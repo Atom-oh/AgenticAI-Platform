@@ -1,0 +1,36 @@
+{
+  "CallerReference": "agentic-book-demo-site-2026-08-31",
+  "Comment": "Builder-agent demo chat site (Lambda URL origin via OAC)",
+  "Enabled": true,
+  "PriceClass": "PriceClass_200",
+  "Origins": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "Id": "demo-lambda",
+        "DomainName": "7o645byt4xumlzfbhn3gxtov6y0fusfq.lambda-url.ap-northeast-2.on.aws",
+        "OriginAccessControlId": "E1NCRU7GW5UYSI",
+        "CustomOriginConfig": {
+          "HTTPPort": 80,
+          "HTTPSPort": 443,
+          "OriginProtocolPolicy": "https-only",
+          "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
+          "OriginReadTimeout": 60,
+          "OriginKeepaliveTimeout": 5
+        }
+      }
+    ]
+  },
+  "DefaultCacheBehavior": {
+    "TargetOriginId": "demo-lambda",
+    "ViewerProtocolPolicy": "redirect-to-https",
+    "AllowedMethods": {
+      "Quantity": 7,
+      "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+      "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]}
+    },
+    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+    "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+    "Compress": true
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeHarness",
+      "Effect": "Allow",
+      "Action": ["bedrock-agentcore:InvokeHarness", "bedrock-agentcore:InvokeAgentRuntime"],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:harness/AgenticBookBuilderDemo-6R0pXEwrY1",
+        "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/harness_AgenticBookBuilderDemo*"
+      ]
+    },
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:ap-northeast-2:180294183052:log-group:/aws/lambda/agentic-book-demo-site*"
+    }
+  ]
+}

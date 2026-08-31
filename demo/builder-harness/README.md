@@ -50,3 +50,34 @@ aws iam delete-role-policy --role-name AgenticBookBuilderHarnessRole \
   --policy-name AgenticBookBuilderHarnessExecPolicy
 aws iam delete-role --role-name AgenticBookBuilderHarnessRole
 ```
+
+## 라이브 데모 사이트
+
+브라우저에서 바로 대화할 수 있는 채팅 UI: **https://d1twhttjtzqewp.cloudfront.net/**
+
+아키텍처(퍼블릭 진입점은 CloudFront뿐):
+
+```
+브라우저 → CloudFront (E3ETCXKSTRXQAT)
+        → API Gateway HTTP API (00l4tzkyqi) ── x-origin-verify 시크릿 헤더 검증
+        → Lambda agentic-book-demo-site (예약 동시성 5)
+        → InvokeHarness (AgenticBookBuilderDemo-6R0pXEwrY1)
+```
+
+- CloudFront가 오리진 요청에 `x-origin-verify` 시크릿 커스텀 헤더를 주입하고, Lambda가 이를 검증한다. API Gateway 엔드포인트를 직접 호출하면 403이다.
+- `sessionId`는 브라우저 localStorage에 저장되어 같은 브라우저에서 대화가 이어진다(InvokeHarness `runtimeSessionId` 재사용).
+- 소스: `site/lambda_function.py` (HTML UI + `/chat` 프록시 단일 파일).
+
+### 이 경로를 선택한 이유 (겪은 함정)
+
+처음에는 Lambda Function URL(AWS_IAM) + CloudFront OAC 패턴으로 구성했으나, 이 계정의 조직 가드레일이 Function URL 호출(익명·CloudFront 서비스 주체 모두)을 차단해 403 `AccessDeniedException`이 발생했다 — 리소스 정책·OAC 설정이 교과서적으로 맞아도 조직 SCP/RCP가 우선한다. API Gateway 경유(`lambda:InvokeFunction`)로 전환해 해결했다.
+
+### 사이트 정리(teardown)
+
+```bash
+aws cloudfront get-distribution-config --id E3ETCXKSTRXQAT   # disable 후 삭제
+aws apigatewayv2 delete-api --api-id 00l4tzkyqi --region ap-northeast-2
+aws lambda delete-function --function-name agentic-book-demo-site --region ap-northeast-2
+aws iam delete-role-policy --role-name AgenticBookDemoSiteLambdaRole --policy-name AgenticBookDemoSitePolicy
+aws iam delete-role --role-name AgenticBookDemoSiteLambdaRole
+```
