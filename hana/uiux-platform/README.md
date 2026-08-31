@@ -29,3 +29,15 @@ Spec: docs/specs/2026-08-31-uiux-agentic-platform-design.md
 Per-invoke cost note: each `InvokeAgentRuntime` call runs 3 full HTML draft generations
 plus up to 2 approved patterns injected into the prompt as few-shot references — budget
 model spend accordingly.
+
+## Deployed endpoints (PoC, 2026-08-31)
+
+- Gallery (CloudFront): https://d4zwmnh2s47e9.cloudfront.net/
+- Shared design-asset MCP (AgentCore Gateway): https://hana-design-assets-gw-kwzg6g7rhz.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp (Cognito M2M JWT)
+- Harness runtime: arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/hana_design_harness-2G8fU3CCa4
+- Figma seed file: https://www.figma.com/design/LsM27cpiDij9PSQfAsTAys
+
+E2E verified: figma-sync (6 components) → gateway MCP (6 tools) → harness (3 axis
+variants per brief) → gallery; feedback approve → approved-patterns → few-shot
+uptake confirmed on a second invoke. Reminder: revoke the temporary Figma PAT
+after the PoC (`aws secretsmanager delete-secret --secret-id hana/figma-token`).
