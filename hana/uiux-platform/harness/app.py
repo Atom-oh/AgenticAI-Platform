@@ -9,7 +9,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent, tool
 from strands.tools.mcp import MCPClient
 
-from harness.publish import publish_draft
+from harness.publish import load_approved_patterns, publish_draft
 
 app = BedrockAgentCoreApp()
 
@@ -58,12 +58,22 @@ def invoke(payload):
         published.append({"id": draft_id, "title": title, "axis": axis, "url": url})
         return url
 
+    patterns = load_approved_patterns(limit=2)
+    system = SYSTEM
+    if patterns:
+        refs = "\n\n".join(
+            f"### 승인 패턴: {p['title']} (axis: {p['axis']})\n```html\n{p['html']}\n```"
+            for p in patterns)
+        system = SYSTEM + ("\n\nBelow are org-approved reference drafts. Follow their "
+                           "structure and quality bar; do not copy their brief-specific "
+                           "content.\n\n" + refs)
+
     token = _m2m_token()
     gateway = MCPClient(lambda: streamablehttp_client(
         os.environ["GATEWAY_URL"], headers={"Authorization": f"Bearer {token}"}))
     with gateway:
         agent = Agent(model=os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
-                      system_prompt=SYSTEM,
+                      system_prompt=system,
                       tools=gateway.list_tools_sync() + [publish_draft_tool])
         result = agent(brief)
     return {"drafts": published, "summary": str(result)}

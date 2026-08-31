@@ -31,6 +31,11 @@
            background:#eef1f0; color:#5c6f6b; white-space:nowrap; }
   .badge.approved { background:#e6f3f2; color:#00615f; }
   .badge.review { background:#f8f0dd; color:#9a7522; }
+  .actions { display:flex; gap:8px; }
+  .actions button { min-height:44px; padding:0 16px; border-radius:22px; border:1px solid #d5e0dd;
+                    background:#e6f3f2; color:#00615f; font-weight:700; font-family:inherit;
+                    font-size:13px; cursor:pointer; }
+  .actions button.reject { background:#fff; color:#5c6f6b; }
   .empty { text-align:center; color:#8aa19c; padding:80px 0; font-size:14px; }
 </style>
 </head>
@@ -63,8 +68,22 @@
           </div>
           <div class="${badgeClass(x.status)}">${x.status}</div>
         </div>
+        <div class="actions">
+          <button onclick="feedback(event,'${x.id}','approve')">승인</button>
+          <button class="reject" onclick="feedback(event,'${x.id}','reject')">반려</button>
+        </div>
       </a>`).join('');
   }).catch(() => { document.getElementById('empty').hidden = false; });
+
+  async function feedback(ev, id, action) {
+    ev.preventDefault(); ev.stopPropagation();
+    const comment = action === 'reject' ? (prompt('반려 사유 (선택)') || '') : '';
+    const r = await fetch('/api/feedback', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({draft_id: id, action, comment})});
+    const out = await r.json();
+    if (out.ok) location.reload(); else alert(out.error || '실패');
+  }
 </script>
 </body>
 </html>

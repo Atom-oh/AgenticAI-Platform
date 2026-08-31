@@ -37,3 +37,11 @@ def test_lambdas_have_env():
     t.has_resource_properties("AWS::Lambda::Function", Match.object_like({
         "FunctionName": "hana-figma-sync",
         "Environment": {"Variables": Match.object_like({"FIGMA_SECRET_ID": "hana/figma-token"})}}))
+
+
+def test_feedback_lambda_and_api_behavior():
+    t = synth()
+    t.has_resource_properties("AWS::Lambda::Url", {"AuthType": "AWS_IAM"})
+    dist = list(t.find_resources("AWS::CloudFront::Distribution").values())[0]
+    behaviors = dist["Properties"]["DistributionConfig"]["CacheBehaviors"]
+    assert any(b["PathPattern"] == "/api/*" for b in behaviors)

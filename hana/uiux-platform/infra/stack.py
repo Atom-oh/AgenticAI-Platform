@@ -85,6 +85,22 @@ class HanaUiuxPlatformStack(cdk.Stack):
                 origin=origins.S3BucketOrigin.with_origin_access_control(drafts),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS))
 
+        feedback = lambda_.Function(
+            self, "Feedback", function_name="hana-draft-feedback",
+            runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
+            handler="feedback.handler.handler", code=code,
+            timeout=cdk.Duration.seconds(15),
+            environment={"DRAFTS_BUCKET": drafts.bucket_name})
+        drafts.grant_read_write(feedback)
+        feedback_url = feedback.add_function_url(
+            auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
+        dist.add_behavior(
+            "/api/*",
+            origins.FunctionUrlOrigin.with_origin_access_control(feedback_url),
+            allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+            cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY)
+
         gw_role = iam.Role(self, "GatewayRole", role_name="hana-agentcore-gateway",
                            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"))
         asset_tools.grant_invoke(gw_role)

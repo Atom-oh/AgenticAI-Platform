@@ -28,3 +28,22 @@ def test_publish_draft_uploads_and_updates_manifest(aws):
     assert entry["axis"] == "밀도"
     assert entry["status"] == "검토중"
     assert entry["url"] == url
+
+
+def test_load_approved_patterns(aws):
+    import json as _json
+    from harness.publish import load_approved_patterns, publish_draft
+    url = publish_draft("이체 · airy", "밀도", "<html>approved one</html>")
+    draft_id = url.rsplit("/", 1)[1].removesuffix(".html")
+    aws.put_object(Bucket="drafts", Key=f"approved-patterns/{draft_id}.html",
+                   Body=b"<html>approved one</html>")
+    aws.put_object(Bucket="drafts", Key="approved-patterns/index.json", Body=_json.dumps(
+        {"patterns": [{"id": draft_id, "title": "이체 · airy", "axis": "밀도",
+                       "approved_at": "2026-08-31T01:00:00+00:00"}]}, ensure_ascii=False))
+    pats = load_approved_patterns(limit=2)
+    assert pats == [{"title": "이체 · airy", "axis": "밀도", "html": "<html>approved one</html>"}]
+
+
+def test_load_approved_patterns_empty(aws):
+    from harness.publish import load_approved_patterns
+    assert load_approved_patterns() == []
