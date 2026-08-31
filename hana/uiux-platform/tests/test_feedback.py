@@ -52,3 +52,27 @@ def test_bad_input_400(aws):
     from feedback.handler import handler
     assert handler(_event({"draft_id": "abc123", "action": "nope"}), None)["statusCode"] == 400
     assert handler(_event({"draft_id": "zzz", "action": "approve"}), None)["statusCode"] == 404
+
+
+def test_base64_encoded_body(aws):
+    import base64
+    from feedback.handler import handler
+    raw = json.dumps({"draft_id": "abc123", "action": "approve"}, ensure_ascii=False)
+    event = {"requestContext": {"http": {"method": "POST"}},
+             "isBase64Encoded": True,
+             "body": base64.b64encode(raw.encode()).decode()}
+    resp = handler(event, None)
+    assert resp["statusCode"] == 200
+    assert json.loads(resp["body"])["status"] == "승인됨"
+
+
+def test_missing_manifest_returns_404(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-2")
+    monkeypatch.setenv("DRAFTS_BUCKET", "drafts-empty")
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="ap-northeast-2")
+        s3.create_bucket(Bucket="drafts-empty",
+                         CreateBucketConfiguration={"LocationConstraint": "ap-northeast-2"})
+        from feedback.handler import handler
+        resp = handler(_event({"draft_id": "abc123", "action": "approve"}), None)
+        assert resp["statusCode"] == 404

@@ -34,6 +34,10 @@ Canvas: https://claude.ai/code/artifact/cf92ef19-6fb2-40b5-b001-6cdacddd64d5
   - Writes token JSON and images to S3 bucket `hana-design-assets-<acct>`; upserts records into DynamoDB `hana-design-registry` (PK `asset_id`, attrs: `type` token|component|icon, `name`, `version`, `s3_key`, `figma_node_id`, `updated_at`).
   - Trigger: manual invoke for the PoC; EventBridge daily rule included but disabled.
 
+**Scope cut (PoC):** component image export via `/v1/images`, the `icon` asset type, and
+the disabled EventBridge schedule are documented-but-not-built for this PoC — only
+token/metadata sync is implemented and exercised end-to-end.
+
 ### 2. Shared design-asset MCP — AgentCore Gateway, `mcp/`
 
 - **AgentCore Gateway** (Seoul) with one Lambda target `design-asset-tools` exposing MCP tools:
@@ -41,6 +45,10 @@ Canvas: https://claude.ai/code/artifact/cf92ef19-6fb2-40b5-b001-6cdacddd64d5
   - `list_skills`, `get_skill` (reads the skill registry)
 - **Inbound auth:** Cognito user pool — `selfSignUpEnabled: false` explicit, admin-created users only (org security policy) — plus an M2M app client (client-credentials) for agents and team members. Gateway JWT authorizer validates Cognito tokens.
 - Org members connect from Claude Code / Kiro / any MCP client via the Gateway's streamable-HTTP URL + OAuth token.
+
+**Scope cut (PoC):** human (non-M2M) Cognito clients for org members are roadmap, not built —
+the PoC uses only the M2M client (client-credentials) for both the harness runtime and any
+manual testing.
 
 ### 3. Shared skill registry — `skills/` → S3
 

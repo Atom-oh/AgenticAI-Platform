@@ -9,18 +9,19 @@ from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent, tool
 from strands.tools.mcp import MCPClient
 
-from harness.publish import load_approved_patterns, publish_draft
+from harness.publish import load_approved_patterns
+from harness.publish import publish_draft as publish_draft_s3
 
 app = BedrockAgentCoreApp()
 
 SYSTEM = """You are Hana Bank's UI/UX design-draft agent.
 Workflow, strictly in order:
-1. get_skill('hana-design-system'), get_skill('design-draft-html'),
-   get_skill('a11y-finance') — follow them exactly.
-2. list_design_tokens and get_brand_guideline — tokens are law.
+1. Use get_skill to load hana-design-system, design-draft-html, and
+   a11y-finance — follow them exactly.
+2. Use list_design_tokens and get_brand_guideline — tokens are law.
 3. Generate exactly 3 self-contained HTML draft variants for the brief.
    Each variant moves ONE axis (밀도, 강조, 흐름) per the design-draft-html skill.
-4. Call publish_draft(title, axis, html) once per variant.
+4. Use publish_draft once per variant.
 Finish with a short Korean summary of the three variants and their axes."""
 
 
@@ -45,7 +46,7 @@ def invoke(payload):
     published = []
 
     @tool
-    def publish_draft_tool(title: str, axis: str, html: str) -> str:
+    def publish_draft(title: str, axis: str, html: str) -> str:
         """Publish one HTML draft variant to the gallery. Returns its public URL.
 
         Args:
@@ -53,7 +54,7 @@ def invoke(payload):
             axis: one of 밀도, 강조, 흐름
             html: complete self-contained HTML document
         """
-        url = publish_draft(title, axis, html)
+        url = publish_draft_s3(title, axis, html)
         draft_id = url.rsplit("/", 1)[1].removesuffix(".html")
         published.append({"id": draft_id, "title": title, "axis": axis, "url": url})
         return url
@@ -74,7 +75,7 @@ def invoke(payload):
     with gateway:
         agent = Agent(model=os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
                       system_prompt=system,
-                      tools=gateway.list_tools_sync() + [publish_draft_tool])
+                      tools=gateway.list_tools_sync() + [publish_draft])
         result = agent(brief)
     return {"drafts": published, "summary": str(result)}
 

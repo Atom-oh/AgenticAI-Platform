@@ -53,24 +53,27 @@
   <div class="empty" id="empty" hidden>아직 생성된 시안이 없습니다.</div>
 </main>
 <script>
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
   const badgeClass = s => s === '승인됨' ? 'badge approved'
                         : s === '검토중' ? 'badge review' : 'badge';
   fetch('./drafts.json', {cache: 'no-store'}).then(r => r.json()).then(d => {
     const drafts = (d.drafts || []).slice().reverse();
     if (!drafts.length) { document.getElementById('empty').hidden = false; return; }
     document.getElementById('grid').innerHTML = drafts.map(x => `
-      <a class="card" href="${x.url}" target="_blank" rel="noopener">
-        <div class="thumb"><iframe src="${x.url}" loading="lazy" tabindex="-1"></iframe></div>
+      <a class="card" href="${esc(x.url)}" target="_blank" rel="noopener">
+        <div class="thumb"><iframe src="${esc(x.url)}" loading="lazy" tabindex="-1"></iframe></div>
         <div class="meta">
           <div>
-            <div class="title">${x.title}</div>
-            <div class="sub">${x.axis} · ${new Date(x.created_at).toLocaleString('ko-KR')}</div>
+            <div class="title">${esc(x.title)}</div>
+            <div class="sub">${esc(x.axis)} · ${esc(new Date(x.created_at).toLocaleString('ko-KR'))}</div>
           </div>
-          <div class="${badgeClass(x.status)}">${x.status}</div>
+          <div class="${badgeClass(x.status)}">${esc(x.status)}</div>
         </div>
         <div class="actions">
-          <button onclick="feedback(event,'${x.id}','approve')">승인</button>
-          <button class="reject" onclick="feedback(event,'${x.id}','reject')">반려</button>
+          <button onclick="feedback(event,'${esc(x.id)}','approve')">승인</button>
+          <button class="reject" onclick="feedback(event,'${esc(x.id)}','reject')">반려</button>
         </div>
       </a>`).join('');
   }).catch(() => { document.getElementById('empty').hidden = false; });

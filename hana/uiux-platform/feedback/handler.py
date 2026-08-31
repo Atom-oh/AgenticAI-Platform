@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from datetime import datetime, timezone
@@ -11,8 +12,11 @@ def _resp(code, body):
 
 
 def handler(event, context):
+    raw_body = event.get("body") or "{}"
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body).decode()
     try:
-        body = json.loads(event.get("body") or "{}")
+        body = json.loads(raw_body)
     except json.JSONDecodeError:
         return _resp(400, {"error": "invalid JSON"})
     draft_id, action = body.get("draft_id"), body.get("action")
@@ -21,7 +25,10 @@ def handler(event, context):
 
     s3 = boto3.client("s3")
     bucket = os.environ["DRAFTS_BUCKET"]
-    manifest = json.loads(s3.get_object(Bucket=bucket, Key="drafts.json")["Body"].read())
+    try:
+        manifest = json.loads(s3.get_object(Bucket=bucket, Key="drafts.json")["Body"].read())
+    except s3.exceptions.NoSuchKey:
+        return _resp(404, {"error": "drafts.json not found"})
     entry = next((d for d in manifest["drafts"] if d["id"] == draft_id), None)
     if entry is None:
         return _resp(404, {"error": f"draft not found: {draft_id}"})
@@ -43,7 +50,8 @@ def handler(event, context):
         except s3.exceptions.NoSuchKey:
             idx = {"patterns": []}
         idx["patterns"] = [p for p in idx["patterns"] if p["id"] != draft_id]
-        idx["patterns"].append({"id": draft_id, "title": entry["title"], "axis": entry["axis"],
+        idx["patterns"].append({"id": draft_id, "title": entry.get("title", ""),
+                                "axis": entry.get("axis", ""),
                                 "approved_at": datetime.now(timezone.utc).isoformat()})
         s3.put_object(Bucket=bucket, Key="approved-patterns/index.json",
                       Body=json.dumps(idx, ensure_ascii=False).encode(),

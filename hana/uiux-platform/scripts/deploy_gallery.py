@@ -3,6 +3,7 @@ import json
 import pathlib
 
 import boto3
+from botocore.exceptions import ClientError
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TYPES = {".html": "text/html", ".json": "application/json"}
@@ -17,8 +18,10 @@ def main():
             try:
                 s3.head_object(Bucket=cfg["drafts_bucket"], Key="drafts.json")
                 continue
-            except s3.exceptions.ClientError:
-                pass
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code")
+                if code not in ("404", "NoSuchKey"):
+                    raise
         s3.upload_file(str(path), cfg["drafts_bucket"], path.name,
                        ExtraArgs={"ContentType": TYPES.get(path.suffix, "text/plain")})
         print(f"uploaded {path.name}")

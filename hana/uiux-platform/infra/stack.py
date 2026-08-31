@@ -1,3 +1,5 @@
+import pathlib
+
 import aws_cdk as cdk
 from aws_cdk import (
     aws_cloudfront as cloudfront,
@@ -36,11 +38,13 @@ class HanaUiuxPlatformStack(cdk.Stack):
                              removal_policy=cdk.RemovalPolicy.DESTROY)
 
         figma_secret = sm.Secret(self, "FigmaToken", secret_name="hana/figma-token",
-                                 description="Figma PAT (operator-injected, temporary)")
+                                 description="Figma PAT (operator-injected, temporary)",
+                                 removal_policy=cdk.RemovalPolicy.DESTROY)
 
-        code = lambda_.Code.from_asset("..", exclude=[
+        project_root = str(pathlib.Path(__file__).resolve().parent.parent)
+        code = lambda_.Code.from_asset(project_root, exclude=[
             "infra", "harness", "gallery", "docs", "design-canvas", "tests",
-            "scripts", "config", ".venv", "**/__pycache__"])
+            "scripts", "config", ".venv", "**/__pycache__", ".pytest_cache"])
         common_env = {"ASSETS_BUCKET": assets.bucket_name,
                       "REGISTRY_TABLE": registry.table_name,
                       "SKILLS_BUCKET": skills.bucket_name,
@@ -78,12 +82,23 @@ class HanaUiuxPlatformStack(cdk.Stack):
                 server, cognito.ResourceServerScope(scope_name="invoke",
                                                     scope_description="invoke MCP"))]))
 
+        drafts_origin = origins.S3BucketOrigin.with_origin_access_control(drafts)
         dist = cloudfront.Distribution(
             self, "Gallery",
             default_root_object="index.html",
             default_behavior=cloudfront.BehaviorOptions(
-                origin=origins.S3BucketOrigin.with_origin_access_control(drafts),
-                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS))
+                origin=drafts_origin,
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS),
+            additional_behaviors={
+                "/drafts.json": cloudfront.BehaviorOptions(
+                    origin=drafts_origin,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS),
+                "/approved-patterns/index.json": cloudfront.BehaviorOptions(
+                    origin=drafts_origin,
+                    cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS),
+            })
 
         feedback = lambda_.Function(
             self, "Feedback", function_name="hana-draft-feedback",
@@ -94,11 +109,18 @@ class HanaUiuxPlatformStack(cdk.Stack):
         drafts.grant_read_write(feedback)
         feedback_url = feedback.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
+        # Forward only Content-Type; ALL_VIEWER would also forward Authorization,
+        # which conflicts with the OAC SigV4 signature on the function URL origin.
+        api_origin_request_policy = cloudfront.OriginRequestPolicy(
+            self, "ApiOriginRequestPolicy",
+            origin_request_policy_name=f"hana-api-content-type-{ACCOUNT}",
+            header_behavior=cloudfront.OriginRequestHeaderBehavior.allow_list("Content-Type"))
         dist.add_behavior(
             "/api/*",
             origins.FunctionUrlOrigin.with_origin_access_control(feedback_url),
             allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
             cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            origin_request_policy=api_origin_request_policy,
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY)
 
         gw_role = iam.Role(self, "GatewayRole", role_name="hana-agentcore-gateway",
@@ -119,6 +141,10 @@ class HanaUiuxPlatformStack(cdk.Stack):
                      "xray:PutTraceSegments", "xray:PutTelemetryRecords",
                      "cloudwatch:PutMetricData"],
             resources=["*"]))
+        rt_role.add_to_policy(iam.PolicyStatement(
+            actions=["secretsmanager:GetSecretValue"],
+            resources=[f"arn:aws:secretsmanager:{self.region}:{ACCOUNT}:secret:"
+                       f"hana/m2m-client-secret*"]))
 
         discovery = (f"https://cognito-idp.{self.region}.amazonaws.com/"
                      f"{pool.user_pool_id}/.well-known/openid-configuration")

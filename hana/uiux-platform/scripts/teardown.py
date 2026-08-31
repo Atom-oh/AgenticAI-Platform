@@ -7,18 +7,32 @@ import boto3
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def _paginate(fn, key, **kwargs):
+    """Collect every item across pages for a nextToken-paginated bedrock-agentcore-control call."""
+    items, token = [], None
+    while True:
+        call_kwargs = dict(kwargs)
+        if token:
+            call_kwargs["nextToken"] = token
+        resp = fn(**call_kwargs)
+        items.extend(resp.get(key, []))
+        token = resp.get("nextToken")
+        if not token:
+            return items
+
+
 def main():
     cfg = json.loads((ROOT / "config" / "stack.json").read_text())
     region = cfg["region"]
     ac = boto3.client("bedrock-agentcore-control", region_name=region)
-    for rt in ac.list_agent_runtimes()["agentRuntimes"]:
+    for rt in _paginate(ac.list_agent_runtimes, "agentRuntimes"):
         if rt["agentRuntimeName"] == "hana_design_harness":
             ac.delete_agent_runtime(agentRuntimeId=rt["agentRuntimeId"])
             print("deleted runtime", rt["agentRuntimeId"])
-    for gw in ac.list_gateways()["items"]:
+    for gw in _paginate(ac.list_gateways, "items"):
         if gw["name"] == "hana-design-assets-gw":
             gid = gw["gatewayId"]
-            for t in ac.list_gateway_targets(gatewayIdentifier=gid)["items"]:
+            for t in _paginate(ac.list_gateway_targets, "items", gatewayIdentifier=gid):
                 ac.delete_gateway_target(gatewayIdentifier=gid, targetId=t["targetId"])
             ac.delete_gateway(gatewayIdentifier=gid)
             print("deleted gateway", gid)

@@ -12,6 +12,18 @@ REPO = "hana-design-harness"
 RUNTIME = "hana_design_harness"
 
 
+def list_all_agent_runtimes(ac):
+    """Collect every agentRuntime across pages (list_agent_runtimes is paginated)."""
+    items, token = [], None
+    while True:
+        kwargs = {"nextToken": token} if token else {}
+        resp = ac.list_agent_runtimes(**kwargs)
+        items.extend(resp.get("agentRuntimes", []))
+        token = resp.get("nextToken")
+        if not token:
+            return items
+
+
 def sh(*args):
     print("+", " ".join(args))
     subprocess.run(args, check=True, cwd=ROOT)
@@ -45,11 +57,7 @@ def main():
     except sm.exceptions.ResourceExistsException:
         sm.put_secret_value(SecretId="hana/m2m-client-secret", SecretString=secret_value)
         sec = sm.describe_secret(SecretId="hana/m2m-client-secret")
-    boto3.client("iam").put_role_policy(
-        RoleName="hana-agentcore-runtime", PolicyName="read-m2m-secret",
-        PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": [{
-            "Effect": "Allow", "Action": "secretsmanager:GetSecretValue",
-            "Resource": sec["ARN"]}]}))
+    # secretsmanager:GetSecretValue for hana-agentcore-runtime is granted in CDK (infra/stack.py)
 
     env = {"GATEWAY_URL": cfg["gateway_url"],
            "USER_POOL_DOMAIN": cfg["cognito_domain"],
@@ -60,7 +68,7 @@ def main():
            "MODEL_ID": "global.anthropic.claude-sonnet-5"}
 
     ac = boto3.client("bedrock-agentcore-control", region_name=region)
-    existing = next((r for r in ac.list_agent_runtimes()["agentRuntimes"]
+    existing = next((r for r in list_all_agent_runtimes(ac)
                      if r["agentRuntimeName"] == RUNTIME), None)
     kwargs = {"agentRuntimeArtifact": {"containerConfiguration": {"containerUri": uri}},
               "networkConfiguration": {"networkMode": "PUBLIC"},
