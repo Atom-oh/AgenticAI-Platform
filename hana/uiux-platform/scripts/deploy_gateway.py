@@ -32,9 +32,14 @@ def main():
                 "allowedClients": [cfg["m2m_client_id"]]}},
             description="Org-shared Hana design asset MCP")
     gw_id = gw["gatewayId"]
-    while client.get_gateway(gatewayIdentifier=gw_id)["status"] not in ("READY", "FAILED"):
+    for attempt in range(60):
+        detail = client.get_gateway(gatewayIdentifier=gw_id)
+        if detail["status"] in ("READY", "FAILED"):
+            break
+        print(f"[{attempt+1}/60] gateway status: {detail['status']}")
         time.sleep(5)
-    detail = client.get_gateway(gatewayIdentifier=gw_id)
+    else:
+        raise TimeoutError(f"gateway not READY after 300s (status: {detail.get('status')})")
     assert detail["status"] == "READY", detail
 
     targets = client.list_gateway_targets(gatewayIdentifier=gw_id)["items"]
