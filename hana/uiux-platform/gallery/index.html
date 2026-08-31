@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hana Design Studio — 시안 갤러리</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+<style>
+  body { margin:0; font-family:'Noto Sans KR','Apple SD Gothic Neo',sans-serif;
+         background:#fbfcfb; color:#17332f; }
+  header { display:flex; align-items:center; justify-content:space-between;
+           padding:0 48px; height:68px; }
+  .logo { display:flex; align-items:center; gap:10px; font-weight:900; font-size:15px; }
+  .logo i { width:26px; height:26px; border-radius:50%; background:#008485; }
+  .hero { display:flex; flex-direction:column; align-items:center; gap:22px;
+          padding:44px 24px 36px; }
+  .hero h1 { margin:0; font-size:clamp(24px,4vw,34px); font-weight:900;
+             letter-spacing:-0.03em; }
+  .hero p { margin:0; color:#5c6f6b; font-size:14px; }
+  main { max-width:1344px; margin:0 auto; padding:0 48px 60px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:24px; }
+  .card { text-decoration:none; color:inherit; display:flex; flex-direction:column; gap:12px; }
+  .thumb { height:300px; border-radius:18px; overflow:hidden; border:1px solid #e2e8e6;
+           background:linear-gradient(160deg,#e9f4f3 0%,#d8ebe9 100%); }
+  .thumb iframe { width:200%; height:200%; border:0; transform:scale(.5);
+                  transform-origin:0 0; pointer-events:none; }
+  .meta { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .title { font-size:15px; font-weight:700; }
+  .sub { font-size:12px; color:#8aa19c; }
+  .badge { font-size:11px; font-weight:700; padding:4px 10px; border-radius:20px;
+           background:#eef1f0; color:#5c6f6b; white-space:nowrap; }
+  .badge.approved { background:#e6f3f2; color:#00615f; }
+  .badge.review { background:#f8f0dd; color:#9a7522; }
+  .empty { text-align:center; color:#8aa19c; padding:80px 0; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><i></i>Hana Design Studio</div>
+  <div class="sub">Agentic UI/UX Platform PoC · ap-northeast-2</div>
+</header>
+<div class="hero">
+  <h1>어떤 화면을 만들어 볼까요?</h1>
+  <p>scripts/invoke.py 로 브리프를 보내면, 생성된 시안이 아래에 나타납니다.</p>
+</div>
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" hidden>아직 생성된 시안이 없습니다.</div>
+</main>
+<script>
+  const badgeClass = s => s === '승인됨' ? 'badge approved'
+                        : s === '검토중' ? 'badge review' : 'badge';
+  fetch('./drafts.json', {cache: 'no-store'}).then(r => r.json()).then(d => {
+    const drafts = (d.drafts || []).slice().reverse();
+    if (!drafts.length) { document.getElementById('empty').hidden = false; return; }
+    document.getElementById('grid').innerHTML = drafts.map(x => `
+      <a class="card" href="${x.url}" target="_blank" rel="noopener">
+        <div class="thumb"><iframe src="${x.url}" loading="lazy" tabindex="-1"></iframe></div>
+        <div class="meta">
+          <div>
+            <div class="title">${x.title}</div>
+            <div class="sub">${x.axis} · ${new Date(x.created_at).toLocaleString('ko-KR')}</div>
+          </div>
+          <div class="${badgeClass(x.status)}">${x.status}</div>
+        </div>
+      </a>`).join('');
+  }).catch(() => { document.getElementById('empty').hidden = false; });
+</script>
+</body>
+</html>
