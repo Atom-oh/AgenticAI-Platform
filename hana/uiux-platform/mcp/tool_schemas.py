@@ -14,4 +14,7 @@ TOOL_SCHEMAS = [
     _tool("list_skills", "List org-shared skills in the skill registry."),
     _tool("get_skill", "Fetch a skill's SKILL.md content (latest version).",
           {"name": {"type": "string"}}, ["name"]),
+    _tool("list_assets", "List all assets in the design asset registry."),
+    _tool("get_asset", "Fetch one asset's registry metadata and S3 content by id.",
+          {"asset_id": {"type": "string"}}, ["asset_id"]),
 ]

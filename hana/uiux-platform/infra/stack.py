@@ -37,6 +37,14 @@ class HanaUiuxPlatformStack(cdk.Stack):
                              billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
                              removal_policy=cdk.RemovalPolicy.DESTROY)
 
+        history = ddb.Table(self, "History", table_name="hana-asset-history",
+                            partition_key=ddb.Attribute(name="asset_id",
+                                                        type=ddb.AttributeType.STRING),
+                            sort_key=ddb.Attribute(name="version",
+                                                   type=ddb.AttributeType.STRING),
+                            billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
+                            removal_policy=cdk.RemovalPolicy.DESTROY)
+
         figma_secret = sm.Secret(self, "FigmaToken", secret_name="hana/figma-token",
                                  description="Figma PAT (operator-injected, temporary)",
                                  removal_policy=cdk.RemovalPolicy.DESTROY)
@@ -67,6 +75,19 @@ class HanaUiuxPlatformStack(cdk.Stack):
         assets.grant_read(asset_tools)
         skills.grant_read(asset_tools)
         registry.grant_read_data(asset_tools)
+
+        dispatcher = lambda_.Function(
+            self, "Dispatcher", function_name="hana-generate-dispatcher",
+            runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
+            handler="dispatch.handler.handler", code=code,
+            timeout=cdk.Duration.seconds(900),
+            environment={"HISTORY_TABLE": history.table_name, "RUNTIME_ARN": ""})
+        history.grant_read_write_data(dispatcher)
+        dispatcher.add_to_role_policy(iam.PolicyStatement(
+            actions=["bedrock-agentcore:InvokeAgentRuntime"], resources=["*"]))
+        # async (Event) invokes default to 2 retries on failure, which would re-run
+        # (and re-bill) the AgentCore Runtime call that already failed once.
+        dispatcher.configure_async_invoke(retry_attempts=0)
 
         pool = cognito.UserPool(
             self, "Pool", user_pool_name="hana-uiux-platform",
@@ -105,8 +126,18 @@ class HanaUiuxPlatformStack(cdk.Stack):
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="feedback.handler.handler", code=code,
             timeout=cdk.Duration.seconds(15),
-            environment={"DRAFTS_BUCKET": drafts.bucket_name})
+            environment={"DRAFTS_BUCKET": drafts.bucket_name,
+                        "ASSETS_BUCKET": assets.bucket_name,
+                        "REGISTRY_TABLE": registry.table_name,
+                        "SKILLS_BUCKET": skills.bucket_name,
+                        "HISTORY_TABLE": history.table_name,
+                        "DISPATCHER_FN": dispatcher.function_name})
         drafts.grant_read_write(feedback)
+        assets.grant_read_write(feedback)
+        skills.grant_write(feedback)
+        registry.grant_read_write_data(feedback)
+        history.grant_read_write_data(feedback)
+        dispatcher.grant_invoke(feedback)
         feedback_url = feedback.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
         # OAC needs BOTH InvokeFunctionUrl (added by the origin construct) and
@@ -160,7 +191,9 @@ class HanaUiuxPlatformStack(cdk.Stack):
             "CognitoDomain": f"{domain.domain_name}.auth.{self.region}.amazoncognito.com",
             "CognitoDiscoveryUrl": discovery,
             "DistributionDomain": dist.distribution_domain_name,
+            "DistributionId": dist.distribution_id,
             "GatewayRoleArn": gw_role.role_arn, "RuntimeRoleArn": rt_role.role_arn,
             "FigmaSyncFn": figma_sync.function_name, "AssetToolsFnArn": asset_tools.function_arn,
+            "HistoryTable": history.table_name, "DispatcherFn": dispatcher.function_name,
         }.items():
             cdk.CfnOutput(self, name, value=value)

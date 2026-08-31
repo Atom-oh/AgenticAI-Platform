@@ -44,6 +44,7 @@ def invoke(payload):
     brief = payload.get("brief", "")
     if not brief:
         return {"error": "payload must include 'brief'"}
+    asset_ids = payload.get("asset_ids") or []
     published = []
 
     @tool
@@ -69,6 +70,12 @@ def invoke(payload):
         system = SYSTEM + ("\n\nBelow are org-approved reference drafts. Follow their "
                            "structure and quality bar; do not copy their brief-specific "
                            "content.\n\n" + refs)
+    if asset_ids:
+        system += ("\n\n사용자가 선택한 자산: " + ", ".join(asset_ids) +
+                   ". 생성 전에 각 id에 대해 get_asset을 호출해 내용을 확인하고, "
+                   "이 자산들을 최우선 규범으로 사용하라 (선택 자산과 충돌하는 기본 토큰 "
+                   "값은 선택 자산이 이긴다). type이 workflow인 자산은 화면 흐름 제약으로, "
+                   "style-guide는 스타일 규범으로, skill은 추가 지침으로 따르라.")
 
     token = _m2m_token()
     gateway = MCPClient(lambda: streamablehttp_client(

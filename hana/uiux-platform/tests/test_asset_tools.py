@@ -65,13 +65,42 @@ def test_skills_tools(aws):
     assert "design-draft-html" in handler({"name": "design-draft-html"}, ctx("get_skill"))["content"]
 
 
+def test_get_skill_resolves_user_prefixed_skill(aws):
+    from mcp.asset_tools import handler
+    boto3.client("s3", region_name="ap-northeast-2").put_object(
+        Bucket="skills", Key="skills/user-senior-mode/1.0.0/SKILL.md",
+        Body=b"# senior-mode\nbig text")
+    out = handler({"name": "senior-mode"}, ctx("get_skill"))
+    assert "big text" in out["content"] and out["name"] == "senior-mode"
+    still = handler({"name": "design-draft-html"}, ctx("get_skill"))
+    assert "design-draft-html" in still["content"] and still["name"] == "design-draft-html"
+
+
 def test_unknown_tool(aws):
     from mcp.asset_tools import handler
     assert "error" in handler({}, ctx("nope"))
+
+
+def test_get_asset_and_list_assets(aws):
+    import json as _json
+    from mcp.asset_tools import handler
+    boto3.client("s3", region_name="ap-northeast-2").put_object(
+        Bucket="assets", Key="user-assets/palette:p/v1.json",
+        Body=_json.dumps({"primary": "#7d2882"}))
+    boto3.resource("dynamodb", region_name="ap-northeast-2").Table("registry").put_item(
+        Item={"asset_id": "palette:p", "type": "palette", "name": "팔레트", "version": 1,
+              "s3_key": "user-assets/palette:p/v1.json", "scope": "mine",
+              "source": "user", "updated_at": "t"})
+    got = handler({"asset_id": "palette:p"}, ctx("get_asset"))
+    assert _json.loads(got["content"])["primary"] == "#7d2882"
+    assert "error" in handler({"asset_id": "nope:x"}, ctx("get_asset"))
+    ids = {a["asset_id"] for a in handler({}, ctx("list_assets"))["assets"]}
+    assert "palette:p" in ids and "component:1:2" in ids
 
 
 def test_schemas_cover_all_tools():
     from mcp.tool_schemas import TOOL_SCHEMAS
     assert {s["name"] for s in TOOL_SCHEMAS} == {
         "list_design_tokens", "search_assets", "get_component",
-        "get_brand_guideline", "list_skills", "get_skill"}
+        "get_brand_guideline", "list_skills", "get_skill",
+        "list_assets", "get_asset"}

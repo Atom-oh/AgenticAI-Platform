@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
+    body { margin: 0; font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif; }
+    a { color: #00615f; } a:hover { color: #008485; }
+  </style>
+</helmet>
+<div style="width: 1440px; height: 900px; background: #fbfcfb; color: #17332f; display: flex; flex-direction: column; overflow: hidden;">
+
+  <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 48px; height: 68px;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <div style="width: 26px; height: 26px; border-radius: 50%; background: #008485;"></div>
+      <div style="font-weight: 900; font-size: 15px; letter-spacing: -0.02em;">Hana Design Studio</div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 26px; font-size: 13px; color: #5c6f6b;">
+      <div>갤러리</div>
+      <div>디자인 자산</div>
+      <div style="font-weight: 700; color: #17332f; border-bottom: 2px solid #008485; padding-bottom: 4px;">생성</div>
+      <div style="width: 30px; height: 30px; border-radius: 50%; background: #00615f; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;">오</div>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 24px; flex-grow: 1; min-height: 0; padding: 24px 48px 40px;">
+
+    <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 18px; min-width: 0;">
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="font-size: 24px; font-weight: 900; letter-spacing: -0.02em;">어떤 화면을 만들어 볼까요?</div>
+        <div style="font-size: 13px; color: #8aa19c;">브리프를 쓰고, 사용할 자산을 고르면 3가지 축(밀도·강조·흐름) 시안이 생성됩니다</div>
+      </div>
+
+      <div style="background: #ffffff; border: 1.5px solid #cfe3e1; border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 10px;">
+        <div style="font-size: 12px; font-weight: 700; color: #00615f;">브리프</div>
+        <div style="min-height: 92px; border: 1px solid #d5e0dd; border-radius: 12px; padding: 14px; font-size: 14px; line-height: 1.6; color: #17332f; background: #fafbfb;">우리팀 카드상품 신청 화면. 연회비와 혜택 3가지를 강조하고, 시니어 고객도 읽기 쉽게.</div>
+      </div>
+
+      <div style="background: #ffffff; border: 1px solid #e2e8e6; border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-size: 12px; font-weight: 700; color: #00615f;">사용할 자산 <span style="color: #8aa19c; font-weight: 500;">2개 선택됨</span></div>
+          <div style="font-size: 12px; color: #8aa19c;">선택한 자산만 생성 컨텍스트로 들어갑니다</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;">
+          <div style="border: 1.5px solid #008485; background: #f7fbfa; border-radius: 12px; padding: 14px; display: flex; align-items: center; gap: 12px; min-height: 44px;">
+            <div style="width: 22px; height: 22px; border-radius: 6px; background: #008485; display: flex; align-items: center; justify-content: center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4 10-10"></path></svg></div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="font-size: 13px; font-weight: 700;">우리팀 카드상품 토큰 <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #00615f;">v1</span></div>
+              <div style="font-size: 11px; color: #9a5b9a;">내 자산 · 토큰 세트</div>
+            </div>
+          </div>
+          <div style="border: 1.5px solid #008485; background: #f7fbfa; border-radius: 12px; padding: 14px; display: flex; align-items: center; gap: 12px; min-height: 44px;">
+            <div style="width: 22px; height: 22px; border-radius: 6px; background: #008485; display: flex; align-items: center; justify-content: center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4 10-10"></path></svg></div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="font-size: 13px; font-weight: 700;">Button/Primary 외 5종 <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #5c6f6b;">v3</span></div>
+              <div style="font-size: 11px; color: #00615f;">회사 공유 · 컴포넌트</div>
+            </div>
+          </div>
+          <div style="border: 1px solid #d5e0dd; border-radius: 12px; padding: 14px; display: flex; align-items: center; gap: 12px; min-height: 44px;">
+            <div style="width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid #b7c4c1;"></div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="font-size: 13px; font-weight: 700; color: #5c6f6b;">hana-tokens <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #8aa19c;">v3</span></div>
+              <div style="font-size: 11px; color: #8aa19c;">회사 공유 · 토큰 세트</div>
+            </div>
+          </div>
+          <div style="border: 1px solid #d5e0dd; border-radius: 12px; padding: 14px; display: flex; align-items: center; gap: 12px; min-height: 44px;">
+            <div style="width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid #b7c4c1;"></div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <div style="font-size: 13px; font-weight: 700; color: #5c6f6b;">승인 패턴 few-shot <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #8aa19c;">자동</span></div>
+              <div style="font-size: 11px; color: #8aa19c;">회사 공유 · 승인된 시안 최근 2건</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end;">
+        <div style="height: 52px; padding: 0 28px; border-radius: 12px; background: #008485; color: #ffffff; display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"></path></svg>
+          시안 3종 생성
+        </div>
+      </div>
+    </div>
+
+    <div style="width: 380px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px; overflow: hidden;">
+      <div style="font-size: 14px; font-weight: 700;">생성 작업</div>
+      <div style="background: #ffffff; border: 1.5px solid #d9a441; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-size: 13px; font-weight: 700;">카드상품 신청 화면</div>
+          <div style="font-size: 11px; font-weight: 700; color: #9a7522; background: #f8f0dd; padding: 3px 10px; border-radius: 14px;">생성중 2/3</div>
+        </div>
+        <div style="height: 6px; border-radius: 3px; background: #f0ece2; overflow: hidden;"><div style="width: 66%; height: 100%; background: #d9a441;"></div></div>
+        <div style="font-size: 11px; color: #8aa19c;">자산 2개 · 시작 1분 전</div>
+      </div>
+      <div style="background: #ffffff; border: 1px solid #e2e8e6; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-size: 13px; font-weight: 700;">적금 만기 안내 화면</div>
+          <div style="font-size: 11px; font-weight: 700; color: #00615f; background: #e6f3f2; padding: 3px 10px; border-radius: 14px;">완료 · 3종</div>
+        </div>
+        <div style="font-size: 11px; color: #8aa19c;">hana-tokens v3 · 12분 전 · 갤러리에서 보기</div>
+      </div>
+      <div style="background: #ffffff; border: 1px solid #e2e8e6; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-size: 13px; font-weight: 700;">모바일 계좌이체 화면</div>
+          <div style="font-size: 11px; font-weight: 700; color: #00615f; background: #e6f3f2; padding: 3px 10px; border-radius: 14px;">완료 · 3종</div>
+        </div>
+        <div style="font-size: 11px; color: #8aa19c;">hana-tokens v3 · 1시간 전 · 1건 승인됨</div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

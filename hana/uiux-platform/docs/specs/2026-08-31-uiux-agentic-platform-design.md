@@ -95,7 +95,7 @@ What separates this platform from individuals using Claude Code: centrally enfor
 - Gallery cards get 승인/반려 buttons → `POST /api/feedback` (CloudFront behavior → Lambda Function URL with OAC — still no direct public compute).
 - Approve promotes the draft to `approved-patterns/` in the drafts bucket and updates `approved-patterns/index.json`; reject records the status.
 - The harness loads up to 2 recent approved patterns as few-shot references before generating, so org-wide approvals improve everyone's next generation.
-- PoC limitation (documented): feedback endpoint has no per-user auth; production would put it behind Cognito.
+- PoC limitation (documented): feedback endpoint has no per-user auth; production would put it behind Cognito. The API is unauthenticated in this PoC, which now includes writes (asset registration) — production must put Cognito in front.
 
 Roadmap (documented, not built): draft-asset network effects (embedding search over approved drafts, graph edges `uses_token`/`composed_in`/`generated_from` toward Neptune/GraphRAG), Slack/portal brief intake for non-developers, rejection-comment-driven skill revision batches.
 

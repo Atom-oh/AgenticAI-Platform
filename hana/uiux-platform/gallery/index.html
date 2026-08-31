@@ -3,21 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hana Design Studio — 시안 갤러리</title>
+<title>Hana Design Studio</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
 <style>
+  * { box-sizing: border-box; }
   body { margin:0; font-family:'Noto Sans KR','Apple SD Gothic Neo',sans-serif;
-         background:#fbfcfb; color:#17332f; }
+         background:#fbfcfb; color:#17332f; overflow-x:hidden; }
   header { display:flex; align-items:center; justify-content:space-between;
-           padding:0 48px; height:68px; }
+           padding:0 24px; height:68px; flex-wrap:wrap; gap:8px; }
   .logo { display:flex; align-items:center; gap:10px; font-weight:900; font-size:15px; }
-  .logo i { width:26px; height:26px; border-radius:50%; background:#008485; }
+  .logo i { width:26px; height:26px; border-radius:50%; background:#008485; display:inline-block; }
+  nav { display:flex; align-items:center; gap:22px; font-size:13px; color:#5c6f6b; }
+  nav a { color:inherit; text-decoration:none; padding-bottom:4px; border-bottom:2px solid transparent;
+          min-height:44px; display:flex; align-items:center; }
+  nav a.active { font-weight:700; color:#17332f; border-bottom-color:#008485; }
+  main { max-width:1344px; margin:0 auto; padding:0 24px 60px; }
+  .tab { display:none; }
+  .tab.active { display:block; }
+
+  /* ---- gallery tab ---- */
   .hero { display:flex; flex-direction:column; align-items:center; gap:22px;
           padding:44px 24px 36px; }
   .hero h1 { margin:0; font-size:clamp(24px,4vw,34px); font-weight:900;
              letter-spacing:-0.03em; }
   .hero p { margin:0; color:#5c6f6b; font-size:14px; }
-  main { max-width:1344px; margin:0 auto; padding:0 48px 60px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:24px; }
   .card { text-decoration:none; color:inherit; display:flex; flex-direction:column; gap:12px; }
   .thumb { height:300px; border-radius:18px; overflow:hidden; border:1px solid #e2e8e6;
@@ -37,60 +46,521 @@
                     font-size:13px; cursor:pointer; }
   .actions button.reject { background:#fff; color:#5c6f6b; }
   .empty { text-align:center; color:#8aa19c; padding:80px 0; font-size:14px; }
+
+  /* ---- shared page-head ---- */
+  .page-head { display:flex; align-items:center; justify-content:space-between; gap:16px;
+               padding:20px 0 16px; flex-wrap:wrap; }
+  .page-head h2 { margin:0; font-size:24px; font-weight:900; letter-spacing:-0.02em; }
+  .page-head .desc { font-size:13px; color:#8aa19c; margin-top:4px; }
+  .btn { min-height:44px; padding:0 20px; border-radius:10px; border:none; font-family:inherit;
+         font-size:13px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center;
+         gap:8px; }
+  .btn-primary { background:#008485; color:#fff; }
+  .btn-dark { background:#17332f; color:#fff; }
+  .btn-outline { background:#fff; color:#00615f; border:1px solid #d5e0dd; }
+  .btn-outline[disabled] { color:#b7c4c1; cursor:not-allowed; }
+
+  /* ---- assets tab ---- */
+  .layout { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+  .layout .main-col { flex:1 1 560px; min-width:0; display:flex; flex-direction:column; gap:18px; }
+  .layout .side-col { width:380px; flex-shrink:0; background:#fff; border:1px solid #e2e8e6;
+                       border-radius:16px; padding:22px; display:flex; flex-direction:column; gap:16px; }
+  .card-box { background:#fff; border:1.5px solid #cfe3e1; border-radius:16px; padding:20px;
+              display:flex; flex-direction:column; gap:14px; }
+  .card-box .label { font-size:13px; font-weight:700; color:#00615f; }
+  .form-row { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
+  .input, select.input { height:46px; border:1px solid #d5e0dd; border-radius:10px; padding:0 14px;
+          font-size:13px; color:#17332f; background:#fafbfb; font-family:inherit; width:100%; }
+  textarea.input { height:110px; padding:12px 14px; resize:vertical; font-family:'IBM Plex Mono',monospace,inherit; }
+  .actor-row { display:flex; align-items:center; gap:10px; }
+  .actor-row label { font-size:12px; color:#5c6f6b; white-space:nowrap; }
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+  .toggle-label { display:flex; align-items:center; gap:8px; font-size:12px; color:#5c6f6b; cursor:pointer;
+                  min-height:44px; }
+  .switch { width:36px; height:22px; border-radius:11px; background:#d5e0dd; position:relative;
+            transition:background .15s; flex-shrink:0; }
+  .switch .knob { position:absolute; left:2px; top:2px; width:18px; height:18px; border-radius:50%;
+                  background:#fff; transition:left .15s; }
+  .switch.on { background:#008485; }
+  .switch.on .knob { left:16px; }
+
+  .filter-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .filter-chip { padding:7px 16px; border-radius:18px; color:#5c6f6b; font-size:12px; border:none;
+                 background:transparent; font-family:inherit; cursor:pointer; min-height:44px; }
+  .filter-chip.active { background:#e6f3f2; color:#00615f; font-weight:700; }
+
+  .asset-row { background:#fff; border:1px solid #e2e8e6; border-radius:14px; padding:16px 18px;
+               display:flex; align-items:center; gap:14px; cursor:pointer; }
+  .asset-row.selected { border-color:#008485; border-width:1.5px; }
+  .asset-row .icon { width:40px; height:40px; border-radius:10px; background:#eef4f3;
+                      display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .asset-row .body { flex-grow:1; display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .asset-row .name-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .asset-row .name { font-size:14px; font-weight:700; }
+  .scope-badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:12px; white-space:nowrap; }
+  .scope-badge.mine { color:#9a5b9a; background:#f5ebf5; }
+  .scope-badge.shared { color:#00615f; background:#e6f3f2; }
+  .asset-row .info { font-size:12px; color:#8aa19c; }
+  .version-chip { font-family:'IBM Plex Mono',monospace,inherit; font-size:12px; color:#5c6f6b;
+                  background:#f4f6f5; padding:4px 10px; border-radius:8px; flex-shrink:0; }
+
+  .timeline-item { display:flex; gap:12px; }
+  .timeline-item .rail { display:flex; flex-direction:column; align-items:center; }
+  .timeline-item .dot { width:10px; height:10px; border-radius:50%; background:#b7c4c1; margin-top:5px; flex-shrink:0; }
+  .timeline-item .line { width:2px; flex-grow:1; background:#e2e8e6; }
+  .timeline-item .content { padding-bottom:18px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .timeline-item .content .ver { font-size:13px; font-weight:700; }
+  .timeline-item .content .ver time { font-family:'IBM Plex Mono',monospace,inherit; font-size:11px; color:#8aa19c; }
+  .timeline-item .content .note { font-size:12px; color:#5c6f6b; }
+
+  /* ---- generate tab ---- */
+  .brief-box textarea.input { height:92px; font-family:inherit; }
+  .asset-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; }
+  .pick { border:1px solid #d5e0dd; border-radius:12px; padding:14px; display:flex; align-items:center;
+          gap:12px; min-height:44px; cursor:pointer; background:#fff; }
+  .pick.checked { border:1.5px solid #008485; background:#f7fbfa; }
+  .pick .box { width:22px; height:22px; border-radius:6px; border:1.5px solid #b7c4c1; flex-shrink:0;
+               display:flex; align-items:center; justify-content:center; }
+  .pick.checked .box { background:#008485; border-color:#008485; }
+  .pick .pname { font-size:13px; font-weight:700; }
+  .pick .ptype { font-size:11px; color:#8aa19c; }
+  .pick.checked .ptype { color:#00615f; }
+
+  .job-card { background:#fff; border:1px solid #e2e8e6; border-radius:14px; padding:16px 18px;
+              display:flex; flex-direction:column; gap:6px; }
+  .job-card.running { border:1.5px solid #d9a441; }
+  .job-card .job-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .job-card .job-title { font-size:13px; font-weight:700; }
+  .job-status { font-size:11px; font-weight:700; padding:3px 10px; border-radius:14px; white-space:nowrap; }
+  .job-status.running { color:#9a7522; background:#f8f0dd; }
+  .job-status.done { color:#00615f; background:#e6f3f2; }
+  .job-status.failed { color:#b23b3b; background:#fbe4e4; }
+  .job-card .job-sub { font-size:11px; color:#8aa19c; }
+  .job-card .job-sub a { color:#00615f; font-weight:700; text-decoration:none; }
+  .empty-small { color:#8aa19c; font-size:12px; padding:12px 0; }
 </style>
 </head>
 <body>
 <header>
   <div class="logo"><i></i>Hana Design Studio</div>
-  <div class="sub">Agentic UI/UX Platform PoC · ap-northeast-2</div>
+  <nav id="nav">
+    <a href="#gallery" data-tab="gallery">갤러리</a>
+    <a href="#assets" data-tab="assets">디자인 자산</a>
+    <a href="#generate" data-tab="generate">생성</a>
+  </nav>
 </header>
-<div class="hero">
-  <h1>어떤 화면을 만들어 볼까요?</h1>
-  <p>scripts/invoke.py 로 브리프를 보내면, 생성된 시안이 아래에 나타납니다.</p>
-</div>
+
 <main>
-  <div class="grid" id="grid"></div>
-  <div class="empty" id="empty" hidden>아직 생성된 시안이 없습니다.</div>
+  <!-- ===================== 갤러리 ===================== -->
+  <section class="tab" id="tab-gallery">
+    <div class="hero">
+      <h1>어떤 화면을 만들어 볼까요?</h1>
+      <p>scripts/invoke.py 로 브리프를 보내면, 생성된 시안이 아래에 나타납니다.</p>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" hidden>아직 생성된 시안이 없습니다.</div>
+  </section>
+
+  <!-- ===================== 디자인 자산 ===================== -->
+  <section class="tab" id="tab-assets">
+    <div class="page-head">
+      <div>
+        <h2>디자인 자산</h2>
+        <div class="desc">내가 등록한 자산과 회사 공유 자산 — 생성 시 선택하는 재료가 됩니다</div>
+      </div>
+    </div>
+    <div class="layout">
+      <div class="main-col">
+        <div class="card-box">
+          <div class="label">새 자산 등록</div>
+          <div class="form-row">
+            <input class="input" id="asset-name" placeholder="자산 이름 (예: 우리팀 카드상품 팔레트)">
+            <select class="input" id="asset-type">
+              <option value="token">토큰 세트</option>
+              <option value="palette">컬러 팔레트</option>
+              <option value="icon-set">아이콘셋</option>
+              <option value="component">컴포넌트</option>
+              <option value="style-guide">스타일 가이드</option>
+              <option value="skill">스킬셋</option>
+              <option value="workflow">워크플로우</option>
+            </select>
+          </div>
+          <textarea class="input" id="asset-content" placeholder="내용 붙여넣기 — JSON(토큰/팔레트/아이콘셋) · Markdown(스타일가이드/스킬셋/워크플로우/컴포넌트)"></textarea>
+          <div class="toggle-row">
+            <label class="toggle-label" id="scope-toggle-label">
+              <span class="switch" id="scope-switch"><span class="knob"></span></span>
+              회사에 공유 (조직 전체가 생성에 사용 가능)
+            </label>
+            <div class="actor-row">
+              <label for="asset-actor">등록자</label>
+              <input class="input" id="asset-actor" style="height:38px; width:140px;" value="데모 사용자">
+            </div>
+            <button class="btn btn-dark" id="btn-register">등록</button>
+          </div>
+        </div>
+
+        <div class="filter-row" id="asset-filters"></div>
+
+        <div id="asset-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+        <div class="empty-small" id="asset-empty" hidden>등록된 자산이 없습니다.</div>
+      </div>
+
+      <div class="side-col">
+        <div>
+          <div style="font-size:14px; font-weight:700;" id="history-title">히스토리</div>
+          <div class="desc" id="history-sub">자산을 선택하면 버전별 변경 이력이 표시됩니다</div>
+        </div>
+        <div id="history-timeline"></div>
+        <button class="btn btn-outline" id="btn-revert" disabled title="준비중" style="margin-top:auto;">이 버전으로 되돌리기</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 생성 ===================== -->
+  <section class="tab" id="tab-generate">
+    <div class="page-head">
+      <div>
+        <h2>어떤 화면을 만들어 볼까요?</h2>
+        <div class="desc">브리프를 쓰고, 사용할 자산을 고르면 시안이 생성됩니다</div>
+      </div>
+    </div>
+    <div class="layout">
+      <div class="main-col">
+        <div class="card-box brief-box">
+          <div class="label">브리프</div>
+          <textarea class="input" id="gen-brief" placeholder="예: 우리팀 카드상품 신청 화면. 연회비와 혜택 3가지를 강조하고, 시니어 고객도 읽기 쉽게."></textarea>
+        </div>
+        <div class="card-box" style="border-color:#e2e8e6;">
+          <div class="toggle-row" style="justify-content:space-between;">
+            <div class="label">사용할 자산 <span id="gen-selected-count" style="color:#8aa19c; font-weight:500;">0개 선택됨</span></div>
+            <div class="desc" style="margin:0;">선택한 자산만 생성 컨텍스트로 들어갑니다</div>
+          </div>
+          <div class="asset-grid" id="gen-asset-grid"></div>
+          <div class="empty-small" id="gen-asset-empty" hidden>등록된 자산이 없습니다. 자산 탭에서 먼저 등록해 주세요.</div>
+        </div>
+        <div style="display:flex; justify-content:flex-end;">
+          <button class="btn btn-primary" id="btn-generate" style="height:52px; padding:0 28px; font-size:15px;">시안 3종 생성</button>
+        </div>
+      </div>
+      <div class="side-col" style="border:none; padding:0; background:transparent;">
+        <div style="font-size:14px; font-weight:700;">생성 작업</div>
+        <div id="job-list" style="display:flex; flex-direction:column; gap:14px;"></div>
+        <div class="empty-small" id="job-empty">아직 생성한 작업이 없습니다.</div>
+      </div>
+    </div>
+  </section>
 </main>
+
 <script>
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+
+  const TYPE_LABELS = {
+    token: '토큰 세트', palette: '컬러 팔레트', 'icon-set': '아이콘셋',
+    component: '컴포넌트', 'style-guide': '스타일 가이드', skill: '스킬셋', workflow: '워크플로우'
+  };
+  const typeLabel = t => TYPE_LABELS[t] || esc(t);
+
+  async function sha256Hex(body) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function apiPost(path, payload) {
+    const body = JSON.stringify(payload);
+    const sha256 = await sha256Hex(body);
+    const r = await fetch(path, {method: 'POST',
+      headers: {'Content-Type': 'application/json', 'x-amz-content-sha256': sha256},
+      body});
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || out.error) { alert(out.error || `요청 실패 (${r.status})`); return null; }
+    return out;
+  }
+
+  async function apiGet(path) {
+    const r = await fetch(path, {cache: 'no-store'});
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || out.error) { alert(out.error || `요청 실패 (${r.status})`); return null; }
+    return out;
+  }
+
+  /* ===================== routing ===================== */
+  const TABS = ['gallery', 'assets', 'generate'];
+  function currentTab() {
+    const h = (location.hash || '#gallery').replace('#', '');
+    return TABS.includes(h) ? h : 'gallery';
+  }
+  function renderRoute() {
+    const tab = currentTab();
+    TABS.forEach(t => {
+      document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
+      document.querySelector(`nav a[data-tab="${t}"]`).classList.toggle('active', t === tab);
+    });
+    if (tab === 'gallery') loadGallery();
+    if (tab === 'assets') loadAssets();
+    if (tab === 'generate') loadGenerateAssets();
+  }
+  window.addEventListener('hashchange', renderRoute);
+
+  /* ===================== 갤러리 tab ===================== */
   const badgeClass = s => s === '승인됨' ? 'badge approved'
                         : s === '검토중' ? 'badge review' : 'badge';
-  fetch('./drafts.json', {cache: 'no-store'}).then(r => r.json()).then(d => {
-    const drafts = (d.drafts || []).slice().reverse();
-    if (!drafts.length) { document.getElementById('empty').hidden = false; return; }
-    document.getElementById('grid').innerHTML = drafts.map(x => `
-      <a class="card" href="${esc(x.url)}" target="_blank" rel="noopener">
-        <div class="thumb"><iframe src="${esc(x.url)}" loading="lazy" tabindex="-1"></iframe></div>
-        <div class="meta">
-          <div>
-            <div class="title">${esc(x.title)}</div>
-            <div class="sub">${esc(x.axis)} · ${esc(new Date(x.created_at).toLocaleString('ko-KR'))}</div>
+
+  function loadGallery() {
+    fetch('./drafts.json', {cache: 'no-store'}).then(r => r.json()).then(d => {
+      const drafts = (d.drafts || []).slice().reverse();
+      document.getElementById('empty').hidden = !!drafts.length;
+      if (!drafts.length) { document.getElementById('grid').innerHTML = ''; return; }
+      document.getElementById('grid').innerHTML = drafts.map(x => `
+        <a class="card" href="${esc(x.url)}" target="_blank" rel="noopener">
+          <div class="thumb"><iframe src="${esc(x.url)}" loading="lazy" tabindex="-1"></iframe></div>
+          <div class="meta">
+            <div>
+              <div class="title">${esc(x.title)}</div>
+              <div class="sub">${esc(x.axis)} · ${esc(new Date(x.created_at).toLocaleString('ko-KR'))}</div>
+            </div>
+            <div class="${badgeClass(x.status)}">${esc(x.status)}</div>
           </div>
-          <div class="${badgeClass(x.status)}">${esc(x.status)}</div>
-        </div>
-        <div class="actions">
-          <button onclick="feedback(event,'${esc(x.id)}','approve')">승인</button>
-          <button class="reject" onclick="feedback(event,'${esc(x.id)}','reject')">반려</button>
-        </div>
-      </a>`).join('');
-  }).catch(() => { document.getElementById('empty').hidden = false; });
+          <div class="actions">
+            <button onclick="feedback(event,'${esc(x.id)}','approve')">승인</button>
+            <button class="reject" onclick="feedback(event,'${esc(x.id)}','reject')">반려</button>
+          </div>
+        </a>`).join('');
+    }).catch(() => { document.getElementById('empty').hidden = false; });
+  }
 
   async function feedback(ev, id, action) {
     ev.preventDefault(); ev.stopPropagation();
     const comment = action === 'reject' ? (prompt('반려 사유 (선택)') || '') : '';
-    const body = JSON.stringify({draft_id: id, action, comment});
-    // CloudFront OAC-signed POST to a Lambda Function URL requires the payload hash
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
-    const sha256 = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
-    const r = await fetch('/api/feedback', {method: 'POST',
-      headers: {'Content-Type': 'application/json', 'x-amz-content-sha256': sha256},
-      body});
-    const out = await r.json();
-    if (out.ok) location.reload(); else alert(out.error || '실패');
+    const out = await apiPost('/api/feedback', {draft_id: id, action, comment});
+    if (out && out.ok) location.reload();
   }
+
+  /* ===================== 자산 tab ===================== */
+  let allAssets = [];
+  let assetFilter = 'all';
+  let selectedAssetId = null;
+
+  function scopeInfo(a) {
+    return a.scope === 'shared'
+      ? {cls: 'shared', label: '회사 공유'}
+      : {cls: 'mine', label: '내 자산'};
+  }
+
+  function renderAssetFilters() {
+    const total = allAssets.length;
+    const mine = allAssets.filter(a => a.scope !== 'shared').length;
+    const shared = total - mine;
+    const chips = [
+      ['all', `전체 ${total}`],
+      ['mine', `내 자산 ${mine}`],
+      ['shared', `회사 공유 ${shared}`],
+    ];
+    document.getElementById('asset-filters').innerHTML = chips.map(([key, label]) => `
+      <button class="filter-chip ${assetFilter === key ? 'active' : ''}" data-filter="${key}">${esc(label)}</button>
+    `).join('');
+    document.querySelectorAll('#asset-filters .filter-chip').forEach(btn => {
+      btn.onclick = () => { assetFilter = btn.dataset.filter; renderAssetList(); renderAssetFilters(); };
+    });
+  }
+
+  function renderAssetList() {
+    const items = allAssets.filter(a => {
+      if (assetFilter === 'mine') return a.scope !== 'shared';
+      if (assetFilter === 'shared') return a.scope === 'shared';
+      return true;
+    });
+    document.getElementById('asset-empty').hidden = !!items.length;
+    document.getElementById('asset-list').innerHTML = items.map(a => {
+      const sc = scopeInfo(a);
+      const when = a.updated_at ? new Date(a.updated_at).toLocaleString('ko-KR') : '';
+      return `
+        <div class="asset-row ${a.asset_id === selectedAssetId ? 'selected' : ''}" data-asset-id="${esc(a.asset_id)}">
+          <div class="icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5c6f6b" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>
+          </div>
+          <div class="body">
+            <div class="name-line">
+              <span class="name">${esc(a.name)}</span>
+              <span class="scope-badge ${sc.cls}">${esc(sc.label)}</span>
+            </div>
+            <div class="info">${typeLabel(a.type)} · ${esc(a.actor || '')} · ${esc(when)}</div>
+          </div>
+          <div class="version-chip">v${esc(a.version)}</div>
+        </div>`;
+    }).join('');
+    document.querySelectorAll('#asset-list .asset-row').forEach(row => {
+      row.onclick = () => selectAsset(row.dataset.assetId);
+    });
+  }
+
+  async function selectAsset(assetId) {
+    selectedAssetId = assetId;
+    renderAssetList();
+    const asset = allAssets.find(a => a.asset_id === assetId);
+    document.getElementById('history-title').textContent = `히스토리 — ${asset ? asset.name : ''}`;
+    document.getElementById('history-sub').textContent = '버전별 변경 이력';
+    document.getElementById('history-timeline').innerHTML = '<div class="empty-small">불러오는 중...</div>';
+    const out = await apiGet(`/api/assets/history?asset_id=${encodeURIComponent(assetId)}`);
+    const items = (out && out.history) || [];
+    if (!items.length) {
+      document.getElementById('history-timeline').innerHTML = '<div class="empty-small">이력이 없습니다.</div>';
+      return;
+    }
+    document.getElementById('history-timeline').innerHTML = items.map((h, i) => `
+      <div class="timeline-item">
+        <div class="rail"><div class="dot"></div>${i < items.length - 1 ? '<div class="line"></div>' : ''}</div>
+        <div class="content">
+          <div class="ver">v${esc(parseInt(String(h.version).replace(/^v/, ''), 10))} ${esc(h.action === 'register' ? '등록' : h.action === 'update' ? '업데이트' : h.action || '')}
+            <time>${esc(h.created_at ? new Date(h.created_at).toLocaleString('ko-KR') : '')}</time></div>
+          <div class="note">${esc(h.actor || '')}${h.note ? ' · ' + esc(h.note) : ''}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  async function loadAssets() {
+    const out = await apiGet('/api/assets');
+    allAssets = (out && out.assets) || [];
+    renderAssetFilters();
+    renderAssetList();
+  }
+
+  function setupAssetsTab() {
+    const scopeSwitch = document.getElementById('scope-switch');
+    scopeSwitch.onclick = () => scopeSwitch.classList.toggle('on');
+    document.getElementById('scope-toggle-label').onclick = (e) => {
+      if (e.target === scopeSwitch || scopeSwitch.contains(e.target)) return;
+      scopeSwitch.classList.toggle('on');
+    };
+    document.getElementById('btn-register').onclick = async () => {
+      const name = document.getElementById('asset-name').value.trim();
+      const type = document.getElementById('asset-type').value;
+      const content = document.getElementById('asset-content').value;
+      const actor = document.getElementById('asset-actor').value.trim() || '데모 사용자';
+      const scope = scopeSwitch.classList.contains('on') ? 'shared' : 'mine';
+      if (!name || !content.trim()) { alert('이름과 내용을 입력해 주세요.'); return; }
+      const out = await apiPost('/api/assets', {name, type, content, actor, scope});
+      if (out && out.ok) {
+        document.getElementById('asset-name').value = '';
+        document.getElementById('asset-content').value = '';
+        await loadAssets();
+      }
+    };
+  }
+
+  /* ===================== 생성 tab ===================== */
+  let genAssets = [];
+  let genSelected = new Set();
+  let jobs = [];
+  let pollTimer = null;
+
+  async function loadGenerateAssets() {
+    const out = await apiGet('/api/assets');
+    genAssets = (out && out.assets) || [];
+    renderGenAssetGrid();
+    if (!pollTimer && jobs.some(j => j.status === 'running')) startPolling();
+  }
+
+  function renderGenAssetGrid() {
+    document.getElementById('gen-asset-empty').hidden = !!genAssets.length;
+    document.getElementById('gen-asset-grid').innerHTML = genAssets.map(a => {
+      const sc = scopeInfo(a);
+      const checked = genSelected.has(a.asset_id);
+      return `
+        <div class="pick ${checked ? 'checked' : ''}" data-asset-id="${esc(a.asset_id)}">
+          <div class="box">${checked ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4 10-10"></path></svg>' : ''}</div>
+          <div>
+            <div class="pname">${esc(a.name)} <span class="version-chip" style="padding:1px 6px;">v${esc(a.version)}</span></div>
+            <div class="ptype">${esc(sc.label)} · ${typeLabel(a.type)}</div>
+          </div>
+        </div>`;
+    }).join('');
+    document.querySelectorAll('#gen-asset-grid .pick').forEach(el => {
+      el.onclick = () => {
+        const id = el.dataset.assetId;
+        if (genSelected.has(id)) genSelected.delete(id); else genSelected.add(id);
+        renderGenAssetGrid();
+        document.getElementById('gen-selected-count').textContent = `${genSelected.size}개 선택됨`;
+      };
+    });
+    document.getElementById('gen-selected-count').textContent = `${genSelected.size}개 선택됨`;
+  }
+
+  function jobStatusLabel(status) {
+    if (status === 'done') return '완료';
+    if (status === 'failed') return '실패';
+    return '생성중';
+  }
+
+  function renderJobs() {
+    document.getElementById('job-empty').hidden = !!jobs.length;
+    document.getElementById('job-list').innerHTML = jobs.slice().reverse().map(j => {
+      const statusCls = j.status === 'done' ? 'done' : j.status === 'failed' ? 'failed' : 'running';
+      const drafts = j.drafts || [];
+      let sub;
+      if (j.status === 'failed') {
+        sub = esc(j.error || '생성 중 오류가 발생했습니다.');
+      } else if (j.status === 'done') {
+        sub = drafts.length
+          ? drafts.map(d => `<a href="${esc(d.url || '#gallery')}" target="_blank" rel="noopener">${esc(d.title || d.id || '시안')}</a>`).join(' · ') + ' · <a href="#gallery">갤러리에서 보기</a>'
+          : '<a href="#gallery">갤러리에서 보기</a>';
+      } else {
+        sub = `자산 ${(j.asset_ids || []).length}개 · 생성 중...`;
+      }
+      return `
+        <div class="job-card ${statusCls === 'running' ? 'running' : ''}">
+          <div class="job-top">
+            <div class="job-title">${esc(j.brief ? j.brief.slice(0, 24) : j.job_id)}</div>
+            <div class="job-status ${statusCls}">${jobStatusLabel(j.status)}</div>
+          </div>
+          <div class="job-sub">${sub}</div>
+        </div>`;
+    }).join('');
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(pollJobs, 10000);
+  }
+  function stopPollingIfIdle() {
+    if (pollTimer && !jobs.some(j => j.status === 'running')) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function pollJobs() {
+    const running = jobs.filter(j => j.status === 'running');
+    for (const j of running) {
+      const out = await apiGet(`/api/jobs?job_id=${encodeURIComponent(j.job_id)}`);
+      if (out && out.job) {
+        Object.assign(j, out.job, {job_id: j.job_id});
+      }
+    }
+    renderJobs();
+    stopPollingIfIdle();
+  }
+
+  function setupGenerateTab() {
+    document.getElementById('btn-generate').onclick = async () => {
+      const brief = document.getElementById('gen-brief').value.trim();
+      if (!brief) { alert('브리프를 입력해 주세요.'); return; }
+      const asset_ids = [...genSelected];
+      const out = await apiPost('/api/generate', {brief, asset_ids});
+      if (out && out.ok) {
+        jobs.push({job_id: out.job_id, brief, asset_ids, status: 'running'});
+        renderJobs();
+        startPolling();
+      }
+    };
+  }
+
+  /* ===================== init ===================== */
+  setupAssetsTab();
+  setupGenerateTab();
+  if (!TABS.includes((location.hash || '').replace('#', ''))) location.hash = '#gallery';
+  renderRoute();
 </script>
 </body>
 </html>

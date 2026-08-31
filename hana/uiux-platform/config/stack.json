@@ -17,5 +17,8 @@
   "cognito_domain": "hana-uiux-180294183052.auth.ap-northeast-2.amazoncognito.com",
   "gateway_id": "hana-design-assets-gw-kwzg6g7rhz",
   "gateway_url": "https://hana-design-assets-gw-kwzg6g7rhz.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
-  "runtime_arn": "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/hana_design_harness-2G8fU3CCa4"
+  "runtime_arn": "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/hana_design_harness-2G8fU3CCa4",
+  "dispatcher_fn": "hana-generate-dispatcher",
+  "distribution_id": "E1VC99R64CM2IY",
+  "history_table": "hana-asset-history"
 }

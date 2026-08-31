@@ -94,6 +94,15 @@ def main():
     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
     print(f"runtime READY: {arn}")
 
+    lam = boto3.client("lambda", region_name=region)
+    dispatcher_fn = cfg["dispatcher_fn"]
+    current_env = lam.get_function_configuration(
+        FunctionName=dispatcher_fn)["Environment"]["Variables"]
+    lam.update_function_configuration(
+        FunctionName=dispatcher_fn,
+        Environment={"Variables": {**current_env, "RUNTIME_ARN": arn}})
+    print(f"updated {dispatcher_fn} RUNTIME_ARN")
+
 
 if __name__ == "__main__":
     main()
