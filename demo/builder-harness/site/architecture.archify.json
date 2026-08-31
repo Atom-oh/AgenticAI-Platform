@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agentic AI 플랫폼 워크스페이스 데모 아키텍처",
+    "output": "architecture.html",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "request-path",
+        "label": "요청 경로",
+        "focus": [
+          "users",
+          "cdn",
+          "apigw",
+          "fn",
+          "harness",
+          "model"
+        ],
+        "note": "브라우저 요청이 CloudFront를 거쳐 공유 Harness의 모델 호출까지 도달하는 주 경로."
+      },
+      {
+        "id": "registry",
+        "label": "레지스트리",
+        "focus": [
+          "fn",
+          "ddb"
+        ],
+        "note": "에이전트 = DynamoDB에 저장된 config. 생성은 곧 레지스트리 쓰기다."
+      },
+      {
+        "id": "agent-runtime",
+        "label": "에이전트 런타임",
+        "focus": [
+          "harness",
+          "model",
+          "memory"
+        ],
+        "note": "공유 Harness 하나가 systemPrompt override로 모든 에이전트를 실행한다."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "users",
+      "type": "external",
+      "label": "사용자",
+      "sublabel": "브라우저 SPA",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "pages",
+      "type": "cloud",
+      "label": "GitHub Pages",
+      "sublabel": "가이드북",
+      "pos": [
+        40,
+        470
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "tag": "정적 문서"
+    },
+    {
+      "id": "cdn",
+      "type": "cloud",
+      "label": "CloudFront",
+      "sublabel": "E3ETCXKSTRXQAT",
+      "pos": [
+        250,
+        300
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "tag": "유일한 퍼블릭 진입점"
+    },
+    {
+      "id": "apigw",
+      "type": "cloud",
+      "label": "API Gateway",
+      "sublabel": "HTTP API 00l4tzkyqi",
+      "pos": [
+        470,
+        300
+      ],
+      "size": [
+        140,
+        62
+      ]
+    },
+    {
+      "id": "fn",
+      "type": "backend",
+      "label": "Lambda",
+      "sublabel": "agentic-book-demo-site",
+      "pos": [
+        690,
+        300
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "예약 동시성 5"
+    },
+    {
+      "id": "ddb",
+      "type": "database",
+      "label": "DynamoDB",
+      "sublabel": "demo-registry",
+      "pos": [
+        690,
+        470
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "tag": "에이전트/데이터소스"
+    },
+    {
+      "id": "harness",
+      "type": "backend",
+      "label": "AgentCore Harness",
+      "sublabel": "AgenticBookBuilderDemo",
+      "pos": [
+        920,
+        300
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "tag": "microVM 세션"
+    },
+    {
+      "id": "memory",
+      "type": "database",
+      "label": "AgentCore Memory",
+      "sublabel": "managed",
+      "pos": [
+        920,
+        470
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "model",
+      "type": "cloud",
+      "label": "Bedrock",
+      "sublabel": "Claude Sonnet 4",
+      "pos": [
+        1155,
+        300
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "tag": "apac geo CRIS"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "AWS ap-northeast-2",
+      "wraps": [
+        "apigw",
+        "fn",
+        "ddb",
+        "harness",
+        "memory",
+        "model"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "x-origin-verify 검증 경계",
+      "wraps": [
+        "fn"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "users-to-cdn",
+      "from": "users",
+      "to": "cdn",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "users-to-pages",
+      "from": "users",
+      "to": "pages",
+      "label": "가이드북 열람",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 26
+    },
+    {
+      "id": "cdn-to-apigw",
+      "from": "cdn",
+      "to": "apigw",
+      "label": "시크릿 헤더 주입",
+      "variant": "security",
+      "labelDy": 55
+    },
+    {
+      "id": "apigw-to-fn",
+      "from": "apigw",
+      "to": "fn",
+      "label": "proxy 통합"
+    },
+    {
+      "id": "fn-to-ddb",
+      "from": "fn",
+      "to": "ddb",
+      "label": "레지스트리 조회/저장",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 26
+    },
+    {
+      "id": "fn-to-harness",
+      "from": "fn",
+      "to": "harness",
+      "label": "InvokeHarness + prompt override",
+      "variant": "emphasis",
+      "labelDy": 62,
+      "labelDx": 0
+    },
+    {
+      "id": "harness-to-model",
+      "from": "harness",
+      "to": "model",
+      "label": "ConverseStream",
+      "labelDy": 55
+    },
+    {
+      "id": "harness-to-memory",
+      "from": "harness",
+      "to": "memory",
+      "label": "세션 이벤트/장기 기억",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 26
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "진입점",
+      "items": [
+        "CloudFront가 유일한 퍼블릭 진입점",
+        "오리진 요청에 x-origin-verify 시크릿 헤더 주입 — Lambda가 검증"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "에이전트 = config",
+      "items": [
+        "에이전트 생성은 DynamoDB 레지스트리 쓰기",
+        "실행은 공유 Harness에 systemPrompt override로 위임",
+        "데이터소스는 CAG 방식 컨텍스트 프리로딩"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "안전장치",
+      "items": [
+        "Lambda 예약 동시성 5로 남용 상한",
+        "에이전트 20개 · 데이터소스 10개 · 메시지 2,000자 한도",
+        "apac geo 프로파일로 데이터 레지던시 고정"
+      ]
+    }
+  ]
+}
