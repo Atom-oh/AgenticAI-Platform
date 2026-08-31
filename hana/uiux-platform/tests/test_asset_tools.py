@@ -65,6 +65,17 @@ def test_skills_tools(aws):
     assert "design-draft-html" in handler({"name": "design-draft-html"}, ctx("get_skill"))["content"]
 
 
+def test_get_skill_resolves_user_prefixed_skill(aws):
+    from mcp.asset_tools import handler
+    boto3.client("s3", region_name="ap-northeast-2").put_object(
+        Bucket="skills", Key="skills/user-senior-mode/1.0.0/SKILL.md",
+        Body=b"# senior-mode\nbig text")
+    out = handler({"name": "senior-mode"}, ctx("get_skill"))
+    assert "big text" in out["content"] and out["name"] == "senior-mode"
+    still = handler({"name": "design-draft-html"}, ctx("get_skill"))
+    assert "design-draft-html" in still["content"] and still["name"] == "design-draft-html"
+
+
 def test_unknown_tool(aws):
     from mcp.asset_tools import handler
     assert "error" in handler({}, ctx("nope"))

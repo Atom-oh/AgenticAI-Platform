@@ -60,10 +60,20 @@ def list_skills(_):
 
 def get_skill(event):
     name = event.get("name", "")
-    versions = [s["version"] for s in list_skills({})["skills"] if s["name"] == name]
+    all_skills = list_skills({})["skills"]
+    versions = [s["version"] for s in all_skills if s["name"] == name]
+    if versions:
+        key = f"skills/{name}/{max(versions)}/SKILL.md"
+        body = _s3().get_object(Bucket=os.environ["SKILLS_BUCKET"], Key=key)["Body"].read()
+        return {"name": name, "version": max(versions), "content": body.decode()}
+    # user-registered skills are physically namespaced under "user-<name>"
+    # (see feedback/assets_api.py register_asset); fall back to that layout
+    # but report the caller-supplied, unprefixed name.
+    fallback_name = f"user-{name}"
+    versions = [s["version"] for s in all_skills if s["name"] == fallback_name]
     if not versions:
         return {"error": f"skill not found: {name}"}
-    key = f"skills/{name}/{max(versions)}/SKILL.md"
+    key = f"skills/{fallback_name}/{max(versions)}/SKILL.md"
     body = _s3().get_object(Bucket=os.environ["SKILLS_BUCKET"], Key=key)["Body"].read()
     return {"name": name, "version": max(versions), "content": body.decode()}
 
