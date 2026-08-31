@@ -48,3 +48,9 @@ E2E verified: figma-sync (6 components) → gateway MCP (6 tools) → harness (3
 variants per brief) → gallery; feedback approve → approved-patterns → few-shot
 uptake confirmed on a second invoke. Reminder: revoke the temporary Figma PAT
 after the PoC (`aws secretsmanager delete-secret --secret-id hana/figma-token`).
+
+## Phase 2 (2026-08-31) — asset platform
+
+Live at the same gallery URL: 자산 탭 (7종 자산 등록 + 버전 히스토리) · 생성 탭 (자산 선택형
+비동기 생성). E2E verified: web-registered purple palette + workflow asset → selective
+generation → drafts render with the registered palette (#7d2882); history v1 recorded.
