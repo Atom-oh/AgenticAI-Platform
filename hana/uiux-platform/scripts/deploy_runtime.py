@@ -35,11 +35,11 @@ def main():
     sh("docker", "buildx", "build", "--platform", "linux/arm64",
        "-f", "harness/Dockerfile", "-t", uri, "--push", ".")
 
-    m2m_secret_arn = boto3.client("cognito-idp", region_name=region).describe_user_pool_client(
+    client_desc = boto3.client("cognito-idp", region_name=region).describe_user_pool_client(
         UserPoolId=cfg["user_pool_id"], ClientId=cfg["m2m_client_id"])
     # store client secret in Secrets Manager so the runtime never gets it via env
     sm = boto3.client("secretsmanager", region_name=region)
-    secret_value = m2m_secret_arn["UserPoolClient"]["ClientSecret"]
+    secret_value = client_desc["UserPoolClient"]["ClientSecret"]
     try:
         sec = sm.create_secret(Name="hana/m2m-client-secret", SecretString=secret_value)
     except sm.exceptions.ResourceExistsException:
@@ -73,9 +73,14 @@ def main():
     else:
         created = ac.create_agent_runtime(agentRuntimeName=RUNTIME, **kwargs)
         arn, rid = created["agentRuntimeArn"], created["agentRuntimeId"]
-    while ac.get_agent_runtime(agentRuntimeId=rid)["status"] in ("CREATING", "UPDATING"):
+    for attempt in range(90):
+        status = ac.get_agent_runtime(agentRuntimeId=rid)["status"]
+        print(f"[{attempt+1}/90] runtime status: {status}")
+        if status not in ("CREATING", "UPDATING"):
+            break
         time.sleep(10)
-    status = ac.get_agent_runtime(agentRuntimeId=rid)["status"]
+    else:
+        raise TimeoutError(f"runtime failed to reach READY within 15 minutes, last status: {status}")
     assert status == "READY", status
     cfg["runtime_arn"] = arn
     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
