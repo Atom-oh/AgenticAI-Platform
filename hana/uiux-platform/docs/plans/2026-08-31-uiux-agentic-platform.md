@@ -1752,6 +1752,273 @@ git add hana/uiux-platform && git commit -m "feat(hana): deploy PoC to ap-northe
 
 ---
 
+### Task 11: Organizational learning loop (feedback → approved patterns → few-shot)
+
+Added 2026-08-31 after user approval. Runs after Task 9, before Task 10 deploy.
+
+**Files:**
+- Create: `hana/uiux-platform/feedback/handler.py` (+ empty `feedback/__init__.py`)
+- Modify: `hana/uiux-platform/infra/stack.py` (feedback Lambda + Function URL + CloudFront `/api/*` behavior)
+- Modify: `hana/uiux-platform/gallery/index.html` (승인/반려 buttons)
+- Modify: `hana/uiux-platform/harness/app.py` and `hana/uiux-platform/harness/publish.py` (few-shot loading)
+- Test: `hana/uiux-platform/tests/test_feedback.py`, extend `tests/test_publish.py`
+
+**Interfaces:**
+- Produces: Lambda Function URL handler for `POST /api/feedback` with JSON body `{"draft_id": str, "action": "approve"|"reject", "comment": str?}` → `{"ok": true, "status": "승인됨"|"반려"}`; 400 `{"error": ...}` on bad input. Approve copies `drafts/<id>.html` → `approved-patterns/<id>.html` and upserts `approved-patterns/index.json` `{"patterns": [{"id","title","axis","approved_at"}]}`.
+- Produces: `load_approved_patterns(limit=2) -> list[dict]` in `harness/publish.py` returning `[{"title", "axis", "html"}]` newest-first from the drafts bucket; harness injects them into the system prompt as reference examples.
+- Env for feedback Lambda: `DRAFTS_BUCKET`.
+
+- [ ] **Step 1: Write failing tests**
+
+`hana/uiux-platform/tests/test_feedback.py`:
+
+```python
+import json
+
+import boto3
+import pytest
+from moto import mock_aws
+
+
+@pytest.fixture
+def aws(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-2")
+    monkeypatch.setenv("DRAFTS_BUCKET", "drafts")
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="ap-northeast-2")
+        s3.create_bucket(Bucket="drafts",
+                         CreateBucketConfiguration={"LocationConstraint": "ap-northeast-2"})
+        s3.put_object(Bucket="drafts", Key="drafts.json", Body=json.dumps({"drafts": [
+            {"id": "abc123", "title": "계좌이체 · compact", "axis": "밀도",
+             "status": "검토중", "url": "https://x/drafts/abc123.html",
+             "created_at": "2026-08-31T00:00:00+00:00"}]}, ensure_ascii=False))
+        s3.put_object(Bucket="drafts", Key="drafts/abc123.html", Body=b"<html>draft</html>")
+        yield s3
+
+
+def _event(body):
+    return {"requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps(body, ensure_ascii=False)}
+
+
+def test_approve_promotes_pattern(aws):
+    from feedback.handler import handler
+    resp = handler(_event({"draft_id": "abc123", "action": "approve"}), None)
+    assert resp["statusCode"] == 200
+    assert json.loads(resp["body"])["status"] == "승인됨"
+    manifest = json.loads(aws.get_object(Bucket="drafts", Key="drafts.json")["Body"].read())
+    assert manifest["drafts"][0]["status"] == "승인됨"
+    idx = json.loads(aws.get_object(Bucket="drafts",
+                                    Key="approved-patterns/index.json")["Body"].read())
+    assert idx["patterns"][0]["id"] == "abc123"
+    aws.get_object(Bucket="drafts", Key="approved-patterns/abc123.html")
+
+
+def test_reject_updates_status_only(aws):
+    from feedback.handler import handler
+    resp = handler(_event({"draft_id": "abc123", "action": "reject", "comment": "너무 밀집"}), None)
+    assert json.loads(resp["body"])["status"] == "반려"
+    manifest = json.loads(aws.get_object(Bucket="drafts", Key="drafts.json")["Body"].read())
+    assert manifest["drafts"][0]["status"] == "반려"
+    assert manifest["drafts"][0]["comment"] == "너무 밀집"
+
+
+def test_bad_input_400(aws):
+    from feedback.handler import handler
+    assert handler(_event({"draft_id": "abc123", "action": "nope"}), None)["statusCode"] == 400
+    assert handler(_event({"draft_id": "zzz", "action": "approve"}), None)["statusCode"] == 404
+```
+
+Extend `hana/uiux-platform/tests/test_publish.py` with:
+
+```python
+def test_load_approved_patterns(aws):
+    import json as _json
+    from harness.publish import load_approved_patterns, publish_draft
+    url = publish_draft("이체 · airy", "밀도", "<html>approved one</html>")
+    draft_id = url.rsplit("/", 1)[1].removesuffix(".html")
+    aws.put_object(Bucket="drafts", Key=f"approved-patterns/{draft_id}.html",
+                   Body=b"<html>approved one</html>")
+    aws.put_object(Bucket="drafts", Key="approved-patterns/index.json", Body=_json.dumps(
+        {"patterns": [{"id": draft_id, "title": "이체 · airy", "axis": "밀도",
+                       "approved_at": "2026-08-31T01:00:00+00:00"}]}, ensure_ascii=False))
+    pats = load_approved_patterns(limit=2)
+    assert pats == [{"title": "이체 · airy", "axis": "밀도", "html": "<html>approved one</html>"}]
+
+
+def test_load_approved_patterns_empty(aws):
+    from harness.publish import load_approved_patterns
+    assert load_approved_patterns() == []
+```
+
+- [ ] **Step 2: Run to verify failures**
+
+Run: `cd hana/uiux-platform && python -m pytest tests/test_feedback.py tests/test_publish.py -v`
+Expected: new tests FAIL (missing module/function)
+
+- [ ] **Step 3: Implement**
+
+`hana/uiux-platform/feedback/handler.py`:
+
+```python
+import json
+import os
+from datetime import datetime, timezone
+
+import boto3
+
+
+def _resp(code, body):
+    return {"statusCode": code, "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(body, ensure_ascii=False)}
+
+
+def handler(event, context):
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except json.JSONDecodeError:
+        return _resp(400, {"error": "invalid JSON"})
+    draft_id, action = body.get("draft_id"), body.get("action")
+    if not draft_id or action not in ("approve", "reject"):
+        return _resp(400, {"error": "draft_id and action (approve|reject) required"})
+
+    s3 = boto3.client("s3")
+    bucket = os.environ["DRAFTS_BUCKET"]
+    manifest = json.loads(s3.get_object(Bucket=bucket, Key="drafts.json")["Body"].read())
+    entry = next((d for d in manifest["drafts"] if d["id"] == draft_id), None)
+    if entry is None:
+        return _resp(404, {"error": f"draft not found: {draft_id}"})
+
+    status = "승인됨" if action == "approve" else "반려"
+    entry["status"] = status
+    if body.get("comment"):
+        entry["comment"] = body["comment"]
+    s3.put_object(Bucket=bucket, Key="drafts.json",
+                  Body=json.dumps(manifest, ensure_ascii=False).encode(),
+                  ContentType="application/json")
+
+    if action == "approve":
+        s3.copy_object(Bucket=bucket, Key=f"approved-patterns/{draft_id}.html",
+                       CopySource={"Bucket": bucket, "Key": f"drafts/{draft_id}.html"})
+        try:
+            idx = json.loads(s3.get_object(
+                Bucket=bucket, Key="approved-patterns/index.json")["Body"].read())
+        except s3.exceptions.NoSuchKey:
+            idx = {"patterns": []}
+        idx["patterns"] = [p for p in idx["patterns"] if p["id"] != draft_id]
+        idx["patterns"].append({"id": draft_id, "title": entry["title"], "axis": entry["axis"],
+                                "approved_at": datetime.now(timezone.utc).isoformat()})
+        s3.put_object(Bucket=bucket, Key="approved-patterns/index.json",
+                      Body=json.dumps(idx, ensure_ascii=False).encode(),
+                      ContentType="application/json")
+    return _resp(200, {"ok": True, "status": status})
+```
+
+`hana/uiux-platform/harness/publish.py` — append:
+
+```python
+def load_approved_patterns(limit: int = 2) -> list:
+    """Newest-first approved drafts as few-shot references. Empty list when none."""
+    s3 = boto3.client("s3")
+    bucket = os.environ["DRAFTS_BUCKET"]
+    try:
+        idx = json.loads(s3.get_object(
+            Bucket=bucket, Key="approved-patterns/index.json")["Body"].read())
+    except s3.exceptions.NoSuchKey:
+        return []
+    out = []
+    for p in sorted(idx.get("patterns", []), key=lambda x: x["approved_at"], reverse=True)[:limit]:
+        try:
+            html = s3.get_object(Bucket=bucket,
+                                 Key=f"approved-patterns/{p['id']}.html")["Body"].read().decode()
+        except s3.exceptions.NoSuchKey:
+            continue
+        out.append({"title": p["title"], "axis": p["axis"], "html": html})
+    return out
+```
+
+`hana/uiux-platform/harness/app.py` — in `invoke`, right before `token = _m2m_token()`, add:
+
+```python
+    patterns = load_approved_patterns(limit=2)
+    system = SYSTEM
+    if patterns:
+        refs = "\n\n".join(
+            f"### 승인 패턴: {p['title']} (axis: {p['axis']})\n```html\n{p['html']}\n```"
+            for p in patterns)
+        system = SYSTEM + ("\n\nBelow are org-approved reference drafts. Follow their "
+                           "structure and quality bar; do not copy their brief-specific "
+                           "content.\n\n" + refs)
+```
+
+and change `Agent(... system_prompt=SYSTEM ...)` to `system_prompt=system`, and the import to `from harness.publish import publish_draft, load_approved_patterns`.
+
+`hana/uiux-platform/infra/stack.py` — additions:
+
+```python
+        feedback = lambda_.Function(
+            self, "Feedback", function_name="hana-draft-feedback",
+            runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
+            handler="feedback.handler.handler", code=code,
+            timeout=cdk.Duration.seconds(15),
+            environment={"DRAFTS_BUCKET": drafts.bucket_name})
+        drafts.grant_read_write(feedback)
+        feedback_url = feedback.add_function_url(
+            auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
+        dist.add_behavior(
+            "/api/*",
+            origins.FunctionUrlOrigin.with_origin_access_control(feedback_url),
+            allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+            cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY)
+```
+
+(also exclude `"feedback"` must NOT be added to the Lambda asset exclude list — the shared `code` asset must include `feedback/`; verify the exclude list in `stack.py` doesn't exclude it.)
+
+Add to `tests/test_stack.py`:
+
+```python
+def test_feedback_lambda_and_api_behavior():
+    t = synth()
+    t.has_resource_properties("AWS::Lambda::Url", {"AuthType": "AWS_IAM"})
+    dist = list(t.find_resources("AWS::CloudFront::Distribution").values())[0]
+    behaviors = dist["Properties"]["DistributionConfig"]["CacheBehaviors"]
+    assert any(b["PathPattern"] == "/api/*" for b in behaviors)
+```
+
+`hana/uiux-platform/gallery/index.html` — in the card template add under `.meta`:
+
+```html
+        <div class="actions">
+          <button onclick="feedback(event,'${x.id}','approve')">승인</button>
+          <button class="reject" onclick="feedback(event,'${x.id}','reject')">반려</button>
+        </div>
+```
+
+with CSS `.actions{display:flex;gap:8px} .actions button{min-height:44px;padding:0 16px;border-radius:22px;border:1px solid #d5e0dd;background:#e6f3f2;color:#00615f;font-weight:700;font-family:inherit;font-size:13px;cursor:pointer} .actions button.reject{background:#fff;color:#5c6f6b}` and script:
+
+```js
+  async function feedback(ev, id, action) {
+    ev.preventDefault(); ev.stopPropagation();
+    const comment = action === 'reject' ? (prompt('반려 사유 (선택)') || '') : '';
+    const r = await fetch('/api/feedback', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({draft_id: id, action, comment})});
+    const out = await r.json();
+    if (out.ok) location.reload(); else alert(out.error || '실패');
+  }
+```
+
+(buttons live inside the `<a class="card">` — move the `.meta`+`.actions` block outside the anchor or call `preventDefault` as above; keep cards as `<div class="card">` with an inner anchor on the thumb if simpler.)
+
+- [ ] **Step 4: Run tests** — `python -m pytest tests/ -v`, all green (including new stack assertion).
+
+- [ ] **Step 5: Commit** — `git add hana/uiux-platform && git commit -m "feat(hana): org learning loop — feedback endpoint, approved patterns, few-shot"`
+
+- [ ] **Step 6 (deploy phase, Task 10):** `deploy_gallery.py` re-upload + `cdk deploy` + `deploy_runtime.py` rebuild, then e2e: approve one draft via `curl -X POST https://<dist>/api/feedback` and re-invoke the harness confirming the summary mentions reference patterns.
+
+---
+
 ## Self-review notes
 
 - Spec coverage: Figma ingestion (T1-2, T10), shared MCP + Cognito no-self-signup (T3, T5, T7), skill registry (T4), harness + variation policy (T8), gallery Option B (T6), IaC + deploy scripts (T5, T7, T9), tests + e2e (throughout, T10), teardown (T9).

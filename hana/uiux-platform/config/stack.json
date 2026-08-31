@@ -1,0 +1,21 @@
+{
+  "region": "ap-northeast-2",
+  "account": "180294183052",
+  "distribution_domain": "d4zwmnh2s47e9.cloudfront.net",
+  "assets_bucket": "hana-design-assets-180294183052",
+  "discovery_url": "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_OVFHIt2Y6/.well-known/openid-configuration",
+  "gateway_role_arn": "arn:aws:iam::180294183052:role/hana-agentcore-gateway",
+  "runtime_role_arn": "arn:aws:iam::180294183052:role/hana-agentcore-runtime",
+  "drafts_bucket": "hana-design-drafts-180294183052",
+  "user_pool_id": "ap-northeast-2_OVFHIt2Y6",
+  "skills_bucket": "hana-skill-registry-180294183052",
+  "registry_table": "hana-design-registry",
+  "asset_tools_fn_arn": "arn:aws:lambda:ap-northeast-2:180294183052:function:hana-design-asset-tools",
+  "figma_sync_fn": "hana-figma-sync",
+  "figma_secret_arn": "arn:aws:secretsmanager:ap-northeast-2:180294183052:secret:hana/figma-token-2Ivvwk",
+  "m2m_client_id": "5r8qi6756ka45rht138ui3viln",
+  "cognito_domain": "hana-uiux-180294183052.auth.ap-northeast-2.amazoncognito.com",
+  "gateway_id": "hana-design-assets-gw-kwzg6g7rhz",
+  "gateway_url": "https://hana-design-assets-gw-kwzg6g7rhz.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp",
+  "runtime_arn": "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/hana_design_harness-2G8fU3CCa4"
+}
