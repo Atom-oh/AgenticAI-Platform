@@ -68,8 +68,35 @@ def get_skill(event):
     return {"name": name, "version": max(versions), "content": body.decode()}
 
 
+def list_assets(_):
+    table = boto3.resource("dynamodb").Table(os.environ["REGISTRY_TABLE"])
+    out = []
+    for item in table.scan()["Items"]:
+        aid = item.get("asset_id", "")
+        if aid.startswith("job:"):
+            continue
+        if item.get("source") == "user":
+            out.append(item)
+        elif item.get("type") in ("token", "component"):
+            out.append({**item, "scope": "shared", "source": "figma"})
+    return {"assets": [json.loads(json.dumps(a, default=str)) for a in out]}
+
+
+def get_asset(event):
+    asset_id = event.get("asset_id", "")
+    table = boto3.resource("dynamodb").Table(os.environ["REGISTRY_TABLE"])
+    item = table.get_item(Key={"asset_id": asset_id}).get("Item")
+    if not item:
+        return {"error": f"asset not found: {asset_id}"}
+    body = _s3().get_object(Bucket=os.environ["ASSETS_BUCKET"],
+                            Key=item["s3_key"])["Body"].read()
+    item = json.loads(json.dumps(item, default=str))
+    return {**item, "content": body.decode()}
+
+
 TOOLS = {f.__name__: f for f in [list_design_tokens, search_assets, get_component,
-                                 get_brand_guideline, list_skills, get_skill]}
+                                 get_brand_guideline, list_skills, get_skill,
+                                 list_assets, get_asset]}
 
 
 def handler(event, context):
