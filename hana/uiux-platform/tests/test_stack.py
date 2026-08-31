@@ -45,3 +45,15 @@ def test_feedback_lambda_and_api_behavior():
     dist = list(t.find_resources("AWS::CloudFront::Distribution").values())[0]
     behaviors = dist["Properties"]["DistributionConfig"]["CacheBehaviors"]
     assert any(b["PathPattern"] == "/api/*" for b in behaviors)
+
+
+def test_history_table_and_dispatcher():
+    t = synth()
+    t.has_resource_properties("AWS::DynamoDB::Table", Match.object_like({
+        "TableName": "hana-asset-history"}))
+    t.has_resource_properties("AWS::Lambda::Function", Match.object_like({
+        "FunctionName": "hana-generate-dispatcher", "Timeout": 900}))
+    t.has_resource_properties("AWS::Lambda::Function", Match.object_like({
+        "FunctionName": "hana-draft-feedback",
+        "Environment": {"Variables": Match.object_like({
+            "DISPATCHER_FN": Match.any_value(), "HISTORY_TABLE": Match.any_value()})}}))
