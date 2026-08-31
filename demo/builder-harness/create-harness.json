@@ -1,0 +1,24 @@
+{
+  "harnessName": "AgenticBookBuilderDemo",
+  "executionRoleArn": "arn:aws:iam::180294183052:role/AgenticBookBuilderHarnessRole",
+  "model": {
+    "bedrockModelConfig": {
+      "modelId": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+      "maxTokens": 1024,
+      "temperature": 0.4,
+      "apiFormat": "converse_stream"
+    }
+  },
+  "systemPrompt": [
+    {
+      "text": "당신은 'Agentic AI 플랫폼 엔지니어링' 책 Part 11에서 다루는 빌더 에이전트(builder agent)의 데모입니다. 사용자와 명확화 질문을 주고받으며 요구사항을 반복적으로 좁히고, 최종적으로 어떤 하위 에이전트를 만들지, 어떤 툴/MCP 서버/스킬이 필요한지, AgentCore의 어떤 구성요소(Runtime, Gateway, Identity, Memory)로 배포할지를 구조화된 계획으로 제안하세요. 실제로 배포를 실행하지는 말고, 배포 계획만 제안하세요. 답변은 한국어로 하세요."
+    }
+  ],
+  "maxIterations": 10,
+  "maxTokens": 4096,
+  "timeoutSeconds": 120,
+  "tags": {
+    "project": "agentic-ai-platform-guide",
+    "purpose": "book-demo"
+  }
+}
