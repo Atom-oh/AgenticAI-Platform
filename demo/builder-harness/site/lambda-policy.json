@@ -4,7 +4,10 @@
     {
       "Sid": "InvokeHarness",
       "Effect": "Allow",
-      "Action": ["bedrock-agentcore:InvokeHarness", "bedrock-agentcore:InvokeAgentRuntime"],
+      "Action": [
+        "bedrock-agentcore:InvokeHarness",
+        "bedrock-agentcore:InvokeAgentRuntime"
+      ],
       "Resource": [
         "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:harness/AgenticBookBuilderDemo-6R0pXEwrY1",
         "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/harness_AgenticBookBuilderDemo*"
@@ -13,8 +16,23 @@
     {
       "Sid": "Logs",
       "Effect": "Allow",
-      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
       "Resource": "arn:aws:logs:ap-northeast-2:180294183052:log-group:/aws/lambda/agentic-book-demo-site*"
+    },
+    {
+      "Sid": "Registry",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-northeast-2:180294183052:table/agentic-book-demo-registry"
     }
   ]
 }

@@ -51,9 +51,17 @@ aws iam delete-role-policy --role-name AgenticBookBuilderHarnessRole \
 aws iam delete-role --role-name AgenticBookBuilderHarnessRole
 ```
 
-## 라이브 데모 사이트
+## 라이브 데모 사이트 — 플랫폼 워크스페이스
 
-브라우저에서 바로 대화할 수 있는 채팅 UI: **https://d1twhttjtzqewp.cloudfront.net/**
+브라우저에서 바로 쓰는 워크스페이스 UI: **https://d1twhttjtzqewp.cloudfront.net/**
+
+Amazon Quick 스타일의 3개 흐름을 갖춘 미니 플랫폼이다:
+
+| 흐름 | 동작 | 책의 근거 |
+|---|---|---|
+| **만들기** | 빌더 에이전트와 요구사항 대화 → "스펙으로 변환" → 검토 후 카탈로그 등록 | Part 11 요구사항 대화 → spec → 카탈로그 |
+| **사용하기** | 카탈로그에서 에이전트 선택 → 채팅. 에이전트별 세션 유지 | Part 11 카탈로그와 레지스트리 |
+| **데이터소스** | 텍스트 코퍼스 등록 → 에이전트에 연결 → 근거 기반 답변 | Part 6 CAG(소규모 코퍼스는 프리로딩) |
 
 아키텍처(퍼블릭 진입점은 CloudFront뿐):
 
@@ -61,16 +69,22 @@ aws iam delete-role --role-name AgenticBookBuilderHarnessRole
 브라우저 → CloudFront (E3ETCXKSTRXQAT)
         → API Gateway HTTP API (00l4tzkyqi) ── x-origin-verify 시크릿 헤더 검증
         → Lambda agentic-book-demo-site (예약 동시성 5)
-        → InvokeHarness (AgenticBookBuilderDemo-6R0pXEwrY1)
+        ├→ DynamoDB agentic-book-demo-registry (에이전트/데이터소스 레지스트리)
+        └→ InvokeHarness (AgenticBookBuilderDemo-6R0pXEwrY1)
 ```
 
-- CloudFront가 오리진 요청에 `x-origin-verify` 시크릿 커스텀 헤더를 주입하고, Lambda가 이를 검증한다. API Gateway 엔드포인트를 직접 호출하면 403이다.
-- `sessionId`는 브라우저 localStorage에 저장되어 같은 브라우저에서 대화가 이어진다(InvokeHarness `runtimeSessionId` 재사용).
-- 소스: `site/lambda_function.py` (HTML UI + `/chat` 프록시 단일 파일).
+핵심 설계 결정: **"에이전트 생성"이 실제 AgentCore 리소스를 만들지 않는다.** 에이전트는 DynamoDB에 저장된 config(이름·시스템 프롬프트·연결 데이터소스)이고, 실행은 공유 Harness 하나에 `InvokeHarness`의 per-invocation `systemPrompt` override로 이뤄진다 — 생성 즉시 사용 가능하고, 비용·남용 위험이 없으며, 책 Part 11의 "카탈로그 config 기반 골든 패스" 개념을 그대로 보여준다. 데이터소스는 최대 20,000자 텍스트를 시스템 프롬프트에 프리로딩하는 CAG 방식이다(대규모는 Bedrock Knowledge Bases로 확장하는 것이 정석 — Part 6 참고).
 
-### 이 경로를 선택한 이유 (겪은 함정)
+데모 한도: 에이전트 20개, 데이터소스 10개(각 20,000자), 메시지 2,000자, Lambda 예약 동시성 5.
 
-처음에는 Lambda Function URL(AWS_IAM) + CloudFront OAC 패턴으로 구성했으나, 이 계정의 조직 가드레일이 Function URL 호출(익명·CloudFront 서비스 주체 모두)을 차단해 403 `AccessDeniedException`이 발생했다 — 리소스 정책·OAC 설정이 교과서적으로 맞아도 조직 SCP/RCP가 우선한다. API Gateway 경유(`lambda:InvokeFunction`)로 전환해 해결했다.
+- 소스: `site/lambda_function.py` (SPA + API 단일 파일)
+- API: `GET/POST /api/agents`, `DELETE /api/agents/{id}`, `GET/POST /api/datasources`, `DELETE /api/datasources/{id}`, `POST /api/chat`, `POST /api/builder`, `POST /api/spec`
+
+### 겪은 함정
+
+- **Lambda Function URL + CloudFront OAC 패턴이 이 계정에서 403**: 조직 가드레일(SCP/RCP)이 Function URL 호출(익명·CloudFront 서비스 주체 모두)을 차단했다. 리소스 정책·OAC가 교과서적으로 맞아도 조직 정책이 우선한다. API Gateway 경유(`lambda:InvokeFunction`)로 전환해 해결.
+- **퍼블릭 Function URL 잔존은 Security Hub Lambda.1을 트리거**: 전환 후 남아 있던 AuthType NONE URL이 "Lambda function policies should prohibit public access" finding을 발생시켰다. URL을 삭제하면 PASSED로 전환된다.
+- **Bedrock 스로틀**: 짧은 간격의 연속 호출에서 `ServiceUnavailableException: Too many connections`가 간헐 발생 — 데모 UI는 단건 요청이라 영향이 적지만, 부하 시 재시도/백오프가 필요하다(가이드북 Part 8 참고).
 
 ### 사이트 정리(teardown)
 
@@ -78,6 +92,7 @@ aws iam delete-role --role-name AgenticBookBuilderHarnessRole
 aws cloudfront get-distribution-config --id E3ETCXKSTRXQAT   # disable 후 삭제
 aws apigatewayv2 delete-api --api-id 00l4tzkyqi --region ap-northeast-2
 aws lambda delete-function --function-name agentic-book-demo-site --region ap-northeast-2
+aws dynamodb delete-table --table-name agentic-book-demo-registry --region ap-northeast-2
 aws iam delete-role-policy --role-name AgenticBookDemoSiteLambdaRole --policy-name AgenticBookDemoSitePolicy
 aws iam delete-role --role-name AgenticBookDemoSiteLambdaRole
 ```
