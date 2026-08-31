@@ -53,9 +53,12 @@ def register_asset(body):
                            "actor": actor, "s3_key": s3_key,
                            "note": body.get("note", ""), "created_at": _now()})
     if atype == "skill":
+        # user-registered skills are namespaced under "user-" so they can never
+        # collide with (or overwrite) org/seed skills, which are deploy-managed
+        # only (seeded via scripts/sync_skills.py, not writable through this API).
         boto3.client("s3").put_object(
             Bucket=os.environ["SKILLS_BUCKET"],
-            Key=f"skills/{_slug(name)}/{version}.0.0/SKILL.md",
+            Key=f"skills/user-{_slug(name)}/{version}.0.0/SKILL.md",
             Body=content.encode(), ContentType="text/markdown")
     return 200, {"ok": True, "asset_id": asset_id, "version": version}
 

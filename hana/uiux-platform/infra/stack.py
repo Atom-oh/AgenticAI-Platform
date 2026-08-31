@@ -85,6 +85,9 @@ class HanaUiuxPlatformStack(cdk.Stack):
         history.grant_read_write_data(dispatcher)
         dispatcher.add_to_role_policy(iam.PolicyStatement(
             actions=["bedrock-agentcore:InvokeAgentRuntime"], resources=["*"]))
+        # async (Event) invokes default to 2 retries on failure, which would re-run
+        # (and re-bill) the AgentCore Runtime call that already failed once.
+        dispatcher.configure_async_invoke(retry_attempts=0)
 
         pool = cognito.UserPool(
             self, "Pool", user_pool_name="hana-uiux-platform",
@@ -188,6 +191,7 @@ class HanaUiuxPlatformStack(cdk.Stack):
             "CognitoDomain": f"{domain.domain_name}.auth.{self.region}.amazoncognito.com",
             "CognitoDiscoveryUrl": discovery,
             "DistributionDomain": dist.distribution_domain_name,
+            "DistributionId": dist.distribution_id,
             "GatewayRoleArn": gw_role.role_arn, "RuntimeRoleArn": rt_role.role_arn,
             "FigmaSyncFn": figma_sync.function_name, "AssetToolsFnArn": asset_tools.function_arn,
             "HistoryTable": history.table_name, "DispatcherFn": dispatcher.function_name,

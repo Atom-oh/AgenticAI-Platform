@@ -29,7 +29,7 @@ def handler(event, context):
             Key=key, UpdateExpression="SET #s=:s, drafts=:d, summary=:m",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":s": "done", ":d": out.get("drafts", []),
-                                       ":m": out.get("summary", "")})
+                                       ":m": out.get("summary", "")[:4000]})
     except Exception as e:
         _job_table().update_item(
             Key=key, UpdateExpression="SET #s=:s, #e=:e",

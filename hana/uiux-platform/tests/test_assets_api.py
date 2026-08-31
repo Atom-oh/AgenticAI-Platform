@@ -63,7 +63,7 @@ def test_register_skill_writes_skill_registry(aws):
         "content": "# senior-mode\n큰 글자"}), None)
     assert r["statusCode"] == 200
     keys = [o["Key"] for o in aws.list_objects_v2(Bucket="skills")["Contents"]]
-    assert "skills/senior-mode/1.0.0/SKILL.md" in keys
+    assert "skills/user-senior-mode/1.0.0/SKILL.md" in keys
 
 
 def test_register_validation(aws):

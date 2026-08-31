@@ -14,6 +14,7 @@ KEYMAP = {
     "RuntimeRoleArn": "runtime_role_arn", "FigmaSyncFn": "figma_sync_fn",
     "AssetToolsFnArn": "asset_tools_fn_arn", "FigmaSecretArn": "figma_secret_arn",
     "HistoryTable": "history_table", "DispatcherFn": "dispatcher_fn",
+    "DistributionId": "distribution_id",
 }
 
 

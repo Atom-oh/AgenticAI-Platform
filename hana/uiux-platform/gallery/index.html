@@ -185,7 +185,7 @@
               <option value="workflow">워크플로우</option>
             </select>
           </div>
-          <textarea class="input" id="asset-content" placeholder="내용 붙여넣기 — JSON(토큰/팔레트/아이콘셋) · Markdown(스타일가이드/스킬셋/워크플로우) · Figma URL(토큰/컴포넌트)"></textarea>
+          <textarea class="input" id="asset-content" placeholder="내용 붙여넣기 — JSON(토큰/팔레트/아이콘셋) · Markdown(스타일가이드/스킬셋/워크플로우/컴포넌트)"></textarea>
           <div class="toggle-row">
             <label class="toggle-label" id="scope-toggle-label">
               <span class="switch" id="scope-switch"><span class="knob"></span></span>
@@ -412,7 +412,7 @@
       <div class="timeline-item">
         <div class="rail"><div class="dot"></div>${i < items.length - 1 ? '<div class="line"></div>' : ''}</div>
         <div class="content">
-          <div class="ver">${esc(h.version)} ${esc(h.action === 'register' ? '등록' : h.action === 'update' ? '업데이트' : h.action || '')}
+          <div class="ver">v${esc(parseInt(String(h.version).replace(/^v/, ''), 10))} ${esc(h.action === 'register' ? '등록' : h.action === 'update' ? '업데이트' : h.action || '')}
             <time>${esc(h.created_at ? new Date(h.created_at).toLocaleString('ko-KR') : '')}</time></div>
           <div class="note">${esc(h.actor || '')}${h.note ? ' · ' + esc(h.note) : ''}</div>
         </div>
