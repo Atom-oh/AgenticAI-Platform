@@ -80,6 +80,17 @@ Canvas: https://claude.ai/code/artifact/cf92ef19-6fb2-40b5-b001-6cdacddd64d5
 
 All serverless/on-demand (Lambda, DynamoDB on-demand, S3, CloudFront, AgentCore consumption, Bedrock per-token). `scripts/teardown.py` + `cdk destroy` remove everything; Figma PAT revoked by user after PoC.
 
+## Organizational learning loop (added 2026-08-31, user-approved)
+
+What separates this platform from individuals using Claude Code: centrally enforced governance (already in the Gateway design) plus a shared learning loop:
+
+- Gallery cards get 승인/반려 buttons → `POST /api/feedback` (CloudFront behavior → Lambda Function URL with OAC — still no direct public compute).
+- Approve promotes the draft to `approved-patterns/` in the drafts bucket and updates `approved-patterns/index.json`; reject records the status.
+- The harness loads up to 2 recent approved patterns as few-shot references before generating, so org-wide approvals improve everyone's next generation.
+- PoC limitation (documented): feedback endpoint has no per-user auth; production would put it behind Cognito.
+
+Roadmap (documented, not built): draft-asset network effects (embedding search over approved drafts, graph edges `uses_token`/`composed_in`/`generated_from` toward Neptune/GraphRAG), Slack/portal brief intake for non-developers, rejection-comment-driven skill revision batches.
+
 ## Out of scope (YAGNI)
 
 - Web UI for invoking the agent (PoC uses `invoke.py`; gallery is read-only static).
