@@ -54,7 +54,8 @@ def invoke(payload):
             html: complete self-contained HTML document
         """
         url = publish_draft(title, axis, html)
-        published.append({"title": title, "axis": axis, "url": url})
+        draft_id = url.rsplit("/", 1)[1].removesuffix(".html")
+        published.append({"id": draft_id, "title": title, "axis": axis, "url": url})
         return url
 
     token = _m2m_token()
