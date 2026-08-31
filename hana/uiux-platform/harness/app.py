@@ -7,6 +7,7 @@ import boto3
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent, tool
+from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 
 from harness.publish import load_approved_patterns
@@ -73,7 +74,10 @@ def invoke(payload):
     gateway = MCPClient(lambda: streamablehttp_client(
         os.environ["GATEWAY_URL"], headers={"Authorization": f"Bearer {token}"}))
     with gateway:
-        agent = Agent(model=os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
+        model = BedrockModel(
+            model_id=os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
+            max_tokens=32000)  # full HTML drafts overflow the default output cap
+        agent = Agent(model=model,
                       system_prompt=system,
                       tools=gateway.list_tools_sync() + [publish_draft])
         result = agent(brief)

@@ -109,18 +109,22 @@ class HanaUiuxPlatformStack(cdk.Stack):
         drafts.grant_read_write(feedback)
         feedback_url = feedback.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
-        # Forward only Content-Type; ALL_VIEWER would also forward Authorization,
-        # which conflicts with the OAC SigV4 signature on the function URL origin.
-        api_origin_request_policy = cloudfront.OriginRequestPolicy(
-            self, "ApiOriginRequestPolicy",
-            origin_request_policy_name=f"hana-api-content-type-{ACCOUNT}",
-            header_behavior=cloudfront.OriginRequestHeaderBehavior.allow_list("Content-Type"))
+        # OAC needs BOTH InvokeFunctionUrl (added by the origin construct) and
+        # InvokeFunction for the CloudFront principal, per the CloudFront OAC docs.
+        feedback.add_permission(
+            "CloudFrontOacInvokeFunction",
+            principal=iam.ServicePrincipal("cloudfront.amazonaws.com"),
+            action="lambda:InvokeFunction",
+            source_arn=f"arn:aws:cloudfront::{ACCOUNT}:distribution/{dist.distribution_id}")
         dist.add_behavior(
             "/api/*",
             origins.FunctionUrlOrigin.with_origin_access_control(feedback_url),
             allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
             cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
-            origin_request_policy=api_origin_request_policy,
+            # AllViewerExceptHostHeader forwards Content-Type and the viewer's
+            # x-amz-content-sha256 (required for OAC-signed POST to a Function URL);
+            # a custom whitelist policy cannot name x-amz-* headers and 403s the origin.
+            origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY)
 
         gw_role = iam.Role(self, "GatewayRole", role_name="hana-agentcore-gateway",

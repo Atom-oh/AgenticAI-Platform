@@ -81,9 +81,13 @@
   async function feedback(ev, id, action) {
     ev.preventDefault(); ev.stopPropagation();
     const comment = action === 'reject' ? (prompt('반려 사유 (선택)') || '') : '';
+    const body = JSON.stringify({draft_id: id, action, comment});
+    // CloudFront OAC-signed POST to a Lambda Function URL requires the payload hash
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+    const sha256 = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
     const r = await fetch('/api/feedback', {method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({draft_id: id, action, comment})});
+      headers: {'Content-Type': 'application/json', 'x-amz-content-sha256': sha256},
+      body});
     const out = await r.json();
     if (out.ok) location.reload(); else alert(out.error || '실패');
   }
