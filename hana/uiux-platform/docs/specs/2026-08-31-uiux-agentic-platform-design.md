@@ -54,7 +54,8 @@ Canvas: https://claude.ai/code/artifact/cf92ef19-6fb2-40b5-b001-6cdacddd64d5
 ### 4. Design draft harness — AgentCore Runtime, `harness/`
 
 - **Strands Agents** Python agent, container image → AgentCore Runtime (Seoul). Model: `global.anthropic.claude-sonnet-5`.
-- Flow: `InvokeAgentRuntime(brief)` → agent loads `design-draft-html` + `hana-design-system` skills → queries Gateway MCP for tokens/components → generates a self-contained HTML draft → uploads to S3 `hana-design-drafts-<acct>` and appends it to the gallery's `drafts.json` manifest → returns the CloudFront URL.
+- **Variation policy** (asset-grounded, axis-driven): tokens are law (all colors/type/spacing from the registry, never invented); registry components are the preferred vocabulary but the agent may compose within token space; each brief yields **3 variants that each deliberately move one named axis** — 밀도 (compact↔airy), 강조 (hierarchy focus), 흐름 (single-screen↔stepped; single-screen is the default per the canvas decision). Random component remixing is explicitly not the mechanism — it produces near-identical variants. This requires the asset registry to carry semantic metadata (component purpose/usage rules), which the DynamoDB schema provides.
+- Flow: `InvokeAgentRuntime(brief)` → agent loads `design-draft-html` + `hana-design-system` skills → queries Gateway MCP for tokens/components → generates self-contained HTML draft variants (default 3, per the variation policy) → uploads to S3 `hana-design-drafts-<acct>` and appends it to the gallery's `drafts.json` manifest → returns the CloudFront URL.
 - **Gallery frontend (Option B showcase):** static site on the drafts S3 bucket behind **CloudFront (OAC)** — the only public entry point; no public compute (org policy). The gallery index lists drafts from a `drafts.json` manifest the harness updates.
 - `scripts/invoke.py` demonstrates the end-to-end run.
 
