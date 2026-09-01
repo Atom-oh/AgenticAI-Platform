@@ -347,7 +347,7 @@
   </section>
 </main>
 
-<div id="login-backdrop" hidden style="position:fixed; inset:0; background:rgba(23,51,47,.45); display:flex; align-items:center; justify-content:center; z-index:50;">
+<div id="login-backdrop" style="position:fixed; inset:0; background:rgba(23,51,47,.45); display:none; align-items:center; justify-content:center; z-index:50;">
   <div class="card-box" style="width:360px; max-width:92vw; background:#fff;">
     <div class="label" style="font-size:16px;">디자이너 로그인</div>
     <div class="desc" style="margin:0;">계정은 관리자가 발급합니다 (셀프 가입 없음)</div>
@@ -396,8 +396,8 @@
       b.onclick = openLogin;
     }
   }
-  function openLogin() { document.getElementById('login-backdrop').hidden = false; }
-  function closeLogin() { document.getElementById('login-backdrop').hidden = true; }
+  function openLogin() { document.getElementById('login-backdrop').style.display = 'flex'; }
+  function closeLogin() { document.getElementById('login-backdrop').style.display = 'none'; }
 
   async function doLogin() {
     const cfg = await loadConfig();
