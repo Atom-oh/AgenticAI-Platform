@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hana Design Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='%23008485'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
 <style>
   * { box-sizing: border-box; }
@@ -175,6 +176,12 @@
           font-size:12px; display:flex; flex-direction:column; gap:4px; }
   .turn .who { font-weight:700; color:#00615f; font-size:11px; }
   .turn.running { border-color:#d9a441; }
+  .busy-overlay { display:flex; flex-direction:column; align-items:center; justify-content:center;
+                  gap:14px; color:#00615f; font-size:14px; font-weight:700; min-height:320px; }
+  .spinner { width:34px; height:34px; border-radius:50%; border:4px solid #cfe3e1;
+             border-top-color:#008485; animation:spin 0.9s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .btn[disabled] { opacity:.55; cursor:wait; }
 </style>
 </head>
 <body>
@@ -882,6 +889,32 @@
     return null;
   }
 
+  let busyTimer = null;
+  function setPlayBusy(kind) {
+    const gen = document.getElementById('play-generate');
+    const ref = document.getElementById('play-refine-btn');
+    if (kind) {
+      gen.disabled = true; ref.disabled = true;
+      gen.textContent = kind === 'generate' ? '생성 중...' : '생성';
+      ref.textContent = kind === 'refine' ? '수정 중...' : '수정';
+      if (kind === 'generate' || !playDraft) {
+        const wrap = document.getElementById('play-canvas');
+        wrap.innerHTML = `<div class="busy-overlay"><div class="spinner"></div>
+          <div>${kind === 'generate' ? '시안을 생성하고 있어요' : '선택 영역을 수정하고 있어요'} — 보통 2~4분</div>
+          <div style="font-weight:400; color:#8aa19c; font-size:12px;" id="busy-elapsed">0초 경과</div></div>`;
+      }
+      const t0 = Date.now();
+      busyTimer = setInterval(() => {
+        const el = document.getElementById('busy-elapsed');
+        if (el) el.textContent = `${Math.round((Date.now() - t0) / 1000)}초 경과`;
+      }, 1000);
+    } else {
+      gen.disabled = false; ref.disabled = false;
+      gen.textContent = '생성'; ref.textContent = '수정';
+      if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+    }
+  }
+
   async function playGenerate() {
     const brief = document.getElementById('play-brief').value.trim();
     if (!brief) { alert('브리프를 입력해 주세요.'); return; }
@@ -891,11 +924,15 @@
                      model_id: document.getElementById('play-model').value};
     const out = await apiPost('/api/generate', payload);
     if (!out) return;
+    setPlayBusy('generate');
     const turn = pushTurn(getUser() || '나', `생성: ${brief}`, true);
     const j = await waitJob(out.job_id);
+    setPlayBusy(null);
     turn.classList.remove('running');
     if (!j || j.status !== 'done' || !(j.drafts || []).length) {
       pushTurn('에이전트', j && j.error ? `실패: ${j.error}` : '생성에 실패했습니다.');
+      document.getElementById('play-canvas').innerHTML =
+        '<div class="canvas-empty">생성에 실패했습니다. 브리프를 조정해 다시 시도해 주세요.</div>';
       return;
     }
     playVariants = j.drafts;
@@ -914,10 +951,12 @@
                      asset_ids: []};
     const out = await apiPost('/api/generate', payload);
     if (!out) return;
+    setPlayBusy('refine');
     const what = playSelected ? `[${playSelected.label}] ${instruction}` : instruction;
     const turn = pushTurn(getUser() || '나', `수정: ${what}`, true);
     document.getElementById('play-refine-input').value = '';
     const j = await waitJob(out.job_id);
+    setPlayBusy(null);
     turn.classList.remove('running');
     if (!j || j.status !== 'done' || !(j.drafts || []).length) {
       pushTurn('에이전트', j && j.error ? `실패: ${j.error}` : '수정에 실패했습니다.');
