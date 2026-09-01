@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 
 import boto3
 
-ASSET_TYPES = {"token", "palette", "icon-set", "component", "style-guide", "skill", "workflow"}
-JSON_TYPES = {"token", "palette", "icon-set"}
+ASSET_TYPES = {"token", "palette", "icon-set", "component", "style-guide", "skill",
+               "workflow", "agent"}
+JSON_TYPES = {"token", "palette", "icon-set", "agent"}
 
 
 def _now():
@@ -24,16 +25,19 @@ def _tables():
     return ddb.Table(os.environ["REGISTRY_TABLE"]), ddb.Table(os.environ["HISTORY_TABLE"])
 
 
-def register_asset(body):
+def register_asset(body, actor=None):
     name, atype = body.get("name", "").strip(), body.get("type", "")
     content = body.get("content", "")
     if not name or atype not in ASSET_TYPES or not content.strip():
         return 400, {"error": f"name/content required; type must be one of {sorted(ASSET_TYPES)}"}
     if atype in JSON_TYPES:
         try:
-            json.loads(content)
+            parsed = json.loads(content)
         except json.JSONDecodeError:
             return 400, {"error": f"{atype} content must be valid JSON"}
+        if atype == "agent" and not isinstance(parsed, dict):
+            return 400, {"error": "agent content must be a JSON object "
+                                  "(keys: system, model_id, asset_ids, skills)"}
     registry, history = _tables()
     asset_id = f"{atype}:{_slug(name)}"
     prev = registry.get_item(Key={"asset_id": asset_id}).get("Item")
@@ -43,7 +47,7 @@ def register_asset(body):
     boto3.client("s3").put_object(Bucket=os.environ["ASSETS_BUCKET"], Key=s3_key,
                                   Body=content.encode(), ContentType="application/json"
                                   if ext == "json" else "text/markdown")
-    actor = body.get("actor", "anonymous")
+    actor = actor or body.get("actor", "anonymous")
     registry.put_item(Item={"asset_id": asset_id, "type": atype, "name": name,
                             "scope": body.get("scope", "mine"), "version": version,
                             "s3_key": s3_key, "actor": actor, "updated_at": _now(),
@@ -88,20 +92,75 @@ def asset_history(asset_id):
     return 200, {"history": items}
 
 
-def create_job(body, lambda_client):
+def _load_agent_cfg(agent_id):
+    """Resolve a shared agent preset (asset type 'agent') to its config dict."""
+    if not agent_id:
+        return None
+    registry, _ = _tables()
+    item = registry.get_item(Key={"asset_id": agent_id}).get("Item")
+    if not item or item.get("type") != "agent":
+        return None
+    body = boto3.client("s3").get_object(Bucket=os.environ["ASSETS_BUCKET"],
+                                         Key=item["s3_key"])["Body"].read()
+    cfg = json.loads(body)
+    cfg["name"] = item.get("name", agent_id)
+    return cfg
+
+
+def create_job(body, lambda_client, actor=None):
     brief = body.get("brief", "").strip()
     if not brief:
         return 400, {"error": "brief required"}
+    actor = actor or body.get("actor", "anonymous")
+    agent_cfg = _load_agent_cfg(body.get("agent_id", ""))
     _, history = _tables()
     job_id = uuid.uuid4().hex[:12]
-    history.put_item(Item={"asset_id": f"job:{job_id}", "version": "job", "status": "running",
-                           "brief": brief, "asset_ids": body.get("asset_ids", []),
-                           "created_at": _now()})
+    job = {"asset_id": f"job:{job_id}", "version": "job", "status": "running",
+           "brief": brief, "asset_ids": body.get("asset_ids", []),
+           "model_id": body.get("model_id", ""), "agent_id": body.get("agent_id", ""),
+           "actor": actor, "created_at": _now()}
+    history.put_item(Item=job)
     lambda_client.invoke(FunctionName=os.environ["DISPATCHER_FN"], InvocationType="Event",
                          Payload=json.dumps({"job_id": job_id, "brief": brief,
-                                             "asset_ids": body.get("asset_ids", [])},
+                                             "asset_ids": body.get("asset_ids", []),
+                                             "model_id": body.get("model_id", ""),
+                                             "agent_cfg": agent_cfg, "actor": actor},
                                             ensure_ascii=False).encode())
     return 200, {"ok": True, "job_id": job_id}
+
+
+def list_jobs(limit=20):
+    _, history = _tables()
+    from boto3.dynamodb.conditions import Attr
+    items, kwargs = [], {"FilterExpression": Attr("version").eq("job")}
+    while True:
+        page = history.scan(**kwargs)
+        items.extend(page["Items"])
+        if "LastEvaluatedKey" not in page:
+            break
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return 200, {"jobs": items[:limit]}
+
+
+def list_models():
+    """All Bedrock models usable in this region, via system inference profiles."""
+    client = boto3.client("bedrock")
+    models, token = [], None
+    while True:
+        kwargs = {"typeEquals": "SYSTEM_DEFINED"}
+        if token:
+            kwargs["nextToken"] = token
+        page = client.list_inference_profiles(**kwargs)
+        for p in page.get("inferenceProfileSummaries", []):
+            if p.get("status") == "ACTIVE":
+                models.append({"id": p["inferenceProfileId"],
+                               "name": p.get("inferenceProfileName", p["inferenceProfileId"])})
+        token = page.get("nextToken")
+        if not token:
+            break
+    models.sort(key=lambda m: m["id"])
+    return 200, {"models": models}
 
 
 def get_job(job_id):
