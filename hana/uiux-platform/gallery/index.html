@@ -138,6 +138,32 @@
   .job-card .job-sub { font-size:11px; color:#8aa19c; }
   .job-card .job-sub a { color:#00615f; font-weight:700; text-decoration:none; }
   .empty-small { color:#8aa19c; font-size:12px; padding:12px 0; }
+
+  /* ---- playground ---- */
+  .play-layout { display:flex; gap:20px; align-items:stretch; flex-wrap:wrap; }
+  .play-side { width:340px; flex-shrink:0; display:flex; flex-direction:column; gap:14px; }
+  .play-main { flex:1 1 560px; min-width:0; display:flex; flex-direction:column; gap:10px; }
+  .canvas-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .canvas-bar .spacer { flex-grow:1; }
+  .chip-btn { min-height:38px; padding:0 14px; border-radius:19px; border:1px solid #d5e0dd;
+              background:#fff; color:#5c6f6b; font-family:inherit; font-size:12px; cursor:pointer; }
+  .chip-btn.active { background:#e6f3f2; color:#00615f; border-color:#008485; font-weight:700; }
+  .canvas-frame { background:#eef4f3; border:1px solid #e2e8e6; border-radius:16px;
+                  min-height:640px; display:flex; justify-content:center; padding:20px; overflow:auto; }
+  .canvas-frame iframe { border:0; background:#fff; border-radius:12px;
+                         box-shadow:0 10px 30px rgba(0,51,50,.12); width:100%; height:760px; }
+  .canvas-frame.mobile iframe { width:390px; flex-shrink:0; }
+  .canvas-empty { color:#8aa19c; font-size:13px; align-self:center; }
+  .refine-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:#fff;
+                border:1.5px solid #cfe3e1; border-radius:14px; padding:12px; }
+  .refine-bar .sel-label { font-size:11px; color:#00615f; background:#e6f3f2; padding:4px 10px;
+                            border-radius:12px; max-width:280px; overflow:hidden;
+                            text-overflow:ellipsis; white-space:nowrap; }
+  .refine-bar input { flex:1 1 240px; }
+  .turn { background:#fff; border:1px solid #e2e8e6; border-radius:12px; padding:10px 12px;
+          font-size:12px; display:flex; flex-direction:column; gap:4px; }
+  .turn .who { font-weight:700; color:#00615f; font-size:11px; }
+  .turn.running { border-color:#d9a441; }
 </style>
 </head>
 <body>
@@ -145,6 +171,7 @@
   <div class="logo"><i></i>Hana Design Studio</div>
   <nav id="nav">
     <a href="#gallery" data-tab="gallery">갤러리</a>
+    <a href="#play" data-tab="play">플레이그라운드</a>
     <a href="#assets" data-tab="assets">디자인 자산</a>
     <a href="#generate" data-tab="generate">생성</a>
     <button class="btn btn-outline" id="btn-auth" style="min-height:38px;">로그인</button>
@@ -160,6 +187,53 @@
     </div>
     <div class="grid" id="grid"></div>
     <div class="empty" id="empty" hidden>아직 생성된 시안이 없습니다.</div>
+  </section>
+
+  <!-- ===================== 플레이그라운드 ===================== -->
+  <section class="tab" id="tab-play">
+    <div class="page-head">
+      <div>
+        <h2>플레이그라운드</h2>
+        <div class="desc">에이전트로 생성하고, 화면의 요소를 클릭해 프롬프트로 바로 수정하세요</div>
+      </div>
+    </div>
+    <div class="play-layout">
+      <div class="play-side">
+        <div class="card-box">
+          <div class="label">무엇을 만들까요?</div>
+          <textarea class="input" id="play-brief" style="height:80px; font-family:inherit;"
+            placeholder="예: 환전 신청 화면. 환율 우대 쿠폰을 강조."></textarea>
+          <select class="input" id="play-output">
+            <option value="design">디자인 (하이파이)</option>
+            <option value="mockup">목업</option>
+            <option value="wireframe">와이어프레임</option>
+            <option value="ux-flow">UX 플로우 (다화면)</option>
+          </select>
+          <select class="input" id="play-agent"><option value="">에이전트: 기본</option></select>
+          <select class="input" id="play-model"><option value="">모델: 기본</option></select>
+          <button class="btn btn-primary" id="play-generate" style="justify-content:center;">생성</button>
+        </div>
+        <div style="font-size:13px; font-weight:700;">히스토리</div>
+        <div id="play-history" style="display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+      <div class="play-main">
+        <div class="canvas-bar">
+          <span id="play-variants"></span>
+          <span class="spacer"></span>
+          <button class="chip-btn" id="play-viewport">모바일 폭</button>
+          <button class="chip-btn" id="play-select-mode">요소 선택: 꺼짐</button>
+          <a class="chip-btn" id="play-open" href="#" target="_blank" rel="noopener" style="display:none; text-decoration:none; align-items:center; display:inline-flex;">새 탭에서 열기</a>
+        </div>
+        <div class="canvas-frame mobile" id="play-canvas">
+          <div class="canvas-empty" id="play-canvas-empty">브리프를 입력하고 생성하거나, 갤러리 시안을 불러오세요.</div>
+        </div>
+        <div class="refine-bar">
+          <span class="sel-label" id="play-sel-label">선택된 요소 없음 — 전체 수정으로 적용됩니다</span>
+          <input class="input" id="play-refine-input" placeholder="수정 지시 — 예: 이 버튼을 더 크게, 문구는 '지금 환전하기'로">
+          <button class="btn btn-dark" id="play-refine-btn">수정</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ===================== 디자인 자산 ===================== -->
@@ -354,7 +428,7 @@
   }
 
   /* ===================== routing ===================== */
-  const TABS = ['gallery', 'assets', 'generate'];
+  const TABS = ['gallery', 'play', 'assets', 'generate'];
   function currentTab() {
     const h = (location.hash || '#gallery').replace('#', '');
     return TABS.includes(h) ? h : 'gallery';
@@ -368,6 +442,7 @@
     if (tab === 'gallery') loadGallery();
     if (tab === 'assets') loadAssets();
     if (tab === 'generate') loadGenerateAssets();
+    if (tab === 'play') initPlayground();
   }
   window.addEventListener('hashchange', renderRoute);
 
@@ -393,6 +468,7 @@
           <div class="actions">
             <button onclick="feedback(event,'${esc(x.id)}','approve')">승인</button>
             <button class="reject" onclick="feedback(event,'${esc(x.id)}','reject')">반려</button>
+            <button class="reject" onclick="openInPlayground(event,'${esc(x.id)}')">편집</button>
           </div>
         </a>`).join('');
     }).catch(() => { document.getElementById('empty').hidden = false; });
@@ -660,6 +736,188 @@
         startPolling();
       }
     };
+  }
+
+  /* ===================== 플레이그라운드 ===================== */
+  let playInited = false;
+  let playDraft = null;          // {id, url, title}
+  let playVariants = [];         // last generation's drafts
+  let playSelected = null;       // {selector, html, label}
+  let selectMode = false;
+
+  function cssPath(el, doc) {
+    const parts = [];
+    while (el && el !== doc.body && el.nodeType === 1) {
+      let seg = el.tagName.toLowerCase();
+      if (el.id) { parts.unshift(`#${el.id}`); break; }
+      const parent = el.parentElement;
+      if (parent) {
+        const same = [...parent.children].filter(c => c.tagName === el.tagName);
+        if (same.length > 1) seg += `:nth-of-type(${same.indexOf(el) + 1})`;
+      }
+      parts.unshift(seg);
+      el = parent;
+    }
+    return parts.join(' > ');
+  }
+
+  function wireCanvasSelection(iframe) {
+    let doc;
+    try { doc = iframe.contentDocument; } catch (e) { return; }
+    if (!doc || !doc.body) return;
+    let hovered = null, hoverOutline = '';
+    doc.addEventListener('mouseover', e => {
+      if (!selectMode) return;
+      if (hovered) hovered.style.outline = hoverOutline;
+      hovered = e.target; hoverOutline = hovered.style.outline;
+      hovered.style.outline = '2px dashed #008485';
+    }, true);
+    doc.addEventListener('click', e => {
+      if (!selectMode) return;
+      e.preventDefault(); e.stopPropagation();
+      doc.querySelectorAll('[data-hana-picked]').forEach(n => {
+        n.style.outline = ''; n.removeAttribute('data-hana-picked');
+      });
+      const el = e.target;
+      const cleanHtml = el.outerHTML.slice(0, 4000);  // capture BEFORE visual markers
+      el.setAttribute('data-hana-picked', '1');
+      el.style.outline = '3px solid #008485';
+      const label = el.tagName.toLowerCase() +
+        (el.textContent ? ` — "${el.textContent.trim().slice(0, 30)}"` : '');
+      playSelected = {selector: cssPath(el, doc), html: cleanHtml, label};
+      document.getElementById('play-sel-label').textContent = `선택: ${label}`;
+    }, true);
+  }
+
+  function loadDraftIntoCanvas(draft) {
+    playDraft = draft;
+    playSelected = null;
+    document.getElementById('play-sel-label').textContent = '선택된 요소 없음 — 전체 수정으로 적용됩니다';
+    const wrap = document.getElementById('play-canvas');
+    wrap.innerHTML = '';
+    const iframe = document.createElement('iframe');
+    iframe.src = draft.url;
+    iframe.onload = () => wireCanvasSelection(iframe);
+    wrap.appendChild(iframe);
+    const open = document.getElementById('play-open');
+    open.style.display = 'inline-flex';
+    open.href = draft.url;
+    renderVariantChips();
+  }
+
+  function renderVariantChips() {
+    document.getElementById('play-variants').innerHTML = playVariants.map(d => `
+      <button class="chip-btn ${playDraft && d.id === playDraft.id ? 'active' : ''}"
+              data-draft-id="${esc(d.id)}" data-url="${esc(d.url)}" data-title="${esc(d.title || '')}">
+        ${esc(d.axis || d.title || d.id)}</button>`).join('');
+    document.querySelectorAll('#play-variants .chip-btn').forEach(b => {
+      b.onclick = () => loadDraftIntoCanvas({id: b.dataset.draftId, url: b.dataset.url, title: b.dataset.title});
+    });
+  }
+
+  function pushTurn(who, text, running) {
+    const el = document.createElement('div');
+    el.className = 'turn' + (running ? ' running' : '');
+    el.innerHTML = `<span class="who">${esc(who)}</span><span>${esc(text)}</span>`;
+    const list = document.getElementById('play-history');
+    list.prepend(el);
+    return el;
+  }
+
+  async function waitJob(jobId) {
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 8000));
+      const out = await apiGet(`/api/jobs?job_id=${encodeURIComponent(jobId)}`);
+      const j = out && out.job;
+      if (j && j.status !== 'running') return j;
+    }
+    return null;
+  }
+
+  async function playGenerate() {
+    const brief = document.getElementById('play-brief').value.trim();
+    if (!brief) { alert('브리프를 입력해 주세요.'); return; }
+    const payload = {brief, asset_ids: [],
+                     output_type: document.getElementById('play-output').value,
+                     agent_id: document.getElementById('play-agent').value,
+                     model_id: document.getElementById('play-model').value};
+    const out = await apiPost('/api/generate', payload);
+    if (!out) return;
+    const turn = pushTurn(getUser() || '나', `생성: ${brief}`, true);
+    const j = await waitJob(out.job_id);
+    turn.classList.remove('running');
+    if (!j || j.status !== 'done' || !(j.drafts || []).length) {
+      pushTurn('에이전트', j && j.error ? `실패: ${j.error}` : '생성에 실패했습니다.');
+      return;
+    }
+    playVariants = j.drafts;
+    pushTurn('에이전트', `${j.drafts.length}종 생성 완료 — 상단 칩으로 전환하며 확인하세요.`);
+    loadDraftIntoCanvas(j.drafts[0]);
+  }
+
+  async function playRefine() {
+    if (!playDraft) { alert('먼저 시안을 생성하거나 불러오세요.'); return; }
+    const instruction = document.getElementById('play-refine-input').value.trim();
+    if (!instruction) { alert('수정 지시를 입력해 주세요.'); return; }
+    const payload = {mode: 'refine', brief: instruction, base_draft_id: playDraft.id,
+                     selector: playSelected ? playSelected.selector : '',
+                     element_html: playSelected ? playSelected.html : '',
+                     model_id: document.getElementById('play-model').value,
+                     asset_ids: []};
+    const out = await apiPost('/api/generate', payload);
+    if (!out) return;
+    const what = playSelected ? `[${playSelected.label}] ${instruction}` : instruction;
+    const turn = pushTurn(getUser() || '나', `수정: ${what}`, true);
+    document.getElementById('play-refine-input').value = '';
+    const j = await waitJob(out.job_id);
+    turn.classList.remove('running');
+    if (!j || j.status !== 'done' || !(j.drafts || []).length) {
+      pushTurn('에이전트', j && j.error ? `실패: ${j.error}` : '수정에 실패했습니다.');
+      return;
+    }
+    const d = j.drafts[0];
+    playVariants = [d, ...playVariants].slice(0, 6);
+    pushTurn('에이전트', (j.summary || '수정 완료').slice(0, 160));
+    loadDraftIntoCanvas(d);
+  }
+
+  function openInPlayground(ev, draftId) {
+    ev.preventDefault(); ev.stopPropagation();
+    fetch('./drafts.json', {cache: 'no-store'}).then(r => r.json()).then(d => {
+      const x = (d.drafts || []).find(v => v.id === draftId);
+      if (!x) return;
+      playVariants = [x];
+      location.hash = '#play';
+      setTimeout(() => loadDraftIntoCanvas(x), 60);
+    });
+  }
+
+  async function initPlayground() {
+    if (playInited) return;
+    playInited = true;
+    document.getElementById('play-generate').onclick = playGenerate;
+    document.getElementById('play-refine-btn').onclick = playRefine;
+    document.getElementById('play-refine-input').addEventListener('keydown',
+      e => { if (e.key === 'Enter') playRefine(); });
+    document.getElementById('play-viewport').onclick = () => {
+      const f = document.getElementById('play-canvas');
+      f.classList.toggle('mobile');
+      document.getElementById('play-viewport').textContent =
+        f.classList.contains('mobile') ? '모바일 폭' : '전체 폭';
+    };
+    document.getElementById('play-select-mode').onclick = () => {
+      selectMode = !selectMode;
+      const b = document.getElementById('play-select-mode');
+      b.textContent = `요소 선택: ${selectMode ? '켜짐' : '꺼짐'}`;
+      b.classList.toggle('active', selectMode);
+    };
+    const assetsOut = await apiGet('/api/assets');
+    const agents = ((assetsOut && assetsOut.assets) || []).filter(a => a.type === 'agent');
+    document.getElementById('play-agent').innerHTML = '<option value="">에이전트: 기본</option>' +
+      agents.map(a => `<option value="${esc(a.asset_id)}">${esc(a.name)}</option>`).join('');
+    const modelsOut = await apiGet('/api/models');
+    document.getElementById('play-model').innerHTML = '<option value="">모델: 기본 (Claude Sonnet 5)</option>' +
+      ((modelsOut && modelsOut.models) || []).map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
   }
 
   /* ===================== init ===================== */

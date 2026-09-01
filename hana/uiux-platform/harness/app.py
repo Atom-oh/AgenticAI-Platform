@@ -11,7 +11,7 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 
-from harness.publish import load_approved_patterns
+from harness.publish import get_draft_html, load_approved_patterns
 from harness.publish import publish_draft as publish_draft_s3
 
 app = BedrockAgentCoreApp()
@@ -25,6 +25,25 @@ Workflow, strictly in order:
    Each variant moves ONE axis (밀도, 강조, 흐름) per the design-draft-html skill.
 4. Use publish_draft once per variant.
 Finish with a short Korean summary of the three variants and their axes."""
+
+OUTPUT_STYLES = {
+    "design": "",
+    "mockup": ("출력 유형: 목업(Mockup). 실서비스 수준 완성도 대신 빠른 검토용 목업 톤으로 — "
+               "이미지 영역은 회색 플레이스홀더 박스, 데이터는 대표 샘플 1~2건만."),
+    "wireframe": ("출력 유형: 와이어프레임(Wireframe). 로우파이 구조 스케치로 — 흑백+회색만 사용"
+                  "(브랜드 컬러 금지), 박스/라인/원 플레이스홀더, 텍스트는 실제 레이블만, "
+                  "이미지·아이콘은 X 표시된 회색 박스, 점선 테두리로 스케치 느낌."),
+    "ux-flow": ("출력 유형: UX 플로우. 한 HTML 안에 가로 스크롤 컨테이너로 화면 프레임 3~5개를 "
+                "순서대로 배치하고, 프레임 사이를 화살표(→)와 트리거 레이블(탭/입력/제출)로 연결해 "
+                "하나의 사용자 흐름을 보여줘라. 각 프레임은 390px 폭 모바일 화면."),
+}
+
+REFINE_SYSTEM = """You are Hana Bank's UI/UX design refinement agent.
+원본 HTML 전체가 주어진다. 사용자가 클릭으로 선택한 요소(selector와 요소 HTML)와
+수정 지시에 따라 그 부분만 수정하고, 나머지 마크업·스타일·텍스트는 그대로 보존하라.
+지시가 전체 톤 변경을 요구하면 필요한 최소 범위만 함께 조정한다.
+완성된 전체 HTML을 publish_draft로 정확히 1회 발행하라 (title: 원본 제목 유지 + " (수정)",
+axis: "수정"). 발행 후 무엇을 바꿨는지 한 문장 한국어 요약으로 마쳐라."""
 
 
 def _m2m_token() -> str:
@@ -103,8 +122,48 @@ def invoke(payload):
         published.append({"id": draft_id, "title": title, "axis": axis, "url": url})
         return url
 
+    if payload.get("mode") == "refine":
+        base_id = payload.get("base_draft_id", "")
+        base_html = get_draft_html(base_id)
+        user_msg = (f"수정 지시: {brief}\n"
+                    f"선택 요소 selector: {payload.get('selector', '')}\n"
+                    f"선택 요소 HTML:\n{payload.get('element_html', '')}\n\n"
+                    f"### 원본 전체 HTML\n```html\n{base_html}\n```")
+
+        @tool
+        def publish_refined(title: str, html: str) -> str:
+            """Publish the refined full HTML as a new draft version. Call exactly once.
+
+            Args:
+                title: 원본 제목 + " (수정)"
+                html: 수정이 반영된 완전한 HTML 문서 전체
+            """
+            url = publish_draft_s3(title, "수정", html, parent_id=base_id)
+            draft_id = url.rsplit("/", 1)[1].removesuffix(".html")
+            published.append({"id": draft_id, "title": title, "axis": "수정", "url": url,
+                              "parent_id": base_id})
+            return url
+
+        model = BedrockModel(model_id=model_id, max_tokens=32000)
+        agent = Agent(model=model, system_prompt=REFINE_SYSTEM, tools=[publish_refined])
+        result = agent(user_msg)
+        usage = {}
+        try:
+            u = result.metrics.accumulated_usage
+            usage = {"inputTokens": int(u.get("inputTokens", 0)),
+                     "outputTokens": int(u.get("outputTokens", 0)),
+                     "totalTokens": int(u.get("totalTokens", 0))}
+        except Exception:
+            pass
+        _record_generation(actor, f"[수정] {brief}", published)
+        return {"drafts": published, "summary": str(result), "usage": usage,
+                "model_id": model_id}
+
     patterns = load_approved_patterns(limit=2)
     system = SYSTEM
+    style = OUTPUT_STYLES.get(payload.get("output_type", "design"), "")
+    if style:
+        system += "\n\n" + style
     if agent_cfg.get("system"):
         system += ("\n\n### 공유 에이전트 프리셋: " + agent_cfg.get("name", "agent") +
                    "\n" + agent_cfg["system"])
