@@ -113,6 +113,8 @@ def handler(event, context):
                 return _resp(*assets_api.list_assets())
             if path.endswith("/api/assets/history"):
                 return _resp(*assets_api.asset_history(qs.get("asset_id", "")))
+            if path.endswith("/api/assets/content"):
+                return _resp(*assets_api.get_asset_content(qs.get("asset_id", "")))
             if path.endswith("/api/jobs"):
                 if qs.get("job_id"):
                     return _resp(*assets_api.get_job(qs["job_id"]))
