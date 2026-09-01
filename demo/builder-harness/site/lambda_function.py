@@ -315,8 +315,10 @@ def api(method, path, body):
         if not SESSION_RE.match(base):
             base = uuid.uuid4().hex + "-web"
         session_id = f"{base}-{agent_id}"
+        # actor = agent x user: isolates long-term memory between users of the
+        # same agent, not just between agents (Codex review finding).
         reply, u, latency = invoke(session_id, message, build_agent_prompt(agent), block_tools=True,
-                                   actor_id=f"agent-{agent_id}")
+                                   actor_id=f"agent-{agent_id}-{base[:24]}")
         add_usage(agent_id, u)
         return 200, {"reply": reply, "sessionId": base, "usage": u, "latencyMs": latency,
                      "budget": {"used": used + (int(u.get("inputTokens", 0)) + int(u.get("outputTokens", 0)) if u else 0),
