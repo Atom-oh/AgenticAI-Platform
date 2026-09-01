@@ -34,6 +34,21 @@
         "dynamodb:Query"
       ],
       "Resource": "arn:aws:dynamodb:ap-northeast-2:180294183052:table/agentic-book-demo-registry"
+    },
+    {
+      "Sid": "AgentRegistry",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateRegistryRecord",
+        "bedrock-agentcore:GetRegistryRecord",
+        "bedrock-agentcore:SubmitRegistryRecordForApproval",
+        "bedrock-agentcore:UpdateRegistryRecordStatus",
+        "bedrock-agentcore:DeleteRegistryRecord"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:us-east-1:180294183052:registry/b2hOSZL4eOhDXAyk",
+        "arn:aws:bedrock-agentcore:us-east-1:180294183052:registry/b2hOSZL4eOhDXAyk/record/*"
+      ]
     }
   ]
 }

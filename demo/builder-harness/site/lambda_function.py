@@ -23,6 +23,8 @@ HARNESS_ARN = os.environ["HARNESS_ARN"]
 ORIGIN_SECRET = os.environ["ORIGIN_SECRET"]
 REGION = os.environ.get("HARNESS_REGION", "ap-northeast-2")
 TABLE = os.environ.get("REGISTRY_TABLE", "agentic-book-demo-registry")
+AGENT_REGISTRY_ID = os.environ.get("AGENT_REGISTRY_ID", "b2hOSZL4eOhDXAyk")
+AGENT_REGISTRY_REGION = os.environ.get("AGENT_REGISTRY_REGION", "us-east-1")
 
 MAX_AGENTS = 20
 MAX_DATASOURCES = 10
@@ -35,6 +37,7 @@ PRICE_IN, PRICE_OUT = 3.0, 15.0
 
 agentcore = boto3.client("bedrock-agentcore", region_name=REGION)
 ddb = boto3.resource("dynamodb", region_name=REGION).Table(TABLE)
+registry = boto3.client("bedrock-agentcore-control", region_name=AGENT_REGISTRY_REGION)
 
 SESSION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-_]{20,80}$")
 ID_RE = re.compile(r"^[a-f0-9]{8}$")
@@ -72,6 +75,7 @@ def _agent_public(i):
                   "totalTokens": in_t + out_t},
         "budgetTokens": budget,
         "estCostUsd": round(in_t * PRICE_IN / 1e6 + out_t * PRICE_OUT / 1e6, 4),
+        "registryRecordArn": i.get("registryRecordArn"),
     }
 
 
@@ -172,6 +176,48 @@ def smoke_eval(agent_id, prompt):
                 "sample": f"평가 실행 실패: 호출 오류", "at": int(time.time())}, None
 
 
+
+# ------------------------------------------------- AgentCore Agent Registry
+# Governance source of truth: every agent is a registry record whose
+# DRAFT -> PENDING_APPROVAL -> APPROVED/REJECTED lifecycle is a control-plane
+# API call, so approvals/rejections are audited in CloudTrail automatically.
+def registry_register(agent_id, name, desc, risk):
+    rec = registry.create_registry_record(
+        registryId=AGENT_REGISTRY_ID,
+        name=f"agent_{agent_id}",
+        description=f"{name} — {desc or 'no description'} (Tier {risk})"[:250],
+        descriptorType="CUSTOM",
+        descriptors={"custom": {"inlineContent": json.dumps(
+            {"platform": "agentic-book-demo", "agentId": agent_id,
+             "riskTier": risk, "execution": "harness-systemPrompt-override"},
+            ensure_ascii=False)}},
+    )
+    record_id = rec["recordArn"].rsplit("/", 1)[-1]
+    # wait briefly for DRAFT, then submit for approval
+    for _ in range(20):
+        st = registry.get_registry_record(
+            registryId=AGENT_REGISTRY_ID, recordId=record_id).get("status")
+        if st == "DRAFT":
+            break
+        time.sleep(1)
+    registry.submit_registry_record_for_approval(
+        registryId=AGENT_REGISTRY_ID, recordId=record_id)
+    return record_id, rec["recordArn"]
+
+
+def registry_set_status(record_id, status, reason):
+    registry.update_registry_record_status(
+        registryId=AGENT_REGISTRY_ID, recordId=record_id,
+        status=status, statusReason=reason[:250])
+
+
+def registry_delete(record_id):
+    try:
+        registry.delete_registry_record(registryId=AGENT_REGISTRY_ID, recordId=record_id)
+    except Exception as exc:
+        print(f"registry delete failed ({record_id}): {exc}")
+
+
 # ---------------------------------------------------------------- api
 def api(method, path, body):
     # --- agents ---
@@ -202,24 +248,38 @@ def api(method, path, body):
         else:
             status = "APPROVED" if risk == 1 else "PENDING"
 
+        # Register in AgentCore Agent Registry (governance source of truth).
+        record_id, record_arn = None, None
+        try:
+            record_id, record_arn = registry_register(agent_id, name, desc, risk)
+            if status == "APPROVED":
+                registry_set_status(record_id, "APPROVED",
+                                    "auto-approve: Tier 1 + smoke eval passed")
+        except Exception as exc:
+            print(f"registry sync failed for {agent_id}: {exc}")
+
         item = {
             "pk": "AGENT", "sk": agent_id, "name": name, "description": desc,
             "systemPrompt": prompt, "datasourceIds": ds_ids,
             "createdAt": int(time.time()), "status": status, "riskTier": risk,
             "budgetTokens": DEFAULT_BUDGET_TOKENS,
             "evalResult": eval_result,
+            "registryRecordId": record_id, "registryRecordArn": record_arn,
             "usage": {"invocations": 0, "inputTokens": 0, "outputTokens": 0},
         }
         ddb.put_item(Item=_to_ddb(item))
         if eval_usage:
             add_usage(agent_id, eval_usage)
-        return 200, {"id": agent_id, "status": status, "eval": eval_result}
+        return 200, {"id": agent_id, "status": status, "eval": eval_result,
+                     "registryRecordArn": record_arn}
 
     m = re.match(r"^/api/agents/([a-f0-9]{8})$", path)
     if m and method == "DELETE":
         item = get_item("AGENT", m.group(1))
         if item and item.get("builtin"):
             return 400, {"error": "기본 제공 에이전트는 삭제할 수 없습니다."}
+        if item and item.get("registryRecordId"):
+            registry_delete(item["registryRecordId"])
         ddb.delete_item(Key={"pk": "AGENT", "sk": m.group(1)})
         return 200, {"ok": True}
 
@@ -239,17 +299,28 @@ def api(method, path, body):
                        "defaultBudgetTokens": DEFAULT_BUDGET_TOKENS,
                        "reservedConcurrency": 5},
             "priceNote": f"추정 비용은 Claude Sonnet 4 온디맨드 표준 단가(${PRICE_IN}/M 입력, ${PRICE_OUT}/M 출력) 기준 근사치",
+            "registry": {"id": AGENT_REGISTRY_ID, "region": AGENT_REGISTRY_REGION,
+                         "note": "승인 상태의 정본은 AgentCore Agent Registry — 승인/거부가 CloudTrail에 감사 기록됨"},
         }
 
     m = re.match(r"^/api/admin/agents/([a-f0-9]{8})/(approve|reject)$", path)
     if m and method == "POST":
         agent_id, action = m.group(1), m.group(2)
-        if not get_item("AGENT", agent_id):
+        item = get_item("AGENT", agent_id)
+        if not item:
             return 404, {"error": "에이전트를 찾을 수 없습니다."}
+        new_status = "APPROVED" if action == "approve" else "REJECTED"
+        reason = (body.get("reason") or "").strip()[:200] or \
+            ("approved by platform engineer (demo)" if action == "approve"
+             else "rejected by platform engineer (demo)")
+        # Registry is the governance source of truth — update it first so the
+        # decision (and its reason) lands in CloudTrail; then refresh the cache.
+        if item.get("registryRecordId"):
+            registry_set_status(item["registryRecordId"], new_status, reason)
         ddb.update_item(Key={"pk": "AGENT", "sk": agent_id},
                         UpdateExpression="SET #s = :s",
                         ExpressionAttributeNames={"#s": "status"},
-                        ExpressionAttributeValues={":s": "APPROVED" if action == "approve" else "REJECTED"})
+                        ExpressionAttributeValues={":s": new_status})
         return 200, {"ok": True}
 
     m = re.match(r"^/api/admin/agents/([a-f0-9]{8})/budget$", path)
@@ -551,7 +622,8 @@ async function renderAdmin(){
    '<div id="body">불러오는 중…</div>';
   let d; try{d=await api('GET','api/admin/overview');}catch(e){$('#body').innerHTML='<div class="empty">'+esc(e.message)+'</div>';return;}
   const t=d.totals;
-  let h='<div class="kpis">'+
+  let h='<div class="notice" style="border-left-color:var(--accent)">🗂️ 거버넌스 정본: <b>AgentCore Agent Registry</b> ('+esc(d.registry.id)+' · '+esc(d.registry.region)+') — '+esc(d.registry.note)+'</div>'+
+   '<div class="kpis">'+
    '<div class="kpi"><span>에이전트</span><b>'+t.agents+' / '+d.limits.maxAgents+'</b></div>'+
    '<div class="kpi"><span>총 호출</span><b>'+t.invocations.toLocaleString()+'</b></div>'+
    '<div class="kpi"><span>총 토큰</span><b>'+t.totalTokens.toLocaleString()+'</b></div>'+
@@ -574,7 +646,7 @@ async function renderAdmin(){
   h+='<h3 class="sec">에이전트 현황 · 토큰 계량과 예산</h3><table><tr><th>에이전트</th><th>상태</th><th>Tier</th><th>호출</th><th>토큰(입력/출력)</th><th>추정 비용</th><th>예산 사용</th><th></th></tr>';
   for(const a of d.agents){
     const pct=Math.min(100,Math.round(a.usage.totalTokens/a.budgetTokens*100));
-    h+='<tr><td>'+esc(a.name)+'</td><td>'+statusBadge(a.status)+'</td><td>'+a.riskTier+'</td>'+
+    h+='<tr><td>'+esc(a.name)+(a.registryRecordArn?' <span class="pill" title="'+esc(a.registryRecordArn)+'">registry</span>':'')+'</td><td>'+statusBadge(a.status)+'</td><td>'+a.riskTier+'</td>'+
       '<td>'+a.usage.invocations+'</td><td>'+a.usage.inputTokens.toLocaleString()+' / '+a.usage.outputTokens.toLocaleString()+'</td>'+
       '<td>$'+a.estCostUsd+'</td>'+
       '<td><div class="bar"><i class="'+(pct>=90?'hot':'')+'" style="width:'+pct+'%"></i></div>'+

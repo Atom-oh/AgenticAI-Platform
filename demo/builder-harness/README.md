@@ -90,6 +90,17 @@ Amazon Quick 스타일의 3개 흐름을 갖춘 미니 플랫폼이다:
 
 "⚙️ 플랫폼 운영" 탭이 플랫폼 엔지니어 뷰다: 승인 대기 검토(스모크 평가 결과 포함), 에이전트별 사용량·비용·예산 바, 예산 증액. 데모라 인증 없이 열려 있다 — 실서비스라면 이 탭이 별도 권한이다.
 
+### AgentCore Agent Registry 통합 (v3)
+
+거버넌스 상태의 정본을 자체 DynamoDB에서 **AgentCore Agent Registry**(Preview, us-east-1 `b2hOSZL4eOhDXAyk`)로 이관했다:
+
+- 에이전트 생성 → `CreateRegistryRecord`(CUSTOM descriptor) → `SubmitRegistryRecordForApproval` → `PENDING_APPROVAL`
+- Tier 1 + 평가 통과 → 자동 `APPROVED`(사유 기록) / 운영 탭 승인·거부 → `UpdateRegistryRecordStatus`(사유 필수)
+- **모든 승인/거부가 control-plane API라 CloudTrail에 주체·시각·사유가 자동 감사 기록**된다 — Codex 리뷰 gap #4(감사 로그 부재)를 관리형으로 해소
+- DynamoDB는 런타임 config(프롬프트·데이터소스·usage·예산)와 상태 캐시로 유지, `registryRecordArn`을 항목에 저장
+
+한계(정직하게): ① Registry는 Preview이며 ap-northeast-2 미지원 → 크로스리전 control plane 사용(메타데이터만 이동) ② 데모에 사용자 인증이 없으므로 CloudTrail 주체가 전부 Lambda 역할 하나로 찍힘 — **사람 단위 감사는 여전히 SSO(P0)가 전제** ③ 자동 동기화가 아니라 앱 코드가 이중 기록(registry 실패 시 로컬 진행 + 로그).
+
 ### 추가로 겪은 함정 (v2)
 
 - **managed memory의 actor 미분리 누출**: 모든 InvokeHarness가 기본 actor를 공유하면 장기 기억이 에이전트 간에 넘어온다(신규 에이전트 평가 응답에 이전 빌더 대화의 온보딩 문맥이 섞여 나옴). `actorId` override로 격리 — Part 7 memory-retrieval-scoping이 경고하는 그대로.
