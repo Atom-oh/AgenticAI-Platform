@@ -138,6 +138,17 @@
   .job-card .job-sub { font-size:11px; color:#8aa19c; }
   .job-card .job-sub a { color:#00615f; font-weight:700; text-decoration:none; }
   .empty-small { color:#8aa19c; font-size:12px; padding:12px 0; }
+  .detail-meta { display:flex; flex-wrap:wrap; gap:6px; }
+  .detail-meta span { font-size:11px; color:#5c6f6b; background:#f4f6f5; padding:4px 10px;
+                      border-radius:12px; }
+  .swatches { display:flex; flex-wrap:wrap; gap:8px; }
+  .swatch { display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10px;
+            color:#5c6f6b; font-family:'IBM Plex Mono',monospace,inherit; }
+  .swatch i { width:44px; height:32px; border-radius:8px; border:1px solid #e2e8e6; display:block; }
+  .content-preview { background:#fafbfb; border:1px solid #e2e8e6; border-radius:10px;
+                     padding:12px; max-height:320px; overflow:auto; }
+  .content-preview pre { margin:0; font-size:11.5px; line-height:1.55; white-space:pre-wrap;
+                         word-break:break-all; font-family:'IBM Plex Mono',monospace,inherit; }
 
   /* ---- playground ---- */
   .play-layout { display:flex; gap:20px; align-items:stretch; flex-wrap:wrap; }
@@ -280,9 +291,11 @@
 
       <div class="side-col">
         <div>
-          <div style="font-size:14px; font-weight:700;" id="history-title">히스토리</div>
-          <div class="desc" id="history-sub">자산을 선택하면 버전별 변경 이력이 표시됩니다</div>
+          <div style="font-size:14px; font-weight:700;" id="history-title">자산 상세</div>
+          <div class="desc" id="history-sub">자산을 선택하면 내용과 이력이 표시됩니다</div>
         </div>
+        <div id="asset-detail"></div>
+        <div style="font-size:13px; font-weight:700;" id="history-head" hidden>히스토리</div>
         <div id="history-timeline"></div>
         <button class="btn btn-outline" id="btn-revert" disabled title="준비중" style="margin-top:auto;">이 버전으로 되돌리기</button>
       </div>
@@ -539,17 +552,52 @@
     });
   }
 
+  function renderAssetDetail(asset, content) {
+    const box = document.getElementById('asset-detail');
+    const sc = scopeInfo(asset);
+    const meta = `
+      <div class="detail-meta">
+        <span>${typeLabel(asset.type)}</span>
+        <span>${esc(sc.label)}</span>
+        <span>v${esc(parseInt(asset.version) || asset.version)}</span>
+        <span>${esc(asset.actor || asset.source || '')}</span>
+      </div>`;
+    let preview = '';
+    let parsed = null;
+    try { parsed = JSON.parse(content); } catch (e) { /* markdown */ }
+    if (parsed) {
+      const hexes = [...new Set((JSON.stringify(parsed).match(/#[0-9a-fA-F]{6}/g) || []))].slice(0, 12);
+      if (hexes.length) {
+        preview += `<div class="swatches">${hexes.map(hx =>
+          `<span class="swatch"><i style="background:${esc(hx)};"></i>${esc(hx)}</span>`).join('')}</div>`;
+      }
+      preview += `<div class="content-preview" style="margin-top:8px;"><pre>${esc(JSON.stringify(parsed, null, 2).slice(0, 4000))}</pre></div>`;
+    } else if (content) {
+      preview = `<div class="content-preview"><pre>${esc(content.slice(0, 4000))}</pre></div>`;
+    } else {
+      preview = '<div class="empty-small">내용을 불러올 수 없습니다.</div>';
+    }
+    box.innerHTML = meta + preview;
+  }
+
   async function selectAsset(assetId) {
     selectedAssetId = assetId;
     renderAssetList();
     const asset = allAssets.find(a => a.asset_id === assetId);
-    document.getElementById('history-title').textContent = `히스토리 — ${asset ? asset.name : ''}`;
-    document.getElementById('history-sub').textContent = '버전별 변경 이력';
-    document.getElementById('history-timeline').innerHTML = '<div class="empty-small">불러오는 중...</div>';
-    const out = await apiGet(`/api/assets/history?asset_id=${encodeURIComponent(assetId)}`);
+    document.getElementById('history-title').textContent = asset ? asset.name : '자산 상세';
+    document.getElementById('history-sub').textContent = asset ? `${typeLabel(asset.type)} — 이 자산의 내용과 변경 이력` : '';
+    document.getElementById('asset-detail').innerHTML = '<div class="empty-small">불러오는 중...</div>';
+    document.getElementById('history-timeline').innerHTML = '';
+    document.getElementById('history-head').hidden = false;
+    const [contentOut, out] = await Promise.all([
+      apiGet(`/api/assets/content?asset_id=${encodeURIComponent(assetId)}`),
+      apiGet(`/api/assets/history?asset_id=${encodeURIComponent(assetId)}`),
+    ]);
+    if (contentOut && contentOut.asset) renderAssetDetail(contentOut.asset, contentOut.content || '');
+    else document.getElementById('asset-detail').innerHTML = '<div class="empty-small">내용을 불러올 수 없습니다.</div>';
     const items = (out && out.history) || [];
     if (!items.length) {
-      document.getElementById('history-timeline').innerHTML = '<div class="empty-small">이력이 없습니다.</div>';
+      document.getElementById('history-timeline').innerHTML = '<div class="empty-small">이력이 없습니다. (Figma 연동 자산은 재수집 시점만 registry에 반영됩니다)</div>';
       return;
     }
     document.getElementById('history-timeline').innerHTML = items.map((h, i) => `

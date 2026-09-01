@@ -82,6 +82,24 @@ def list_assets():
     return 200, {"assets": out, "count": len(out)}
 
 
+def get_asset_content(asset_id):
+    """Registry item + its stored content (for the detail panel)."""
+    if not asset_id:
+        return 400, {"error": "asset_id required"}
+    registry, _ = _tables()
+    item = registry.get_item(Key={"asset_id": asset_id}).get("Item")
+    if not item:
+        return 404, {"error": f"asset not found: {asset_id}"}
+    content = ""
+    try:
+        body = boto3.client("s3").get_object(Bucket=os.environ["ASSETS_BUCKET"],
+                                             Key=item["s3_key"])["Body"].read()
+        content = body.decode()[:20000]
+    except Exception:
+        content = ""
+    return 200, {"asset": item, "content": content}
+
+
 def asset_history(asset_id):
     if not asset_id:
         return 400, {"error": "asset_id required"}
