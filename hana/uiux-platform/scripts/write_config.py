@@ -13,7 +13,7 @@ KEYMAP = {
     "DistributionDomain": "distribution_domain", "GatewayRoleArn": "gateway_role_arn",
     "RuntimeRoleArn": "runtime_role_arn", "FigmaSyncFn": "figma_sync_fn",
     "AssetToolsFnArn": "asset_tools_fn_arn", "FigmaSecretArn": "figma_secret_arn",
-    "HistoryTable": "history_table", "DispatcherFn": "dispatcher_fn",
+    "HistoryTable": "history_table", "DispatcherFn": "dispatcher_fn", "SpaClientId": "spa_client_id",
     "DistributionId": "distribution_id",
 }
 

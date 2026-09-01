@@ -102,6 +102,10 @@ class HanaUiuxPlatformStack(cdk.Stack):
             scopes=[cognito.OAuthScope.resource_server(
                 server, cognito.ResourceServerScope(scope_name="invoke",
                                                     scope_description="invoke MCP"))]))
+        # public browser client for designer sign-in (no secret; accounts are
+        # still admin-created only — self sign-up stays disabled above)
+        spa = pool.add_client("Spa", generate_secret=False,
+                              auth_flows=cognito.AuthFlow(user_password=True, user_srp=True))
 
         drafts_origin = origins.S3BucketOrigin.with_origin_access_control(drafts)
         dist = cloudfront.Distribution(
@@ -131,13 +135,20 @@ class HanaUiuxPlatformStack(cdk.Stack):
                         "REGISTRY_TABLE": registry.table_name,
                         "SKILLS_BUCKET": skills.bucket_name,
                         "HISTORY_TABLE": history.table_name,
-                        "DISPATCHER_FN": dispatcher.function_name})
+                        "DISPATCHER_FN": dispatcher.function_name,
+                        "SPA_CLIENT_ID": spa.user_pool_client_id,
+                        "DEFAULT_MODEL": "global.anthropic.claude-sonnet-5",
+                        "MEMORY_ID": ""})
         drafts.grant_read_write(feedback)
         assets.grant_read_write(feedback)
         skills.grant_write(feedback)
         registry.grant_read_write_data(feedback)
         history.grant_read_write_data(feedback)
         dispatcher.grant_invoke(feedback)
+        feedback.add_to_role_policy(iam.PolicyStatement(
+            actions=["bedrock:ListInferenceProfiles"], resources=["*"]))
+        feedback.add_to_role_policy(iam.PolicyStatement(
+            actions=["bedrock-agentcore:CreateEvent"], resources=["*"]))
         feedback_url = feedback.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
         # OAC needs BOTH InvokeFunctionUrl (added by the origin construct) and
@@ -177,6 +188,11 @@ class HanaUiuxPlatformStack(cdk.Stack):
                      "cloudwatch:PutMetricData"],
             resources=["*"]))
         rt_role.add_to_policy(iam.PolicyStatement(
+            actions=["bedrock-agentcore:CreateEvent",
+                     "bedrock-agentcore:RetrieveMemoryRecords",
+                     "bedrock-agentcore:ListMemoryRecords"],
+            resources=["*"]))
+        rt_role.add_to_policy(iam.PolicyStatement(
             actions=["secretsmanager:GetSecretValue"],
             resources=[f"arn:aws:secretsmanager:{self.region}:{ACCOUNT}:secret:"
                        f"hana/m2m-client-secret*"]))
@@ -195,5 +211,6 @@ class HanaUiuxPlatformStack(cdk.Stack):
             "GatewayRoleArn": gw_role.role_arn, "RuntimeRoleArn": rt_role.role_arn,
             "FigmaSyncFn": figma_sync.function_name, "AssetToolsFnArn": asset_tools.function_arn,
             "HistoryTable": history.table_name, "DispatcherFn": dispatcher.function_name,
+            "SpaClientId": spa.user_pool_client_id,
         }.items():
             cdk.CfnOutput(self, name, value=value)

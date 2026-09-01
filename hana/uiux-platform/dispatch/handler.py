@@ -21,15 +21,21 @@ def handler(event, context):
         resp = _agentcore().invoke_agent_runtime(
             agentRuntimeArn=os.environ["RUNTIME_ARN"], qualifier="DEFAULT",
             payload=json.dumps({"brief": event["brief"],
-                                "asset_ids": event.get("asset_ids", [])},
+                                "asset_ids": event.get("asset_ids", []),
+                                "model_id": event.get("model_id", ""),
+                                "agent_cfg": event.get("agent_cfg"),
+                                "actor": event.get("actor", "")},
                                ensure_ascii=False).encode())
         body = resp["response"].read() if hasattr(resp["response"], "read") else resp["response"]
         out = json.loads(body)
         _job_table().update_item(
-            Key=key, UpdateExpression="SET #s=:s, drafts=:d, summary=:m",
-            ExpressionAttributeNames={"#s": "status"},
+            Key=key, UpdateExpression="SET #s=:s, drafts=:d, summary=:m, #u=:u, model_id=:mid",
+            ExpressionAttributeNames={"#s": "status", "#u": "usage"},
             ExpressionAttributeValues={":s": "done", ":d": out.get("drafts", []),
-                                       ":m": out.get("summary", "")[:4000]})
+                                       ":m": out.get("summary", "")[:4000],
+                                       ":u": {k: int(v) for k, v in
+                                              (out.get("usage") or {}).items()},
+                                       ":mid": out.get("model_id", "")})
     except Exception as e:
         _job_table().update_item(
             Key=key, UpdateExpression="SET #s=:s, #e=:e",

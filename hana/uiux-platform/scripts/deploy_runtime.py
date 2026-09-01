@@ -65,7 +65,8 @@ def main():
            "M2M_SECRET_ARN": sec["ARN"],
            "DRAFTS_BUCKET": cfg["drafts_bucket"],
            "DISTRIBUTION_DOMAIN": cfg["distribution_domain"],
-           "MODEL_ID": "global.anthropic.claude-sonnet-5"}
+           "MODEL_ID": "global.anthropic.claude-sonnet-5",
+           "MEMORY_ID": cfg.get("memory_id", "")}
 
     ac = boto3.client("bedrock-agentcore-control", region_name=region)
     existing = next((r for r in list_all_agent_runtimes(ac)

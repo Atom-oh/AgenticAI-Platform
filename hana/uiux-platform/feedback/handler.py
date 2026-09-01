@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import boto3
 
 from . import assets_api
+from .auth import actor_from_event
 
 
 def _resp(code, body):
@@ -17,7 +18,24 @@ def _lambda_client():
     return boto3.client("lambda")
 
 
-def handle_feedback(body):
+def _remember_feedback(actor, draft_id, entry, action, comment):
+    """Record the designer's taste signal into AgentCore Memory (best effort)."""
+    memory_id = os.environ.get("MEMORY_ID", "")
+    if not memory_id or not actor:
+        return
+    try:
+        text = (f"디자이너 {actor}의 피드백: 시안 '{entry.get('title', draft_id)}' "
+                f"(axis {entry.get('axis', '')}) → {'승인' if action == 'approve' else '반려'}"
+                + (f" — 사유: {comment}" if comment else ""))
+        boto3.client("bedrock-agentcore").create_event(
+            memoryId=memory_id, actorId=actor, sessionId=f"feedback-{draft_id}",
+            eventTimestamp=datetime.now(timezone.utc),
+            payload=[{"conversational": {"content": {"text": text}, "role": "USER"}}])
+    except Exception:
+        pass  # memory is an enhancement, never a failure path
+
+
+def handle_feedback(body, actor=None):
     draft_id, action = body.get("draft_id"), body.get("action")
     if not draft_id or action not in ("approve", "reject"):
         return 400, {"error": "draft_id and action (approve|reject) required"}
@@ -36,6 +54,8 @@ def handle_feedback(body):
     entry["status"] = status
     if body.get("comment"):
         entry["comment"] = body["comment"]
+    if actor:
+        entry["reviewed_by"] = actor
     s3.put_object(Bucket=bucket, Key="drafts.json",
                   Body=json.dumps(manifest, ensure_ascii=False).encode(),
                   ContentType="application/json")
@@ -55,6 +75,7 @@ def handle_feedback(body):
         s3.put_object(Bucket=bucket, Key="approved-patterns/index.json",
                       Body=json.dumps(idx, ensure_ascii=False).encode(),
                       ContentType="application/json")
+    _remember_feedback(actor, draft_id, entry, action, body.get("comment", ""))
     return 200, {"ok": True, "status": status}
 
 
@@ -73,19 +94,41 @@ def handler(event, context):
         # Legacy feedback route (no rawPath for backwards compatibility)
         if method == "POST" and not path and "draft_id" in body:
             return _resp(*handle_feedback(body))
-        # New API routes
-        if method == "POST" and path.endswith("/api/feedback"):
-            return _resp(*handle_feedback(body))
-        if method == "POST" and path.endswith("/api/assets"):
-            return _resp(*assets_api.register_asset(body))
-        if method == "GET" and path.endswith("/api/assets"):
-            return _resp(*assets_api.list_assets())
-        if method == "GET" and path.endswith("/api/assets/history"):
-            return _resp(*assets_api.asset_history(qs.get("asset_id", "")))
-        if method == "POST" and path.endswith("/api/generate"):
-            return _resp(*assets_api.create_job(body, _lambda_client()))
-        if method == "GET" and path.endswith("/api/jobs"):
-            return _resp(*assets_api.get_job(qs.get("job_id", "")))
+
+        if method == "POST":
+            # every write requires a signed-in designer (Cognito access token
+            # in the x-hana-auth header; Authorization is reserved by OAC)
+            actor = actor_from_event(event)
+            if actor is None:
+                return _resp(401, {"error": "로그인이 필요합니다 (x-hana-auth)"})
+            if path.endswith("/api/feedback"):
+                return _resp(*handle_feedback(body, actor))
+            if path.endswith("/api/assets"):
+                return _resp(*assets_api.register_asset(body, actor))
+            if path.endswith("/api/generate"):
+                return _resp(*assets_api.create_job(body, _lambda_client(), actor))
+
+        if method == "GET":
+            if path.endswith("/api/assets"):
+                return _resp(*assets_api.list_assets())
+            if path.endswith("/api/assets/history"):
+                return _resp(*assets_api.asset_history(qs.get("asset_id", "")))
+            if path.endswith("/api/jobs"):
+                if qs.get("job_id"):
+                    return _resp(*assets_api.get_job(qs["job_id"]))
+                return _resp(*assets_api.list_jobs())
+            if path.endswith("/api/models"):
+                return _resp(*assets_api.list_models())
+            if path.endswith("/api/config"):
+                return _resp(200, {"spa_client_id": os.environ.get("SPA_CLIENT_ID", ""),
+                                   "region": os.environ.get("AWS_REGION", "ap-northeast-2"),
+                                   "default_model": os.environ.get(
+                                       "DEFAULT_MODEL", "global.anthropic.claude-sonnet-5")})
+            if path.endswith("/api/me"):
+                actor = actor_from_event(event)
+                if actor is None:
+                    return _resp(401, {"error": "unauthenticated"})
+                return _resp(200, {"username": actor})
     except Exception as e:
         return _resp(500, {"error": str(e)})
     return _resp(404, {"error": f"no route: {method} {path}"})

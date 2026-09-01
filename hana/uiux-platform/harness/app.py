@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 import urllib.parse
 import urllib.request
 
@@ -39,12 +40,53 @@ def _m2m_token() -> str:
         return json.loads(resp.read())["access_token"]
 
 
+def _recall_designer_memory(actor: str, brief: str) -> str:
+    """Long-term designer preferences from AgentCore Memory (best effort)."""
+    memory_id = os.environ.get("MEMORY_ID", "")
+    if not memory_id or not actor:
+        return ""
+    try:
+        client = boto3.client("bedrock-agentcore")
+        records = client.retrieve_memory_records(
+            memoryId=memory_id, namespace=f"/designers/{actor}",
+            searchCriteria={"searchQuery": brief, "topK": 5})
+        texts = [r.get("content", {}).get("text", "")
+                 for r in records.get("memoryRecordSummaries", [])]
+        texts = [t for t in texts if t]
+        return "\n".join(f"- {t}" for t in texts)
+    except Exception:
+        return ""
+
+
+def _record_generation(actor: str, brief: str, published: list):
+    memory_id = os.environ.get("MEMORY_ID", "")
+    if not memory_id or not actor:
+        return
+    try:
+        titles = ", ".join(d["title"] for d in published)
+        boto3.client("bedrock-agentcore").create_event(
+            memoryId=memory_id, actorId=actor,
+            sessionId=f"generate-{published[0]['id'] if published else 'none'}",
+            eventTimestamp=datetime.now(timezone.utc),
+            payload=[{"conversational": {
+                "content": {"text": f"디자이너 {actor}가 브리프 '{brief}'로 시안을 "
+                                    f"생성함: {titles}"},
+                "role": "USER"}}])
+    except Exception:
+        pass
+
+
 @app.entrypoint
 def invoke(payload):
     brief = payload.get("brief", "")
     if not brief:
         return {"error": "payload must include 'brief'"}
-    asset_ids = payload.get("asset_ids") or []
+    asset_ids = list(payload.get("asset_ids") or [])
+    agent_cfg = payload.get("agent_cfg") or {}
+    actor = payload.get("actor", "")
+    model_id = (payload.get("model_id") or agent_cfg.get("model_id")
+                or os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"))
+    asset_ids += [a for a in agent_cfg.get("asset_ids", []) if a not in asset_ids]
     published = []
 
     @tool
@@ -63,13 +105,23 @@ def invoke(payload):
 
     patterns = load_approved_patterns(limit=2)
     system = SYSTEM
+    if agent_cfg.get("system"):
+        system += ("\n\n### 공유 에이전트 프리셋: " + agent_cfg.get("name", "agent") +
+                   "\n" + agent_cfg["system"])
+    if agent_cfg.get("skills"):
+        system += ("\n\n프리셋이 요구하는 추가 스킬을 get_skill로 로드해 따르라: " +
+                   ", ".join(agent_cfg["skills"]))
+    memories = _recall_designer_memory(actor, brief)
+    if memories:
+        system += ("\n\n### 이 디자이너에 대한 기억 (AgentCore Memory)\n" + memories +
+                   "\n위 취향/피드백 이력을 시안에 반영하되, 브리프와 선택 자산이 우선한다.")
     if patterns:
         refs = "\n\n".join(
             f"### 승인 패턴: {p['title']} (axis: {p['axis']})\n```html\n{p['html']}\n```"
             for p in patterns)
-        system = SYSTEM + ("\n\nBelow are org-approved reference drafts. Follow their "
-                           "structure and quality bar; do not copy their brief-specific "
-                           "content.\n\n" + refs)
+        system += ("\n\nBelow are org-approved reference drafts. Follow their "
+                   "structure and quality bar; do not copy their brief-specific "
+                   "content.\n\n" + refs)
     if asset_ids:
         system += ("\n\n사용자가 선택한 자산: " + ", ".join(asset_ids) +
                    ". 생성 전에 각 id에 대해 get_asset을 호출해 내용을 확인하고, "
@@ -82,13 +134,24 @@ def invoke(payload):
         os.environ["GATEWAY_URL"], headers={"Authorization": f"Bearer {token}"}))
     with gateway:
         model = BedrockModel(
-            model_id=os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
+            model_id=model_id,
             max_tokens=32000)  # full HTML drafts overflow the default output cap
         agent = Agent(model=model,
                       system_prompt=system,
                       tools=gateway.list_tools_sync() + [publish_draft])
         result = agent(brief)
-    return {"drafts": published, "summary": str(result)}
+
+    usage = {}
+    try:
+        u = result.metrics.accumulated_usage
+        usage = {"inputTokens": int(u.get("inputTokens", 0)),
+                 "outputTokens": int(u.get("outputTokens", 0)),
+                 "totalTokens": int(u.get("totalTokens", 0))}
+    except Exception:
+        pass
+    _record_generation(actor, brief, published)
+    return {"drafts": published, "summary": str(result), "usage": usage,
+            "model_id": model_id}
 
 
 if __name__ == "__main__":
