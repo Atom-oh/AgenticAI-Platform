@@ -29,12 +29,13 @@ def handler(event, context):
         body = resp["response"].read() if hasattr(resp["response"], "read") else resp["response"]
         out = json.loads(body)
         _job_table().update_item(
-            Key=key, UpdateExpression="SET #s=:s, drafts=:d, summary=:m, #u=:u",
+            Key=key, UpdateExpression="SET #s=:s, drafts=:d, summary=:m, #u=:u, model_id=:mid",
             ExpressionAttributeNames={"#s": "status", "#u": "usage"},
             ExpressionAttributeValues={":s": "done", ":d": out.get("drafts", []),
                                        ":m": out.get("summary", "")[:4000],
                                        ":u": {k: int(v) for k, v in
-                                              (out.get("usage") or {}).items()}})
+                                              (out.get("usage") or {}).items()},
+                                       ":mid": out.get("model_id", "")})
     except Exception as e:
         _job_table().update_item(
             Key=key, UpdateExpression="SET #s=:s, #e=:e",

@@ -54,3 +54,16 @@ after the PoC (`aws secretsmanager delete-secret --secret-id hana/figma-token`).
 Live at the same gallery URL: 자산 탭 (7종 자산 등록 + 버전 히스토리) · 생성 탭 (자산 선택형
 비동기 생성). E2E verified: web-registered purple palette + workflow asset → selective
 generation → drafts render with the registered palette (#7d2882); history v1 recorded.
+
+## Phase 3 (2026-09-01) — commercial-grade designer platform
+
+- **디자이너 로그인 (AgentCore Identity 경로의 Cognito)**: 관리자 발급 계정(`scripts/create_designer.py`),
+  SPA 로그인 → `x-hana-auth` 토큰. 모든 쓰기 API는 로그인 필수 (무인증 401).
+- **Bedrock 전 모델**: `GET /api/models`가 활성 inference profile 전체(27+)를 노출, 생성 시 모델 선택.
+- **에이전트 공유**: 자산 타입 `agent` — 시스템 프롬프트·모델·자산·스킬 프리셋을 조직에 공유,
+  생성 탭에서 선택 실행.
+- **AgentCore Memory** (`hana_design_memory`): 생성/승인/반려가 디자이너별 이벤트로 기록되고,
+  다음 생성에서 시맨틱 추출된 취향이 프롬프트로 회수됩니다 (추출은 비동기 — 수 분 소요).
+- 잡 목록 영속화(`GET /api/jobs`) + 토큰 사용량/모델 표시.
+- 배포 추가 단계: `scripts/deploy_memory.py` (cdk deploy 후, deploy_runtime 전) ·
+  `scripts/create_designer.py <id> <pw>`.
