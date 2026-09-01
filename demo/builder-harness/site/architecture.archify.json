@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Agentic AI 플랫폼 워크스페이스 데모 아키텍처",
+    "title": "NEXUS — Agentic AI 플랫폼 아키텍처 (v4)",
     "output": "architecture.html",
     "quality_profile": "showcase",
     "animation": "trace",
@@ -12,32 +12,36 @@
         "label": "요청 경로",
         "focus": [
           "users",
+          "cognito",
           "cdn",
           "apigw",
           "fn",
           "harness",
           "model"
         ],
-        "note": "브라우저 요청이 CloudFront를 거쳐 공유 Harness의 모델 호출까지 도달하는 주 경로."
+        "note": "Cognito PKCE 로그인 후, CloudFront를 거쳐 JWT 검증된 요청만 Lambda와 Harness에 도달한다."
       },
       {
-        "id": "registry",
-        "label": "레지스트리",
+        "id": "central-mcp",
+        "label": "중앙 MCP",
         "focus": [
-          "fn",
+          "users",
+          "gateway",
+          "gwtools",
           "ddb"
         ],
-        "note": "에이전트 = DynamoDB에 저장된 config. 생성은 곧 레지스트리 쓰기다."
+        "note": "AgentCore Gateway가 플랫폼 툴 3종을 Cognito JWT 인바운드 MCP로 노출한다."
       },
       {
-        "id": "agent-runtime",
-        "label": "에이전트 런타임",
+        "id": "governance",
+        "label": "거버넌스",
         "focus": [
-          "harness",
-          "model",
-          "memory"
+          "fn",
+          "registry",
+          "s3skills",
+          "ddb"
         ],
-        "note": "공유 Harness 하나가 systemPrompt override로 모든 에이전트를 실행한다."
+        "note": "승인 수명주기의 정본은 Agent Registry(us-east-1) — 상태 변경이 CloudTrail에 감사 기록된다."
       }
     ]
   },
@@ -49,7 +53,7 @@
       "sublabel": "브라우저 SPA",
       "pos": [
         40,
-        300
+        330
       ],
       "size": [
         130,
@@ -57,43 +61,42 @@
       ]
     },
     {
-      "id": "pages",
-      "type": "cloud",
-      "label": "GitHub Pages",
-      "sublabel": "가이드북",
+      "id": "cognito",
+      "type": "security",
+      "label": "Cognito",
+      "sublabel": "PKCE · 초대 전용",
       "pos": [
-        40,
-        470
-      ],
-      "size": [
-        130,
-        60
-      ],
-      "tag": "정적 문서"
-    },
-    {
-      "id": "cdn",
-      "type": "cloud",
-      "label": "CloudFront",
-      "sublabel": "E3ETCXKSTRXQAT",
-      "pos": [
-        250,
-        300
+        240,
+        140
       ],
       "size": [
         140,
         62
       ],
-      "tag": "유일한 퍼블릭 진입점"
+      "tag": "self sign-up 차단"
+    },
+    {
+      "id": "cdn",
+      "type": "cloud",
+      "label": "CloudFront",
+      "sublabel": "유일한 퍼블릭 진입점",
+      "pos": [
+        240,
+        330
+      ],
+      "size": [
+        140,
+        62
+      ]
     },
     {
       "id": "apigw",
       "type": "cloud",
       "label": "API Gateway",
-      "sublabel": "HTTP API 00l4tzkyqi",
+      "sublabel": "JWT authorizer",
       "pos": [
-        470,
-        300
+        460,
+        330
       ],
       "size": [
         140,
@@ -103,61 +106,61 @@
     {
       "id": "fn",
       "type": "backend",
-      "label": "Lambda",
-      "sublabel": "agentic-book-demo-site",
+      "label": "NEXUS Lambda",
+      "sublabel": "SPA + API + RBAC",
       "pos": [
-        690,
-        300
+        680,
+        330
       ],
       "size": [
         150,
         62
       ],
-      "tag": "예약 동시성 5"
+      "tag": "감사 로그 기록"
     },
     {
-      "id": "ddb",
-      "type": "database",
-      "label": "DynamoDB",
-      "sublabel": "demo-registry",
+      "id": "s3skills",
+      "type": "cloud",
+      "label": "S3 Skills",
+      "sublabel": "SKILL.md 게시",
       "pos": [
-        690,
-        470
+        680,
+        140
       ],
       "size": [
         150,
         60
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "security",
+      "label": "Agent Registry",
+      "sublabel": "us-east-1 · 거버넌스 정본",
+      "pos": [
+        1140,
+        140
       ],
-      "tag": "에이전트/데이터소스"
+      "size": [
+        150,
+        62
+      ],
+      "tag": "CloudTrail 감사"
     },
     {
       "id": "harness",
       "type": "backend",
       "label": "AgentCore Harness",
-      "sublabel": "AgenticBookBuilderDemo",
+      "sublabel": "microVM · memory 격리",
       "pos": [
-        920,
-        300
+        915,
+        330
       ],
       "size": [
         160,
         62
       ],
-      "tag": "microVM 세션"
-    },
-    {
-      "id": "memory",
-      "type": "database",
-      "label": "AgentCore Memory",
-      "sublabel": "managed",
-      "pos": [
-        920,
-        470
-      ],
-      "size": [
-        160,
-        60
-      ]
+      "tag": "툴 차단 강제"
     },
     {
       "id": "model",
@@ -165,14 +168,56 @@
       "label": "Bedrock",
       "sublabel": "Claude Sonnet 4",
       "pos": [
-        1155,
-        300
+        1150,
+        330
       ],
       "size": [
         140,
         62
       ],
       "tag": "apac geo CRIS"
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "AgentCore Gateway",
+      "sublabel": "중앙 MCP · JWT",
+      "pos": [
+        240,
+        530
+      ],
+      "size": [
+        160,
+        62
+      ]
+    },
+    {
+      "id": "gwtools",
+      "type": "backend",
+      "label": "Tools Lambda",
+      "sublabel": "플랫폼 툴 3종",
+      "pos": [
+        470,
+        530
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "ddb",
+      "type": "database",
+      "label": "DynamoDB",
+      "sublabel": "레지스트리 캐시·감사",
+      "pos": [
+        680,
+        530
+      ],
+      "size": [
+        150,
+        60
+      ]
     }
   ],
   "boundaries": [
@@ -180,17 +225,20 @@
       "kind": "region",
       "label": "AWS ap-northeast-2",
       "wraps": [
+        "cognito",
         "apigw",
         "fn",
-        "ddb",
+        "s3skills",
         "harness",
-        "memory",
-        "model"
+        "model",
+        "gateway",
+        "gwtools",
+        "ddb"
       ]
     },
     {
       "kind": "security-group",
-      "label": "x-origin-verify 검증 경계",
+      "label": "x-origin-verify 검증",
       "wraps": [
         "fn"
       ]
@@ -205,14 +253,22 @@
       "variant": "emphasis"
     },
     {
-      "id": "users-to-pages",
+      "id": "users-to-cognito",
       "from": "users",
-      "to": "pages",
-      "label": "가이드북 열람",
+      "to": "cognito",
+      "label": "PKCE 로그인",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "users-to-gateway",
+      "from": "users",
+      "to": "gateway",
+      "label": "MCP (JWT)",
       "variant": "dashed",
       "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 26
+      "toSide": "left"
     },
     {
       "id": "cdn-to-apigw",
@@ -226,25 +282,16 @@
       "id": "apigw-to-fn",
       "from": "apigw",
       "to": "fn",
-      "label": "proxy 통합"
-    },
-    {
-      "id": "fn-to-ddb",
-      "from": "fn",
-      "to": "ddb",
-      "label": "레지스트리 조회/저장",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 26
+      "label": "JWT 검증 후 proxy",
+      "labelDy": 55
     },
     {
       "id": "fn-to-harness",
       "from": "fn",
       "to": "harness",
-      "label": "InvokeHarness + prompt override",
+      "label": "InvokeHarness + override",
       "variant": "emphasis",
-      "labelDy": 62,
-      "labelDx": 0
+      "labelDy": 55
     },
     {
       "id": "harness-to-model",
@@ -254,40 +301,75 @@
       "labelDy": 55
     },
     {
-      "id": "harness-to-memory",
-      "from": "harness",
-      "to": "memory",
-      "label": "세션 이벤트/장기 기억",
+      "id": "fn-to-ddb",
+      "from": "fn",
+      "to": "ddb",
+      "label": "상태·감사 저장",
       "fromSide": "bottom",
       "toSide": "top",
       "labelDy": 26
+    },
+    {
+      "id": "fn-to-s3",
+      "from": "fn",
+      "to": "s3skills",
+      "label": "스킬 게시",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -26
+    },
+    {
+      "id": "fn-to-registry",
+      "from": "fn",
+      "to": "registry",
+      "label": "승인 수명주기 동기화",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "gateway-to-gwtools",
+      "from": "gateway",
+      "to": "gwtools",
+      "label": "Lambda 타깃",
+      "labelDy": 55
+    },
+    {
+      "id": "gwtools-to-ddb",
+      "from": "gwtools",
+      "to": "ddb",
+      "label": "read-only",
+      "variant": "dashed",
+      "labelDy": 55
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "진입점",
+      "title": "신뢰 경계",
       "items": [
-        "CloudFront가 유일한 퍼블릭 진입점",
-        "오리진 요청에 x-origin-verify 시크릿 헤더 주입 — Lambda가 검증"
+        "CloudFront만 공개 — 시크릿 헤더 없으면 403",
+        "API는 Cognito JWT authorizer가 앱 코드 전에 차단",
+        "가입 버튼 없음 — admin-create 초대 전용"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "거버넌스",
+      "items": [
+        "승인 정본 = Agent Registry(수동 승인 모드)",
+        "승인/거부·사유가 CloudTrail에 감사 기록",
+        "생성 시 스모크 평가 통과 필요(evals-as-gate)"
       ]
     },
     {
       "dot": "emerald",
-      "title": "에이전트 = config",
+      "title": "실행 통제",
       "items": [
-        "에이전트 생성은 DynamoDB 레지스트리 쓰기",
-        "실행은 공유 Harness에 systemPrompt override로 위임",
-        "데이터소스는 CAG 방식 컨텍스트 프리로딩"
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "안전장치",
-      "items": [
-        "Lambda 예약 동시성 5로 남용 상한",
-        "에이전트 20개 · 데이터소스 10개 · 메시지 2,000자 한도",
-        "apac geo 프로파일로 데이터 레지던시 고정"
+        "에이전트 = config, 공유 Harness에 prompt override",
+        "actorId 격리(에이전트×사용자)·allowedTools 차단",
+        "토큰 예산 서킷 브레이커 + 팀별 차지백"
       ]
     }
   ]

@@ -49,8 +49,9 @@
 
 | 계정 | 그룹 | 용도 |
 |---|---|---|
+| demo@atomai.click | platform-admins | 공유 데모 계정 (Qwer!234) |
 | admin@demo.nexus | platform-admins | 플랫폼 운영(승인·예산·감사) |
 | alpha@demo.nexus | team-alpha | 서비스팀 셀프서비스 |
 | beta@demo.nexus | team-beta | 서비스팀 셀프서비스 |
 
-가입 버튼은 존재하지 않는다 — 계정은 `admin-create-user`로만 발급한다.
+가입 버튼은 존재하지 않는다 — 계정은 `admin-create-user`로만 발급한다. (데모 편의로 비밀번호 최소 길이를 8자로 완화 — 프로덕션은 12자+ 권장)
