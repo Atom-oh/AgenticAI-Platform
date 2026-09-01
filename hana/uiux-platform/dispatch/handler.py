@@ -24,7 +24,12 @@ def handler(event, context):
                                 "asset_ids": event.get("asset_ids", []),
                                 "model_id": event.get("model_id", ""),
                                 "agent_cfg": event.get("agent_cfg"),
-                                "actor": event.get("actor", "")},
+                                "actor": event.get("actor", ""),
+                                "mode": event.get("mode", "generate"),
+                                "output_type": event.get("output_type", "design"),
+                                "base_draft_id": event.get("base_draft_id", ""),
+                                "selector": event.get("selector", ""),
+                                "element_html": event.get("element_html", "")},
                                ensure_ascii=False).encode())
         body = resp["response"].read() if hasattr(resp["response"], "read") else resp["response"]
         out = json.loads(body)

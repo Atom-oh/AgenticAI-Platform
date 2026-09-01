@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import boto3
 
 
-def publish_draft(title: str, axis: str, html: str) -> str:
+def publish_draft(title: str, axis: str, html: str, parent_id: str = "") -> str:
     s3 = boto3.client("s3")
     bucket = os.environ["DRAFTS_BUCKET"]
     draft_id = uuid.uuid4().hex[:12]
@@ -19,9 +19,12 @@ def publish_draft(title: str, axis: str, html: str) -> str:
             s3.get_object(Bucket=bucket, Key="drafts.json")["Body"].read())
     except s3.exceptions.NoSuchKey:
         manifest = {"drafts": []}
-    manifest["drafts"].append({
+    entry = {
         "id": draft_id, "title": title, "axis": axis, "status": "검토중",
-        "url": url, "created_at": datetime.now(timezone.utc).isoformat()})
+        "url": url, "created_at": datetime.now(timezone.utc).isoformat()}
+    if parent_id:
+        entry["parent_id"] = parent_id
+    manifest["drafts"].append(entry)
     s3.put_object(Bucket=bucket, Key="drafts.json",
                   Body=json.dumps(manifest, ensure_ascii=False).encode(),
                   ContentType="application/json")
@@ -46,3 +49,9 @@ def load_approved_patterns(limit: int = 2) -> list:
             continue
         out.append({"title": p["title"], "axis": p["axis"], "html": html})
     return out
+
+
+def get_draft_html(draft_id: str) -> str:
+    s3 = boto3.client("s3")
+    return s3.get_object(Bucket=os.environ["DRAFTS_BUCKET"],
+                         Key=f"drafts/{draft_id}.html")["Body"].read().decode()

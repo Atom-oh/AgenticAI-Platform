@@ -67,3 +67,14 @@ generation → drafts render with the registered palette (#7d2882); history v1 r
 - 잡 목록 영속화(`GET /api/jobs`) + 토큰 사용량/모델 표시.
 - 배포 추가 단계: `scripts/deploy_memory.py` (cdk deploy 후, deploy_runtime 전) ·
   `scripts/create_designer.py <id> <pw>`.
+
+## Phase 4 (2026-09-01) — 플레이그라운드 & 클릭-수정
+
+- **플레이그라운드 탭**: 에이전트·모델·출력유형(디자인/목업/와이어프레임/UX플로우) 선택 →
+  생성 → variant 칩 전환 → 모바일/전체 폭 토글 → 대화형 히스토리. 갤러리 카드의 [편집]으로
+  기존 시안도 불러옵니다.
+- **컴포넌트 클릭 → 프롬프트 수정**: 시안 iframe이 same-origin이라 요소 선택(css path +
+  outerHTML 추출)이 가능. `POST /api/generate {mode:"refine", base_draft_id, selector,
+  element_html, brief}` → 하니스가 문서 전체를 보존하며 선택 부분만 수정 → parent_id가
+  연결된 새 버전 발행. E2E: 버튼 문구/크기 수정이 반영되고 나머지 마크업 보존 확인.
+- 출력유형은 하니스 프롬프트 스타일로 구현 (와이어프레임은 브랜드 컬러 0건 검증).

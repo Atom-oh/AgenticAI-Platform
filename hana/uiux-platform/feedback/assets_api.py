@@ -112,19 +112,29 @@ def create_job(body, lambda_client, actor=None):
     if not brief:
         return 400, {"error": "brief required"}
     actor = actor or body.get("actor", "anonymous")
+    mode = body.get("mode", "generate")
+    if mode == "refine" and not body.get("base_draft_id"):
+        return 400, {"error": "refine mode requires base_draft_id"}
     agent_cfg = _load_agent_cfg(body.get("agent_id", ""))
     _, history = _tables()
     job_id = uuid.uuid4().hex[:12]
     job = {"asset_id": f"job:{job_id}", "version": "job", "status": "running",
            "brief": brief, "asset_ids": body.get("asset_ids", []),
            "model_id": body.get("model_id", ""), "agent_id": body.get("agent_id", ""),
+           "mode": mode, "output_type": body.get("output_type", "design"),
+           "base_draft_id": body.get("base_draft_id", ""),
            "actor": actor, "created_at": _now()}
     history.put_item(Item=job)
     lambda_client.invoke(FunctionName=os.environ["DISPATCHER_FN"], InvocationType="Event",
                          Payload=json.dumps({"job_id": job_id, "brief": brief,
                                              "asset_ids": body.get("asset_ids", []),
                                              "model_id": body.get("model_id", ""),
-                                             "agent_cfg": agent_cfg, "actor": actor},
+                                             "agent_cfg": agent_cfg, "actor": actor,
+                                             "mode": mode,
+                                             "output_type": body.get("output_type", "design"),
+                                             "base_draft_id": body.get("base_draft_id", ""),
+                                             "selector": body.get("selector", ""),
+                                             "element_html": body.get("element_html", "")[:4000]},
                                             ensure_ascii=False).encode())
     return 200, {"ok": True, "job_id": job_id}
 
