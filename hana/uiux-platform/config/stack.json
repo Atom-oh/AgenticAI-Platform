@@ -20,5 +20,7 @@
   "runtime_arn": "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/hana_design_harness-2G8fU3CCa4",
   "dispatcher_fn": "hana-generate-dispatcher",
   "distribution_id": "E1VC99R64CM2IY",
-  "history_table": "hana-asset-history"
+  "history_table": "hana-asset-history",
+  "spa_client_id": "6f4kpa5l1qqrjfv73uvl724gul",
+  "memory_id": "hana_design_memory-zicgmJBGYI"
 }

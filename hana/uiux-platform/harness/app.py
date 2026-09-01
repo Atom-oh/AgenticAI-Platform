@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 import urllib.parse
 import urllib.request
 
@@ -66,6 +67,7 @@ def _record_generation(actor: str, brief: str, published: list):
         boto3.client("bedrock-agentcore").create_event(
             memoryId=memory_id, actorId=actor,
             sessionId=f"generate-{published[0]['id'] if published else 'none'}",
+            eventTimestamp=datetime.now(timezone.utc),
             payload=[{"conversational": {
                 "content": {"text": f"디자이너 {actor}가 브리프 '{brief}'로 시안을 "
                                     f"생성함: {titles}"},

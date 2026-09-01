@@ -29,6 +29,7 @@ def _remember_feedback(actor, draft_id, entry, action, comment):
                 + (f" — 사유: {comment}" if comment else ""))
         boto3.client("bedrock-agentcore").create_event(
             memoryId=memory_id, actorId=actor, sessionId=f"feedback-{draft_id}",
+            eventTimestamp=datetime.now(timezone.utc),
             payload=[{"conversational": {"content": {"text": text}, "role": "USER"}}])
     except Exception:
         pass  # memory is an enhancement, never a failure path
