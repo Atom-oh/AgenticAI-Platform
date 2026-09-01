@@ -49,6 +49,22 @@
         "arn:aws:bedrock-agentcore:us-east-1:180294183052:registry/b2hOSZL4eOhDXAyk",
         "arn:aws:bedrock-agentcore:us-east-1:180294183052:registry/b2hOSZL4eOhDXAyk/record/*"
       ]
+    },
+    {
+      "Sid": "SkillsBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::agentic-nexus-skills-180294183052/skills/*"
+    },
+    {
+      "Sid": "SelfInvokeAsync",
+      "Effect": "Allow",
+      "Action": "lambda:InvokeFunction",
+      "Resource": "arn:aws:lambda:ap-northeast-2:180294183052:function:agentic-book-demo-site"
     }
   ]
 }

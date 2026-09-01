@@ -1,0 +1,4 @@
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"bedrock-agentcore.amazonaws.com"},
+ "Action":"sts:AssumeRole",
+ "Condition":{"StringEquals":{"aws:SourceAccount":"180294183052"},
+  "ArnLike":{"aws:SourceArn":"arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:gateway/*"}}}]}

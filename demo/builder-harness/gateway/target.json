@@ -1,0 +1,26 @@
+{
+  "gatewayIdentifier": "nexus-platform-tools-dgt6g0wppb",
+  "name": "platform",
+  "description": "NEXUS platform tools (agents catalog, wiki, ontology)",
+  "targetConfiguration": {
+    "mcp": {
+      "lambda": {
+        "lambdaArn": "arn:aws:lambda:ap-northeast-2:180294183052:function:nexus-gateway-tools",
+        "toolSchema": {
+          "inlinePayload": [
+            {"name": "search_agents",
+             "description": "승인된 에이전트 카탈로그를 검색한다. query가 비면 전체 목록.",
+             "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "검색어(선택)"}}}},
+            {"name": "get_wiki_page",
+             "description": "AI Wiki 문서를 slug로 조회한다. 없는 slug면 사용 가능한 목록을 돌려준다.",
+             "inputSchema": {"type": "object", "properties": {"slug": {"type": "string", "description": "문서 slug"}}, "required": ["slug"]}},
+            {"name": "query_ontology",
+             "description": "조직 온톨로지(엔티티·관계 그래프) 전체를 조회한다.",
+             "inputSchema": {"type": "object", "properties": {}}}
+          ]
+        }
+      }
+    }
+  },
+  "credentialProviderConfigurations": [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+}

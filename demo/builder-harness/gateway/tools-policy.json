@@ -1,0 +1,5 @@
+{"Version":"2012-10-17","Statement":[
+ {"Sid":"DdbRead","Effect":"Allow","Action":["dynamodb:GetItem","dynamodb:Query"],
+  "Resource":"arn:aws:dynamodb:ap-northeast-2:180294183052:table/agentic-book-demo-registry"},
+ {"Sid":"Logs","Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
+  "Resource":"arn:aws:logs:ap-northeast-2:180294183052:log-group:/aws/lambda/nexus-gateway-tools*"}]}
