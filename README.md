@@ -8,7 +8,7 @@ Cognito 초대 전용 · CloudFront 단일 진입) 위에서 동작한다. 기�
 
 | 서피스 | 대상 | 라이브 | 소스 |
 |---|---|---|---|
-| **플랫폼 허브 · 규정 영향 분석(S1)** | 심사·기획 | https://d15n7n9ypt87h8.cloudfront.net/ | `platform/` |
+| **은행 Agentic AI 플랫폼 (S1~S5 · F7 · Portal · 에이전트 빌더)** | 전 직군 | https://agent.atomai.click/ (구버전 예비: d15n7n9ypt87h8) | `platform/` |
 | **UI/UX 스튜디오** | 디자이너 | https://d4zwmnh2s47e9.cloudfront.net/ | `demo/uiux-studio/` |
 | **에이전트 컨트롤룸** | 플랫폼 엔지니어·현업 | https://d1twhttjtzqewp.cloudfront.net/ | `demo/builder-harness/` |
 | **가이드북** (93챕터) | 전 직군 | https://www.atomai.click/AgenticAI-Platform/ | `docs/` |
@@ -24,13 +24,15 @@ admin-create 초대 전용.
 - **온톨로지 편입**: 컨트롤룸 커버리지 그래프에 서피스 간 관계가 존재한다
   (위키 `platform-reorg` 문서 참조).
 
-## 은행 데모 (SPEC.md — 진행 중)
+## 은행 데모 (SPEC.md)
 
-`SPEC.md`가 정본 요구사항. 진행 상황은 `platform/README.md`.
+`SPEC.md`가 정본 요구사항. **실제 배포 상태·운영 절차·구현 상태 표는 `platform/README.md`** — 코드와 배포로
+확인된 것만 "완료"로 적는다.
 
-- Phase 1 완료 — 온톨로지(3,317노드/8,520엣지) · GraphStore · Semantic Layer · 커버리지 테스트
-- Phase 2 완료 — S1 규정 영향 분석 라이브 (GraphRAG vs Vector RAG, 스트리밍, 근거 검증)
-- Phase 3~5 — 온프렘 플레인 분리(ECS·RDS·Guardrails), Registry S3 반전 시연, 보고서·마무리
+- 구조: 두 CDK 스택 — `BankPlatform`(클라우드 플레인: CloudFront·WebSocket API·엔진·Registry·Guardrails IaC)
+  + `BankPlatformPlane`(격리 VPC: ECS 온프렘 서비스·RDS·Neptune·브리지·Writer, NAT 없음)
+- 시나리오 S1~S5 + F7(Reader/Writer)이 한 SPA(레일 내비)에 있고, 관리 작업(Neptune 적재·시드·리셋)은 IAM 전용 AdminFn
+- 데모 계정 비밀번호는 Secrets Manager `bank-platform/demo-user` — 문서·코드에 기록하지 않는다 (SPEC §9)
 
 ## 가이드북 개발
 

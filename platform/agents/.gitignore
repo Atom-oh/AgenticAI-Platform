@@ -1,0 +1,3 @@
+# prepare_context.sh 가 생성하는 빌드 컨텍스트 (정본: ../agentcore/agent_specs.py, ../skills/)
+_ctx/
+__pycache__/

@@ -1,6 +1,6 @@
 // 설정 로드 + Cognito 인증 + 단일 WebSocket 관리자
 
-export type AppConfig = { wssUrl: string; cognitoClientId: string; region: string };
+export type AppConfig = { wssUrl: string; cognitoClientId: string; region: string; graphBackend?: string; planeDeployed?: boolean };
 
 let _cfg: AppConfig | null = null;
 export async function loadConfig(): Promise<AppConfig> {
@@ -84,6 +84,9 @@ class PlatformSocket {
       ws.onerror = () => reject(new Error('서버 연결에 실패했습니다.'));
       ws.onmessage = (m) => {
         let e: WsEvent; try { e = JSON.parse(m.data); } catch { return; }
+        // API Gateway 오류 프레임({"message":"Internal server error",...}, 29초 통합 타임아웃)에는 type 이 없다.
+        // Lambda 는 계속 post_to_connection 으로 스트리밍하므로 이 프레임은 무시한다 (typeless).
+        if (typeof e.type !== 'string') { console.debug('ws: typeless frame ignored', e); return; }
         if (e.reqId && this.pending.has(e.reqId)) {
           this.pending.get(e.reqId)!(e);
           if (!e.type.endsWith('.stage') && !e.type.endsWith('.token')) this.pending.delete(e.reqId);
@@ -114,13 +117,16 @@ class PlatformSocket {
     const reqId = `r${++this.seq}`;
     return new Promise((resolve, reject) => {
       const h: Handler = (e) => {
+        if (e.reqId && e.reqId !== reqId && e.type !== 'cache.replay') return; // 다른 요청의 이벤트 무시
         onEvent(e);
-        if (e.type === 'error') { this.subs.delete(h); reject(new Error(e.message)); }
+        if (e.type === 'error') { this.subs.delete(h); this.subs.delete(done); reject(new Error(e.message)); }
       };
       this.subs.add(h);
       // s1은 vector.done+graph.done 2건, s2는 s2.done 1건에서 종료
       let doneNeeded = action === 's1' ? 2 : 1;
       const done: Handler = (e) => {
+        if (e.reqId && e.reqId !== reqId) return;
+        if (e.type === 'cache.replay') { doneNeeded = action === 's1' ? 2 : 1; return; } // 캐시 재생: 종료 카운트 초기화
         if (e.type.endsWith('.done') && --doneNeeded <= 0) {
           this.subs.delete(h); this.subs.delete(done); resolve();
         }

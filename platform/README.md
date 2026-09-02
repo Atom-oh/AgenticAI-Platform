@@ -1,80 +1,114 @@
 # Agentic AI Platform — 은행 데모 (SPEC.md 구현)
 
-루트 `SPEC.md`의 구현. 종합 Agentic AI Platform의 정본 서피스로, 기존
-`demo/builder-harness`(한울증권 컨트롤룸)·`demo/uiux-studio`(디자이너 스튜디오)를 잇는다.
+루트 `SPEC.md`가 정본 요구사항이다. 이 문서는 **실제 배포 상태**와 운영 절차를 적는다 — 코드에 없는 것을
+"완료"라고 쓰지 않는다. (상태 표는 §"구현 상태" 참조, 배포 시점마다 갱신)
 
-## §15 확정 사항 (2026-09-02)
+## 구조 — Single Boundary — 두 스택, NAT 없음
 
-| 항목 | 결정 |
+```
+[브라우저] ─ CloudFront(유일한 퍼블릭 진입점) ─ S3(프라이빗)
+     └─ wss:// API Gateway($connect: Cognito access token 검증)
+            └─ WsFn (클라우드 플레인, VPC 밖)  ── Bedrock(Claude·Titan·Guardrails) · Cognito · DynamoDB(연결/트레이스/캐시/Registry)
+                  ├─ ReaderFn (F7 Reader: Bedrock만, 내부 도구 invoke 권한 없음 → AccessDenied 시연)
+                  ├─ GatesFn  (F5 게이트: tsc / eslint / axe-core — Node 20)
+                  └─ lambda:Invoke ─▶ BridgeFn ─────────────────────────────┐   BankPlatformPlane 스택 (VPC 10.77/16)
+                                                                             │   ┌───────────────────────────────────────┐
+                        cloud-isolated 서브넷: BridgeFn · WriterFn · Neptune │   │ onprem-isolated 서브넷 (인터넷 경로 0) │
+                        (Bedrock/Lambda VPC 엔드포인트는 이 SG들만 허용)     ├──▶│ 내부 ALB → ECS Fargate VPC 내부 서비스   │
+                                                                             │   │  정확 조회·계산엔진·마스킹·감사원문·   │
+                                                                             │   │  벡터 인덱스  ── RDS PostgreSQL        │
+                                                                             │   └───────────────────────────────────────┘
+```
+
+- **VPC 내부 플레인 = 실제 네트워크 분리**: NAT·퍼블릭 서브넷이 없고, VPC 내부 태스크 SG는 Bedrock 엔드포인트 SG에 포함되지 않는다.
+  프롬프트 원문과 재식별 매핑은 RDS `audit_log`에만 남는다. 클라우드 트레이스 테이블에는 해시·길이·메트릭만 기록된다(§12.3).
+- **브리지 Lambda가 유일한 입구**: IAM invoke만 가능. Neptune openCypher와 VPC 내부 ALB를 대리 호출하며 AWS API·인터넷을 호출하지 않는다.
+- **관리 작업 분리**: Neptune 적재·Registry 시드·리셋은 `AdminFn`(IAM invoke 전용). WebSocket 사용자 경로에는 없다.
+- **Guardrails는 코드로 정의**(`infra/lib/stack.ts` CfnGuardrail): 투자권유 토픽 차단, PII 탐지/익명화, 근거 점수(표시용), 비속어.
+- **비용가드/오프라인 폴백**: 일일 Bedrock 토큰 상한(DAILY_TOKEN_CAP) 초과·호출 실패 시 캐시 응답을 재생하고 UI에 "캐시 응답" 배지를 띄운다.
+
+## 에이전트 계층 — AgentCore 네이티브
+
+- **에이전트 = AgentCore Harness** (코드 없는 관리형 에이전트 루프): 모델(`global.anthropic.claude-sonnet-5`)·시스템프롬프트·
+  skills(S3 `SKILL.md`)·tools(Gateway MCP)·managed memory. `agentcore/agent_specs.py`의 시나리오 에이전트 4종을 `AdminFn seed_agents`가
+  멱등 생성하고, 빌더 화면에서 사용자 정의 에이전트를 만든다.
+- **도구 = AgentCore Gateway `bankplatformcore-tools`(MCP, IAM 인바운드)** → Lambda 타깃 `agentcore/gateway_tools.py` 10종
+  (규정 목록·규정 영향 순회·컴포넌트 영향·Semantic 해석·**마스킹 반환 고객 조회**·우대금리/한도 계산·승인 컴포넌트(Consumer API)·화면 게이트·내부 문서 검색).
+  개인데이터 도구는 VPC 내부에서 조회·계산·마스킹한 뒤 **마스킹 결과만** 반환한다 — 에이전트(LLM)는 원본을 보지 못한다 (도구 출력 = 경계).
+- **거버넌스 = 플랫폼 Registry(DynamoDB: 상태기계·감사·유일성·하이브리드 검색) + AgentCore Registry 미러**(`agentcore/registry_mirror.py`,
+  submit-for-approval / update-status 동기화). **APPROVED가 아닌 에이전트는 호출되지 않는다** (Consumer 게이트, `handlers/agents.py`).
+- AgentCore Insights·Evaluations·Policy는 사용하지 않는다(SPEC v2 §11-4). Harness 화면에는 `Tier 0/1 전용` 배지.
+
+## 디렉토리
+
+| 경로 | 내용 |
 |---|---|
-| 기존 자산 | 하나의 종합 플랫폼으로 재편 — 기존 배포는 무시 가능 (사용자 확정) |
-| 에이전트 SDK | Strands + AgentCore 실사용 (Gateway·Registry 기존 자산 재사용) |
-| 그래프 DB | Neptune 상시 기동 (예산 승인) + LocalGraphStore 개발용 이중화 |
-| 벡터 저장소 | OpenSearch Serverless |
-| 도메인 | 여신(전세대출) — SPEC 제안 채택 |
-| 계정·리전 | 180294183052 / ap-northeast-2 (Bedrock 액세스 확인) · Registry us-east-1 |
-| 시연 시간 | 15분 |
+| `api/ws_handler.py` | 진입점(인증·디스패치) — 얇게 유지 |
+| `api/handlers/` | 액션별 핸들러: `core`(허브·탐색·트레이스·리셋), `s1`, `s2`, `registry`, `screengen`, `report` |
+| `api/common/` | `ctx`(이벤트 push), `log`(원문 마스킹 로그), `tracing`(F6 트레이스), `pii`(독립 PII 스캔), `costguard`(예산·캐시), `plane`(VPC 내부 플레인 클라이언트) |
+| `api/admin_handler.py` | 관리자 Lambda(IAM invoke) |
+| `engine/` | GraphRAG · Vector RAG(BM25+dense+RRF+Cohere rerank, 약화 없음) · Bedrock 래퍼(실측 usage) |
+| `graph/store.py` | `GraphStore` 인터페이스, `LocalGraphStore`, `NeptuneGraphStore`(브리지 경유) |
+| `registry/` | F4 Registry: 상태기계·유일성·감사·Consumer API(APPROVED만)·하이브리드 검색·시드 |
+| `agentcore/` | Harness 래퍼·에이전트 명세·Gateway 도구 Lambda·AgentCore Registry 미러 |
+| `screengen/`, `gates/`, `skills/` | F5 화면 생성 에이전트, 실검증 게이트(Node), 퍼블리싱/접근성 스킬 |
+| `report/` | F7 Reader/Writer/내부 도구 Lambda 핸들러 |
+| `onprem/` | VPC 내부 컨테이너: 정확 조회(RDS)·계산엔진·마스킹·감사원문·벡터 인덱스 |
+| `bridge/` | 브리지 Lambda |
+| `infra/lib/plane-stack.ts`, `infra/lib/stack.ts` | CDK 두 스택 |
+| `seed/`, `schema/`, `semantic/` | 합성데이터(시드 고정) · 온톨로지 스키마 · Semantic Layer |
+| `web/` | React 18 + Vite + TS + Tailwind, 단일 SPA(레일 내비), Pretendard, 다크 |
+| `tests/` | pytest (오프라인) |
 
-## Phase 1 — 온톨로지와 데이터 (완료)
+## 운영
 
 ```bash
 cd platform
-python3 seed/generate.py          # 합성데이터 생성 (시드 고정 20260902)
-python3 -m pytest tests/ -q       # §4.3 커버리지 + §8 식별자 + Semantic Layer 검증
-python3 cli.py impact REG-LN-001  # §4.3 4-hop 순회 — Phase 1 완료 조건
-python3 cli.py metric "지난달 사용액"
+python3 -m pytest tests/ -q                       # 오프라인 테스트 (AWS 호출 없음, 344개)
+MAIN_STACK=BankPlatformCore bash deploy.sh --plane            # 플레인 스택 + 메인 스택 + 시드 + 프론트 (첫 배포 25~35분)
+MAIN_STACK=BankPlatformCore GRAPH_BACKEND=neptune bash deploy.sh   # 시연 표준: Neptune 백엔드 (Neptune 재적재 자동)
+MAIN_STACK=BankPlatformCore bash deploy.sh --no-web           # 백엔드만 재배포
+python3 cli.py admin health                       # 브리지 → VPC 내부 서비스(/health: RDS·벡터·AOSS) · Neptune /status
+python3 cli.py admin seed_agents                  # 시나리오 에이전트 4종 등록(AgentCore Runtime/Strands) + Registry 승인 + AgentCore Registry 미러
+python3 cli.py admin reset_demo                   # 시연 리셋 (UI의 ⟲ 버튼과 동일)
+bash teardown.sh                                  # 시연 후 플레인 스택 삭제 (Neptune·RDS·ECS·AOSS 상시 과금 — §10-1)
+bash teardown.sh --all                            # 메인 스택까지 삭제
 ```
 
-- `schema/ontology.cypher` — 노드 12종·관계 18종 스키마 (openCypher)
-- `seed/generate.py` — 노드 3,317 / 엣지 8,520. 가상 "아톰은행" 여신 도메인.
-  히어로 규정 3건(REG-LN-001 전세 담보, REG-LN-014 LTV, REG-CS-003 설명의무)에
-  §4.3 커버리지를 보장. 개인 식별자는 생성 시점부터 토큰(CUST-/ACCT-).
-- `graph/store.py` — `GraphStore` 인터페이스 + `LocalGraphStore`(인메모리).
-  `GRAPH_BACKEND=neptune|local` 전환 (Neptune 구현은 Phase 2).
-  `impact_of_regulation()`이 §4.3 순회를 수행하고 **순회 경로 엣지**를 함께 반환한다(시각화용).
-- `semantic/` — 지표 정의 YAML + 로더. Text-to-SQL은 이 계층만 참조한다.
-- `tests/test_coverage.py` — 볼륨·커버리지·버전체인·식별자·시맨틱 5종.
+- 라이브: **https://agent.atomai.click** (CloudFront `d8f5f6gxuiuxw`, 스택 `BankPlatformCore`). 구 스택 `BankPlatform`(d15n7n9ypt87h8)은
+  롤백 정리 고착 상태로 남아 있는 **구버전 예비 경로**다 — 시연 후 삭제.
+- 데모 계정: `demo@atomai.click`. 비밀번호는 Secrets Manager `bank-platform/demo-user` — 문서·코드에 적지 않는다(§9).
+  Cognito 풀은 초대 전용(`AllowAdminCreateUserOnly=true`), 가입 UI 없음.
+- 관측성: CloudWatch 대시보드 `BankPlatformCore-ops`, 알람(WsFn 오류·스로틀·p95, ReaderFn 오류). 로그는 JSON 1행/이벤트, `traceId` 포함,
+  프롬프트·개인데이터 키는 해시로 치환된다(§12.5). VPC 내부 서비스 로그도 메트릭만.
+- CI: `.github/workflows/platform-ci.yml` — pytest · 웹 타입체크/빌드 · 게이트 node:test · cdk synth · 비밀번호/키 패턴 검사.
+  (고객 제안은 GitLab CI 전제 — 이 저장소의 GitHub Actions는 같은 파이프라인의 검증용이다. CodeCommit/CodePipeline 미사용.)
 
-## Phase 2 — GraphRAG 엔진과 S1 화면 (완료)
+## 시연 리허설 체크리스트 (SPEC v2 §8-5·§10-1)
 
-라이브: **https://d15n7n9ypt87h8.cloudfront.net/** (demo@atomai.click — 초대 전용, 가입 없음)
+1. `python3 cli.py admin health` → `storeReady:true`, `aossReady:true`(AOSS 177 docs), Neptune `healthy`.
+2. 대시보드 사이드바: **그래프 백엔드 = Neptune Serverless**, **VPC 내부 플레인 = 연결됨**, LLM 경로 = Tier 0/1 Claude global.
+3. S1 프리셋 → GraphRAG 카운트(상품 12·화면 55·컴포넌트 77·부서 7·문서 7·정책규칙 5, Neptune 실측)와 경로 그래프, Vector 패널의 "VPC 내부 벡터 인덱스(AOSS)" 배지.
+4. S2 프리셋 → ⓪추론 경로 배지 → ⑤ 익명화 게이트(페이로드 기본 표시, 식별자 0건) → ⑧ Semantic 검증. Semantic Layer OFF 토글로 "조용히 틀림" 재현.
+5. S5 프리셋 → Guardrails 차단(`investment-solicitation`, STANDARD 티어·APAC 프로파일).
+6. Registry: Button v2 → DEPRECATED, v3 → APPROVED → 화면 생성 재실행 → 게이트 6종(빌드·타입·린트·KWCAG·구조 스냅샷·Registry) 결과와 Button v3 사용 확인.
+7. 에이전트 빌더: 시나리오 에이전트(AgentCore Runtime · Strands) 채팅 → 도구 호출 카드(Gateway MCP) + 경계 계측 이벤트. 새 에이전트 만들기 → PENDING_APPROVAL → 승인 전 호출 거부(Consumer 게이트) → 승인 후 호출.
+8. Single Boundary 뷰: 5개 지표(VPC 잔류 항목·경계 토큰·모델 ID·저장/추론 배지·차단) 모두 실측값. 대시보드 헤더 "데모 대체 표기"(§11) 열어 3개 대체 지점 확인.
+9. 문제 발생 시 ⟲ 시연 리셋 → Registry 기준선 복원; Bedrock 장애 시 "캐시 응답" 배지가 붙은 재생.
 
-```bash
-cd platform && bash deploy.sh   # api-dist 조립 → CDK 배포 → 프론트 빌드/업로드
-```
+## 구현 상태 (2026-09-03 새벽 배포 기준 — 코드·배포·e2e로 확인된 것만)
 
-- `engine/` — GraphRAG(의도분해→seed 선택(신뢰도)→4-hop 순회→생성→근거검증) +
-  Vector RAG(BM25+dense RRF+Cohere Rerank, 약화 없음)
-- `api/ws_handler.py` — WebSocket 스트리밍. $connect에서 Cognito access token 필수
-  (무토큰/무효 토큰 연결 거부 — e2e 확인). 두 엔진 병렬 실행, 토큰 단위 push.
-- `web/` — React 18+Vite+TS+Tailwind, Pretendard, 다크. S1 좌우 비교 + seed 신뢰도 +
-  counts 칩 + 근거검증 배지 + Cytoscape 순회 경로 시각화 + 시나리오 프리셋 버튼 +
-  그래프 백엔드 상시 표시(local/neptune).
-- `infra/` — CDK TS: S3+CloudFront(OAC, 유일한 퍼블릭 웹 진입점), WebSocket API
-  (스로틀 20rps), Lambda(py3.12, 예약 동시성 10), DDB 연결 테이블(TTL).
-- e2e 실측: 첫 토큰 3.1s(SPEC 5s 내), Vector 60토큰/Graph 187토큰 스트리밍,
-  counts = 상품12·화면39·부서7·문서7, 무토큰 연결 거부.
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| S1 규정 영향 분석 (GraphRAG vs Vector RAG, PolicyRule 경로) | 배포 | Neptune v2 3,797/11,052 적재, `impact_of_regulation` 실측 카운트; 벡터 인덱스 AOSS(177 docs) VPC 엔드포인트 |
+| S2 마이데이터 상담 (게이트·배지·Semantic 토글) | 배포 | `api/handlers/s2.py`, `tests/test_s2_v2.py` 31 통과, 가드레일 v3 STANDARD |
+| S3 Registry 상태기계·Consumer API·화면 생성 + 실검증 게이트 | 배포 | `registry/`, `screengen/`, `gates/`(tsc·eslint·axe), 테스트 통과 |
+| S4 Single Boundary 뷰 (§8-3 지표 5종) | 배포 | `handlers/core.py traces.retained`, `Views.tsx` |
+| S5 Guardrails 실차단 | 배포·실측 | `apply-guardrail` 투자권유 질문 → `GUARDRAIL_INTERVENED` (v2 이후) |
+| F7 Reader/Writer IAM 분리 + 인젝션 | 배포 | ReaderFn(권한 없음, AccessDenied 실측) / WriterFn(격리 서브넷, 인터넷 경로 없음) |
+| UX Asset Portal (Related = 그래프 순회) | 배포 | `handlers/portal.py`, `views/Portal.tsx`, `tests/test_portal.py` 27 통과 |
+| 에이전트 계층 (AgentCore Runtime · Strands · Gateway MCP · Registry 미러 · 빌더) | 배포 | `agents/`, `agentcore/`, `handlers/agents.py`; 로컬 컨테이너 스모크에서 Gateway 도구 호출·스트리밍·경계 계측 확인 |
+| Tier 2 Gemma 경로 (bedrock-mantle) | 코드 완료 · 가용성 런타임 확인 | `engine/llm.py GemmaAdapter` — 모델/키 미확인 시 배지에 "미가용" 표기 |
+| 익명화 변환(ML 가명처리·재식별 볼트) | 미구현 (배지 표기) | §11-2 배지: 규칙 기반 토큰화만 구현 |
+| pgvector | 미사용 (AOSS 확정) | §16 |
 
-정리(teardown): `cd infra && npx cdk destroy` (Neptune은 Phase 3에서 추가 예정 — 상시 과금 주의)
-
-## 단일 앱 재편 + Phase 3 일부 (2026-09-02)
-
-"하나의 페이지" 지시에 따라 모든 화면을 **한 SPA**(레일 내비게이션)로 통합했다:
-대시보드 · S1 규정 영향 분석 · S2 마이데이터 상담 · 온톨로지 탐색기 · Agent Registry(S3 뷰) ·
-Two-Plane 뷰(S4) · Guardrails 로그(S5) · 에이전트(컨트롤룸 프록시 — RBAC·예산·감사는
-컨트롤룸 백엔드가 그대로 시행) · 디자인 스튜디오/가이드북(임베드).
-
-- **S2 파이프라인 (F3)**: 입력 Guardrails → Semantic Layer → 정확 조회(합성, 벡터 검색 없음)
-  → 결정론적 계산엔진(수식 단계 표시) → 마스킹/토큰화(경계 페이로드 토글) → 스트리밍 설명
-  → 출력 Guardrails + 수치 검증기 → 재식별. 단계별 온프렘(앰버)/클라우드(시안) 색 규칙.
-- **실물 Bedrock Guardrails** `iol2t2rp0q9i` v3 (STANDARD tier + apac 프로파일): 투자권유
-  차단·정상 상담 통과 4케이스 검증. 목 아님 (§12.4).
-- **F6 경계 계측**: 요청마다 traceId·마스킹 필드·경계 페이로드 PII 실측 스캔·토큰 추정을
-  DynamoDB에 기록(TTL 7일). S4 카운터는 이 실측값의 합 — 하드코딩 아님. 현재 PII 반출 0건.
-- 미완(정직): 온프렘 플레인 물리 분리(별도 VPC·ECS)와 Neptune 전환은 Phase 3 인프라,
-  S3 화면 생성 반전 시연은 Phase 4. UI에 해당 문구 명시.
-
-## 다음 Phase
-
-SPEC §13 참조 — Phase 2: GraphRAG 엔진과 S1 화면 (완료 시 검토), Phase 3: 온프렘
-플레인 분리(ECS Fargate·RDS·Guardrails), Phase 4: Registry와 S3, Phase 5: 마무리.

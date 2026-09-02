@@ -1,4 +1,4 @@
-# Platform 내부 계약 (병렬 구현용) — 2026-09-02
+# Platform 내부 계약 (병렬 구현용) — 2026-09-02 (SPEC v2 Single Boundary 반영 · 금지어: 온프렘/Two-Plane/In-Region → 'VPC 내부'/'Single Boundary')
 
 이 문서는 `platform/` 안에서 동시에 작업하는 모듈들이 지켜야 하는 계약이다. 위반하면 통합이 깨진다.
 
@@ -10,7 +10,11 @@
 | `registry/`, `api/handlers/registry.py`, `web/src/views/RegistryView.tsx`, `tests/test_registry*.py` | Registry 모듈 | F4 |
 | `screengen/`, `gates/`, `skills/`, `api/handlers/screengen.py`, `web/src/views/ScreenGen.tsx`, `tests/test_screengen*.py` | 화면생성 모듈 | F5 |
 | `report/`, `api/handlers/report.py`, `web/src/views/Report.tsx`, `web/public/samples/*`, `tests/test_report*.py` | 보고서 모듈 | F7 |
-| `onprem/`, `bridge/`, `graph/store.py`(Neptune 부분), `tests/test_onprem*.py` | 플레인 모듈 | §3 온프렘·Neptune |
+| `onprem/`, `bridge/`, `graph/store.py`(Neptune 부분), `tests/test_onprem*.py` | 플레인 모듈 | §3 VPC 내부·Neptune |
+| `agentcore/`, `agents/`, `api/handlers/agents.py`, `web/src/views/AgentBuilder.tsx` | 에이전트 계층 | AgentCore Runtime(Strands 컨테이너)·Harness·Gateway 도구·Registry 미러·빌더 |
+| `api/handlers/portal.py`, `web/src/views/Portal.tsx` | Portal 모듈 | UX Asset Portal (Related = 그래프 순회) |
+| `engine/gate.py`, `engine/llm.py`, `engine/bedrock.py` | 게이트 모듈 | 익명화 게이트(유일한 모델 호출 경로)·LLMClient 어댑터(Claude global · Gemma mantle) |
+| `onprem/aoss_index.py` | 플레인 모듈 | OpenSearch Serverless 하이브리드 인덱스 (VPC 엔드포인트) |
 | `infra/lib/*.ts`, `deploy.sh`, `web/src/App.tsx`, `web/src/lib.ts`, `web/src/Views.tsx` | 통합자 | CDK·셸 |
 
 ## 1. 핸들러 계약 (`api/handlers/<module>.py`)
@@ -29,7 +33,7 @@ ROUTES = {"x": handle_x, "x_list": ...}   # 액션 이름은 모듈 접두어로
   단발은 `engine.bedrock.generate(system, user)` → `(text, usage)`.
 - 계측: `from common import tracing; tracing.record_trace({...})` — 키: `traceId, scenario, email, query, blocked, piiOutbound, maskedFields, tokensIn, tokensOut, cached, plane, elapsedMs` + 자유 필드. **프롬프트 원문·응답 원문·개인데이터 값은 넣지 않는다** (email/query는 자동 해시).
 - 로그: `from common.log import log_event; log_event("module.event", ctx.trace_id, key=value)`. 금지 키는 자동 해시.
-- 온프렘 플레인 호출: `from common import plane; plane.call("/path", body)` (bridge/direct). `plane.mode()` in {bridge,direct,local,none}.
+- VPC 내부 플레인 호출: `from common import plane; plane.call("/path", body)` (bridge/direct). `plane.mode()` in {bridge,direct,local,none}.
 - 환경변수는 `os.environ.get("X", default)`; 새 env가 필요하면 통합 스니펫에 명시.
 - Lambda 런타임: Python 3.12, **외부 pip 패키지 없음**(boto3만). PyYAML도 없다 (semantic은 json 변환본 사용).
 - 배포 조립: `deploy.sh`가 `api/*.py`, `api/common`, `api/handlers`, `engine`, `graph`, `onprem`, `semantic`, `seed/out` + **각 모듈 디렉토리**(`registry`, `screengen`, `report`)를 `api-dist/`로 복사한다. 모듈은 `import registry.x` 처럼 최상위 패키지로 import 된다 (`sys.path`에 api-dist 루트).
@@ -37,7 +41,7 @@ ROUTES = {"x": handle_x, "x_list": ...}   # 액션 이름은 모듈 접두어로
 ## 2. 프론트 계약 (`web/src/views/<View>.tsx`)
 
 - React 18 + TS + Tailwind v4, 다크 전용, Pretendard. 공용 클래스: `.panel`, `.chip`, `.md`, `.blink`.
-  색 규칙 필수: 온프렘 = `var(--onprem)`(앰버), 클라우드 = `var(--cloud)`(시안), 정상 = `var(--ok)`; 위험은 `text-rose-400`.
+  색 규칙 필수: VPC 내부 = `var(--onprem)`(앰버), 클라우드 = `var(--cloud)`(시안), 정상 = `var(--ok)`; 위험은 `text-rose-400`.
 - 소켓: `import { sock, auth } from '../lib'`.
   - 요청/응답: `const e = await sock.request('registry_list', { type: 'COMPONENT' })` → 응답 이벤트 1건.
   - 스트리밍: `await sock.run('screengen', { prompt }, (e) => { ... })` — `.stage/.token/.done` 이벤트 수신, `.done`에서 종료.

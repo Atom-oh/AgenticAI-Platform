@@ -1,0 +1,4 @@
+# deploy.sh 가 seed/out/corpus.jsonl · corpus.embeddings.json 을 여기로 복사한 뒤 docker build 한다 — 복사본은 커밋하지 않는다
+*
+!.gitkeep
+!.gitignore

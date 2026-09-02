@@ -49,7 +49,7 @@
 
 | 계정 | 그룹 | 용도 |
 |---|---|---|
-| demo@atomai.click | platform-admins | 공유 데모 계정 (!234Qwer — uiux-studio 포함 전 데모 공통) |
+| demo@atomai.click | platform-admins | 공유 데모 계정 — 비밀번호는 Secrets Manager `bank-platform/demo-user` (SPEC §9: 문서·코드에 기록하지 않는다) |
 | admin@demo.nexus | platform-admins | 플랫폼 운영(승인·예산·감사) |
 | alpha@demo.nexus | team-alpha | 서비스팀 셀프서비스 |
 | beta@demo.nexus | team-beta | 서비스팀 셀프서비스 |

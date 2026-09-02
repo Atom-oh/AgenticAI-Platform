@@ -14,3 +14,9 @@ platform/infra/outputs.json
 platform/infra/dist/
 platform/web/node_modules/
 platform/web/dist/
+platform/skills-dist/
+platform/agents/_ctx/
+platform/infra/plane-outputs.json
+platform/gates/node_modules/
+platform/**/.pytest_cache/
+platform/web/tsconfig.tsbuildinfo

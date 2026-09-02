@@ -1,0 +1,22 @@
+[
+  {"name": "list_regulations", "description": "아톰은행 규정 목록을 조회/검색한다 (합성 규정, 제목 검색).",
+   "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "제목 검색어(선택)"}}}},
+  {"name": "analyze_regulation_impact", "description": "규정 개정 영향을 온톨로지 순회로 분석한다. reg_code(예: REG-LN-001) 또는 question(자연어). 영향 상품·화면·컴포넌트·부서·문서와 노드 ID를 반환.",
+   "inputSchema": {"type": "object", "properties": {"reg_code": {"type": "string", "description": "규정 코드(선택)"}, "question": {"type": "string", "description": "자연어 질문(선택)"}}}},
+  {"name": "impact_of_component", "description": "UI 컴포넌트(예: CMP-Button-v2)를 변경하면 영향받는 화면·패턴·정책규칙·상품·부서를 그래프 순회로 반환한다.",
+   "inputSchema": {"type": "object", "properties": {"component_id": {"type": "string", "description": "컴포넌트 노드 ID"}}, "required": ["component_id"]}},
+  {"name": "resolve_metric", "description": "한국어 지표 용어(우대금리·전월실적·LTV 등)를 Semantic Layer 정의(SQL 템플릿·소관 부서)로 해석한다.",
+   "inputSchema": {"type": "object", "properties": {"term": {"type": "string", "description": "지표 용어"}}, "required": ["term"]}},
+  {"name": "lookup_customer_profile", "description": "고객의 마이데이터를 VPC 내부 원장에서 정확 조회하고 결정론적 계산엔진으로 우대금리·한도를 계산한 뒤, 개인 식별자를 마스킹한 프로필과 계산 내역만 반환한다. 원본 값은 반환하지 않는다.",
+   "inputSchema": {"type": "object", "properties": {"customer_ref": {"type": "string", "description": "고객 식별 참조(로그인 이메일 등). 비우면 현재 상담 고객"}, "question": {"type": "string", "description": "고객 질문(선택)"}}}},
+  {"name": "calc_preferential_rate", "description": "우대금리 판정(결정론적 계산엔진). 급여이체 개월수·전월 카드사용액·자동이체 건수·생애최초 여부와 기본금리로 적용금리와 계산 내역을 반환.",
+   "inputSchema": {"type": "object", "properties": {"base_rate": {"type": "string"}, "salary_transfer_months": {"type": "integer"}, "card_monthly_krw": {"type": "integer"}, "auto_transfer_count": {"type": "integer"}, "is_first_home": {"type": "boolean"}}, "required": ["base_rate"]}},
+  {"name": "calc_jeonse_limit", "description": "전세대출 한도 계산(결정론적): min(보증금×보증비율, 연소득×4) - 기존대출.",
+   "inputSchema": {"type": "object", "properties": {"deposit_krw": {"type": "integer"}, "guarantee_ratio": {"type": "string"}, "annual_income_krw": {"type": "integer"}, "existing_debt_krw": {"type": "integer"}}, "required": ["deposit_krw", "guarantee_ratio", "annual_income_krw"]}},
+  {"name": "list_approved_components", "description": "Registry Consumer API — APPROVED 상태의 UI 컴포넌트 계약(name, version, module, exportName, propsSchema)만 반환한다. 승인되지 않은 컴포넌트는 보이지 않는다.",
+   "inputSchema": {"type": "object", "properties": {"subtype": {"type": "string", "description": "기본 COMPONENT"}}}},
+  {"name": "run_screen_gates", "description": "생성한 React+TS 화면 코드에 실검증 게이트(빌드/타입/린트/KWCAG 접근성/구조 스냅샷/Registry 승인)를 실행하고 결과를 반환한다.",
+   "inputSchema": {"type": "object", "properties": {"code": {"type": "string", "description": "Screen.tsx 전체 코드"}}, "required": ["code"]}},
+  {"name": "search_internal_documents", "description": "사내 문서(보고서·기안문·규정) 메타데이터를 키워드로 검색한다. Writer 전용.",
+   "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}}, "required": ["query"]}}
+]

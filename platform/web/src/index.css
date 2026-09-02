@@ -1,13 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  /* 색 규칙 (SPEC §6.2): 전 화면 공통 — 클라우드=시안, 온프렘=앰버 */
+  /* 색 규칙 (SPEC v2 §8-4): 전 화면 공통 — Bedrock 영역=시안, VPC 내부 영역=앰버 */
   --cloud: #38bdf8;
   --onprem: #fbbf24;
   --ok: #34d399;
   --bg: #0b0f14;
   --panel: #111823;
   --line: #1e2a3a;
+  /* Single Boundary 별칭 — 새 코드는 --vpc / --bedrock 을 쓴다 (기존 변수는 호환용으로 유지) */
+  --vpc: var(--onprem);
+  --bedrock: var(--cloud);
 }
 
 html, body, #root { height: 100%; }
@@ -27,3 +30,47 @@ body {
 .md { line-height: 1.65; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
 .blink { animation: bl 1s step-end infinite; }
 @keyframes bl { 50% { opacity: 0; } }
+
+/* ---- 경계 통과 애니메이션 (SPEC v2 §8-4 "경계를 넘는 데이터는 애니메이션으로 표시") — 순수 CSS ----
+   .bx-track  : VPC 내부(좌, 앰버) → 익명화 게이트(중앙) → Bedrock(우, 시안) 사이의 얇은 트랙
+   .bx-dot    : 트레이스 1건 = 점 1개. 좌에서 우로 이동 (경계 통과), 게이트에서 멈춤(차단/거부), VPC 내부에 머묾(캐시 응답) */
+.bx-track {
+  position: relative; height: 22px; border-radius: 999px; overflow: hidden;
+  background: linear-gradient(90deg, rgba(251,191,36,.18) 0%, rgba(251,191,36,.10) 46%,
+    rgba(56,189,248,.10) 54%, rgba(56,189,248,.18) 100%);
+  border: 1px solid var(--line);
+}
+.bx-track::before {       /* 익명화 게이트 — 유일한 통과 지점 */
+  content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: repeating-linear-gradient(180deg, #e2e8f0 0 3px, transparent 3px 6px); opacity: .7;
+}
+.bx-dot {
+  position: absolute; top: 7px; left: 2px; width: 8px; height: 8px; border-radius: 999px;
+  background: var(--vpc); box-shadow: 0 0 6px var(--vpc);
+  animation: bx-cross var(--bx-dur, 4.5s) cubic-bezier(.4,0,.2,1) var(--bx-delay, 0s) infinite;
+}
+.bx-dot.gate { animation-name: bx-gate; }      /* 게이트 거부 / Guardrails 차단: 경계에서 멈춘다 */
+.bx-dot.stay { animation-name: bx-stay; }      /* 캐시 응답: 경계를 넘지 않는다 */
+@keyframes bx-cross {
+  0%   { left: 2px; background: var(--vpc); box-shadow: 0 0 6px var(--vpc); opacity: 0; }
+  8%   { opacity: 1; }
+  48%  { background: var(--vpc); box-shadow: 0 0 6px var(--vpc); }
+  52%  { background: var(--bedrock); box-shadow: 0 0 6px var(--bedrock); }
+  88%  { left: calc(100% - 10px); opacity: 1; }
+  100% { left: calc(100% - 10px); opacity: 0; }
+}
+@keyframes bx-gate {
+  0%   { left: 2px; opacity: 0; background: var(--vpc); box-shadow: 0 0 6px var(--vpc); }
+  8%   { opacity: 1; }
+  46%  { left: calc(50% - 6px); background: var(--vpc); }
+  52%  { background: #f43f5e; box-shadow: 0 0 8px #f43f5e; }
+  90%  { left: calc(50% - 6px); background: #f43f5e; opacity: 1; }
+  100% { left: calc(50% - 6px); opacity: 0; }
+}
+@keyframes bx-stay {
+  0%   { left: 2px; opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { left: 30%; opacity: 1; }
+  100% { left: 30%; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .bx-dot { animation-duration: 0.01ms; animation-iteration-count: 1; } }

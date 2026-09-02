@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""합성데이터 생성기 (SPEC §4·§8) — 시드 고정, 재현 가능.
+"""합성데이터 생성기 (SPEC v2 §5·§9) — 시드 고정, 재현 가능.
 
-가상 은행 "아톰은행"의 여신 중심 도메인. 실제 은행 상품명·내규 조항을 사용하지 않고
-구조만 모사한다. 개인 식별자는 생성 시점부터 토큰 형태(CUST-xxxx / ACCT-xxxx)로 만든다.
+가상 은행 "아톰은행"의 여신 도메인(§5-1) + UX 자산 도메인(§5-2). 실제 은행 상품명·내규 조항을
+사용하지 않고 구조만 모사한다. 개인 식별자는 생성 시점부터 토큰 형태(CUST-xxxx / ACCT-xxxx)로 만든다.
 
-출력: seed/out/nodes.jsonl, seed/out/edges.jsonl
-커버리지 제약(§4.3): 히어로 규정 3건에 대해 products>=4, screens>=6,
-departments>=3, documents>=5 를 보장하도록 심는다 — tests/test_coverage.py가 검증.
+출력: seed/out/nodes.jsonl, seed/out/edges.jsonl (목표: 노드 약 3,800 / 관계 약 11,000)
+커버리지 제약(§5-4) — tests/test_coverage.py · tests/test_ontology_v2.py 가 검증:
+  - 히어로 규정 3건(HERO_REGULATIONS): products>=4, screens>=6, components>=8, departments>=3, documents>=5
+  - 히어로 컴포넌트 3건(HERO_COMPONENTS): screens>=12, patterns>=4, policyRules>=2
+여신 도메인은 v1 과 바이트 단위로 동일하게 유지한다 (Regulation 원문 코퍼스의 임베딩 캐시 보존).
+UX 자산 도메인은 별도 난수열(SEED+1)로 뒤에 덧붙인다.
 """
 from __future__ import annotations
 
@@ -17,9 +20,20 @@ from pathlib import Path
 SEED = 20260902
 OUT = Path(__file__).resolve().parent / "out"
 
+# §5-4 커버리지 제약의 대상 — 테스트·CLI·Registry 시드가 이 ID를 읽는다 (변경 금지)
+HERO_REGULATIONS = ["REG-LN-001", "REG-LN-014", "REG-CS-003"]
+HERO_COMPONENTS = ["CMP-Button-v2", "CMP-Button-v3", "CMP-Input-v3"]
+# 히어로 컴포넌트를 직접 사용하는 화면 인덱스(SCR-###). 전세(0~7)·주담대(8~15) 흐름 화면이 주 버튼/입력을 쓴다.
+HERO_COMPONENT_SCREENS = {
+    "CMP-Button-v2": list(range(0, 16)),
+    "CMP-Button-v3": list(range(16, 32)),
+    "CMP-Input-v3": list(range(0, 4)) + list(range(8, 12)) + list(range(32, 40)),
+}
+
 NODES: list[dict] = []
 EDGES: list[dict] = []
 _ids: set[str] = set()
+_edge_keys: set[tuple[str, str, str]] = set()
 
 
 def node(nid: str, label: str, **props) -> str:
@@ -30,6 +44,12 @@ def node(nid: str, label: str, **props) -> str:
 
 
 def edge(src: str, rel: str, dst: str, **props) -> None:
+    """엣지 추가. 같은 (src, rel, dst) 는 1건만 둔다 — Related 카운트(§8-2)가 중복으로 부풀지 않도록.
+    난수열은 소비하지 않으므로 중복 제거가 이후 생성 결과를 바꾸지 않는다."""
+    key = (src, rel, dst)
+    if key in _edge_keys:
+        return
+    _edge_keys.add(key)
     EDGES.append({"src": src, "rel": rel, "dst": dst, "props": props})
 
 
@@ -289,6 +309,183 @@ def main() -> None:
         edge(a, "OF_PRODUCT", p)
         for m in rng.sample(merchants, k=rng.randint(1, 3)):
             edge(a, "TRANSACTED_AT", m)
+
+    # ============================================================
+    # UX 자산 도메인 (SPEC v2 §5-2 / §5-3) — Pattern · Procedure · PolicyRule · UXTerm · ScreenMeta
+    # 별도 난수열(SEED+1)을 사용해 위 여신 도메인 노드·엣지는 바이트 단위로 동일하게 유지한다
+    # (Regulation 원문 코퍼스 → Titan 임베딩 캐시가 그대로 유효).
+    # ============================================================
+    urng = random.Random(SEED + 1)
+    idx = {n["id"]: n for n in NODES}
+
+    # Component.owner (§5-2 속성 추가) — 버전 사슬 컴포넌트는 UI플랫폼팀, 볼륨용 위젯은 3개 팀에 분산
+    comp_owners = ["UI플랫폼팀", "디지털채널부", "UX디자인부"]
+    for c in components:
+        idx[c]["props"]["owner"] = urng.choice(comp_owners) if c.startswith("CMP-GEN-") else "UI플랫폼팀"
+
+    def _dedupe_edge(seen: set, src: str, rel: str, dst: str) -> None:
+        if (src, dst) not in seen:
+            seen.add((src, dst)); edge(src, rel, dst)
+
+    uses: set[tuple[str, str]] = {(e["src"], e["dst"]) for e in EDGES if e["rel"] == "USES"}
+    # 히어로 컴포넌트 3건(§5-4 두 번째 제약 대상) — 흐름 화면이 주 액션 버튼/입력을 직접 사용한다 (screens>=12 보장)
+    for cid, scrs in HERO_COMPONENT_SCREENS.items():
+        for s in scrs:
+            _dedupe_edge(uses, screens[s], "USES", cid)
+
+    # ---------------- Pattern (40) ----------------
+    pattern_defs = [
+        ("단계형 신청 폼", "폼"), ("조건 검색 목록", "목록"), ("결과 상세 카드", "상세"),
+        ("한도·금리 조회 위저드", "폼"), ("서류 제출 업로드", "폼"), ("약정 전자서명", "인증"),
+        ("심사 진행 스테퍼", "피드백"), ("금액 입력 키패드", "폼"), ("상품 비교 표", "목록"),
+        ("고지·동의 체크리스트", "동의"), ("본인인증 모달", "인증"), ("오류 안내 토스트", "피드백"),
+        ("탭 전환 상세", "탐색"), ("필터 칩 목록", "목록"), ("날짜 범위 선택", "폼"),
+        ("계좌 선택 드롭다운", "폼"), ("가맹점 제외 안내", "피드백"), ("우대 조건 체크리스트", "동의"),
+        ("실행 완료 확인", "피드백"), ("이체 한도 안내 배너", "피드백"),
+        ("빈 상태 안내", "피드백"), ("페이지 헤더", "레이아웃"), ("하단 고정 액션바", "레이아웃"),
+        ("접이식 섹션", "레이아웃"), ("정렬 가능 데이터 표", "목록"), ("검색 자동완성", "폼"),
+        ("파일 미리보기", "상세"), ("타임라인 이력", "상세"), ("알림 센터", "피드백"),
+        ("약관 전문 뷰어", "동의"), ("설명의무 확인 다이얼로그", "동의"), ("금리 산정 내역 표", "상세"),
+        ("상환 스케줄 표", "상세"), ("담보 물건 입력", "폼"), ("공동 명의자 추가", "폼"),
+        ("영업점 방문 예약", "폼"), ("상담사 연결 배너", "피드백"), ("진행 상태 배지", "피드백"),
+        ("취소·되돌리기 확인", "피드백"), ("세션 만료 안내", "인증"),
+    ]
+    assert len(pattern_defs) == 40
+    patterns = [node(f"PAT-{i:03d}", "Pattern", patternId=f"PAT-{i:03d}", name=nm, category=cat,
+                     status=urng.choice(["APPROVED"] * 8 + ["DRAFT", "DEPRECATED"]))
+                for i, (nm, cat) in enumerate(pattern_defs)]
+
+    # Pattern -COMPOSES-> Component. 히어로 컴포넌트는 6개 패턴이 포함한다 (§5-4 patterns>=4 보장)
+    composes: set[tuple[str, str]] = set()
+    hero_comp_patterns = {
+        "CMP-Button-v2": [0, 3, 5, 18, 22, 38],     # 신청 폼·위저드·전자서명·완료·액션바·확인 — 주 버튼
+        "CMP-Button-v3": [7, 10, 25, 28, 35, 39],    # 키패드·인증 모달·자동완성·알림·예약·세션 — 차세대 버튼
+        "CMP-Input-v3": [0, 3, 7, 25, 33, 34],       # 폼·위저드·키패드·자동완성·담보 입력·명의자
+    }
+    for cid, pis in hero_comp_patterns.items():
+        for pi in pis:
+            _dedupe_edge(composes, patterns[pi], "COMPOSES", cid)
+    approved_comps = [c for c in components if idx[c]["props"]["approvalStatus"] == "APPROVED"]
+    for p in patterns:
+        for c in urng.sample(approved_comps, k=urng.randint(4, 8)):
+            _dedupe_edge(composes, p, "COMPOSES", c)
+
+    # Screen -FOLLOWS-> Pattern. 히어로 흐름 화면(전세 0~7 · 주담대 8~15)은 흐름 단계에 맞는 패턴을 따른다
+    follows: set[tuple[str, str]] = set()
+    flow_patterns = [21, 3, 0, 4, 6, 5, 18, 31]  # 상품안내→헤더, 한도조회→위저드, 신청서→폼, 서류→업로드,
+    #                                              심사결과→스테퍼, 약정→전자서명, 실행→완료확인, 금리안내→금리내역
+    for i, pi in enumerate(flow_patterns):
+        _dedupe_edge(follows, screens[i], "FOLLOWS", patterns[pi])
+        _dedupe_edge(follows, screens[i + 8], "FOLLOWS", patterns[pi])
+    for s in screens:
+        for p in urng.sample(patterns, k=urng.randint(2, 3)):
+            _dedupe_edge(follows, s, "FOLLOWS", p)
+
+    # ---------------- Procedure (30) ----------------
+    proc_names = [
+        "전세자금대출 신청 절차", "주택담보대출 신청 절차", "신용대출 한도 조회 절차", "대출 실행 및 입금 절차",
+        "금리인하요구권 접수 절차", "대출 만기 연장 절차", "중도상환 처리 절차", "담보 물건 변경 절차",
+        "공동 명의자 추가 절차", "우대금리 조건 확인 절차", "비대면 실명확인 절차", "예금 신규 가입 절차",
+        "해외 송금 신청 절차", "카드 발급 신청 절차", "자동이체 등록 절차", "연체 안내 및 상환 절차",
+        "고객확인의무(CDD) 이행 절차", "설명의무 확인 및 증빙 절차", "영업점 방문 예약 절차",
+        "상품 비교 및 추천 절차",
+    ]
+    proc_names += [f"{cat} 운영 업무 절차 {i}호" for i, cat in
+                   enumerate(["여신", "수신", "외환", "카드", "공통"] * 2, start=1)]
+    assert len(proc_names) == 30
+    proc_screens: list[list[str]] = [screens[0:8], screens[8:16]]
+    for _ in range(2, 30):
+        proc_screens.append(urng.sample(screens, k=urng.randint(4, 8)))
+    procedures = []
+    for i, (nm, scrs) in enumerate(zip(proc_names, proc_screens)):
+        pr = node(f"PRC-{i:03d}", "Procedure", procedureId=f"PRC-{i:03d}", name=nm,
+                  steps=json.dumps([idx[s]["props"]["name"] for s in scrs], ensure_ascii=False),
+                  status=urng.choice(["APPROVED"] * 8 + ["DRAFT", "DEPRECATED"]))
+        procedures.append(pr)
+        for s in scrs:
+            edge(pr, "INCLUDES", s)
+
+    # ---------------- ScreenMeta (150, 화면당 1건) ----------------
+    prev_map: dict[str, list[str]] = {s: [] for s in screens}
+    next_map: dict[str, list[str]] = {s: [] for s in screens}
+    for scrs in proc_screens:
+        for a, b in zip(scrs, scrs[1:]):
+            if b not in next_map[a]:
+                next_map[a].append(b)
+            if a not in prev_map[b]:
+                prev_map[b].append(a)
+    purposes = ["고객이 조건을 입력하고 결과를 확인한다", "신청 내용을 검토하고 다음 단계로 진행한다",
+                "필수 고지 사항을 확인하고 동의를 받는다", "처리 결과를 조회하고 증빙을 내려받는다",
+                "담당자가 접수 건을 검토하고 처리한다"]
+    entry_conds = ["로그인 완료", "본인인증 완료", "상품 선택 완료", "약관 동의 완료", "직원 권한(창구·운영)"]
+    for i, s in enumerate(screens):
+        sp = idx[s]["props"]
+        sm = node(f"SM-{i:03d}", "ScreenMeta", screenNo=s,
+                  purpose=f"{sp['name']} — {urng.choice(purposes)} ({sp['channel']})",
+                  entryCondition=urng.choice(entry_conds),
+                  prevScreens=json.dumps(prev_map[s]), nextScreens=json.dumps(next_map[s]))
+        edge(sm, "DESCRIBES", s)
+
+    # ---------------- PolicyRule (60) ----------------
+    # 두 도메인의 연결점: PolicyRule -DERIVED_FROM-> Regulation, PolicyRule -CONSTRAINS-> Screen (S1 v2 순회)
+    constrains: set[tuple[str, str]] = set()
+    hero_rules = [
+        ("REG-LN-001", "전세대출 담보 인정 범위 고지 문구 필수", "고지의무", "HIGH", list(range(0, 8))),
+        ("REG-LN-001", "질권·채권양도 담보 선택 시 인정비율 80% 상한 표기", "표기", "MEDIUM", [1, 2, 3, 7, 40]),
+        ("REG-LN-001", "제외 대상 주택 사전 확인 체크리스트", "동의", "HIGH", [2, 3, 4, 41]),
+        ("REG-LN-014", "LTV 산정 기준가 출처 표기", "표기", "MEDIUM", list(range(8, 16))),
+        ("REG-LN-014", "규제지역 변경 시 한도 재계산 안내", "고지의무", "HIGH", [9, 10, 11, 42]),
+        ("REG-LN-014", "LTV 한도 초과 승인 불가 입력 검증", "입력검증", "HIGH", [12, 13, 43]),
+        ("REG-CS-003", "우대금리 조건·미충족 시 불이익 설명 확인", "동의", "HIGH", [0, 7, 8, 15, 16, 17, 44, 45]),
+        ("REG-CS-003", "비대면 화면 단위 고지·이해 확인 절차", "고지의무", "HIGH", list(range(12, 24))),
+        ("REG-CS-003", "설명 확인 증빙(전자서명·녹취) 보관", "보안", "MEDIUM", [5, 13, 16, 18, 20, 46]),
+        # 히어로 컴포넌트(Button v3 · Input v3) 화면군을 제약하는 규칙 — §5-4 policyRules>=2 보장
+        ("REG-GN-009", "비대면 세션 만료 시 재인증 요구", "보안", "HIGH", list(range(16, 32))),
+        ("REG-GN-013", "주 액션 버튼 명칭 표기 통일(신청·확인·취소)", "표기", "LOW", list(range(16, 40))),
+        ("REG-GN-012", "금액·계좌 입력 필드 형식 검증", "입력검증", "MEDIUM", list(range(0, 4)) + list(range(8, 12)) + list(range(32, 40))),
+    ]
+    rule_types = ["고지의무", "접근성", "입력검증", "보안", "표기", "동의"]
+    policy_rules = []
+    for i in range(60):
+        rid = f"POL-{i:03d}"
+        if i < len(hero_rules):
+            reg_id, title, rtype, sev, scr_idx = hero_rules[i]
+            targets = [screens[k] for k in scr_idx]
+            derived = [reg_id]
+        else:
+            reg_id = urng.choice(regs)
+            topic = idx[reg_id]["props"]["title"].split(" 기준")[0]
+            rtype = urng.choice(rule_types)
+            title = f"{topic} 화면 {rtype} 규칙 {i}호"
+            sev = urng.choice(["HIGH", "MEDIUM", "MEDIUM", "LOW"])
+            targets = urng.sample(screens, k=urng.randint(4, 12))
+            derived = [reg_id] + ([urng.choice(regs)] if urng.random() < 0.3 else [])
+        pol = node(rid, "PolicyRule", ruleId=rid, title=title, ruleType=rtype, severity=sev,
+                   status="ACTIVE" if i < len(hero_rules) else urng.choice(["ACTIVE"] * 8 + ["DRAFT", "RETIRED"]))
+        policy_rules.append(pol)
+        for s in targets:
+            _dedupe_edge(constrains, pol, "CONSTRAINS", s)
+        for r in dict.fromkeys(derived):
+            edge(pol, "DERIVED_FROM", r)
+
+    # ---------------- UXTerm (200) ----------------
+    term_domains = [("전세대출", "여신"), ("주담대", "여신"), ("신용대출", "여신"), ("예금", "수신"),
+                    ("송금", "외환"), ("카드", "카드"), ("공통", "공통")]
+    concepts = ["한도", "금리", "우대금리", "상환", "만기", "신청", "심사", "약정", "실행", "해지",
+                "중도상환수수료", "거치기간", "담보", "보증", "연체", "자동이체", "본인인증", "전자서명",
+                "약관", "설명확인", "고객확인", "가맹점", "전월실적", "기준금리", "가산금리", "상품안내",
+                "서류제출", "결과조회", "재약정", "증액"]
+    term_pool = [(d, cat, c) for d, cat in term_domains for c in concepts][:200]
+    term_screens = {"전세대출": screens[0:8], "주담대": screens[8:16]}
+    for i, (dom, cat, con) in enumerate(term_pool):
+        term = con if dom == "공통" else f"{dom} {con}"
+        t = node(f"TRM-{i:04d}", "UXTerm", termId=f"TRM-{i:04d}", term=term,
+                 definition=f"{dom} 업무 화면에서 '{con}'을(를) 가리키는 표준 표기. 고객 안내 문구·버튼 명칭은 '{term}'으로 통일한다.",
+                 category=cat)
+        pool = term_screens.get(dom)
+        picks = (urng.sample(pool, k=urng.randint(2, 4)) if pool else []) + urng.sample(screens, k=urng.randint(2, 5))
+        for s in dict.fromkeys(picks):
+            edge(t, "USED_IN", s)
 
     # ---------------- 출력 ----------------
     OUT.mkdir(parents=True, exist_ok=True)

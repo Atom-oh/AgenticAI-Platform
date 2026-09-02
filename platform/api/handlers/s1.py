@@ -14,10 +14,16 @@ from handlers.core import GRAPH_BACKEND, lazy_index, lazy_store
 _ID_RE = re.compile(r"\b(?:REG|PRD|SCR|CMP|CND|DOC|TPL|D)-[A-Za-z0-9-]+\b")
 
 
-def _run_vector(ctx: Ctx, query: str, usage: dict) -> None:
+def _run_vector(ctx: Ctx, query: str, usage: dict, xing: dict) -> None:
     from engine import bedrock, vectorrag
-    hits, timing, system, user = vectorrag.prepare(query, lazy_index())
-    ctx.post({"type": "vector.chunks", "timing": timing,
+    try:
+        hits, timing, system, user = vectorrag.prepare(query, lazy_index())
+    except Exception as e:  # 플레인 벡터 검색 실패는 패널에 명시적으로 보인다 (빈 패널 금지)
+        ctx.post({"type": "vector.done", "error": f"벡터 검색 실패 ({type(e).__name__}): {str(e)[:160]}",
+                  "searchPlane": vectorrag.search_mode()})
+        return
+    ctx.post({"type": "vector.chunks", "timing": timing, "searchPlane": timing.get("searchPlane", "local"),
+              "searchLabel": vectorrag.search_label(),
               "chunks": [{"id": h.chunk["chunkId"], "score": round(h.score, 4), "text": h.chunk["text"][:220]}
                          for h in hits]})
     t0 = time.time()
@@ -25,10 +31,12 @@ def _run_vector(ctx: Ctx, query: str, usage: dict) -> None:
     for tk in st:
         ctx.token("vector", tk)
     usage["vector"] = st.usage
-    ctx.post({"type": "vector.done", "generate_ms": int((time.time() - t0) * 1000), "usage": st.usage})
+    xing["vector"] = st.info()  # 게이트 실측: modelId/route/tier/boundary (SPEC v2 §8-3)
+    ctx.post({"type": "vector.done", "generate_ms": int((time.time() - t0) * 1000), "usage": st.usage,
+              "modelId": st.model_id, "route": st.route, "tier": st.tier, "boundary": st.boundary})
 
 
-def _run_graph(ctx: Ctx, query: str, usage: dict) -> None:
+def _run_graph(ctx: Ctx, query: str, usage: dict, xing: dict) -> None:
     from engine import bedrock, graphrag
     meta = graphrag.prepare(query, lazy_store())
     if "error" in meta:
@@ -44,9 +52,11 @@ def _run_graph(ctx: Ctx, query: str, usage: dict) -> None:
         full.append(tk)
         ctx.token("graph", tk)
     usage["graph"] = st.usage
+    xing["graph"] = st.info()
     valid = {n["id"] for n in meta["graph"]["nodes"]}
     cited = set(_ID_RE.findall("".join(full)))
     ctx.post({"type": "graph.done", "generate_ms": int((time.time() - t0) * 1000), "usage": st.usage,
+              "modelId": st.model_id, "route": st.route, "tier": st.tier, "boundary": st.boundary,
               "evidenceNodeIds": sorted(valid & cited)[:50], "hallucinatedIds": sorted(cited - valid)})
 
 
@@ -56,12 +66,13 @@ def handle(ctx: Ctx, body: dict) -> None:
         ctx.error("질문이 비어 있습니다.")
         return
     usage: dict = {}
+    xing: dict = {}  # 경계 통과 실측 (게이트 Stream.info) — 패널별
 
     def run(c: Ctx) -> None:
         c.post({"type": "meta", "backend": GRAPH_BACKEND, "user": c.email, "query": query})
         errors = []
         with ThreadPoolExecutor(max_workers=2) as ex:
-            futs = [ex.submit(_run_vector, c, query, usage), ex.submit(_run_graph, c, query, usage)]
+            futs = [ex.submit(_run_vector, c, query, usage, xing), ex.submit(_run_graph, c, query, usage, xing)]
             for f in futs:
                 try:
                     f.result()
@@ -74,11 +85,24 @@ def handle(ctx: Ctx, body: dict) -> None:
     tin = sum(int(u.get("inputTokens", 0)) for u in usage.values())
     tout = sum(int(u.get("outputTokens", 0)) for u in usage.values())
     costguard.add_usage(tin + tout)
+    # 게이트 실측 — 모델 ID·경로·경계를 넘은 문자/추정 토큰/필드 수 (SPEC v2 §8-3: 하드코딩 금지, 실측만)
+    infos = [x for x in xing.values() if x]
+    boundaries = [x.get("boundary") or {} for x in infos]
+    pii_rules = sum(int((b.get("piiRules") or {}).get("count", 0)) for b in boundaries)
     tracing.record_trace({"traceId": ctx.trace_id, "scenario": "S1", "email": ctx.email, "query": query,
-                          "blocked": False, "piiOutbound": 0, "piiDetectors": ["n/a(합성 규정 문서만)"],
+                          "blocked": False, "piiOutbound": pii_rules, "piiDetectors": ["rules(gate)"],
                           "maskedFields": [], "tokensIn": tin, "tokensOut": tout, "cached": res["cached"],
-                          "backend": GRAPH_BACKEND, "plane": "cloud", "elapsedMs": ctx.elapsed_ms()})
-    log_event("s1.done", ctx.trace_id, tokensIn=tin, tokensOut=tout, cached=res["cached"], ms=ctx.elapsed_ms())
+                          "backend": GRAPH_BACKEND, "plane": "cloud", "elapsedMs": ctx.elapsed_ms(),
+                          "modelId": (infos[0]["modelId"] if infos else None),
+                          "route": (infos[0]["route"] if infos else None),
+                          "tier": (infos[0]["tier"] if infos else None),
+                          "crossings": len(infos),
+                          "boundaryFields": sum(len(b.get("fieldsPassed") or []) for b in boundaries),
+                          "boundaryChars": sum(int(b.get("chars", 0)) for b in boundaries),
+                          "boundaryEstTokens": sum(int(b.get("estTokens", 0)) for b in boundaries)})
+    log_event("s1.done", ctx.trace_id, tokensIn=tin, tokensOut=tout, cached=res["cached"], ms=ctx.elapsed_ms(),
+              modelId=(infos[0]["modelId"] if infos else None), route=(infos[0]["route"] if infos else None),
+              crossings=len(infos))
 
 
 ROUTES = {"s1": handle}
