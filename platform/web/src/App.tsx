@@ -54,6 +54,7 @@ function Login({ onDone }: { onDone: () => void }) {
           className="w-full py-2 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm disabled:opacity-50">
           {busy ? '확인 중…' : '로그인'}
         </button>
+        <div className="text-[11px] text-slate-500 mt-3">demo: demo@atomai.click / !234Qwer</div>
       </div>
     </div>
   );
