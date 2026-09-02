@@ -49,7 +49,7 @@
 
 | 계정 | 그룹 | 용도 |
 |---|---|---|
-| demo@atomai.click | platform-admins | 공유 데모 계정 (!234Qwer) — uiux-studio 데모는 별도 풀, !234QWer 사용 |
+| demo@atomai.click | platform-admins | 공유 데모 계정 (!234Qwer — uiux-studio 포함 전 데모 공통) |
 | admin@demo.nexus | platform-admins | 플랫폼 운영(승인·예산·감사) |
 | alpha@demo.nexus | team-alpha | 서비스팀 셀프서비스 |
 | beta@demo.nexus | team-beta | 서비스팀 셀프서비스 |
