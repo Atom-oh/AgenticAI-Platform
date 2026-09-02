@@ -30,6 +30,20 @@ def main() -> None:
                              ("부서", r.departments), ("문서", r.documents)]:
             names = [n.props.get("name") or n.props.get("title") for n in items[:6]]
             print(f"  {label}({len(items)}): {', '.join(names)}{' …' if len(items) > 6 else ''}")
+    elif cmd == "s1":
+        import time as _t
+        from engine import graphrag, vectorrag
+        q = sys.argv[2]
+        print(f"질문: {q}\n{'=' * 60}")
+        t0 = _t.time()
+        v = vectorrag.answer(q)
+        print(f"\n◀ Vector RAG ({int((_t.time() - t0) * 1000)}ms, {v['timing']})")
+        print(v["answer"][:800])
+        t0 = _t.time()
+        g = graphrag.answer(q, get_store())
+        print(f"\n▶ GraphRAG ({int((_t.time() - t0) * 1000)}ms, seed={g.get('seed')}, conf={g.get('seedConfidence')})")
+        print(f"counts={g.get('counts')} hallucinated={g.get('hallucinatedIds')}")
+        print(g["answer"][:1200])
     elif cmd == "metric":
         m = SemanticLayer().resolve(sys.argv[2])
         if not m:
