@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hana Design Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='%23008485'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Noto Sans KR','Apple SD Gothic Neo',sans-serif;
+         background:#fbfcfb; color:#17332f; overflow-x:hidden; }
+  header { display:flex; align-items:center; justify-content:space-between;
+           padding:0 24px; height:68px; flex-wrap:wrap; gap:8px; }
+  .logo { display:flex; align-items:center; gap:10px; font-weight:900; font-size:15px; }
+  .logo i { width:26px; height:26px; border-radius:50%; background:#008485; display:inline-block; }
+  nav { display:flex; align-items:center; gap:22px; font-size:13px; color:#5c6f6b; }
+  nav a { color:inherit; text-decoration:none; padding-bottom:4px; border-bottom:2px solid transparent;
+          min-height:44px; display:flex; align-items:center; }
+  nav a.active { font-weight:700; color:#17332f; border-bottom-color:#008485; }
+  main { max-width:1344px; margin:0 auto; padding:0 24px 60px; }
+  .tab { display:none; }
+  .tab.active { display:block; }
+
+  /* ---- gallery tab ---- */
+  .hero { display:flex; flex-direction:column; align-items:center; gap:22px;
+          padding:44px 24px 36px; }
+  .hero h1 { margin:0; font-size:clamp(24px,4vw,34px); font-weight:900;
+             letter-spacing:-0.03em; }
+  .hero p { margin:0; color:#5c6f6b; font-size:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:24px; }
+  .card { text-decoration:none; color:inherit; display:flex; flex-direction:column; gap:12px; }
+  .thumb { height:300px; border-radius:18px; overflow:hidden; border:1px solid #e2e8e6;
+           background:linear-gradient(160deg,#e9f4f3 0%,#d8ebe9 100%); }
+  .thumb iframe { width:200%; height:200%; border:0; transform:scale(.5);
+                  transform-origin:0 0; pointer-events:none; }
+  .meta { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .title { font-size:15px; font-weight:700; }
+  .sub { font-size:12px; color:#8aa19c; }
+  .badge { font-size:11px; font-weight:700; padding:4px 10px; border-radius:20px;
+           background:#eef1f0; color:#5c6f6b; white-space:nowrap; }
+  .badge.approved { background:#e6f3f2; color:#00615f; }
+  .badge.review { background:#f8f0dd; color:#9a7522; }
+  .actions { display:flex; gap:8px; }
+  .actions button { min-height:44px; padding:0 16px; border-radius:22px; border:1px solid #d5e0dd;
+                    background:#e6f3f2; color:#00615f; font-weight:700; font-family:inherit;
+                    font-size:13px; cursor:pointer; }
+  .actions button.reject { background:#fff; color:#5c6f6b; }
+  .empty { text-align:center; color:#8aa19c; padding:80px 0; font-size:14px; }
+
+  /* ---- shared page-head ---- */
+  .page-head { display:flex; align-items:center; justify-content:space-between; gap:16px;
+               padding:20px 0 16px; flex-wrap:wrap; }
+  .page-head h2 { margin:0; font-size:24px; font-weight:900; letter-spacing:-0.02em; }
+  .page-head .desc { font-size:13px; color:#8aa19c; margin-top:4px; }
+  .btn { min-height:44px; padding:0 20px; border-radius:10px; border:none; font-family:inherit;
+         font-size:13px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center;
+         gap:8px; }
+  .btn-primary { background:#008485; color:#fff; }
+  .btn-dark { background:#17332f; color:#fff; }
+  .btn-outline { background:#fff; color:#00615f; border:1px solid #d5e0dd; }
+  .btn-outline[disabled] { color:#b7c4c1; cursor:not-allowed; }
+
+  /* ---- assets tab ---- */
+  .layout { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+  .layout .main-col { flex:1 1 560px; min-width:0; display:flex; flex-direction:column; gap:18px; }
+  .layout .side-col { width:380px; flex-shrink:0; background:#fff; border:1px solid #e2e8e6;
+                       border-radius:16px; padding:22px; display:flex; flex-direction:column; gap:16px; }
+  .card-box { background:#fff; border:1.5px solid #cfe3e1; border-radius:16px; padding:20px;
+              display:flex; flex-direction:column; gap:14px; }
+  .card-box .label { font-size:13px; font-weight:700; color:#00615f; }
+  .form-row { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
+  .input, select.input { height:46px; border:1px solid #d5e0dd; border-radius:10px; padding:0 14px;
+          font-size:13px; color:#17332f; background:#fafbfb; font-family:inherit; width:100%; }
+  textarea.input { height:110px; padding:12px 14px; resize:vertical; font-family:'IBM Plex Mono',monospace,inherit; }
+  .actor-row { display:flex; align-items:center; gap:10px; }
+  .actor-row label { font-size:12px; color:#5c6f6b; white-space:nowrap; }
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+  .toggle-label { display:flex; align-items:center; gap:8px; font-size:12px; color:#5c6f6b; cursor:pointer;
+                  min-height:44px; }
+  .switch { width:36px; height:22px; border-radius:11px; background:#d5e0dd; position:relative;
+            transition:background .15s; flex-shrink:0; }
+  .switch .knob { position:absolute; left:2px; top:2px; width:18px; height:18px; border-radius:50%;
+                  background:#fff; transition:left .15s; }
+  .switch.on { background:#008485; }
+  .switch.on .knob { left:16px; }
+
+  .filter-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .filter-chip { padding:7px 16px; border-radius:18px; color:#5c6f6b; font-size:12px; border:none;
+                 background:transparent; font-family:inherit; cursor:pointer; min-height:44px; }
+  .filter-chip.active { background:#e6f3f2; color:#00615f; font-weight:700; }
+
+  .asset-row { background:#fff; border:1px solid #e2e8e6; border-radius:14px; padding:16px 18px;
+               display:flex; align-items:center; gap:14px; cursor:pointer; }
+  .asset-row.selected { border-color:#008485; border-width:1.5px; }
+  .asset-row .icon { width:40px; height:40px; border-radius:10px; background:#eef4f3;
+                      display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .asset-row .body { flex-grow:1; display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .asset-row .name-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .asset-row .name { font-size:14px; font-weight:700; }
+  .scope-badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:12px; white-space:nowrap; }
+  .scope-badge.mine { color:#9a5b9a; background:#f5ebf5; }
+  .scope-badge.shared { color:#00615f; background:#e6f3f2; }
+  .asset-row .info { font-size:12px; color:#8aa19c; }
+  .version-chip { font-family:'IBM Plex Mono',monospace,inherit; font-size:12px; color:#5c6f6b;
+                  background:#f4f6f5; padding:4px 10px; border-radius:8px; flex-shrink:0; }
+
+  .timeline-item { display:flex; gap:12px; }
+  .timeline-item .rail { display:flex; flex-direction:column; align-items:center; }
+  .timeline-item .dot { width:10px; height:10px; border-radius:50%; background:#b7c4c1; margin-top:5px; flex-shrink:0; }
+  .timeline-item .line { width:2px; flex-grow:1; background:#e2e8e6; }
+  .timeline-item .content { padding-bottom:18px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .timeline-item .content .ver { font-size:13px; font-weight:700; }
+  .timeline-item .content .ver time { font-family:'IBM Plex Mono',monospace,inherit; font-size:11px; color:#8aa19c; }
+  .timeline-item .content .note { font-size:12px; color:#5c6f6b; }
+
+  /* ---- generate tab ---- */
+  .brief-box textarea.input { height:92px; font-family:inherit; }
+  .asset-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; }
+  .pick { border:1px solid #d5e0dd; border-radius:12px; padding:14px; display:flex; align-items:center;
+          gap:12px; min-height:44px; cursor:pointer; background:#fff; }
+  .pick.checked { border:1.5px solid #008485; background:#f7fbfa; }
+  .pick .box { width:22px; height:22px; border-radius:6px; border:1.5px solid #b7c4c1; flex-shrink:0;
+               display:flex; align-items:center; justify-content:center; }
+  .pick.checked .box { background:#008485; border-color:#008485; }
+  .pick .pname { font-size:13px; font-weight:700; }
+  .pick .ptype { font-size:11px; color:#8aa19c; }
+  .pick.checked .ptype { color:#00615f; }
+
+  .job-card { background:#fff; border:1px solid #e2e8e6; border-radius:14px; padding:16px 18px;
+              display:flex; flex-direction:column; gap:6px; }
+  .job-card.running { border:1.5px solid #d9a441; }
+  .job-card .job-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .job-card .job-title { font-size:13px; font-weight:700; }
+  .job-status { font-size:11px; font-weight:700; padding:3px 10px; border-radius:14px; white-space:nowrap; }
+  .job-status.running { color:#9a7522; background:#f8f0dd; }
+  .job-status.done { color:#00615f; background:#e6f3f2; }
+  .job-status.failed { color:#b23b3b; background:#fbe4e4; }
+  .job-card .job-sub { font-size:11px; color:#8aa19c; }
+  .job-card .job-sub a { color:#00615f; font-weight:700; text-decoration:none; }
+  .empty-small { color:#8aa19c; font-size:12px; padding:12px 0; }
+  .detail-meta { display:flex; flex-wrap:wrap; gap:6px; }
+  .detail-meta span { font-size:11px; color:#5c6f6b; background:#f4f6f5; padding:4px 10px;
+                      border-radius:12px; }
+  .swatches { display:flex; flex-wrap:wrap; gap:8px; }
+  .swatch { display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10px;
+            color:#5c6f6b; font-family:'IBM Plex Mono',monospace,inherit; }
+  .swatch i { width:44px; height:32px; border-radius:8px; border:1px solid #e2e8e6; display:block; }
+  .content-preview { background:#fafbfb; border:1px solid #e2e8e6; border-radius:10px;
+                     padding:12px; max-height:320px; overflow:auto; }
+  .content-preview pre { margin:0; font-size:11.5px; line-height:1.55; white-space:pre-wrap;
+                         word-break:break-all; font-family:'IBM Plex Mono',monospace,inherit; }
+
+  /* ---- playground ---- */
+  .play-layout { display:flex; gap:20px; align-items:stretch; flex-wrap:wrap; }
+  .play-side { width:340px; flex-shrink:0; display:flex; flex-direction:column; gap:14px; }
+  .play-main { flex:1 1 560px; min-width:0; display:flex; flex-direction:column; gap:10px; }
+  .canvas-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .canvas-bar .spacer { flex-grow:1; }
+  .chip-btn { min-height:38px; padding:0 14px; border-radius:19px; border:1px solid #d5e0dd;
+              background:#fff; color:#5c6f6b; font-family:inherit; font-size:12px; cursor:pointer; }
+  .chip-btn.active { background:#e6f3f2; color:#00615f; border-color:#008485; font-weight:700; }
+  .canvas-frame { background:#eef4f3; border:1px solid #e2e8e6; border-radius:16px;
+                  min-height:640px; display:flex; justify-content:center; padding:20px; overflow:auto; }
+  .canvas-frame iframe { border:0; background:#fff; border-radius:12px;
+                         box-shadow:0 10px 30px rgba(0,51,50,.12); width:100%; height:760px; }
+  .canvas-frame.mobile iframe { width:390px; flex-shrink:0; }
+  .canvas-empty { color:#8aa19c; font-size:13px; align-self:center; }
+  .refine-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:#fff;
+                border:1.5px solid #cfe3e1; border-radius:14px; padding:12px; }
+  .refine-bar .sel-label { font-size:11px; color:#00615f; background:#e6f3f2; padding:4px 10px;
+                            border-radius:12px; max-width:280px; overflow:hidden;
+                            text-overflow:ellipsis; white-space:nowrap; }
+  .refine-bar input { flex:1 1 240px; }
+  .turn { background:#fff; border:1px solid #e2e8e6; border-radius:12px; padding:10px 12px;
+          font-size:12px; display:flex; flex-direction:column; gap:4px; }
+  .turn .who { font-weight:700; color:#00615f; font-size:11px; }
+  .turn.running { border-color:#d9a441; }
+  .busy-overlay { display:flex; flex-direction:column; align-items:center; justify-content:center;
+                  gap:14px; color:#00615f; font-size:14px; font-weight:700; min-height:320px; }
+  .spinner { width:34px; height:34px; border-radius:50%; border:4px solid #cfe3e1;
+             border-top-color:#008485; animation:spin 0.9s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .btn[disabled] { opacity:.55; cursor:wait; }
+
+  /* ---- dedicated login page ---- */
+  body.gate header, body.gate main { display:none; }
+  #login-view { display:none; }
+  body.gate #login-view { display:flex; }
+  #login-view { position:fixed; inset:0; align-items:center; justify-content:center;
+                background:#fbfcfb; padding:16px; overflow:hidden; z-index:40; }
+  #login-view .glow { position:absolute; inset:0; pointer-events:none;
+    background: radial-gradient(circle at 16% 12%, rgba(0,132,133,.14), transparent 42%),
+                radial-gradient(circle at 84% 88%, rgba(0,97,95,.10), transparent 42%); }
+  .login-wrap { position:relative; width:100%; max-width:400px; display:flex;
+                flex-direction:column; gap:14px; }
+  .login-brand { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  .login-mark { width:52px; height:52px; border-radius:50%; background:#008485; position:relative; }
+  .login-mark::after { content:''; position:absolute; inset:14px; border-radius:50%;
+                       background:#fbfcfb; }
+  .login-brand .name { font-size:20px; font-weight:900; letter-spacing:-0.02em; color:#17332f; }
+  .login-brand .sub { font-size:13px; color:#8aa19c; }
+  .login-card { background:#fff; border:1px solid #e2e8e6; border-radius:14px; padding:28px;
+                display:flex; flex-direction:column; gap:16px;
+                box-shadow:0 12px 40px rgba(0,51,50,.08); }
+  .login-card .head { display:flex; align-items:center; justify-content:space-between; }
+  .login-card .head h1 { margin:0; font-size:17px; font-weight:700; color:#17332f; }
+  .login-card .secure { display:flex; align-items:center; gap:6px; font-size:11px; color:#8aa19c; }
+  .login-card .secure i { width:6px; height:6px; border-radius:50%; background:#2e9e5b; display:block; }
+  .login-error { display:none; border:1px solid #efc7c7; background:#fbe9e9; color:#a13232;
+                 border-radius:8px; padding:9px 12px; font-size:13px; }
+  .login-error.show { display:block; }
+  .login-field { display:flex; flex-direction:column; gap:6px; }
+  .login-field span { font-size:12px; color:#8aa19c; }
+  .login-field input { height:44px; border:1px solid #d5e0dd; border-radius:8px; padding:0 12px;
+                       font-size:14px; font-family:inherit; color:#17332f; outline:none;
+                       transition:border-color .15s, box-shadow .15s; }
+  .login-field input:focus { border-color:#008485; box-shadow:0 0 0 3px rgba(0,132,133,.15); }
+  .login-remember { display:flex; align-items:center; gap:8px; font-size:13px; color:#5c6f6b;
+                    cursor:pointer; min-height:24px; }
+  .login-submit { height:46px; border:none; border-radius:8px; background:#008485; color:#fff;
+                  font-size:14px; font-weight:700; font-family:inherit; cursor:pointer; }
+  .login-submit[disabled] { opacity:.6; cursor:wait; }
+  .login-foot { text-align:center; font-size:12px; color:#8aa19c; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><i></i>Hana Design Studio</div>
+  <nav id="nav">
+    <a href="#gallery" data-tab="gallery">갤러리</a>
+    <a href="#play" data-tab="play">플레이그라운드</a>
+    <a href="#assets" data-tab="assets">디자인 자산</a>
+    <a href="#generate" data-tab="generate">생성</a>
+    <button class="btn btn-outline" id="btn-auth" style="min-height:38px;">로그인</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ===================== 갤러리 ===================== -->
+  <section class="tab" id="tab-gallery">
+    <div class="hero">
+      <h1>어떤 화면을 만들어 볼까요?</h1>
+      <p>scripts/invoke.py 로 브리프를 보내면, 생성된 시안이 아래에 나타납니다.</p>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" hidden>아직 생성된 시안이 없습니다.</div>
+  </section>
+
+  <!-- ===================== 플레이그라운드 ===================== -->
+  <section class="tab" id="tab-play">
+    <div class="page-head">
+      <div>
+        <h2>플레이그라운드</h2>
+        <div class="desc">에이전트로 생성하고, 화면의 요소를 클릭해 프롬프트로 바로 수정하세요</div>
+      </div>
+    </div>
+    <div class="play-layout">
+      <div class="play-side">
+        <div class="card-box">
+          <div class="label">무엇을 만들까요?</div>
+          <textarea class="input" id="play-brief" style="height:80px; font-family:inherit;"
+            placeholder="예: 환전 신청 화면. 환율 우대 쿠폰을 강조."></textarea>
+          <select class="input" id="play-output">
+            <option value="design">디자인 (하이파이)</option>
+            <option value="mockup">목업</option>
+            <option value="wireframe">와이어프레임</option>
+            <option value="ux-flow">UX 플로우 (다화면)</option>
+          </select>
+          <select class="input" id="play-agent"><option value="">에이전트: 기본</option></select>
+          <select class="input" id="play-model"><option value="">모델: 기본</option></select>
+          <button class="btn btn-primary" id="play-generate" style="justify-content:center;">생성</button>
+        </div>
+        <div style="font-size:13px; font-weight:700;">히스토리</div>
+        <div id="play-history" style="display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+      <div class="play-main">
+        <div class="canvas-bar">
+          <span id="play-variants"></span>
+          <span class="spacer"></span>
+          <button class="chip-btn" id="play-viewport">모바일 폭</button>
+          <button class="chip-btn" id="play-select-mode">요소 선택: 꺼짐</button>
+          <a class="chip-btn" id="play-open" href="#" target="_blank" rel="noopener" style="display:none; text-decoration:none; align-items:center; display:inline-flex;">새 탭에서 열기</a>
+        </div>
+        <div class="canvas-frame mobile" id="play-canvas">
+          <div class="canvas-empty" id="play-canvas-empty">브리프를 입력하고 생성하거나, 갤러리 시안을 불러오세요.</div>
+        </div>
+        <div class="refine-bar">
+          <span class="sel-label" id="play-sel-label">선택된 요소 없음 — 전체 수정으로 적용됩니다</span>
+          <input class="input" id="play-refine-input" placeholder="수정 지시 — 예: 이 버튼을 더 크게, 문구는 '지금 환전하기'로">
+          <button class="btn btn-dark" id="play-refine-btn">수정</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 디자인 자산 ===================== -->
+  <section class="tab" id="tab-assets">
+    <div class="page-head">
+      <div>
+        <h2>디자인 자산</h2>
+        <div class="desc">내가 등록한 자산과 회사 공유 자산 — 생성 시 선택하는 재료가 됩니다</div>
+      </div>
+    </div>
+    <div class="layout">
+      <div class="main-col">
+        <div class="card-box">
+          <div class="label">새 자산 등록</div>
+          <div class="form-row">
+            <input class="input" id="asset-name" placeholder="자산 이름 (예: 우리팀 카드상품 팔레트)">
+            <select class="input" id="asset-type">
+              <option value="token">토큰 세트</option>
+              <option value="palette">컬러 팔레트</option>
+              <option value="icon-set">아이콘셋</option>
+              <option value="component">컴포넌트</option>
+              <option value="style-guide">스타일 가이드</option>
+              <option value="skill">스킬셋</option>
+              <option value="workflow">워크플로우</option>
+              <option value="agent">에이전트 (프롬프트·모델·자산 프리셋)</option>
+            </select>
+          </div>
+          <textarea class="input" id="asset-content" placeholder="내용 붙여넣기 — JSON(토큰/팔레트/아이콘셋/에이전트) · Markdown(스타일가이드/스킬셋/워크플로우/컴포넌트). 에이전트 예: {&quot;system&quot;: &quot;카드 상품 전문&quot;, &quot;model_id&quot;: &quot;...&quot;, &quot;asset_ids&quot;: []}"></textarea>
+          <div class="toggle-row">
+            <label class="toggle-label" id="scope-toggle-label">
+              <span class="switch" id="scope-switch"><span class="knob"></span></span>
+              회사에 공유 (조직 전체가 생성에 사용 가능)
+            </label>
+            <div class="actor-row"><label>등록자: 로그인한 디자이너 계정으로 기록됩니다</label></div>
+            <button class="btn btn-dark" id="btn-register">등록</button>
+          </div>
+        </div>
+
+        <div class="filter-row" id="asset-filters"></div>
+
+        <div id="asset-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+        <div class="empty-small" id="asset-empty" hidden>등록된 자산이 없습니다.</div>
+      </div>
+
+      <div class="side-col">
+        <div>
+          <div style="font-size:14px; font-weight:700;" id="history-title">자산 상세</div>
+          <div class="desc" id="history-sub">자산을 선택하면 내용과 이력이 표시됩니다</div>
+        </div>
+        <div id="asset-detail"></div>
+        <div style="font-size:13px; font-weight:700;" id="history-head" hidden>히스토리</div>
+        <div id="history-timeline"></div>
+        <button class="btn btn-outline" id="btn-revert" disabled title="준비중" style="margin-top:auto;">이 버전으로 되돌리기</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== 생성 ===================== -->
+  <section class="tab" id="tab-generate">
+    <div class="page-head">
+      <div>
+        <h2>어떤 화면을 만들어 볼까요?</h2>
+        <div class="desc">브리프를 쓰고, 사용할 자산을 고르면 시안이 생성됩니다</div>
+      </div>
+    </div>
+    <div class="layout">
+      <div class="main-col">
+        <div class="card-box brief-box">
+          <div class="label">브리프</div>
+          <textarea class="input" id="gen-brief" placeholder="예: 우리팀 카드상품 신청 화면. 연회비와 혜택 3가지를 강조하고, 시니어 고객도 읽기 쉽게."></textarea>
+          <div class="form-row">
+            <div>
+              <div class="desc" style="margin-bottom:6px;">모델 (Bedrock 전체)</div>
+              <select class="input" id="gen-model"><option value="">기본 모델</option></select>
+            </div>
+            <div>
+              <div class="desc" style="margin-bottom:6px;">공유 에이전트 프리셋</div>
+              <select class="input" id="gen-agent"><option value="">사용 안 함</option></select>
+            </div>
+          </div>
+        </div>
+        <div class="card-box" style="border-color:#e2e8e6;">
+          <div class="toggle-row" style="justify-content:space-between;">
+            <div class="label">사용할 자산 <span id="gen-selected-count" style="color:#8aa19c; font-weight:500;">0개 선택됨</span></div>
+            <div class="desc" style="margin:0;">선택한 자산만 생성 컨텍스트로 들어갑니다</div>
+          </div>
+          <div class="asset-grid" id="gen-asset-grid"></div>
+          <div class="empty-small" id="gen-asset-empty" hidden>등록된 자산이 없습니다. 자산 탭에서 먼저 등록해 주세요.</div>
+        </div>
+        <div style="display:flex; justify-content:flex-end;">
+          <button class="btn btn-primary" id="btn-generate" style="height:52px; padding:0 28px; font-size:15px;">시안 3종 생성</button>
+        </div>
+      </div>
+      <div class="side-col" style="border:none; padding:0; background:transparent;">
+        <div style="font-size:14px; font-weight:700;">생성 작업</div>
+        <div id="job-list" style="display:flex; flex-direction:column; gap:14px;"></div>
+        <div class="empty-small" id="job-empty">아직 생성한 작업이 없습니다.</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="login-view">
+  <div class="glow" aria-hidden="true"></div>
+  <div class="login-wrap">
+    <div class="login-brand">
+      <div class="login-mark" aria-hidden="true"></div>
+      <div class="name">Hana Design Studio</div>
+      <div class="sub">하나은행 UI/UX Agentic AI 플랫폼</div>
+    </div>
+    <form class="login-card" id="login-form">
+      <div class="head">
+        <h1>로그인</h1>
+        <span class="secure"><i></i>보안 연결</span>
+      </div>
+      <div class="login-error" id="login-error" role="alert"></div>
+      <label class="login-field">
+        <span>아이디</span>
+        <input id="login-username" autocomplete="username" required>
+      </label>
+      <label class="login-field">
+        <span>비밀번호</span>
+        <input id="login-password" type="password" autocomplete="current-password" required>
+      </label>
+      <label class="login-remember">
+        <input type="checkbox" id="login-remember" checked style="width:16px; height:16px; accent-color:#008485;">
+        로그인 상태 유지
+      </label>
+      <button class="login-submit" id="btn-login-submit" type="submit">로그인</button>
+      <div class="login-foot">계정은 관리자가 발급합니다 · 셀프 가입 없음</div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+
+  const TYPE_LABELS = {
+    token: '토큰 세트', palette: '컬러 팔레트', 'icon-set': '아이콘셋',
+    component: '컴포넌트', 'style-guide': '스타일 가이드', skill: '스킬셋', workflow: '워크플로우', agent: '에이전트'
+  };
+  const typeLabel = t => TYPE_LABELS[t] || esc(t);
+
+  async function sha256Hex(body) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /* ---- designer identity (Cognito) ---- */
+  let appConfig = null;
+  const getToken = () => sessionStorage.getItem('hana_token') || localStorage.getItem('hana_token') || '';
+  const getUser = () => sessionStorage.getItem('hana_user') || localStorage.getItem('hana_user') || '';
+
+  async function loadConfig() {
+    if (!appConfig) appConfig = await apiGet('/api/config');
+    return appConfig;
+  }
+
+  function renderAuthButton() {
+    const b = document.getElementById('btn-auth');
+    b.textContent = `${getUser()} · 로그아웃`;
+    b.onclick = () => {
+      for (const st of [sessionStorage, localStorage]) {
+        st.removeItem('hana_token'); st.removeItem('hana_user');
+      }
+      openLogin();
+    };
+  }
+  function openLogin() {
+    document.body.classList.add('gate');
+    setTimeout(() => document.getElementById('login-username').focus(), 50);
+  }
+  function closeLogin() { document.body.classList.remove('gate'); }
+  function showLoginError(msg) {
+    const el = document.getElementById('login-error');
+    el.textContent = msg;
+    el.classList.add('show');
+  }
+
+  async function doLogin(e) {
+    if (e) e.preventDefault();
+    document.getElementById('login-error').classList.remove('show');
+    const cfg = await loadConfig();
+    if (!cfg || !cfg.spa_client_id) { showLoginError('로그인 설정을 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.'); return; }
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    if (!username || !password) { showLoginError('아이디와 비밀번호를 입력해 주세요.'); return; }
+    const btn = document.getElementById('btn-login-submit');
+    btn.disabled = true; btn.textContent = '로그인 중...';
+    try {
+      const r = await fetch(`https://cognito-idp.${cfg.region}.amazonaws.com/`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-amz-json-1.1',
+                  'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth'},
+        body: JSON.stringify({AuthFlow: 'USER_PASSWORD_AUTH', ClientId: cfg.spa_client_id,
+                              AuthParameters: {USERNAME: username, PASSWORD: password}})});
+      const out = await r.json().catch(() => ({}));
+      const token = out.AuthenticationResult && out.AuthenticationResult.AccessToken;
+      if (!token) {
+        showLoginError(out.__type && String(out.__type).includes('NotAuthorized')
+          ? '아이디 또는 비밀번호가 올바르지 않습니다.'
+          : (out.message || '로그인에 실패했습니다. 잠시 후 다시 시도해 주세요.'));
+        return;
+      }
+      const store = document.getElementById('login-remember').checked ? localStorage : sessionStorage;
+      store.setItem('hana_token', token);
+      store.setItem('hana_user', username);
+      document.getElementById('login-password').value = '';
+      closeLogin();
+      renderAuthButton();
+      renderRoute();
+    } catch (err) {
+      showLoginError('네트워크 오류로 로그인하지 못했습니다.');
+    } finally {
+      btn.disabled = false; btn.textContent = '로그인';
+    }
+  }
+
+  async function bootAuth() {
+    if (!getToken()) { openLogin(); return; }
+    const r = await fetch('/api/me', {headers: {'x-hana-auth': getToken()}, cache: 'no-store'})
+      .catch(() => null);
+    if (!r || !r.ok) {
+      for (const st of [sessionStorage, localStorage]) {
+        st.removeItem('hana_token'); st.removeItem('hana_user');
+      }
+      openLogin();
+      return;
+    }
+    renderAuthButton();
+  }
+
+  async function apiPost(path, payload) {
+    const body = JSON.stringify(payload);
+    const sha256 = await sha256Hex(body);
+    const headers = {'Content-Type': 'application/json', 'x-amz-content-sha256': sha256};
+    if (getToken()) headers['x-hana-auth'] = getToken();
+    const r = await fetch(path, {method: 'POST', headers, body});
+    const out = await r.json().catch(() => ({}));
+    if (r.status === 401) { openLogin(); return null; }  // session expired → login page
+    if (!r.ok || out.error) { alert(out.error || `요청 실패 (${r.status})`); return null; }
+    return out;
+  }
+
+  async function apiGet(path) {
+    const r = await fetch(path, {cache: 'no-store'});
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || out.error) { alert(out.error || `요청 실패 (${r.status})`); return null; }
+    return out;
+  }
+
+  /* ===================== routing ===================== */
+  const TABS = ['gallery', 'play', 'assets', 'generate'];
+  function currentTab() {
+    const h = (location.hash || '#gallery').replace('#', '');
+    return TABS.includes(h) ? h : 'gallery';
+  }
+  function renderRoute() {
+    const tab = currentTab();
+    TABS.forEach(t => {
+      document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
+      document.querySelector(`nav a[data-tab="${t}"]`).classList.toggle('active', t === tab);
+    });
+    if (tab === 'gallery') loadGallery();
+    if (tab === 'assets') loadAssets();
+    if (tab === 'generate') loadGenerateAssets();
+    if (tab === 'play') initPlayground();
+  }
+  window.addEventListener('hashchange', renderRoute);
+
+  /* ===================== 갤러리 tab ===================== */
+  const badgeClass = s => s === '승인됨' ? 'badge approved'
+                        : s === '검토중' ? 'badge review' : 'badge';
+
+  function loadGallery() {
+    fetch('./drafts.json', {cache: 'no-store'}).then(r => r.json()).then(d => {
+      const drafts = (d.drafts || []).slice().reverse();
+      document.getElementById('empty').hidden = !!drafts.length;
+      if (!drafts.length) { document.getElementById('grid').innerHTML = ''; return; }
+      document.getElementById('grid').innerHTML = drafts.map(x => `
+        <a class="card" href="${esc(x.url)}" target="_blank" rel="noopener">
+          <div class="thumb"><iframe src="${esc(x.url)}" loading="lazy" tabindex="-1"></iframe></div>
+          <div class="meta">
+            <div>
+              <div class="title">${esc(x.title)}</div>
+              <div class="sub">${esc(x.axis)} · ${esc(new Date(x.created_at).toLocaleString('ko-KR'))}</div>
+            </div>
+            <div class="${badgeClass(x.status)}">${esc(x.status)}</div>
+          </div>
+          <div class="actions">
+            <button onclick="feedback(event,'${esc(x.id)}','approve')">승인</button>
+            <button class="reject" onclick="feedback(event,'${esc(x.id)}','reject')">반려</button>
+            <button class="reject" onclick="openInPlayground(event,'${esc(x.id)}')">편집</button>
+          </div>
+        </a>`).join('');
+    }).catch(() => { document.getElementById('empty').hidden = false; });
+  }
+
+  async function feedback(ev, id, action) {
+    ev.preventDefault(); ev.stopPropagation();
+    const comment = action === 'reject' ? (prompt('반려 사유 (선택)') || '') : '';
+    const out = await apiPost('/api/feedback', {draft_id: id, action, comment});
+    if (out && out.ok) location.reload();
+  }
+
+  /* ===================== 자산 tab ===================== */
+  let allAssets = [];
+  let assetFilter = 'all';
+  let selectedAssetId = null;
+
+  function scopeInfo(a) {
+    return a.scope === 'shared'
+      ? {cls: 'shared', label: '회사 공유'}
+      : {cls: 'mine', label: '내 자산'};
+  }
+
+  function renderAssetFilters() {
+    const total = allAssets.length;
+    const mine = allAssets.filter(a => a.scope !== 'shared').length;
+    const shared = total - mine;
+    const chips = [
+      ['all', `전체 ${total}`],
+      ['mine', `내 자산 ${mine}`],
+      ['shared', `회사 공유 ${shared}`],
+    ];
+    document.getElementById('asset-filters').innerHTML = chips.map(([key, label]) => `
+      <button class="filter-chip ${assetFilter === key ? 'active' : ''}" data-filter="${key}">${esc(label)}</button>
+    `).join('');
+    document.querySelectorAll('#asset-filters .filter-chip').forEach(btn => {
+      btn.onclick = () => { assetFilter = btn.dataset.filter; renderAssetList(); renderAssetFilters(); };
+    });
+  }
+
+  function renderAssetList() {
+    const items = allAssets.filter(a => {
+      if (assetFilter === 'mine') return a.scope !== 'shared';
+      if (assetFilter === 'shared') return a.scope === 'shared';
+      return true;
+    });
+    document.getElementById('asset-empty').hidden = !!items.length;
+    document.getElementById('asset-list').innerHTML = items.map(a => {
+      const sc = scopeInfo(a);
+      const when = a.updated_at ? new Date(a.updated_at).toLocaleString('ko-KR') : '';
+      return `
+        <div class="asset-row ${a.asset_id === selectedAssetId ? 'selected' : ''}" data-asset-id="${esc(a.asset_id)}">
+          <div class="icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5c6f6b" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>
+          </div>
+          <div class="body">
+            <div class="name-line">
+              <span class="name">${esc(a.name)}</span>
+              <span class="scope-badge ${sc.cls}">${esc(sc.label)}</span>
+            </div>
+            <div class="info">${typeLabel(a.type)} · ${esc(a.actor || '')} · ${esc(when)}</div>
+          </div>
+          <div class="version-chip">v${esc(a.version)}</div>
+        </div>`;
+    }).join('');
+    document.querySelectorAll('#asset-list .asset-row').forEach(row => {
+      row.onclick = () => selectAsset(row.dataset.assetId);
+    });
+  }
+
+  function renderAssetDetail(asset, content) {
+    const box = document.getElementById('asset-detail');
+    const sc = scopeInfo(asset);
+    const meta = `
+      <div class="detail-meta">
+        <span>${typeLabel(asset.type)}</span>
+        <span>${esc(sc.label)}</span>
+        <span>v${esc(parseInt(asset.version) || asset.version)}</span>
+        <span>${esc(asset.actor || asset.source || '')}</span>
+      </div>`;
+    let preview = '';
+    let parsed = null;
+    try { parsed = JSON.parse(content); } catch (e) { /* markdown */ }
+    if (parsed) {
+      const hexes = [...new Set((JSON.stringify(parsed).match(/#[0-9a-fA-F]{6}/g) || []))].slice(0, 12);
+      if (hexes.length) {
+        preview += `<div class="swatches">${hexes.map(hx =>
+          `<span class="swatch"><i style="background:${esc(hx)};"></i>${esc(hx)}</span>`).join('')}</div>`;
+      }
+      preview += `<div class="content-preview" style="margin-top:8px;"><pre>${esc(JSON.stringify(parsed, null, 2).slice(0, 4000))}</pre></div>`;
+    } else if (content) {
+      preview = `<div class="content-preview"><pre>${esc(content.slice(0, 4000))}</pre></div>`;
+    } else {
+      preview = '<div class="empty-small">내용을 불러올 수 없습니다.</div>';
+    }
+    box.innerHTML = meta + preview;
+  }
+
+  async function selectAsset(assetId) {
+    selectedAssetId = assetId;
+    renderAssetList();
+    const asset = allAssets.find(a => a.asset_id === assetId);
+    document.getElementById('history-title').textContent = asset ? asset.name : '자산 상세';
+    document.getElementById('history-sub').textContent = asset ? `${typeLabel(asset.type)} — 이 자산의 내용과 변경 이력` : '';
+    document.getElementById('asset-detail').innerHTML = '<div class="empty-small">불러오는 중...</div>';
+    document.getElementById('history-timeline').innerHTML = '';
+    document.getElementById('history-head').hidden = false;
+    const [contentOut, out] = await Promise.all([
+      apiGet(`/api/assets/content?asset_id=${encodeURIComponent(assetId)}`),
+      apiGet(`/api/assets/history?asset_id=${encodeURIComponent(assetId)}`),
+    ]);
+    if (contentOut && contentOut.asset) renderAssetDetail(contentOut.asset, contentOut.content || '');
+    else document.getElementById('asset-detail').innerHTML = '<div class="empty-small">내용을 불러올 수 없습니다.</div>';
+    const items = (out && out.history) || [];
+    if (!items.length) {
+      document.getElementById('history-timeline').innerHTML = '<div class="empty-small">이력이 없습니다. (Figma 연동 자산은 재수집 시점만 registry에 반영됩니다)</div>';
+      return;
+    }
+    document.getElementById('history-timeline').innerHTML = items.map((h, i) => `
+      <div class="timeline-item">
+        <div class="rail"><div class="dot"></div>${i < items.length - 1 ? '<div class="line"></div>' : ''}</div>
+        <div class="content">
+          <div class="ver">v${esc(parseInt(String(h.version).replace(/^v/, ''), 10))} ${esc(h.action === 'register' ? '등록' : h.action === 'update' ? '업데이트' : h.action || '')}
+            <time>${esc(h.created_at ? new Date(h.created_at).toLocaleString('ko-KR') : '')}</time></div>
+          <div class="note">${esc(h.actor || '')}${h.note ? ' · ' + esc(h.note) : ''}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  async function loadAssets() {
+    const out = await apiGet('/api/assets');
+    allAssets = (out && out.assets) || [];
+    renderAssetFilters();
+    renderAssetList();
+  }
+
+  function setupAssetsTab() {
+    const scopeSwitch = document.getElementById('scope-switch');
+    scopeSwitch.onclick = () => scopeSwitch.classList.toggle('on');
+    document.getElementById('scope-toggle-label').onclick = (e) => {
+      if (e.target === scopeSwitch || scopeSwitch.contains(e.target)) return;
+      scopeSwitch.classList.toggle('on');
+    };
+    document.getElementById('btn-register').onclick = async () => {
+      const name = document.getElementById('asset-name').value.trim();
+      const type = document.getElementById('asset-type').value;
+      const content = document.getElementById('asset-content').value;
+      const scope = scopeSwitch.classList.contains('on') ? 'shared' : 'mine';
+      if (!name || !content.trim()) { alert('이름과 내용을 입력해 주세요.'); return; }
+      const out = await apiPost('/api/assets', {name, type, content, scope});
+      if (out && out.ok) {
+        document.getElementById('asset-name').value = '';
+        document.getElementById('asset-content').value = '';
+        await loadAssets();
+      }
+    };
+  }
+
+  /* ===================== 생성 tab ===================== */
+  let genAssets = [];
+  let genSelected = new Set();
+  let jobs = [];
+  let pollTimer = null;
+
+  let modelsLoaded = false;
+  async function loadModels() {
+    if (modelsLoaded) return;
+    const out = await apiGet('/api/models');
+    if (!out) return;
+    modelsLoaded = true;
+    const sel = document.getElementById('gen-model');
+    sel.innerHTML = '<option value="">기본 모델 (Claude Sonnet 5)</option>' +
+      (out.models || []).map(m => `<option value="${esc(m.id)}">${esc(m.name)} — ${esc(m.id)}</option>`).join('');
+  }
+
+  function renderAgentPicker() {
+    const sel = document.getElementById('gen-agent');
+    const agents = genAssets.filter(a => a.type === 'agent');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">사용 안 함</option>' +
+      agents.map(a => `<option value="${esc(a.asset_id)}">${esc(a.name)}</option>`).join('');
+    sel.value = prev;
+  }
+
+  async function loadJobs() {
+    const out = await apiGet('/api/jobs');
+    if (out && out.jobs) {
+      jobs = out.jobs.map(j => ({...j, job_id: String(j.asset_id || '').replace('job:', '')}))
+                     .reverse();  // renderJobs reverses again → newest first
+      renderJobs();
+      if (jobs.some(j => j.status === 'running')) startPolling();
+    }
+  }
+
+  async function loadGenerateAssets() {
+    const out = await apiGet('/api/assets');
+    genAssets = (out && out.assets) || [];
+    renderGenAssetGrid();
+    renderAgentPicker();
+    loadModels();
+    loadJobs();
+  }
+
+  function renderGenAssetGrid() {
+    document.getElementById('gen-asset-empty').hidden = !!genAssets.length;
+    document.getElementById('gen-asset-grid').innerHTML = genAssets.map(a => {
+      const sc = scopeInfo(a);
+      const checked = genSelected.has(a.asset_id);
+      return `
+        <div class="pick ${checked ? 'checked' : ''}" data-asset-id="${esc(a.asset_id)}">
+          <div class="box">${checked ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4 10-10"></path></svg>' : ''}</div>
+          <div>
+            <div class="pname">${esc(a.name)} <span class="version-chip" style="padding:1px 6px;">v${esc(a.version)}</span></div>
+            <div class="ptype">${esc(sc.label)} · ${typeLabel(a.type)}</div>
+          </div>
+        </div>`;
+    }).join('');
+    document.querySelectorAll('#gen-asset-grid .pick').forEach(el => {
+      el.onclick = () => {
+        const id = el.dataset.assetId;
+        if (genSelected.has(id)) genSelected.delete(id); else genSelected.add(id);
+        renderGenAssetGrid();
+        document.getElementById('gen-selected-count').textContent = `${genSelected.size}개 선택됨`;
+      };
+    });
+    document.getElementById('gen-selected-count').textContent = `${genSelected.size}개 선택됨`;
+  }
+
+  function jobStatusLabel(status) {
+    if (status === 'done') return '완료';
+    if (status === 'failed') return '실패';
+    return '생성중';
+  }
+
+  function renderJobs() {
+    document.getElementById('job-empty').hidden = !!jobs.length;
+    document.getElementById('job-list').innerHTML = jobs.slice().reverse().map(j => {
+      const statusCls = j.status === 'done' ? 'done' : j.status === 'failed' ? 'failed' : 'running';
+      const drafts = j.drafts || [];
+      let sub;
+      if (j.status === 'failed') {
+        sub = esc(j.error || '생성 중 오류가 발생했습니다.');
+      } else if (j.status === 'done') {
+        sub = drafts.length
+          ? drafts.map(d => `<a href="${esc(d.url || '#gallery')}" target="_blank" rel="noopener">${esc(d.title || d.id || '시안')}</a>`).join(' · ') + ' · <a href="#gallery">갤러리에서 보기</a>'
+          : '<a href="#gallery">갤러리에서 보기</a>';
+      } else {
+        sub = `자산 ${(j.asset_ids || []).length}개 · 생성 중...`;
+      }
+      const facts = [];
+      if (j.actor) facts.push(esc(j.actor));
+      if (j.model_id) facts.push(esc(String(j.model_id).split('.').pop()));
+      if (j.usage && j.usage.totalTokens) facts.push(`${Number(j.usage.totalTokens).toLocaleString()} tokens`);
+      if (facts.length) sub += `<br><span style="color:#b7c4c1;">${facts.join(' · ')}</span>`;
+      return `
+        <div class="job-card ${statusCls === 'running' ? 'running' : ''}">
+          <div class="job-top">
+            <div class="job-title">${esc(j.brief ? j.brief.slice(0, 24) : j.job_id)}</div>
+            <div class="job-status ${statusCls}">${jobStatusLabel(j.status)}</div>
+          </div>
+          <div class="job-sub">${sub}</div>
+        </div>`;
+    }).join('');
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(pollJobs, 10000);
+  }
+  function stopPollingIfIdle() {
+    if (pollTimer && !jobs.some(j => j.status === 'running')) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function pollJobs() {
+    const running = jobs.filter(j => j.status === 'running');
+    for (const j of running) {
+      const out = await apiGet(`/api/jobs?job_id=${encodeURIComponent(j.job_id)}`);
+      if (out && out.job) {
+        Object.assign(j, out.job, {job_id: j.job_id});
+      }
+    }
+    renderJobs();
+    stopPollingIfIdle();
+  }
+
+  function setupGenerateTab() {
+    document.getElementById('btn-generate').onclick = async () => {
+      const brief = document.getElementById('gen-brief').value.trim();
+      if (!brief) { alert('브리프를 입력해 주세요.'); return; }
+      const asset_ids = [...genSelected];
+      const model_id = document.getElementById('gen-model').value;
+      const agent_id = document.getElementById('gen-agent').value;
+      const out = await apiPost('/api/generate', {brief, asset_ids, model_id, agent_id});
+      if (out && out.ok) {
+        jobs.push({job_id: out.job_id, brief, asset_ids, model_id, actor: getUser(), status: 'running'});
+        renderJobs();
+        startPolling();
+      }
+    };
+  }
+
+  /* ===================== 플레이그라운드 ===================== */
+  let playInited = false;
+  let playDraft = null;          // {id, url, title}
+  let playVariants = [];         // last generation's drafts
+  let playSelected = null;       // {selector, html, label}
+  let selectMode = false;
+
+  function cssPath(el, doc) {
+    const parts = [];
+    while (el && el !== doc.body && el.nodeType === 1) {
+      let seg = el.tagName.toLowerCase();
+      if (el.id) { parts.unshift(`#${el.id}`); break; }
+      const parent = el.parentElement;
+      if (parent) {
+        const same = [...parent.children].filter(c => c.tagName === el.tagName);
+        if (same.length > 1) seg += `:nth-of-type(${same.indexOf(el) + 1})`;
+      }
+      parts.unshift(seg);
+      el = parent;
+    }
+    return parts.join(' > ');
+  }
+
+  function wireCanvasSelection(iframe) {
+    let doc;
+    try { doc = iframe.contentDocument; } catch (e) { return; }
+    if (!doc || !doc.body) return;
+    let hovered = null, hoverOutline = '';
+    doc.addEventListener('mouseover', e => {
+      if (!selectMode) return;
+      if (hovered) hovered.style.outline = hoverOutline;
+      hovered = e.target; hoverOutline = hovered.style.outline;
+      hovered.style.outline = '2px dashed #008485';
+    }, true);
+    doc.addEventListener('click', e => {
+      if (!selectMode) return;
+      e.preventDefault(); e.stopPropagation();
+      doc.querySelectorAll('[data-hana-picked]').forEach(n => {
+        n.style.outline = ''; n.removeAttribute('data-hana-picked');
+      });
+      const el = e.target;
+      const cleanHtml = el.outerHTML.slice(0, 4000);  // capture BEFORE visual markers
+      el.setAttribute('data-hana-picked', '1');
+      el.style.outline = '3px solid #008485';
+      const label = el.tagName.toLowerCase() +
+        (el.textContent ? ` — "${el.textContent.trim().slice(0, 30)}"` : '');
+      playSelected = {selector: cssPath(el, doc), html: cleanHtml, label};
+      document.getElementById('play-sel-label').textContent = `선택: ${label}`;
+    }, true);
+  }
+
+  function loadDraftIntoCanvas(draft) {
+    playDraft = draft;
+    playSelected = null;
+    document.getElementById('play-sel-label').textContent = '선택된 요소 없음 — 전체 수정으로 적용됩니다';
+    const wrap = document.getElementById('play-canvas');
+    wrap.innerHTML = '';
+    const iframe = document.createElement('iframe');
+    iframe.src = draft.url;
+    iframe.onload = () => wireCanvasSelection(iframe);
+    wrap.appendChild(iframe);
+    const open = document.getElementById('play-open');
+    open.style.display = 'inline-flex';
+    open.href = draft.url;
+    renderVariantChips();
+  }
+
+  function renderVariantChips() {
+    document.getElementById('play-variants').innerHTML = playVariants.map(d => `
+      <button class="chip-btn ${playDraft && d.id === playDraft.id ? 'active' : ''}"
+              data-draft-id="${esc(d.id)}" data-url="${esc(d.url)}" data-title="${esc(d.title || '')}">
+        ${esc(d.axis || d.title || d.id)}</button>`).join('');
+    document.querySelectorAll('#play-variants .chip-btn').forEach(b => {
+      b.onclick = () => loadDraftIntoCanvas({id: b.dataset.draftId, url: b.dataset.url, title: b.dataset.title});
+    });
+  }
+
+  function pushTurn(who, text, running) {
+    const el = document.createElement('div');
+    el.className = 'turn' + (running ? ' running' : '');
+    el.innerHTML = `<span class="who">${esc(who)}</span><span>${esc(text)}</span>`;
+    const list = document.getElementById('play-history');
+    list.prepend(el);
+    return el;
+  }
+
+  async function waitJob(jobId) {
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 8000));
+      const out = await apiGet(`/api/jobs?job_id=${encodeURIComponent(jobId)}`);
+      const j = out && out.job;
+      if (j && j.status !== 'running') return j;
+    }
+    return null;
+  }
+
+  let busyTimer = null;
+  function setPlayBusy(kind) {
+    const gen = document.getElementById('play-generate');
+    const ref = document.getElementById('play-refine-btn');
+    if (kind) {
+      gen.disabled = true; ref.disabled = true;
+      gen.textContent = kind === 'generate' ? '생성 중...' : '생성';
+      ref.textContent = kind === 'refine' ? '수정 중...' : '수정';
+      if (kind === 'generate' || !playDraft) {
+        const wrap = document.getElementById('play-canvas');
+        wrap.innerHTML = `<div class="busy-overlay"><div class="spinner"></div>
+          <div>${kind === 'generate' ? '시안을 생성하고 있어요' : '선택 영역을 수정하고 있어요'} — 보통 2~4분</div>
+          <div style="font-weight:400; color:#8aa19c; font-size:12px;" id="busy-elapsed">0초 경과</div></div>`;
+      }
+      const t0 = Date.now();
+      busyTimer = setInterval(() => {
+        const el = document.getElementById('busy-elapsed');
+        if (el) el.textContent = `${Math.round((Date.now() - t0) / 1000)}초 경과`;
+      }, 1000);
+    } else {
+      gen.disabled = false; ref.disabled = false;
+      gen.textContent = '생성'; ref.textContent = '수정';
+      if (busyTimer) { clearInterval(busyTimer); busyTimer = null; }
+    }
+  }
+
+  async function playGenerate() {
+    const brief = document.getElementById('play-brief').value.trim();
+    if (!brief) { alert('브리프를 입력해 주세요.'); return; }
+    const payload = {brief, asset_ids: [],
+                     output_type: document.getElementById('play-output').value,
+                     agent_id: document.getElementById('play-agent').value,
+                     model_id: document.getElementById('play-model').value};
+    const out = await apiPost('/api/generate', payload);
+    if (!out) return;
+    setPlayBusy('generate');
+    const turn = pushTurn(getUser() || '나', `생성: ${brief}`, true);
+    const j = await waitJob(out.job_id);
+    setPlayBusy(null);
+    turn.classList.remove('running');
+    if (!j || j.status !== 'done' || !(j.drafts || []).length) {
+      pushTurn('에이전트', j && j.error ? `실패: ${j.error}` : '생성에 실패했습니다.');
+      document.getElementById('play-canvas').innerHTML =
+        '<div class="canvas-empty">생성에 실패했습니다. 브리프를 조정해 다시 시도해 주세요.</div>';
+      return;
+    }
+    playVariants = j.drafts;
+    pushTurn('에이전트', `${j.drafts.length}종 생성 완료 — 상단 칩으로 전환하며 확인하세요.`);
+    loadDraftIntoCanvas(j.drafts[0]);
+  }
+
+  async function playRefine() {
+    if (!playDraft) { alert('먼저 시안을 생성하거나 불러오세요.'); return; }
+    const instruction = document.getElementById('play-refine-input').value.trim();
+    if (!instruction) { alert('수정 지시를 입력해 주세요.'); return; }
+    const payload = {mode: 'refine', brief: instruction, base_draft_id: playDraft.id,
+                     selector: playSelected ? playSelected.selector : '',
+                     element_html: playSelected ? playSelected.html : '',
+                     model_id: document.getElementById('play-model').value,
+                     asset_ids: []};
+    const out = await apiPost('/api/generate', payload);
+    if (!out) return;
+    setPlayBusy('refine');
+    const what = playSelected ? `[${playSelected.label}] ${instruction}` : instruction;
+    const turn = pushTurn(getUser() || '나', `수정: ${what}`, true);
+    document.getElementById('play-refine-input').value = '';
+    const j = await waitJob(out.job_id);
+    setPlayBusy(null);
+    turn.classList.remove('running');
+    if (!j || j.status !== 'done' || !(j.drafts || []).length) {
+      pushTurn('에이전트', j && j.error ? `실패: ${j.error}` : '수정에 실패했습니다.');
+      return;
+    }
+    const d = j.drafts[0];
+    playVariants = [d, ...playVariants].slice(0, 6);
+    pushTurn('에이전트', (j.summary || '수정 완료').slice(0, 160));
+    loadDraftIntoCanvas(d);
+  }
+
+  function openInPlayground(ev, draftId) {
+    ev.preventDefault(); ev.stopPropagation();
+    fetch('./drafts.json', {cache: 'no-store'}).then(r => r.json()).then(d => {
+      const x = (d.drafts || []).find(v => v.id === draftId);
+      if (!x) return;
+      playVariants = [x];
+      location.hash = '#play';
+      setTimeout(() => loadDraftIntoCanvas(x), 60);
+    });
+  }
+
+  async function initPlayground() {
+    if (playInited) return;
+    playInited = true;
+    document.getElementById('play-generate').onclick = playGenerate;
+    document.getElementById('play-refine-btn').onclick = playRefine;
+    document.getElementById('play-refine-input').addEventListener('keydown',
+      e => { if (e.key === 'Enter') playRefine(); });
+    document.getElementById('play-viewport').onclick = () => {
+      const f = document.getElementById('play-canvas');
+      f.classList.toggle('mobile');
+      document.getElementById('play-viewport').textContent =
+        f.classList.contains('mobile') ? '모바일 폭' : '전체 폭';
+    };
+    document.getElementById('play-select-mode').onclick = () => {
+      selectMode = !selectMode;
+      const b = document.getElementById('play-select-mode');
+      b.textContent = `요소 선택: ${selectMode ? '켜짐' : '꺼짐'}`;
+      b.classList.toggle('active', selectMode);
+    };
+    const assetsOut = await apiGet('/api/assets');
+    const agents = ((assetsOut && assetsOut.assets) || []).filter(a => a.type === 'agent');
+    document.getElementById('play-agent').innerHTML = '<option value="">에이전트: 기본</option>' +
+      agents.map(a => `<option value="${esc(a.asset_id)}">${esc(a.name)}</option>`).join('');
+    const modelsOut = await apiGet('/api/models');
+    document.getElementById('play-model').innerHTML = '<option value="">모델: 기본 (Claude Sonnet 5)</option>' +
+      ((modelsOut && modelsOut.models) || []).map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+  }
+
+  /* ===================== init ===================== */
+  setupAssetsTab();
+  setupGenerateTab();
+  document.getElementById('login-form').addEventListener('submit', doLogin);
+  loadConfig();
+  bootAuth();
+  if (!TABS.includes((location.hash || '').replace('#', ''))) location.hash = '#gallery';
+  renderRoute();
+</script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+    body { margin: 0; font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif; }
+    a { color: #00615f; } a:hover { color: #008485; }
+  </style>
+</helmet>
+<div style="width: 1440px; height: 900px; background: #fbfcfb; color: #17332f; display: flex; flex-direction: column; overflow: hidden;">
+
+  <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 48px; height: 68px;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <div style="width: 26px; height: 26px; border-radius: 50%; background: #008485;"></div>
+      <div style="font-weight: 900; font-size: 15px; letter-spacing: -0.02em;">Hana Design Studio</div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 26px; font-size: 13px; color: #5c6f6b;">
+      <div style="font-weight: 700; color: #17332f;">갤러리</div>
+      <div>디자인 자산</div>
+      <div>스킬</div>
+      <div style="width: 30px; height: 30px; border-radius: 50%; background: #00615f; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;">오</div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 44px 48px 36px;">
+    <div style="font-size: 34px; font-weight: 900; letter-spacing: -0.03em; text-align: center; line-height: 1.25;">어떤 화면을 만들어 볼까요?</div>
+    <div style="width: 640px; display: flex; align-items: center; gap: 12px; height: 58px; border-radius: 29px; background: #ffffff; border: 1.5px solid #d5e0dd; padding: 0 10px 0 24px; box-shadow: 0 8px 28px rgba(0, 97, 95, 0.08);">
+      <div style="flex-grow: 1; font-size: 15px; color: #8aa19c;">예: 시니어 고객용 계좌이체 화면, 글자 크게</div>
+      <div style="width: 42px; height: 42px; border-radius: 50%; background: #008485; display: flex; align-items: center; justify-content: center;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"></path></svg>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <div style="font-size: 12px; color: #00615f; background: #e6f3f2; padding: 6px 14px; border-radius: 16px;">계좌이체</div>
+      <div style="font-size: 12px; color: #00615f; background: #e6f3f2; padding: 6px 14px; border-radius: 16px;">거래내역</div>
+      <div style="font-size: 12px; color: #00615f; background: #e6f3f2; padding: 6px 14px; border-radius: 16px;">상품가입</div>
+      <div style="font-size: 12px; color: #00615f; background: #e6f3f2; padding: 6px 14px; border-radius: 16px;">마이데이터 대시보드</div>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; padding: 0 48px 40px; display: flex; flex-direction: column; gap: 18px; overflow: hidden;">
+    <div style="font-size: 14px; font-weight: 700; color: #5c6f6b;">최근 생성된 시안</div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px;">
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="height: 300px; border-radius: 18px; background: linear-gradient(160deg, #e9f4f3 0%, #d8ebe9 100%); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+          <div style="width: 150px; height: 240px; background: #ffffff; border-radius: 14px; box-shadow: 0 14px 34px rgba(0, 51, 50, 0.16); display: flex; flex-direction: column; gap: 8px; padding: 14px; margin-top: 60px;">
+            <div style="height: 10px; width: 55%; background: #008485; border-radius: 4px;"></div>
+            <div style="height: 36px; background: #e6f3f2; border-radius: 8px;"></div>
+            <div style="height: 8px; width: 80%; background: #e2e8e6; border-radius: 4px;"></div>
+            <div style="height: 8px; width: 65%; background: #e2e8e6; border-radius: 4px;"></div>
+            <div style="height: 24px; background: #008485; border-radius: 8px; margin-top: 8px;"></div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 15px; font-weight: 700;">계좌이체 · 시니어 모드</div>
+            <div style="font-size: 12px; color: #8aa19c;">3시간 전 · hana-tokens v1.2</div>
+          </div>
+          <div style="font-size: 11px; font-weight: 700; color: #00615f; background: #e6f3f2; padding: 4px 10px; border-radius: 20px;">승인됨</div>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="height: 300px; border-radius: 18px; background: linear-gradient(160deg, #f2efe6 0%, #e8e2d2 100%); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+          <div style="width: 150px; height: 240px; background: #ffffff; border-radius: 14px; box-shadow: 0 14px 34px rgba(60, 51, 20, 0.14); display: flex; flex-direction: column; gap: 8px; padding: 14px; margin-top: 60px;">
+            <div style="height: 10px; width: 45%; background: #17332f; border-radius: 4px;"></div>
+            <div style="display: flex; gap: 6px;"><div style="height: 44px; flex-grow: 1; background: #e6f3f2; border-radius: 8px;"></div><div style="height: 44px; flex-grow: 1; background: #f0ece2; border-radius: 8px;"></div></div>
+            <div style="height: 8px; width: 85%; background: #e2e8e6; border-radius: 4px;"></div>
+            <div style="height: 8px; width: 60%; background: #e2e8e6; border-radius: 4px;"></div>
+            <div style="height: 24px; background: #17332f; border-radius: 8px; margin-top: 8px;"></div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 15px; font-weight: 700;">거래내역 조회</div>
+            <div style="font-size: 12px; color: #8aa19c;">어제 · hana-tokens v1.2</div>
+          </div>
+          <div style="font-size: 11px; font-weight: 700; color: #9a7522; background: #f8f0dd; padding: 4px 10px; border-radius: 20px;">검토중</div>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="height: 300px; border-radius: 18px; background: linear-gradient(160deg, #e7ecf2 0%, #d7e0ea 100%); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+          <div style="width: 150px; height: 240px; background: #ffffff; border-radius: 14px; box-shadow: 0 14px 34px rgba(20, 40, 60, 0.14); display: flex; flex-direction: column; gap: 8px; padding: 14px; margin-top: 60px;">
+            <div style="height: 52px; background: #008485; border-radius: 8px;"></div>
+            <div style="height: 8px; width: 70%; background: #e2e8e6; border-radius: 4px;"></div>
+            <div style="height: 28px; background: #e6f3f2; border-radius: 8px;"></div>
+            <div style="height: 28px; background: #e6f3f2; border-radius: 8px;"></div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <div style="font-size: 15px; font-weight: 700;">적금 가입 온보딩</div>
+            <div style="font-size: 12px; color: #8aa19c;">2일 전 · hana-tokens v1.1</div>
+          </div>
+          <div style="font-size: 11px; font-weight: 700; color: #5c6f6b; background: #eef1f0; padding: 4px 10px; border-radius: 20px;">초안</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
