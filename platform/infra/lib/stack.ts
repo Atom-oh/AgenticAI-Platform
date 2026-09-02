@@ -206,7 +206,7 @@ export class BankPlatformStack extends cdk.Stack {
       environment: {
         GEN_MODEL: 'global.anthropic.claude-sonnet-5',
         INTERNAL_TOOL_FN: internalToolFnName,     // 시도는 하되 IAM이 막는다
-        ALLOWED_SAMPLE_HOSTS: dist.distributionDomainName,
+        ALLOWED_SAMPLE_HOSTS: `${props.domainName ?? 'agent.atomai.click'},${dist.distributionDomainName}`,
       },
       description: 'bank-platform report reader: external web only, no internal tool permission',
     });

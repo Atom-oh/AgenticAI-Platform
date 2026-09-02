@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { Component, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { auth, login } from './lib';
 import S1 from './S1';
 import S2 from './S2';
@@ -86,6 +87,22 @@ function DemoLegend({ route, onClose }: { route: WsEvent | null; onClose: () => 
   );
 }
 
+/* 화면 단위 에러 바운더리 — 한 뷰의 렌더 오류가 앱 전체(내비 포함)를 백지로 만들지 않게 한다 (시연 안전장치) */
+class ViewErrorBoundary extends Component<{ viewKey: string; children: ReactNode }, { error: string | null }> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(e: any) { return { error: String(e?.message || e) }; }
+  componentDidUpdate(prev: { viewKey: string }) { if (prev.viewKey !== this.props.viewKey && this.state.error) this.setState({ error: null }); }
+  render() {
+    if (this.state.error) return (
+      <div className="panel p-5 text-sm">
+        <div className="text-rose-300 font-semibold mb-1">이 화면을 그리는 중 오류가 났습니다</div>
+        <pre className="text-xs text-slate-400 whitespace-pre-wrap">{this.state.error}</pre>
+        <button className="chip mt-3 hover:border-sky-500" onClick={() => this.setState({ error: null })}>다시 시도</button>
+      </div>);
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [authed, setAuthed] = useState(false);
   const [view, setView] = useState(resolveView());
@@ -160,6 +177,7 @@ export default function App() {
         </div>
         {legend && <DemoLegend route={route} onClose={() => setLegend(false)} />}
         <div className="p-6 max-w-[1400px]">
+          <ViewErrorBoundary viewKey={view}>
           {view === 'home' && <Dashboard go={go} />}
           {view === 's1' && <S1 />}
           {view === 's2' && <S2 />}
@@ -174,6 +192,7 @@ export default function App() {
           {view === 'controlroom' && <Agents />}
           {view === 'studio' && <Studio />}
           {view === 'guide' && <Frame src="https://www.atomai.click/AgenticAI-Platform/" note="Agentic AI 플랫폼 엔지니어링 가이드북 (임베드)" />}
+          </ViewErrorBoundary>
         </div>
       </main>
     </div>

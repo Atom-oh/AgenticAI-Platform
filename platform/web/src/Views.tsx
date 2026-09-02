@@ -27,13 +27,14 @@ export function routeOfModel(id: string): { infer: string; tier: string; gemma: 
 }
 const num = (v: any) => (v === null || v === undefined || v === '' ? null : Number(v));
 const fmt = (v: any) => { const n = num(v); return n === null || Number.isNaN(n) ? '—' : n.toLocaleString(); };
+const asList = (v: any): any[] => (Array.isArray(v) ? v : []);   // DynamoDB Decimal→문자열 등 배열이 아닌 값 방어 (S4 백지화 원인)
 const fieldsOf = (i: any): string[] => {
-  const raw = (i.boundaryFields && i.boundaryFields.length ? i.boundaryFields : i.maskedFields) || [];
+  const raw = asList(i.boundaryFields).length ? asList(i.boundaryFields) : asList(i.maskedFields);
   return raw.map((f: any) => (typeof f === 'string' ? f : f?.field || f?.name || String(f)));
 };
 const isGate = (i: any) => i.blockedBy === 'gate' || !!i.gateRejected;
 const blockReason = (i: any) =>
-  (i.topics && i.topics.length ? i.topics.join(', ') : '') || i.blockReason || i.reason || (isGate(i) ? '게이트 거부' : 'Guardrails');
+  (asList(i.topics).length ? asList(i.topics).join(', ') : '') || i.blockReason || i.reason || (isGate(i) ? '게이트 거부' : 'Guardrails');
 
 /* ---------------- 대시보드 ---------------- */
 export function Dashboard({ go }: { go: (v: string) => void }) {
