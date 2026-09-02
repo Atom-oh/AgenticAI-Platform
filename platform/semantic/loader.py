@@ -9,7 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+try:
+    import yaml
+except ImportError:  # Lambda 런타임 — metrics.json 변환본을 사용한다
+    yaml = None
 
 _YAML = Path(__file__).resolve().parent / "metrics.yaml"
 
@@ -33,7 +36,12 @@ class Dimension:
 
 class SemanticLayer:
     def __init__(self, path: Path = _YAML) -> None:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        json_path = path.with_suffix(".json")  # Lambda에는 PyYAML이 없어 배포 시 변환본 사용
+        if json_path.exists():
+            import json
+            raw = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
         self.metrics = [Metric(**m) for m in raw["metrics"]]
         self.dimensions = [Dimension(**d) for d in raw["dimensions"]]
         self._alias_index: dict[str, Metric] = {}

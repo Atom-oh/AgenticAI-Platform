@@ -57,6 +57,23 @@ cd platform && bash deploy.sh   # api-dist 조립 → CDK 배포 → 프론트 �
 
 정리(teardown): `cd infra && npx cdk destroy` (Neptune은 Phase 3에서 추가 예정 — 상시 과금 주의)
 
+## 단일 앱 재편 + Phase 3 일부 (2026-09-02)
+
+"하나의 페이지" 지시에 따라 모든 화면을 **한 SPA**(레일 내비게이션)로 통합했다:
+대시보드 · S1 규정 영향 분석 · S2 마이데이터 상담 · 온톨로지 탐색기 · Agent Registry(S3 뷰) ·
+Two-Plane 뷰(S4) · Guardrails 로그(S5) · 에이전트(컨트롤룸 프록시 — RBAC·예산·감사는
+컨트롤룸 백엔드가 그대로 시행) · 디자인 스튜디오/가이드북(임베드).
+
+- **S2 파이프라인 (F3)**: 입력 Guardrails → Semantic Layer → 정확 조회(합성, 벡터 검색 없음)
+  → 결정론적 계산엔진(수식 단계 표시) → 마스킹/토큰화(경계 페이로드 토글) → 스트리밍 설명
+  → 출력 Guardrails + 수치 검증기 → 재식별. 단계별 온프렘(앰버)/클라우드(시안) 색 규칙.
+- **실물 Bedrock Guardrails** `iol2t2rp0q9i` v3 (STANDARD tier + apac 프로파일): 투자권유
+  차단·정상 상담 통과 4케이스 검증. 목 아님 (§12.4).
+- **F6 경계 계측**: 요청마다 traceId·마스킹 필드·경계 페이로드 PII 실측 스캔·토큰 추정을
+  DynamoDB에 기록(TTL 7일). S4 카운터는 이 실측값의 합 — 하드코딩 아님. 현재 PII 반출 0건.
+- 미완(정직): 온프렘 플레인 물리 분리(별도 VPC·ECS)와 Neptune 전환은 Phase 3 인프라,
+  S3 화면 생성 반전 시연은 Phase 4. UI에 해당 문구 명시.
+
 ## 다음 Phase
 
 SPEC §13 참조 — Phase 2: GraphRAG 엔진과 S1 화면 (완료 시 검토), Phase 3: 온프렘

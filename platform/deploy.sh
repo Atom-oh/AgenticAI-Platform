@@ -6,8 +6,11 @@ LOG=/tmp/bank-platform-deploy.log
 
 echo "== 1) api-dist 조립 =="
 rm -rf api-dist && mkdir -p api-dist/seed/out
-cp api/ws_handler.py api-dist/
-cp -r engine graph api-dist/
+cp api/*.py api-dist/
+cp -r engine graph onprem semantic api-dist/
+# Lambda에는 PyYAML이 없다 — metrics.yaml → metrics.json 변환본 포함
+python3 -c "import yaml,json,pathlib; p=pathlib.Path('semantic/metrics.yaml'); \
+  pathlib.Path('api-dist/semantic/metrics.json').write_text(json.dumps(yaml.safe_load(p.read_text()),ensure_ascii=False))"
 find api-dist -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
 # 데이터: 그래프 + 코퍼스 + 임베딩 캐시 (임베딩이 없으면 생성)
 [ -f seed/out/corpus.embeddings.json ] || python3 -c "from engine.vectorrag import HybridIndex; HybridIndex.load()"

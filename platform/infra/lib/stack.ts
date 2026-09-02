@@ -49,12 +49,14 @@ export class BankPlatformStack extends cdk.Stack {
       handler: 'ws_handler.handler',
       code: lambda.Code.fromAsset('../api-dist'),
       memorySize: 1536,
-      timeout: cdk.Duration.seconds(120),
+      timeout: cdk.Duration.seconds(150),
       reservedConcurrentExecutions: 10, // 남용 상한 (동시 5명 시연 + 여유)
       environment: {
         CONN_TABLE: connTable.tableName,
         GRAPH_BACKEND: 'local', // Phase 3에서 neptune 전환. UI에 항상 표시된다.
         GEN_MODEL: 'apac.anthropic.claude-sonnet-4-20250514-v1:0',
+        GUARDRAIL_ID: 'iol2t2rp0q9i',
+        GUARDRAIL_VERSION: '3',
       },
     });
     connTable.grantReadWriteData(fn);
@@ -64,6 +66,17 @@ export class BankPlatformStack extends cdk.Stack {
         `arn:aws:bedrock:*::foundation-model/*`,
         `arn:aws:bedrock:*:${this.account}:inference-profile/*`,
       ],
+    }));
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:ApplyGuardrail'],
+      resources: [
+        `arn:aws:bedrock:*:${this.account}:guardrail/*`,
+        `arn:aws:bedrock:*:${this.account}:guardrail-profile/*`,
+      ],
+    }));
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:ListRegistryRecords', 'bedrock-agentcore:GetRegistryRecord'],
+      resources: [`arn:aws:bedrock-agentcore:us-east-1:${this.account}:registry/b2hOSZL4eOhDXAyk*`],
     }));
 
     // ---------- WebSocket API — $connect에서 Cognito 토큰 필수 ----------
