@@ -200,6 +200,7 @@ export default withMermaid(defineConfig({
         items: [
           { text: '데모 안내 · 접속 정보', link: '/14-demo/' },
           { text: '아키텍처와 설계 결정', link: '/14-demo/architecture' },
+          { text: '시연 리허설 · 체크리스트', link: '/14-demo/rehearsal' },
         ],
       },
     ],
