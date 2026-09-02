@@ -7,7 +7,7 @@ GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 
 
 | 항목 | 값 |
 |---|---|
-| **데모 URL** | <https://d8f5f6gxuiuxw.cloudfront.net/> |
+| **데모 URL** | <https://agent.atomai.click/> |
 | **접속 계정** | `demo@atomai.click` — 비밀번호는 Secrets Manager `bank-platform/demo-user` (SPEC §9, 문서에 기록하지 않음) |
 | 가입 | 불가 — 계정은 관리자 초대(admin-create)로만 발급 |
 
