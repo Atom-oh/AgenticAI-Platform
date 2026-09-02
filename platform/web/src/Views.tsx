@@ -195,8 +195,8 @@ export function TwoPlane({ blockedOnly }: { blockedOnly?: boolean }) {
         </div>
         <div className="text-xs text-slate-500 max-w-md">
           하드코딩이 아니다 — 매 요청의 경계 통과 페이로드를 정규식 스캔해 DynamoDB에 기록한 값의 합.
-          정확 조회·계산·마스킹·감사 원문은 <b style={{ color: 'var(--onprem)' }}>NAT 없는 격리 서브넷의 ECS 온프렘 플레인</b>이
-          수행하고, 클라우드에는 마스킹된 페이로드와 메트릭만 나간다.</div>
+          정확 조회·계산·마스킹·감사 원문은 <b style={{ color: 'var(--onprem)' }}>고객 데이터 플레인(PII VPC — 인터넷 차단 격리 서브넷의 ECS·RDS)</b>이
+          수행한다. 원칙: PII는 VPC 안에 두되, <b>Bedrock 등 모델 호출로 나가는 페이로드는 익명화가 필수</b> — 이 표가 그 실측 기록이다.</div>
         <button className="chip ml-auto hover:border-sky-500" onClick={reload}>새로고침</button>
       </div>
       <div className="panel overflow-hidden">

@@ -10,9 +10,9 @@ type Stage = { step: string; [k: string]: any };
 const STEP_LABEL: Record<string, string> = {
   guardrail_in: '① 입력 가드레일 (Bedrock Guardrails 실물)',
   semantic: '② Semantic Layer 지표 해석',
-  lookup: '③ 정확 조회 — 조회된 원본 값 (온프렘)',
+  lookup: '③ 정확 조회 — 조회된 원본 값 (PII VPC)',
   calc: '④ 결정론적 계산엔진 — 계산 내역',
-  mask: '⑤ 마스킹/토큰화 게이트 → 경계 통과 페이로드',
+  mask: '⑤ 익명화(마스킹) 게이트 — 모델 호출 필수 통제',
 };
 
 function StagePanel({ s }: { s: Stage }) {
@@ -25,7 +25,7 @@ function StagePanel({ s }: { s: Stage }) {
         <span className="text-slate-500">{open ? '▾' : '▸'}</span>
         {STEP_LABEL[s.step] || s.step}
         <span className="chip text-[10px] ml-auto" style={{ borderColor: onprem ? 'var(--onprem)' : 'var(--cloud)' }}>
-          {onprem ? '온프렘 플레인' : '클라우드'}
+          {onprem ? 'PII VPC' : '모델 호출'}
         </span>
       </button>
       {open && <div className="mt-2 text-xs text-slate-300">
@@ -106,7 +106,7 @@ export default function S2() {
 
       <div className="grid grid-cols-[1fr_1fr] gap-4">
         <div>
-          <div className="text-xs text-slate-500 mb-2">파이프라인 단계 (펼쳐보기) — <span style={{ color: 'var(--onprem)' }}>■ 온프렘</span> / <span style={{ color: 'var(--cloud)' }}>■ 클라우드</span></div>
+          <div className="text-xs text-slate-500 mb-2">파이프라인 단계 (펼쳐보기) — <span style={{ color: 'var(--onprem)' }}>■ 고객 데이터 플레인(PII VPC)</span> / <span style={{ color: 'var(--cloud)' }}>■ 모델 호출(익명화 필수)</span></div>
           {stages.map((s, i) => <StagePanel key={i} s={s} />)}
         </div>
         <div className="panel p-4">

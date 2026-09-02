@@ -22,14 +22,14 @@
       },
       {
         "id": "twoplane",
-        "label": "Two-Plane 경계",
+        "label": "PII VPC 경계",
         "focus": [
           "cloudfn",
           "onprem",
           "rds",
           "guardrails"
         ],
-        "note": "정확 조회·계산·마스킹·감사 원문은 NAT 없는 격리 서브넷의 온프렘 플레인이 수행한다. 클라우드로는 마스킹된 페이로드만 나간다."
+        "note": "PII는 인터넷이 차단된 VPC 안에 두고, Bedrock 등 모델 호출로 나가는 페이로드에는 익명화가 필수다."
       },
       {
         "id": "governance",
@@ -163,8 +163,8 @@
     {
       "id": "onprem",
       "type": "backend",
-      "label": "온프렘 플레인 ECS",
-      "sublabel": "정확 조회·계산·마스킹",
+      "label": "고객 데이터 플레인 ECS",
+      "sublabel": "정확 조회·계산·익명화",
       "pos": [
         690,
         560
@@ -179,7 +179,7 @@
       "id": "rds",
       "type": "database",
       "label": "RDS PostgreSQL",
-      "sublabel": "합성 개인데이터",
+      "sublabel": "PII 원장 (합성)",
       "pos": [
         930,
         560
@@ -237,7 +237,7 @@
     },
     {
       "kind": "security-group",
-      "label": "온프렘 플레인 — 격리 서브넷 (NAT 없음)",
+      "label": "고객 데이터 플레인 (PII VPC) — 격리 서브넷 · 인터넷 차단",
       "wraps": [
         "onprem",
         "rds"
@@ -280,7 +280,7 @@
       "id": "fn-br",
       "from": "cloudfn",
       "to": "bedrock",
-      "label": "마스킹된 페이로드만",
+      "label": "익명화된 페이로드만",
       "variant": "emphasis",
       "labelDy": 55
     },
@@ -342,10 +342,10 @@
   "cards": [
     {
       "dot": "amber",
-      "title": "Two-Plane 원칙",
+      "title": "데이터 배치 원칙 (개정 A1)",
       "items": [
-        "온프렘 플레인은 인터넷 경로가 없다 — VPC 엔드포인트만",
-        "프롬프트 원문·재식별 매핑은 플레인 밖으로 나가지 않는다",
+        "PII는 VPC 안에 둘 수 있다 — 격리 서브넷, 인터넷 경로 없음",
+        "모델 호출로 나가는 페이로드는 익명화 필수 (외부 SaaS 모델 금지)",
         "경계 통과 PII를 정규식 실측 — 현재 반출 0건"
       ]
     },

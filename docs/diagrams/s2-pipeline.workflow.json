@@ -41,7 +41,7 @@
           "trace",
           "audit"
         ],
-        "note": "경계 통과 PII 실측과 traceId는 클라우드에, 프롬프트 원문은 온프렘에만 남는다."
+        "note": "경계 통과 PII 실측과 traceId는 모델 호출 플레인에, 프롬프트 원문은 PII VPC에만 남는다."
       }
     ]
   },
@@ -57,11 +57,11 @@
     },
     {
       "id": "cloud",
-      "label": "클라우드 플레인"
+      "label": "모델 호출 플레인 (익명화 필수)"
     },
     {
       "id": "onprem",
-      "label": "온프렘 플레인 — 격리 서브넷 ECS"
+      "label": "고객 데이터 플레인 (PII VPC · 격리 서브넷 ECS)"
     }
   ],
   "phases": [
@@ -169,7 +169,7 @@
       "col": 2,
       "type": "database",
       "label": "정확 조회",
-      "sublabel": "RDS · 벡터 검색 없음",
+      "sublabel": "RDS 원장 · 벡터 검색 없음",
       "width": 138
     },
     {
@@ -187,7 +187,7 @@
       "lane": "onprem",
       "col": 4,
       "type": "security",
-      "label": "마스킹 게이트",
+      "label": "익명화 게이트",
       "sublabel": "토큰화 · 재식별 매핑 보관",
       "width": 148
     },
@@ -302,9 +302,9 @@
   "cards": [
     {
       "dot": "amber",
-      "title": "안티 요구사항 시행",
+      "title": "개정된 배치 원칙 (A1)",
       "items": [
-        "LLM이 금액·금리를 만들면 수치 검증기가 표시한다",
+        "PII는 VPC 내 보관 — 모델 호출 페이로드는 익명화 필수",
         "개인 금융데이터는 벡터화하지 않는다 — 키 기반 조회만"
       ]
     },

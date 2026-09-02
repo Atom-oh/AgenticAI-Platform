@@ -219,10 +219,21 @@ class NeptuneGraphStore(GraphStore):
     name = "neptune"
 
     def __init__(self, endpoint: str | None = None) -> None:
-        self.endpoint = endpoint or os.environ["NEPTUNE_ENDPOINT"]
+        self.endpoint = endpoint or os.environ.get("NEPTUNE_ENDPOINT", "")
         self.url = f"https://{self.endpoint}:8182/openCypher"
 
     def _q(self, cypher: str, params: dict | None = None) -> list[dict]:
+        """openCypher 질의. BRIDGE_FN이 있으면 VPC 안의 브리지 Lambda를 경유한다 (Lambda 본체는 VPC 밖)."""
+        bridge_fn = os.environ.get("BRIDGE_FN", "")
+        if bridge_fn:
+            import boto3
+            lam = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2"))
+            r = lam.invoke(FunctionName=bridge_fn, Payload=json.dumps(
+                {"op": "neptune", "cypher": cypher, "params": params or {}}).encode())
+            body = json.loads(r["Payload"].read().decode() or "{}")
+            if r.get("FunctionError") or "errorMessage" in body:
+                raise RuntimeError(f"neptune via bridge failed: {str(body)[:300]}")
+            return body["results"]
         import urllib.parse
         import urllib.request
         data = urllib.parse.urlencode(
