@@ -82,9 +82,11 @@ function shell(inner){
         <span class="ic">${v.ic}</span><span class="tx">${v.label}</span></button>`).join('')}
       ${ME&&ME.isAdmin?`<div class="sect">PLATFORM ENGINEER</div>
       <button data-v="admin" class="${r==='admin'?'on':''}"><span class="ic">⚙</span><span class="tx">플랫폼 운영</span></button>`:''}
+      <div class="sect">PLATFORM SURFACES</div>
       <div class="foot">
-        <a href="https://www.atomai.click/AgenticAI-Platform/" target="_blank">가이드북 ↗</a><br>
-        <a href="https://www.atomai.click/AgenticAI-Platform/demo-architecture.html" target="_blank">아키텍처 ↗</a>
+        <a href="https://d4zwmnh2s47e9.cloudfront.net/" target="_blank">🎨 UI/UX 스튜디오 ↗</a><br>
+        <a href="https://www.atomai.click/AgenticAI-Platform/" target="_blank">📖 가이드북 ↗</a><br>
+        <a href="https://www.atomai.click/AgenticAI-Platform/demo-architecture.html" target="_blank">🗺 아키텍처 ↗</a>
       </div>
     </nav>
     <main>
@@ -114,7 +116,7 @@ function renderLogin(expired){
       <p>에이전트를 만들고, 승인하고, 지식과 연결하고, 관측하는 곳입니다.<br>
       조직 계정으로 로그인해 주세요. 가입은 플랫폼 관리자의 초대로만 가능합니다.</p>
       <button class="btn p" id="li" style="width:100%;padding:12px">로그인</button>
-      <div class="hint">demo: demo@atomai.click / !234QWer</div>
+      <div class="hint">demo: demo@atomai.click / !234Qwer</div>
     </div>
   </div>`;
   $('#li').onclick = login;
