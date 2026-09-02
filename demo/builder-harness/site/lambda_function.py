@@ -163,6 +163,7 @@ def _agent_public(i):
             "datasourceIds": i.get("datasourceIds", []),
             "skillIds": i.get("skillIds", []),
             "useOntology": bool(i.get("useOntology")),
+            "usePersonalHr": bool(i.get("usePersonalHr")),
             "createdAt": int(i.get("createdAt", 0)),
             "status": i.get("status", "APPROVED"),
             "riskTier": int(i.get("riskTier", 1)),
@@ -298,6 +299,34 @@ def registry_delete(record_id):
         registry.delete_registry_record(registryId=AGENT_REGISTRY_ID, recordId=record_id)
     except Exception as exc:
         print(f"registry delete failed ({record_id}): {exc}")
+
+
+# ---------------------------------------------------------------- employees
+def emp_block(email):
+    """Caller's own HR record only — looked up server-side by the JWT email,
+    never by client-supplied identity (entitlement scoping, guidebook Part 9)."""
+    e = get_item("EMP", (email or "").lower())
+    if not e:
+        return ""
+    lv = e.get("leave") or {}
+    granted = float(lv.get("granted", 0))
+    used = float(lv.get("used", 0))
+    pending = float(lv.get("pending", 0))
+    remain = round(granted - used - pending, 1)
+    hist = lv.get("history") or []
+    lines = [
+        "\n\n## 요청자 본인 인사정보 (조회자 계정 기준, 타인 정보 아님)",
+        f"- 성명: {e.get('name','')} / 사번: {e.get('empNo','')} / 소속: {e.get('dept','')} / 직급: {e.get('rank','')}",
+        f"- 입사일: {e.get('joinDate','')} (근속 {e.get('years','?')}년)",
+        f"- 연차: 부여 {granted:g}일, 사용 {used:g}일, 신청중 {pending:g}일, **잔여 {remain:g}일**",
+    ]
+    if hist:
+        lines.append("- 최근 휴가 사용 내역:")
+        for h in hist[:6]:
+            lines.append(f"  \u00b7 {h.get('date','')} {h.get('type','')} {h.get('days','')}일 ({h.get('status','')})")
+    lines.append("이 수치는 요청자 본인의 현재 스냅샷이다. 이 정보로 잔여 연차 등 개인 질문에 "
+                 "직접 답하되, 확정 신청·정정은 HR포털에서 처리하도록 안내하라.")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- ontology
@@ -447,8 +476,16 @@ def api(method, path, body, p):
     email, team = p["email"], p["team"]
 
     if path == "/api/me" and method == "GET":
+        e = get_item("EMP", (email or "").lower())
+        prof = None
+        if e:
+            lv = e.get("leave") or {}
+            g, u2, pd = float(lv.get("granted", 0)), float(lv.get("used", 0)), float(lv.get("pending", 0))
+            prof = {"name": e.get("name", ""), "empNo": e.get("empNo", ""),
+                    "dept": e.get("dept", ""), "rank": e.get("rank", ""),
+                    "leaveRemain": round(g - u2 - pd, 1), "leaveGranted": g}
         return 200, {"email": email, "team": team, "isAdmin": p["isAdmin"],
-                     "groups": p["groups"]}
+                     "groups": p["groups"], "profile": prof}
 
     # ---------------- agents ----------------
     if path == "/api/agents" and method == "GET":
@@ -464,6 +501,7 @@ def api(method, path, body, p):
         skill_ids = [d for d in (body.get("skillIds") or [])
                      if isinstance(d, str) and ID_RE.match(d)][:3]
         use_onto = bool(body.get("useOntology"))
+        use_hr = bool(body.get("usePersonalHr"))
         if not name or not prompt:
             return 400, {"error": "name과 systemPrompt는 필수입니다."}
         if len(prompt) > MAX_PROMPT_CHARS:
@@ -474,7 +512,7 @@ def api(method, path, body, p):
         ddb.put_item(Item=_to_ddb({
             "pk": "AGENT", "sk": agent_id, "name": name, "description": desc,
             "systemPrompt": prompt, "datasourceIds": ds_ids, "skillIds": skill_ids,
-            "useOntology": use_onto, "createdAt": int(time.time()),
+            "useOntology": use_onto, "usePersonalHr": use_hr, "createdAt": int(time.time()),
             "status": "EVALUATING", "riskTier": risk,
             "budgetTokens": DEFAULT_BUDGET_TOKENS,
             "ownerEmail": email, "team": team,
@@ -520,8 +558,14 @@ def api(method, path, body, p):
                          "budgetExceeded": True}
         if not SESSION_RE.match(base):
             base = uuid.uuid4().hex + "-web"
+        sys_prompt = build_agent_prompt(agent)
+        if agent.get("usePersonalHr"):
+            eb = emp_block(email)
+            sys_prompt += eb or ("\n\n## 요청자 본인 인사정보\n"
+                                 "(이 계정에 연결된 직원 레코드가 없습니다. 개인 수치는 확인 불가로 안내하고 "
+                                 "HR포털/인사팀을 안내하세요.)")
         reply, u, latency = invoke(
-            f"{base}-{agent_id}", message, build_agent_prompt(agent),
+            f"{base}-{agent_id}", message, sys_prompt,
             block_tools=True, actor_id=f"agent-{agent_id}-{actor_safe(email or base)[:24]}")
         add_usage(agent_id, u)
         return 200, {"reply": reply, "sessionId": base, "usage": u, "latencyMs": latency,

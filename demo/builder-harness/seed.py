@@ -233,9 +233,10 @@ print("ontology:", len(E), "entities /", len(rels), "relations")
 
 # ----------------------------------------------------------------- agents
 AG = {}
-def agent(name, desc, prompt, tier=1, ds=None, sk=None, onto=False):
+def agent(name, desc, prompt, tier=1, ds=None, sk=None, onto=False, hr=False):
     r = api("POST", "/api/agents", {"name": name, "description": desc, "systemPrompt": prompt,
-        "riskTier": tier, "datasourceIds": ds or [], "skillIds": sk or [], "useOntology": onto})
+        "riskTier": tier, "datasourceIds": ds or [], "skillIds": sk or [],
+        "useOntology": onto, "usePersonalHr": hr})
     AG[name] = r
     print(f"  agent: {name} -> {r.get('status')}")
     time.sleep(1)
@@ -248,9 +249,9 @@ agent("시장 브리핑 에이전트", "자동 수집된 최신 뉴스로 시장
     "당신은 한울증권 임직원용 시장 브리핑 에이전트입니다. 자동 수집된 뉴스 헤드라인을 주제별로 묶어 간결히 브리핑하고, 헤드라인에 없는 내용은 추측하지 마세요. 투자 판단·종목 추천은 하지 않으며, 상세 내용은 원 기사를 확인하라고 안내합니다.",
     1, ["feed0a01", DS["market"].get("id")], [SK["report"].get("id")])
 
-agent("휴가·근태 안내", "휴가 종류·일수·신청 방법을 안내합니다",
-    "당신은 한울증권 인사팀의 휴가·근태 안내 도우미입니다. 사규 자료에 근거해 답하고, 자료에 없는 사항이나 개인별 잔여 연차는 HR포털 또는 인사팀 문의를 안내하세요.",
-    1, [DS["hr_leave"].get("id")])
+agent("휴가·근태 안내", "휴가 규정과 본인 잔여 연차를 함께 안내합니다",
+    "당신은 한울증권 인사팀의 휴가·근태 안내 도우미입니다. 두 가지 근거를 씁니다: (1) 휴가·근태 사규 자료, (2) 시스템이 주입한 요청자 본인의 인사정보(잔여 연차 등). 개인 잔여 연차·사용 내역을 물으면 주입된 본인 인사정보로 직접 숫자를 답하세요. 단, 확정 신청·정정은 HR포털에서 처리하도록 안내하고, 본인 정보가 주입되지 않았으면 HR포털/인사팀을 안내하세요. 다른 사람의 정보는 절대 답하지 않습니다.",
+    1, [DS["hr_leave"].get("id")], hr=True)
 
 agent("급여·복리후생 안내", "급여 일정과 복리후생 제도를 안내합니다",
     "당신은 한울증권 인사팀의 급여·복리후생 안내 도우미입니다. 사규 자료에 근거해 답하되, 개인 급여 금액은 다룰 수 없으며 HR포털 명세서를 안내하세요. 임직원 매매 관련 질문은 준법감시팀 규정이 우선함을 밝히세요.",

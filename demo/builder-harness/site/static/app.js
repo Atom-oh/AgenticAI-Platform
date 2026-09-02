@@ -90,6 +90,7 @@ function shell(inner){
     <main>
       <div class="topbar">
         <h1 id="vtitle"></h1><div class="sp"></div>
+        ${ME&&ME.profile?`<span class="chip"><span class="dot"></span>${esc(ME.profile.name)} · 잔여연차 <b>${ME.profile.leaveRemain}일</b></span>`:''}
         <span class="chip ${ME&&ME.isAdmin?'admin':''}"><span class="dot"></span>
           <b>${esc(ME?ME.email:'')}</b>&nbsp;${esc(ME?ME.team:'')}</span>
         <button class="btn ghost" id="lo">로그아웃</button>
@@ -306,7 +307,8 @@ async function renderChat(agentId){
   chatUI('💬 '+a.name,
     `${esc(a.description||'')} <span class="pill">systemPrompt override</span><span class="pill">🔒 툴 차단</span>`+
     (a.skillIds.length?`<span class="pill">⚡스킬 ${a.skillIds.length}</span>`:'')+
-    (a.useOntology?'<span class="pill">◈ 온톨로지</span>':''),
+    (a.useOntology?'<span class="pill">◈ 온톨로지</span>':'')+
+    (a.usePersonalHr?'<span class="pill">🔐 내 인사정보</span>':''),
     '메시지를 입력하세요…');
   const hist=CHATS[agentId]||[];
   hist.forEach(h=>addMsg(h.cls,h.text));
@@ -356,8 +358,10 @@ async function renderCreate(){
     <div class="checks" id="sc">${sks.length?sks.map(k=>
       `<label><input type="checkbox" value="${k.id}"> ⚡ ${esc(k.name)}</label>`).join(''):
       '<span class="sub" style="margin:0">스킬 탭에서 먼저 만들 수 있습니다.</span>'}</div>
-    <label>AI-Ready Data</label>
-    <div class="checks"><label><input type="checkbox" id="uo"> ◈ 조직 온톨로지를 컨텍스트로 주입</label></div>
+    <label>개인화 · 컨텍스트</label>
+    <div class="checks">
+      <label><input type="checkbox" id="uo"> ◈ 조직 온톨로지를 컨텍스트로 주입</label>
+      <label><input type="checkbox" id="uh"> 🔐 요청자 본인 인사정보 연결 (잔여 연차 등)</label></div>
     <div style="margin-top:20px" class="row">
       <button class="btn p" id="ok">에이전트 생성</button>
       <button class="btn ghost" id="bk">빌더로 돌아가기</button></div>`;
@@ -369,7 +373,7 @@ async function renderCreate(){
     $('#ok').disabled=true;$('#ok').textContent='등록 중…';
     try{await api('POST','/api/agents',{name:$('#an').value,description:$('#ad').value,
       systemPrompt:$('#ap').value,datasourceIds:ds,skillIds:sk,riskTier:tier,
-      useOntology:$('#uo').checked});
+      useOntology:$('#uo').checked,usePersonalHr:$('#uh').checked});
       SPEC=null;
       toast('🧪 등록되었습니다 — 스모크 평가가 백그라운드에서 진행됩니다(15~30초). 카탈로그에서 상태가 갱신됩니다.');
       nav('catalog');}
