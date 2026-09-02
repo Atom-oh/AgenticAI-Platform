@@ -114,7 +114,7 @@ function renderLogin(expired){
       <p>에이전트를 만들고, 승인하고, 지식과 연결하고, 관측하는 곳입니다.<br>
       조직 계정으로 로그인해 주세요. 가입은 플랫폼 관리자의 초대로만 가능합니다.</p>
       <button class="btn p" id="li" style="width:100%;padding:12px">로그인</button>
-      <div class="hint">demo: demo@atomai.click / !234Qwer</div>
+      <div class="hint">demo: demo@atomai.click / !234QWer</div>
     </div>
   </div>`;
   $('#li').onclick = login;
