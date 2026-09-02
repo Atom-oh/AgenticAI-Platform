@@ -103,10 +103,10 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 | S1 규정 영향 분석 | 통과 | 전체 23s · 첫 토큰 2.9s(토큰 배치 후), Neptune 카운트 상품 12·화면 55·컴포넌트 77·부서 7·문서 7·정책규칙 5, 그래프 노드 186, 벡터 검색 = VPC 내부(AOSS), 근거 검증 위반 0 |
 | S2 마이데이터 상담 | 통과 | 전체 11.4s · 첫 토큰 5.8s, 브리지 경유 VPC 내부 플레인, 마스킹 필드 customerName·customer_id·account_id, 독립 PII 스캔 0건, 수치 검증 위반 0, 출력 가드레일 NONE |
 | S5 Guardrails | 차단 | `investment-solicitation` 토픽 (STANDARD 티어·APAC 프로파일) |
-| S3 화면 생성 | 통과 (2회차) | 1차 타입 게이트 실패(Badge tone 'danger' 비허용) → 실패 사유 반영 1회 재생성 → 빌드·타입·린트·KWCAG·구조 스냅샷·Registry 승인 전부 통과, 컴포넌트 10종 사용 |
+| S3 화면 생성 | 통과 (2회차, 반전 버튼 ①②·재생성 v3 교차 검증) | 1차 타입 게이트 실패(Badge tone 'danger' 비허용) → 실패 사유 반영 1회 재생성 → 빌드·타입·린트·KWCAG·구조 스냅샷·Registry 승인 전부 통과, 컴포넌트 10종 사용 |
 | 에이전트 빌더 — Strands 런타임 호출 | 통과 | AgentCore Runtime `bank_platform_agents`(READY), 전체 37s · 첫 토큰 25s(microVM 콜드스타트+도구 2회), 도구 list_regulations → analyze_regulation_impact (Gateway MCP), 실측 토큰 7,905/2,504; AgentCore Registry 미러 APPROVED 4건 |
 | UX Asset Portal | 통과 | Components 80 카드, Related = 그래프 순회(computedBy graph-traversal), CMP-Button-v2 영향: 화면 21·패턴 35·정책규칙 45 |
-| Single Boundary 뷰 | 통과 | VPC 잔류: 벡터 청크 177·감사 원문 N·온톨로지 3,797(neptune) — 플레인 /health 실측; 모델 ID 집계; 차단/캐시 건수 |
+| Single Boundary 뷰 | 통과 (브라우저 재검 6/6) | VPC 잔류: 벡터 청크 177·감사 원문·온톨로지 3,797(neptune) — 플레인 /health 실측; 모델 ID 집계; 저장/추론 배지; 차단/캐시 건수. 뷰 단위 ErrorBoundary로 한 화면 오류가 앱을 백지화하지 않음 |
 | F7 보고서 Reader/Writer | 통과 | 전체 42s, 인젝션 지시문 탐지, Reader의 내부 도구 호출 1회 IAM AccessDenied(실측), Writer(격리 서브넷·인터넷 경로 없음) 보고서 2,383자 |
 
 알려진 한계(정직 표기): S2 LLM 첫 토큰 ~6초(플레인 준비·입력 가드레일 포함 — 단계 이벤트는 1초 내 도착하므로 화면 침묵은 없다), 에이전트 런타임 첫 호출은 microVM 콜드스타트로 20초 이상(리허설 직전 한 번 워밍업 권장). API Gateway
