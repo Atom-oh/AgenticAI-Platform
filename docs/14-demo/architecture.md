@@ -5,8 +5,8 @@
 
 ## 인터랙티브 다이어그램 (archify)
 
-- **[플랫폼 아키텍처 (인터랙티브)](/AgenticAI-Platform/platform-architecture.html)** — Two-Plane VPC·중앙 MCP·거버넌스를 가이드 뷰 3장으로 탐색 (Play story 지원)
-- **[S2 상담 파이프라인 워크플로우 (인터랙티브)](/AgenticAI-Platform/s2-workflow.html)** — 정상 상담·S5 차단·계측/감사 경로
+- **[플랫폼 아키텍처 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html)** — Two-Plane VPC·중앙 MCP·거버넌스를 가이드 뷰 3장으로 탐색 (Play story 지원)
+- **[S2 상담 파이프라인 워크플로우 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/s2-workflow.html)** — 정상 상담·S5 차단·계측/감사 경로
 
 ## 전체 구성
 
