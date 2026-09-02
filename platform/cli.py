@@ -23,10 +23,15 @@ sys.path.insert(0, str(HERE))
 
 
 def _admin_fn_name() -> str:
+    if os.environ.get("ADMIN_FN"):
+        return os.environ["ADMIN_FN"]
     out = HERE / "infra" / "outputs.json"
     if out.exists():
-        return json.loads(out.read_text())["BankPlatform"]["AdminFnName"]
-    return os.environ["ADMIN_FN"]
+        data = json.loads(out.read_text())
+        stack = os.environ.get("MAIN_STACK") or next((k for k in data if "AdminFnName" in data[k]), None)
+        if stack:
+            return data[stack]["AdminFnName"]
+    raise SystemExit("AdminFn 이름을 찾을 수 없습니다 — infra/outputs.json 또는 ADMIN_FN 환경변수 필요")
 
 
 def main(argv: list[str]) -> int:

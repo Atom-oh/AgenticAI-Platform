@@ -107,7 +107,7 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 | 에이전트 빌더 — Strands 런타임 호출 | 통과 | AgentCore Runtime `bank_platform_agents`(READY), 전체 37s · 첫 토큰 25s(microVM 콜드스타트+도구 2회), 도구 list_regulations → analyze_regulation_impact (Gateway MCP), 실측 토큰 7,905/2,504; AgentCore Registry 미러 APPROVED 4건 |
 | UX Asset Portal | 통과 | Components 80 카드, Related = 그래프 순회(computedBy graph-traversal), CMP-Button-v2 영향: 화면 21·패턴 35·정책규칙 45 |
 | Single Boundary 뷰 | 통과 | VPC 잔류: 벡터 청크 177·감사 원문 N·온톨로지 3,797(neptune) — 플레인 /health 실측; 모델 ID 집계; 차단/캐시 건수 |
-| F7 보고서 | 재검증 필요 | 1차 e2e에서 `WEB_URL` 미설정 오류 → env 추가 후 재배포 (아래 재검증 절 참조) |
+| F7 보고서 Reader/Writer | 통과 | 전체 42s, 인젝션 지시문 탐지, Reader의 내부 도구 호출 1회 IAM AccessDenied(실측), Writer(격리 서브넷·인터넷 경로 없음) 보고서 2,383자 |
 
 알려진 한계(정직 표기): S2 LLM 첫 토큰 ~6초(플레인 준비·입력 가드레일 포함 — 단계 이벤트는 1초 내 도착하므로 화면 침묵은 없다), 에이전트 런타임 첫 호출은 microVM 콜드스타트로 20초 이상(리허설 직전 한 번 워밍업 권장). API Gateway
 @connections 프레임 상한으로 토큰 프레임을 32자/60ms 단위로 배치한다(스로틀 시 캐시 응답 폴백이 동작함을 실측).
