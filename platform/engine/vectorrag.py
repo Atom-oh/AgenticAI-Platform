@@ -112,6 +112,18 @@ class HybridIndex:
         return hits[:top_k], timing
 
 
+def prepare(query: str, index: HybridIndex | None = None):
+    """검색까지 수행하고 (hits, timing, system, user) 를 반환 — 스트리밍 생성용."""
+    index = index or HybridIndex.load()
+    hits, timing = index.search(query)
+    context = "\n\n".join(f"[{h.chunk['chunkId']}] {h.chunk['text']}" for h in hits)
+    system = ("당신은 아톰은행 내규 안내 도우미입니다. 제공된 규정 청크만 근거로 "
+              "한국어로 답하세요. 근거에 없는 내용은 '검색된 규정에서 확인할 수 없습니다'라고 "
+              "말하세요. 인용한 청크 ID를 답변 끝에 나열하세요.")
+    user = f"질문: {query}\n\n검색된 규정 청크:\n{context}"
+    return hits, timing, system, user
+
+
 def answer(query: str, index: HybridIndex | None = None) -> dict:
     """Vector RAG 전체 파이프라인: 검색 → 생성. S1 좌측 패널의 응답."""
     index = index or HybridIndex.load()

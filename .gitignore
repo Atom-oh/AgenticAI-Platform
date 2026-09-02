@@ -7,3 +7,10 @@ demo/builder-harness/site/function.zip
 demo/builder-harness/site/architecture.visual-check.*
 platform/seed/out/
 platform/**/__pycache__/
+platform/api-dist/
+platform/infra/node_modules/
+platform/infra/cdk.out/
+platform/infra/outputs.json
+platform/infra/dist/
+platform/web/node_modules/
+platform/web/dist/

@@ -84,6 +84,38 @@ GENERATE_SYSTEM = """당신은 아톰은행 규정 영향 분석 도우미입니
 순회 결과에 없는 항목을 만들어내지 마세요. 숫자는 순회 결과의 건수만 사용하세요."""
 
 
+def prepare(query: str, store: GraphStore) -> dict:
+    """생성 직전까지 수행 — 스트리밍용. meta(seed/counts/graph)와 프롬프트를 반환."""
+    timing: dict = {}
+    t0 = time.time()
+    intent, _ = _decompose(query)
+    timing["decompose_ms"] = int((time.time() - t0) * 1000)
+    seed, confidence, candidates = _select_seed(store, intent.get("entity_keywords", []))
+    if not seed:
+        return {"error": "질문에서 대상 규정을 특정하지 못했습니다.", "intent": intent,
+                "seedCandidates": candidates, "timing": timing}
+    t0 = time.time()
+    r = store.impact_of_regulation(seed["code"])
+    timing["traverse_ms"] = int((time.time() - t0) * 1000)
+    path_nodes = {}
+    for group, ntype in [([r.regulation], "Regulation"), (r.conditions, "Condition"),
+                         (r.products, "Product"), (r.screens, "Screen"),
+                         (r.components, "Component"), (r.departments, "Department"),
+                         (r.documents, "Document")]:
+        for n in group:
+            path_nodes[n.id] = {"id": n.id, "label": ntype,
+                                "name": n.props.get("name") or n.props.get("title") or n.id}
+    edges = [{"src": e.src, "rel": e.rel, "dst": e.dst} for e in r.path_edges
+             if e.src in path_nodes and e.dst in path_nodes]
+    return {
+        "intent": intent, "seed": seed, "seedConfidence": confidence,
+        "seedCandidates": candidates, "counts": r.counts(),
+        "graph": {"nodes": list(path_nodes.values()), "edges": edges[:400]},
+        "timing": timing, "system": GENERATE_SYSTEM,
+        "user": f"질문: {query}\n\n그래프 순회 결과:\n{_assemble_context(r)}",
+    }
+
+
 def answer(query: str, store: GraphStore) -> dict:
     """GraphRAG 전체 파이프라인. S1 우측 패널의 응답."""
     timing: dict = {}

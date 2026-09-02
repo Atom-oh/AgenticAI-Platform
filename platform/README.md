@@ -35,6 +35,28 @@ python3 cli.py metric "지난달 사용액"
 - `semantic/` — 지표 정의 YAML + 로더. Text-to-SQL은 이 계층만 참조한다.
 - `tests/test_coverage.py` — 볼륨·커버리지·버전체인·식별자·시맨틱 5종.
 
+## Phase 2 — GraphRAG 엔진과 S1 화면 (완료)
+
+라이브: **https://d15n7n9ypt87h8.cloudfront.net/** (demo@atomai.click — 초대 전용, 가입 없음)
+
+```bash
+cd platform && bash deploy.sh   # api-dist 조립 → CDK 배포 → 프론트 빌드/업로드
+```
+
+- `engine/` — GraphRAG(의도분해→seed 선택(신뢰도)→4-hop 순회→생성→근거검증) +
+  Vector RAG(BM25+dense RRF+Cohere Rerank, 약화 없음)
+- `api/ws_handler.py` — WebSocket 스트리밍. $connect에서 Cognito access token 필수
+  (무토큰/무효 토큰 연결 거부 — e2e 확인). 두 엔진 병렬 실행, 토큰 단위 push.
+- `web/` — React 18+Vite+TS+Tailwind, Pretendard, 다크. S1 좌우 비교 + seed 신뢰도 +
+  counts 칩 + 근거검증 배지 + Cytoscape 순회 경로 시각화 + 시나리오 프리셋 버튼 +
+  그래프 백엔드 상시 표시(local/neptune).
+- `infra/` — CDK TS: S3+CloudFront(OAC, 유일한 퍼블릭 웹 진입점), WebSocket API
+  (스로틀 20rps), Lambda(py3.12, 예약 동시성 10), DDB 연결 테이블(TTL).
+- e2e 실측: 첫 토큰 3.1s(SPEC 5s 내), Vector 60토큰/Graph 187토큰 스트리밍,
+  counts = 상품12·화면39·부서7·문서7, 무토큰 연결 거부.
+
+정리(teardown): `cd infra && npx cdk destroy` (Neptune은 Phase 3에서 추가 예정 — 상시 과금 주의)
+
 ## 다음 Phase
 
 SPEC §13 참조 — Phase 2: GraphRAG 엔진과 S1 화면 (완료 시 검토), Phase 3: 온프렘
