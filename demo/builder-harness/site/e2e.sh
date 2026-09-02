@@ -45,5 +45,12 @@ RL=$(curl -s --max-time 110 -X POST $CF/api/chat -H "Authorization: Bearer $TOK"
  | python3 -c "import json,sys; d=json.load(sys.stdin); print('ok' if len(d.get('reply',''))>5 else 'empty')")
 ck "$RL" ok "에이전트 응답"
 
+echo "[6] 도메인·크롤러"
+DSN=$(curl -s -H "Authorization: Bearer $TOK" $CF/api/datasources | python3 -c "import json,sys; d=json.load(sys.stdin)['datasources']; print(len(d), len([x for x in d if x.get('source')=='crawler']))")
+ck "$(echo $DSN | cut -d' ' -f1 | awk '{print ($1>=6)?"y":"n"}')" y "데이터소스 6종 이상"
+ck "$(echo $DSN | cut -d' ' -f2)" 1 "자동 수집(크롤러) 데이터소스 1건"
+ck "$(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $TOK" $CF/api/wiki/news-crawler-design)" 200 "크롤러 설계 위키"
+ck "$(curl -s -o /dev/null -w %{http_code} -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' $CF/api/admin/crawl)" 200 "수동 크롤 트리거"
+
 echo; echo "결과: $pass passed / $fail failed"
 [ $fail -eq 0 ]

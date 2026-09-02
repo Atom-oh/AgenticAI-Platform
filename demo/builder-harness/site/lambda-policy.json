@@ -64,7 +64,10 @@
       "Sid": "SelfInvokeAsync",
       "Effect": "Allow",
       "Action": "lambda:InvokeFunction",
-      "Resource": "arn:aws:lambda:ap-northeast-2:180294183052:function:agentic-book-demo-site"
+      "Resource": [
+        "arn:aws:lambda:ap-northeast-2:180294183052:function:agentic-book-demo-site",
+        "arn:aws:lambda:ap-northeast-2:180294183052:function:agentic-news-crawler"
+      ]
     }
   ]
 }

@@ -27,6 +27,7 @@ AGENT_REGISTRY_ID = os.environ.get("AGENT_REGISTRY_ID", "b2hOSZL4eOhDXAyk")
 AGENT_REGISTRY_REGION = os.environ.get("AGENT_REGISTRY_REGION", "us-east-1")
 SKILLS_BUCKET = os.environ.get("SKILLS_BUCKET", "agentic-nexus-skills-180294183052")
 SELF_FN = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "agentic-book-demo-site")
+CRAWLER_FN = os.environ.get("CRAWLER_FN", "agentic-news-crawler")
 GATEWAY_URL = os.environ.get("PLATFORM_GATEWAY_URL", "")
 
 MAX_AGENTS, MAX_DATASOURCES, MAX_SKILLS = 30, 15, 15
@@ -321,6 +322,58 @@ def ontology_context(cap=6000):
 
 
 # ---------------------------------------------------------------- workflows
+def agent_init_async(agent_id):
+    lam.invoke(FunctionName=SELF_FN, InvocationType="Event",
+               Payload=json.dumps({"nexusAsync": "agentInit",
+                                   "agentId": agent_id}).encode())
+
+
+def agent_init_execute(agent_id):
+    """Background: smoke eval -> final status -> registry sync."""
+    item = get_item("AGENT", agent_id)
+    if not item:
+        return
+    eval_result, eval_usage = smoke_eval(agent_id, item.get("systemPrompt", ""))
+    risk = int(item.get("riskTier", 2))
+    status = "APPROVED" if (eval_result["passed"] and risk == 1) else "PENDING"
+    ddb.update_item(Key={"pk": "AGENT", "sk": agent_id},
+                    UpdateExpression="SET #s=:s, evalResult=:e",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":s": status, ":e": _to_ddb(eval_result)})
+    if eval_usage:
+        add_usage(agent_id, eval_usage)
+    audit("platform@eval", "agent.eval", agent_id,
+          f"passed={eval_result['passed']} -> {status}")
+    registry_sync_execute({"agentId": agent_id, "name": item.get("name", ""),
+                           "desc": item.get("description", ""), "risk": risk,
+                           "team": item.get("team", ""), "status": status,
+                           "email": item.get("ownerEmail", "")})
+
+
+def registry_sync_async(agent_id, name, desc, risk, team, status, email):
+    lam.invoke(FunctionName=SELF_FN, InvocationType="Event",
+               Payload=json.dumps({"nexusAsync": "registrySync", "agentId": agent_id,
+                                   "name": name, "desc": desc, "risk": risk,
+                                   "team": team, "status": status, "email": email},
+                                  ensure_ascii=False).encode())
+
+
+def registry_sync_execute(ev):
+    agent_id = ev.get("agentId", "")
+    try:
+        record_id, record_arn = registry_register(
+            agent_id, ev.get("name", ""), ev.get("desc", ""),
+            int(ev.get("risk", 2)), ev.get("team", ""))
+        if ev.get("status") == "APPROVED":
+            registry_set_status(record_id, "APPROVED",
+                                f"auto-approve: Tier 1 + smoke eval passed (by {ev.get('email','')})")
+        ddb.update_item(Key={"pk": "AGENT", "sk": agent_id},
+                        UpdateExpression="SET registryRecordId=:i, registryRecordArn=:a",
+                        ExpressionAttributeValues={":i": record_id, ":a": record_arn})
+    except Exception as exc:
+        print(f"async registry sync failed for {agent_id}: {exc}")
+
+
 def wf_run_async(run_id):
     lam.invoke(FunctionName=SELF_FN, InvocationType="Event",
                Payload=json.dumps({"nexusAsync": "wfrun", "runId": run_id}).encode())
@@ -418,29 +471,19 @@ def api(method, path, body, p):
         if len(_list("AGENT")) >= MAX_AGENTS:
             return 400, {"error": f"데모 한도({MAX_AGENTS}개)에 도달했습니다."}
         agent_id = uuid.uuid4().hex[:8]
-        eval_result, eval_usage = smoke_eval(agent_id, prompt)
-        status = "APPROVED" if (eval_result["passed"] and risk == 1) else "PENDING"
-        record_id = record_arn = None
-        try:
-            record_id, record_arn = registry_register(agent_id, name, desc, risk, team)
-            if status == "APPROVED":
-                registry_set_status(record_id, "APPROVED",
-                                    f"auto-approve: Tier 1 + smoke eval passed (by {email})")
-        except Exception as exc:
-            print(f"registry sync failed for {agent_id}: {exc}")
         ddb.put_item(Item=_to_ddb({
             "pk": "AGENT", "sk": agent_id, "name": name, "description": desc,
             "systemPrompt": prompt, "datasourceIds": ds_ids, "skillIds": skill_ids,
             "useOntology": use_onto, "createdAt": int(time.time()),
-            "status": status, "riskTier": risk, "budgetTokens": DEFAULT_BUDGET_TOKENS,
-            "evalResult": eval_result, "ownerEmail": email, "team": team,
-            "registryRecordId": record_id, "registryRecordArn": record_arn,
+            "status": "EVALUATING", "riskTier": risk,
+            "budgetTokens": DEFAULT_BUDGET_TOKENS,
+            "ownerEmail": email, "team": team,
             "usage": {"invocations": 0, "inputTokens": 0, "outputTokens": 0}}))
-        if eval_usage:
-            add_usage(agent_id, eval_usage)
-        audit(email, "agent.create", agent_id, f"{name} tier{risk} -> {status}")
-        return 200, {"id": agent_id, "status": status, "eval": eval_result,
-                     "registryRecordArn": record_arn}
+        # smoke eval + governance + registry all run in the background —
+        # API GW has a hard 30s timeout and a cold microVM eval can exceed it.
+        agent_init_async(agent_id)
+        audit(email, "agent.create", agent_id, f"{name} tier{risk} -> EVALUATING")
+        return 200, {"id": agent_id, "status": "EVALUATING"}
 
     m = re.match(r"^/api/agents/([a-f0-9]{8})$", path)
     if m and method == "DELETE":
@@ -519,6 +562,8 @@ def api(method, path, body, p):
         return 200, {"datasources": [
             {"id": i["sk"], "name": i["name"], "chars": len(i.get("content", "")),
              "ownerEmail": i.get("ownerEmail", ""), "team": i.get("team", ""),
+             "source": i.get("source", "manual"),
+             "crawledAt": int(i.get("crawledAt", 0)),
              "createdAt": int(i.get("createdAt", 0))}
             for i in sorted(_list("DS"), key=lambda x: x.get("createdAt", 0), reverse=True)]}
 
@@ -832,6 +877,11 @@ def api(method, path, body, p):
         audit(email, f"agent.{action}", agent_id, reason)
         return 200, {"ok": True}
 
+    if path == "/api/admin/crawl" and method == "POST":
+        lam.invoke(FunctionName=CRAWLER_FN, InvocationType="Event", Payload=b"{}")
+        audit(email, "datasource.crawl.trigger", "feed0a01", "manual trigger")
+        return 200, {"ok": True, "note": "수집을 시작했습니다. 20~30초 후 데이터소스가 갱신됩니다."}
+
     m = re.match(r"^/api/admin/agents/([a-f0-9]{8})/budget$", path)
     if m and method == "POST":
         try:
@@ -890,6 +940,12 @@ def handler(event, context):
     # async workflow executor (self-invoked)
     if event.get("nexusAsync") == "wfrun":
         wf_execute(event.get("runId", ""))
+        return {"ok": True}
+    if event.get("nexusAsync") == "registrySync":
+        registry_sync_execute(event)
+        return {"ok": True}
+    if event.get("nexusAsync") == "agentInit":
+        agent_init_execute(event.get("agentId", ""))
         return {"ok": True}
 
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}

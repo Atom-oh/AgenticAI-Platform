@@ -110,8 +110,8 @@ function renderLogin(expired){
     <div class="tag">AgentCore 기반 사내 에이전트 플랫폼 · 관제실</div>
     <div class="panel">
       ${expired?'<p style="color:var(--amber)">세션이 만료되었습니다.</p>':''}
-      <p>에이전트를 만들고, 승인하고, 지식과 연결하고, 관측하는 곳.<br>
-      조직 계정으로 로그인하세요. 가입은 플랫폼 관리자의 초대로만 가능합니다.</p>
+      <p>에이전트를 만들고, 승인하고, 지식과 연결하고, 관측하는 곳입니다.<br>
+      조직 계정으로 로그인해 주세요. 가입은 플랫폼 관리자의 초대로만 가능합니다.</p>
       <button class="btn p" id="li" style="width:100%;padding:12px">로그인</button>
       <div class="hint">demo: demo@atomai.click / !234Qwer</div>
     </div>
@@ -135,7 +135,7 @@ async function renderHome(){
         .map(([k,l])=>`<span><i style="background:${KIND_COLOR[k]}"></i>${l}</span>`).join('')}</div>
     </div>
     <div class="kpis" id="kp"></div>
-    <div class="notice cy">이 화면이 이 플랫폼의 논지다 — <b>누가(팀) 무엇을(에이전트) 어떤 지식(데이터소스·온톨로지·스킬) 위에서 운영하는가</b>를 한 장으로 본다. 선이 없는 에이전트는 근거 없는 에이전트다.</div>`;
+    <div class="notice cy">이 화면이 플랫폼의 출발점입니다 — <b>어느 팀이 어떤 에이전트를 어떤 지식(데이터소스·온톨로지·스킬) 위에서 운영하는지</b>를 한눈에 봅니다. 연결선이 없는 에이전트는 근거 없이 답하고 있다는 신호입니다.</div>`;
   let g;
   try{ g = await api('GET','/api/graph'); }
   catch(e){ $('#ghint').textContent = e.message; return; }
@@ -216,7 +216,7 @@ function lifecycleRail(a){
     <div class="dot"></div><div class="lb">${lb}</div></div>`;
   return `<div class="lrail">
     ${stop(true,false,false,'초안')}
-    ${stop(evalOk,false,a.eval&&!a.eval.passed,'평가')}
+    ${a.status==='EVALUATING'?stop(false,true,false,'평가'):stop(evalOk,false,a.eval&&!a.eval.passed,'평가')}
     ${stop(approved,a.status==='PENDING',rejected,'승인')}
     ${stop(live&&approved,false,false,'운영')}
   </div>`;
@@ -227,7 +227,7 @@ let AGENTS=[];
 async function renderCatalog(){
   setTitle('에이전트 카탈로그');
   const view=$('#view');
-  view.innerHTML = `<div class="sub">팀이 만든 에이전트들. 카드의 레일이 수명주기(초안→평가→승인→운영)를 보여줍니다. 승인된 에이전트만 사용할 수 있습니다.</div>
+  view.innerHTML = `<div class="sub">각 팀이 만든 에이전트 목록입니다. 카드의 레일은 수명주기(초안→평가→승인→운영)를 나타내며, 승인된 에이전트만 사용할 수 있습니다.</div>
     <div class="row" style="margin-bottom:16px" id="tf"></div><div class="grid" id="g">불러오는 중…</div>`;
   try{ AGENTS=(await api('GET','/api/agents')).agents; }
   catch(e){ $('#g').innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
@@ -246,7 +246,8 @@ async function renderCatalog(){
     for(const a of list){
       const c=document.createElement('div');c.className='card';
       const badge=a.status==='APPROVED'?'<span class="badge ok">승인됨</span>':
-        a.status==='PENDING'?'<span class="badge pend">승인 대기</span>':'<span class="badge rej">거부됨</span>';
+        a.status==='PENDING'?'<span class="badge pend">승인 대기</span>':
+        a.status==='EVALUATING'?'<span class="badge pend">평가 중…</span>':'<span class="badge rej">거부됨</span>';
       c.innerHTML=`<div class="row" style="justify-content:space-between"><h3>${esc(a.name)}</h3>${badge}</div>
         ${lifecycleRail(a)}
         <p>${esc(a.description||'설명 없음')}</p>
@@ -257,7 +258,7 @@ async function renderCatalog(){
           · ${fmt(a.usage.totalTokens)}tok</div>
         <div class="row">
           <button class="btn p" data-use="${a.id}" ${a.status==='APPROVED'?'':'disabled'}>
-            ${a.status==='APPROVED'?'사용하기':'승인 대기 중'}</button>
+            ${a.status==='APPROVED'?'사용하기':a.status==='EVALUATING'?'평가 중…':'승인 대기 중'}</button>
           <button class="btn d" data-del="${a.id}">삭제</button></div>`;
       g.appendChild(c);
     }
@@ -319,13 +320,13 @@ async function renderChat(agentId){
 let SPEC=null;
 function renderBuilder(){
   chatUI('🛠 새 에이전트',
-    `빌더와 요구사항을 좁힌 뒤 <b>스펙으로 변환</b> → 검토 → 생성. 생성 시 스모크 평가가 실행되고, Tier 2 또는 평가 실패는 승인 대기로 들어갑니다.`,
+    `빌더와 대화하며 요구사항을 구체화한 뒤 <b>스펙으로 변환</b> → 검토 → 생성 순서로 진행합니다. 생성 시 스모크 평가가 자동 실행되며, Tier 2이거나 평가에 실패하면 승인 대기 상태가 됩니다.`,
     '만들고 싶은 에이전트를 설명해 주세요…');
   const bar=document.createElement('div');
   bar.style.cssText='padding:10px 13px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center';
   bar.innerHTML=`<button class="btn a" id="sp">📋 대화를 스펙으로 변환</button><span class="sub" style="margin:0" id="sph"></span>`;
   document.querySelector('.chatbox').appendChild(bar);
-  addMsg('b','안녕하세요! 어떤 에이전트를 만들고 싶으신가요? 용도·사용자·필요한 지식을 알려주시면 명확화 질문을 드리며 스펙을 함께 만들어 갑니다.');
+  addMsg('b','안녕하세요! 어떤 에이전트를 만들고 싶으신가요? 용도와 대상 사용자, 필요한 지식을 알려주시면 질문을 주고받으며 스펙을 함께 완성해 드릴게요.');
   bindChat(t=>api('POST','/api/builder',{message:t,sessionId:SESSION}));
   $('#sp').onclick=async()=>{
     $('#sp').disabled=true;$('#sph').textContent='스펙 추출 중…';
@@ -339,7 +340,7 @@ async function renderCreate(){
   let dss=[],sks=[];
   try{dss=(await api('GET','/api/datasources')).datasources;}catch(e){}
   try{sks=(await api('GET','/api/skills')).skills;}catch(e){}
-  $('#view').innerHTML=`<div class="sub">스펙 검토 → 지식·스킬 연결 → 위험 등급 선택 → 생성(스모크 평가 포함).</div>
+  $('#view').innerHTML=`<div class="sub">빌더가 정리한 스펙을 검토하고, 지식·스킬을 연결한 뒤 위험 등급을 선택해 생성합니다. 생성 즉시 스모크 평가가 실행됩니다.</div>
     <label>이름</label><input id="an" maxlength="30" value="${esc(s.name)}">
     <label>설명</label><input id="ad" maxlength="120" value="${esc(s.description)}">
     <label>시스템 프롬프트</label><textarea id="ap" rows="9">${esc(s.systemPrompt)}</textarea>
@@ -365,14 +366,13 @@ async function renderCreate(){
     const ds=[...document.querySelectorAll('#ac input:checked')].map(x=>x.value);
     const sk=[...document.querySelectorAll('#sc input:checked')].map(x=>x.value);
     const tier=parseInt(document.querySelector('input[name=tier]:checked').value,10);
-    $('#ok').disabled=true;$('#ok').textContent='생성 + 스모크 평가 중… (~15초)';
-    try{const d=await api('POST','/api/agents',{name:$('#an').value,description:$('#ad').value,
+    $('#ok').disabled=true;$('#ok').textContent='등록 중…';
+    try{await api('POST','/api/agents',{name:$('#an').value,description:$('#ad').value,
       systemPrompt:$('#ap').value,datasourceIds:ds,skillIds:sk,riskTier:tier,
       useOntology:$('#uo').checked});
       SPEC=null;
-      toast(d.status==='APPROVED'?'✅ 평가 통과 — 자동 승인되어 카탈로그에 등록됨'
-        :'⏳ 승인 대기로 등록됨 — 플랫폼 운영에서 검토 필요');
-      nav(d.status==='APPROVED'?'catalog':(ME.isAdmin?'admin':'catalog'));}
+      toast('🧪 등록되었습니다 — 스모크 평가가 백그라운드에서 진행됩니다(15~30초). 카탈로그에서 상태가 갱신됩니다.');
+      nav('catalog');}
     catch(e){toast(e.message,1);$('#ok').disabled=false;$('#ok').textContent='에이전트 생성';}};
 }
 
@@ -380,7 +380,7 @@ async function renderCreate(){
 async function renderWorkflows(){
   setTitle('워크플로우');
   const view=$('#view');
-  view.innerHTML=`<div class="sub">승인된 에이전트를 연결해 실행합니다 — <b>Chain</b>(순차 전달), <b>Loop</b>(완료까지 반복, 최대 4회). 실행은 비동기이며 단계별 진행이 기록됩니다.</div>
+  view.innerHTML=`<div class="sub">승인된 에이전트를 이어 붙여 실행합니다 — <b>Chain</b>은 앞 단계의 출력을 다음 단계 입력으로 전달하고, <b>Loop</b>는 한 에이전트가 완료(DONE)할 때까지 반복합니다(최대 4회). 실행은 비동기로 진행되며 단계별 기록이 남습니다.</div>
     <div id="list">불러오는 중…</div>
     <h3 class="sec">새 워크플로우</h3>
     <label>이름</label><input id="wn" maxlength="40" placeholder="예: 초안 작성 → 검토 → 요약">
@@ -489,7 +489,7 @@ async function renderWorkflows(){
 /* ---------------- skills ---------------- */
 async function renderSkills(){
   setTitle('스킬');
-  $('#view').innerHTML=`<div class="sub">재사용 가능한 방법 지식 — <b>SKILL.md</b>(agentskills.io 표준)로 패키징하고 S3에 게시하면, 에이전트 호출 시 Harness가 로드합니다. 게시와 동시에 Agent Registry에 AGENT_SKILLS로 등록됩니다.</div>
+  $('#view').innerHTML=`<div class="sub">반복해서 쓰는 방법 지식을 <b>SKILL.md</b>(agentskills.io 표준)로 패키징합니다. 게시하면 S3에 저장되고 Agent Registry에 AGENT_SKILLS로 등록되며, 이 스킬을 연결한 에이전트는 답변 시 해당 규약을 따릅니다.</div>
     <div class="grid" id="g">불러오는 중…</div>
     <h3 class="sec">새 스킬 게시</h3>
     <label>이름</label><input id="sn" maxlength="40" placeholder="예: 보고서 형식 규약">
@@ -522,17 +522,34 @@ async function renderSkills(){
 
 /* ---------------- knowledge: wiki / datasources / ontology ---------------- */
 function mdRender(md){
-  let h=esc(md);
-  h=h.replace(/```([\s\S]*?)```/g,(_,c)=>`<pre><code>${c}</code></pre>`);
-  h=h.replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>')
-     .replace(/^# (.*)$/gm,'<h1>$1</h1>').replace(/^---$/gm,'<hr>')
-     .replace(/^&gt; (.*)$/gm,'<blockquote>$1</blockquote>')
+  const codes=[];
+  let h=esc(md).replace(/```(\w*)\n?([\s\S]*?)```/g,(_,l,c)=>{codes.push(c);return '\u0000C'+(codes.length-1)+'\u0000';});
+  h=h.replace(/^#### (.*)$/gm,'<h4>$1</h4>').replace(/^### (.*)$/gm,'<h3>$1</h3>')
+     .replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h1>$1</h1>')
+     .replace(/^---+$/gm,'<hr>')
+     .replace(/^&gt; ?(.*)$/gm,'<blockquote>$1</blockquote>')
      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
      .replace(/`([^`]+)`/g,'<code>$1</code>')
-     .replace(/^\- (.*)$/gm,'<li>$1</li>')
-     .replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g,'<ul>$1</ul>')
-     .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>');
-  return h.split(/\n{2,}/).map(b=>/^<(h\d|ul|pre|blockquote|hr)/.test(b.trim())?b:`<p>${b.replace(/\n/g,'<br>')}</p>`).join('');
+     .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  h=h.replace(/((?:^\|.*\|[ \t]*$\n?)+)/gm, block=>{
+    const rows=block.trim().split('\n').map(r=>r.trim()).filter(r=>r.startsWith('|'));
+    if(rows.length<2) return block;
+    const cells=r=>r.replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+    const head=cells(rows[0]);
+    const sep=rows[1]&&/^[\s|:\-]+$/.test(rows[1]);
+    const body=(sep?rows.slice(2):rows.slice(1)).map(r=>'<tr>'+cells(r).map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('');
+    return '<div class="tbl"><table><tr>'+head.map(c=>'<th>'+c+'</th>').join('')+'</tr>'+body+'</table></div>\n';
+  });
+  h=h.replace(/^[-*] (.*)$/gm,'<li>$1</li>')
+     .replace(/^\d+[.)] (.*)$/gm,'<oli>$1</oli>');
+  h=h.replace(/(?:<li>[^\u0000]*?<\/li>\n?)+/g,m=>'<ul>'+m.replace(/\n/g,'')+'</ul>\n');
+  h=h.replace(/(?:<oli>[^\u0000]*?<\/oli>\n?)+/g,m=>'<ol>'+m.replace(/<oli>/g,'<li>').replace(/<\/oli>/g,'</li>').replace(/\n/g,'')+'</ol>\n');
+  h=h.replace(/<\/blockquote>\n<blockquote>/g,'<br>');
+  h=h.split(/\n{2,}/).map(b=>{
+    const t=b.trim();
+    return /^<(h\d|ul|ol|pre|blockquote|hr|div)/.test(t)?t:(t?'<p>'+t.replace(/\n/g,'<br>')+'</p>':'');
+  }).join('');
+  return h.replace(/\u0000C(\d+)\u0000/g,(_,i)=>'<pre><code>'+codes[+i]+'</code></pre>');
 }
 async function renderKnowledge(sub){
   setTitle('지식 · 데이터');
@@ -570,7 +587,7 @@ async function paintWiki(body, slug){
     return;
   }
   let pages;try{pages=(await api('GET','/api/wiki')).pages;}catch(e){body.innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
-  body.innerHTML=`<div class="sub">조직의 AI 지식 베이스. 에이전트의 데이터소스로 연결하거나, 운영 규약의 정본으로 씁니다.</div>
+  body.innerHTML=`<div class="sub">조직의 AI 지식 베이스입니다. 문서를 에이전트의 근거 자료로 연결하거나, 운영 규약의 정본으로 사용합니다.</div>
     <div class="grid" id="wg">${pages.length?'':'<div class="empty" style="grid-column:1/-1">문서가 없습니다.</div>'}</div>
     <h3 class="sec">새 문서</h3>
     <div class="row"><input id="ws" placeholder="slug (예: agent-naming-rules)" style="max-width:280px">
@@ -592,7 +609,7 @@ async function paintWiki(body, slug){
 }
 async function paintDS(body){
   let dss;try{dss=(await api('GET','/api/datasources')).datasources;}catch(e){body.innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
-  body.innerHTML=`<div class="notice">소규모 코퍼스는 컨텍스트 프리로딩(<b>CAG</b>)으로 연결합니다 — 가이드북 Part 6의 결정 표 그대로. 대규모는 Bedrock Knowledge Bases로 확장.</div>
+  body.innerHTML=`<div class="notice">소규모 문서는 컨텍스트 프리로딩(<b>CAG</b>) 방식으로 에이전트에 연결합니다(가이드북 Part 6의 결정 기준). 대규모 코퍼스는 Bedrock Knowledge Bases로 확장합니다. 🛰 자동 수집 데이터소스는 크롤러가 6시간마다 갱신합니다.</div>
     <div class="grid" id="dg">${dss.length?'':'<div class="empty" style="grid-column:1/-1">데이터소스가 없습니다.</div>'}</div>
     <h3 class="sec">새 데이터소스</h3>
     <label>이름</label><input id="dn" maxlength="40">
@@ -601,11 +618,17 @@ async function paintDS(body){
   const dg=$('#dg');
   for(const d of dss){
     const c=document.createElement('div');c.className='card';
-    c.innerHTML=`<h3>📚 ${esc(d.name)}</h3>
-      <div class="meta">${fmt(d.chars)}자 · ${esc(d.team)}</div>
-      <div class="row"><button class="btn d" data-del="${d.id}">삭제</button></div>`;
+    const auto=d.source==='crawler';
+    c.innerHTML=`<div class="row" style="justify-content:space-between"><h3>${auto?'🛰':'📚'} ${esc(d.name)}</h3>${auto?'<span class="badge pend">자동 수집</span>':''}</div>
+      <div class="meta">${fmt(d.chars)}자 · ${esc(d.team)}${auto&&d.crawledAt?' · 갱신 '+new Date(d.crawledAt*1000).toLocaleString('ko-KR'):''}</div>
+      <div class="row">${auto&&ME.isAdmin?'<button class="btn a" data-crawl="1">지금 수집</button>':''}
+      <button class="btn d" data-del="${d.id}">삭제</button></div>`;
     dg.appendChild(c);
   }
+  dg.querySelectorAll('[data-crawl]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{const r=await api('POST','/api/admin/crawl');toast(r.note||'수집을 시작했습니다.');}
+    catch(e){toast(e.message,1);}finally{b.disabled=false;}});
   dg.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
     if(!confirm('삭제할까요?'))return;
     try{await api('DELETE','/api/datasources/'+b.dataset.del);toast('삭제됨');paintDS(body);}
@@ -660,7 +683,7 @@ async function paintOnto(body){
 async function renderAdmin(){
   setTitle('플랫폼 운영');
   const view=$('#view');
-  view.innerHTML=`<div class="sub">플랫폼 엔지니어 통제면 — 승인·예산·감사. 거버넌스 정본은 AgentCore Agent Registry이며, 모든 결정은 CloudTrail과 플랫폼 감사 로그에 남습니다.</div><div id="ab">불러오는 중…</div>`;
+  view.innerHTML=`<div class="sub">플랫폼 엔지니어의 통제 화면입니다 — 승인·예산·감사를 여기서 처리합니다. 거버넌스 정본은 AgentCore Agent Registry이며, 모든 결정이 CloudTrail과 플랫폼 감사 로그에 남습니다.</div><div id="ab">불러오는 중…</div>`;
   let d;try{d=await api('GET','/api/admin/overview');}catch(e){view.innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
   const t=d.totals;
   let h=`<div class="kpis">
@@ -686,7 +709,7 @@ async function renderAdmin(){
     ${d.agents.map(a=>{const pct=Math.min(100,Math.round(a.usage.totalTokens/a.budgetTokens*100));
     return `<tr><td>${esc(a.name)}${a.registryRecordArn?' <span class="pill" title="'+esc(a.registryRecordArn)+'">reg</span>':''}</td>
       <td>${esc(a.team)}</td>
-      <td>${a.status==='APPROVED'?'<span class="badge ok">승인</span>':a.status==='PENDING'?'<span class="badge pend">대기</span>':'<span class="badge rej">거부</span>'}</td>
+      <td>${a.status==='APPROVED'?'<span class="badge ok">승인</span>':a.status==='PENDING'?'<span class="badge pend">대기</span>':a.status==='EVALUATING'?'<span class="badge pend">평가 중</span>':'<span class="badge rej">거부</span>'}</td>
       <td>${a.usage.invocations}</td><td class="mono">${fmt(a.usage.totalTokens)}</td>
       <td><div class="bar"><i class="${pct>=90?'hot':''}" style="width:${pct}%"></i></div>
       <span class="mono" style="color:var(--muted)">${pct}% / ${fmt(a.budgetTokens)}</span></td>

@@ -206,3 +206,11 @@ td.mono,.mono{font-family:var(--mono);font-size:11.5px}
   .rail button{justify-content:center}
   .content{padding:18px 14px 50px}
 }
+
+/* markdown extras */
+.md .tbl{overflow-x:auto;margin:12px 0}
+.md table{border:1px solid var(--line);border-radius:8px}
+.md th{background:#16223C;color:var(--signal);font-size:11.5px}
+.md td{color:var(--text)}
+.md ol{margin:9px 0 9px 22px;line-height:1.75;font-size:13.5px}
+.md h4{font-size:13px;color:var(--amber);margin:16px 0 8px;font-family:var(--disp)}

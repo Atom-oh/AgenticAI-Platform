@@ -49,3 +49,13 @@ frontend 정적: static/ 디렉터리를 zip에 포함, /와 /static/* 서빙
 - Cognito: pool ap-northeast-2_h2rhe1TKo / client 3o8u65rhccnr1ug1f94tctmb0b / domain agentic-platform-2rhe1tko / JWT authorizer 9dzkc3
 - Gateway: nexus-platform-tools-dgt6g0wppb (MCP, Cognito JWT) / target ET0X4S47UR / tools Lambda nexus-gateway-tools / exec role NexusGatewayExecRole
 - Skills S3: agentic-nexus-skills-180294183052 (per-invocation s3 skill source는 SDK 미지원 → 프롬프트 주입, S3+Registry는 게시/카탈로그 계층)
+
+## v5 확장 (금융 도메인 + 크롤러)
+
+- 도메인: 가상 증권사 "한울증권" 직원용 — 증권 용어/시장 제도/HR(휴가·급여·온보딩) 문서, 온톨로지(팀·시스템·규정·시장), 에이전트 6종, 아침 브리핑 워크플로우.
+- 뉴스 크롤러: Lambda `agentic-news-crawler` + EventBridge 6h + 운영 탭 "지금 수집". Google News RSS 헤드라인 메타데이터만 수집 → 고정 DS(feed0a01) upsert → 감사 로그.
+- 마크다운 렌더러: 표/정렬 목록/코드블록/h4/인용 지원.
+- 한글 카피 해요체로 정비.
+- 에이전트 생성을 완전 비동기화(EVALUATING → 백그라운드 평가·승인·Registry) — API GW 30초 타임아웃 회피.
+- 재현: `python3 demo/builder-harness/seed.py <admin-token> --wipe`
+- 크롤러 리소스: Lambda agentic-news-crawler / role AgenticNewsCrawlerRole / rule agentic-news-crawler-6h
