@@ -92,6 +92,7 @@ def relay_read(ddb, table: str, key: str) -> str:
 
 
 def handle_report(ctx: Ctx, body: dict) -> None:
+    ctx.token_batch_chars = 0  # Writer 릴레이 청크는 이미 묶여 있다 — 프레임 배치를 끄고 그대로 전달 (tokenEvents 집계 일치)
     env = _env()
     url = str(body.get("url") or default_url())[:500].strip()
     audience = str(body.get("audience") or "")[:60]

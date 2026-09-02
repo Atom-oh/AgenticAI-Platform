@@ -391,6 +391,7 @@ export class BankPlatformStack extends cdk.Stack {
         COGNITO_USER_POOL_ID: props.cognitoUserPoolId,
         COGNITO_CLIENT_ID: props.cognitoClientId,
         LLM_ROUTE: 'claude',
+        WEB_URL: `https://${props.domainName ?? 'agent.atomai.click'}`,   // F7 Reader 샘플 페이지 원본
         HARNESS_ROLE_ARN: harnessRole.roleArn,
         GATEWAY_ARN: gateway.attrGatewayArn,
         GATEWAY_URL: gateway.attrGatewayUrl,
