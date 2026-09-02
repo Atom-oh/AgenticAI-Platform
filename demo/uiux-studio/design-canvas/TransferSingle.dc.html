@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+    body { margin: 0; font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif; }
+    a { color: #00615f; } a:hover { color: #008485; }
+  </style>
+</helmet>
+<div style="width: 390px; height: 844px; background: #f4f6f5; color: #17332f; display: flex; flex-direction: column; overflow: hidden;">
+
+  <div style="display: flex; align-items: center; gap: 12px; padding: 58px 20px 16px;">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#17332f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg>
+    <div style="font-size: 19px; font-weight: 900; letter-spacing: -0.02em;">이체</div>
+  </div>
+
+  <div style="flex-grow: 1; padding: 4px 20px; display: flex; flex-direction: column; gap: 14px; overflow: hidden;">
+    <div style="background: #ffffff; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px;">
+      <div style="font-size: 12px; font-weight: 700; color: #8aa19c;">출금계좌</div>
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <div style="font-size: 15px; font-weight: 700;">하나 주거래 통장</div>
+          <div style="font-size: 12px; color: #8aa19c;">356-910123-45607 · 잔액 2,340,120원</div>
+        </div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8aa19c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg>
+      </div>
+    </div>
+
+    <div style="background: #ffffff; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 14px;">
+      <div style="font-size: 12px; font-weight: 700; color: #8aa19c;">받는분</div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="height: 50px; border: 1.5px solid #008485; border-radius: 12px; display: flex; align-items: center; padding: 0 14px; font-size: 15px; font-weight: 700; background: #f7fbfa;">김하나 · 하나 123-456789-01234</div>
+        <div style="display: flex; gap: 8px;">
+          <div style="height: 44px; padding: 0 14px; display: flex; align-items: center; gap: 6px; background: #f4f6f5; border-radius: 22px; font-size: 12px; color: #5c6f6b;">
+            <div style="width: 20px; height: 20px; border-radius: 50%; background: #00615f; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700;">박</div>
+            박서준
+          </div>
+          <div style="height: 44px; padding: 0 14px; display: flex; align-items: center; gap: 6px; background: #f4f6f5; border-radius: 22px; font-size: 12px; color: #5c6f6b;">
+            <div style="width: 20px; height: 20px; border-radius: 50%; background: #d9a441; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700;">이</div>
+            이지은
+          </div>
+          <div style="height: 44px; padding: 0 14px; display: flex; align-items: center; background: #f4f6f5; border-radius: 22px; font-size: 12px; color: #5c6f6b;">+ 최근</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background: #ffffff; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div style="font-size: 12px; font-weight: 700; color: #8aa19c;">보낼 금액</div>
+        <div style="font-size: 11px; color: #008485;">수수료 면제</div>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 4px; border-bottom: 2px solid #008485; padding-bottom: 10px;">
+        <div style="font-size: 30px; font-weight: 900; letter-spacing: -0.02em;">150,000</div>
+        <div style="font-size: 17px; font-weight: 700;">원</div>
+      </div>
+      <div style="font-size: 12px; color: #8aa19c;">십오만원</div>
+    </div>
+
+    <div style="background: #ffffff; border-radius: 16px; padding: 18px; display: flex; align-items: center; justify-content: space-between;">
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 12px; font-weight: 700; color: #8aa19c;">받는분 통장 표시</div>
+        <div style="font-size: 14px; font-weight: 500;">오준석</div>
+      </div>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8aa19c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"></path></svg>
+    </div>
+  </div>
+
+  <div style="padding: 14px 20px 34px;">
+    <div style="height: 56px; border-radius: 14px; background: #008485; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700;">150,000원 이체하기</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
