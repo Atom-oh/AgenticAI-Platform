@@ -1,158 +1,267 @@
-# Agentic AI Platform 데모 — 구축 요구사항 명세
+# Agentic AI Platform 데모 — 명세 v2 (Single Boundary)
 
-> **이 문서를 Claude Code에 넘기는 방법**
-> 1. 이 파일을 프로젝트 루트에 `SPEC.md`로 저장한다.
-> 2. `claude` 실행 후 다음과 같이 지시한다.
->    ```
->    SPEC.md를 읽고 §15 미결정 사항을 먼저 질문해라.
->    답변을 받은 뒤 §13 Phase 1부터 구현을 시작한다.
->    §12 안티 요구사항을 위반하는 구현은 하지 않는다.
->    ```
-> 3. Phase 단위로 검토·머지한다. 한 번에 전체를 만들게 하지 않는다.
+> **Claude Code 사용법**
+> 이 파일을 프로젝트 루트에 `SPEC.md`로 저장하고 다음과 같이 지시한다.
+> ```
+> SPEC.md를 읽어라.
+> 1) §14 확인 질문을 먼저 물어라.
+> 2) 답을 받으면 §1 정합성 감사부터 시작한다 (코드 수정 전).
+> 3) §11 데모 제약 표기 규칙과 §12 안티 요구사항은 예외 없이 지킨다.
+> 4) §13 Phase 단위로 멈추고 검토받는다.
+> ```
+> 이 문서는 이전 명세(`agentic-ai-platform-demo-spec.md`)를 **대체**한다. 충돌 시 이 문서가 우선한다.
+> 주요 변경: 아키텍처를 Two-Plane → **Single Boundary**로 전환, PII를 VPC 내부로 이동, 익명화를 유일한 경계 통과 조건으로 승격, PII 추론 모델 확정.
 
 ---
 
-## 1. 이 데모가 증명해야 하는 것
+## 1. 목표와 증명 대상
 
-한국 금융기관(은행) 대상 Agentic AI Platform 신규 구축 제안을 위한 데모다.
-말로 설명하면 반박당하는 세 가지를 **화면으로 증명**하는 것이 목적이다.
+부서장급이 15분 시연을 보고 아래 세 가지를 스스로 설명할 수 있어야 한다.
 
 | # | 증명할 주장 | 증명 방법 |
 |---|---|---|
-| P1 | 벡터 RAG만으로는 "있는 것을 없다고" 답하는 오류를 못 막는다. 온톨로지·GraphRAG가 필요하다 | 동일 질문을 Vector RAG / GraphRAG 양쪽에 던져 결과를 나란히 보여준다 |
-| P2 | 데이터·인덱스는 온프렘에 두고 생성 엔진만 클라우드로 쓸 수 있다 | 요청마다 경계를 넘은 데이터가 무엇인지 실시간으로 표시한다 |
-| P3 | 사내 AI 자산은 Git처럼 버전·승인 관리되어야 하고, 승인 안 된 자산은 에이전트에게 보이지 않아야 한다 | Registry에서 컴포넌트를 Deprecated로 바꾸면 에이전트 생성 결과가 즉시 달라진다 |
+| P1 | 벡터 RAG만으로는 "있는 것을 없다고" 답하는 오류를 못 막는다 | 동일 질문을 Vector RAG / GraphRAG에 던져 좌우 비교 |
+| P2 | **경계는 하나뿐이고, 익명화를 통과하지 못하면 Bedrock에 도달할 수 없다** | 요청마다 무엇이 경계를 넘었는지 실측 표시 |
+| P3 | 사내 AI 자산은 승인·버전 관리되고, 승인 안 된 자산은 에이전트에게 보이지 않는다 | Registry에서 Deprecated 전환 시 생성 결과가 즉시 달라짐 |
 
-**성공 기준**: 기술 담당자가 아닌 부서장급이 15분 시연을 보고 위 세 가지를 스스로 설명할 수 있다.
+### 1-1. 첫 작업 — 정합성 감사 (코드 수정 전 수행)
+현재 데모 코드와 이 명세를 대조해 표로 보고한다.
+
+| 명세 항목 | 데모 현황 | 상태 (일치 / 불일치 / 미구현 / 명세에 없음) | 조치 |
+
+특히 다음을 확인한다.
+- "온프렘", "On-Premises", "Two-Plane", "In-Region", "서울을 벗어나지 않" 문자열이 남아 있는지 → 전부 교체 대상
+- 기존 ECS 프라이빗 플레인 구성이 있는지 → VPC 프라이빗 서브넷으로 재정의
+- 개인신용정보 반출 0건 카운터가 있는지 → §8 지표로 교체
+
+불일치와 미구현만 다음 단계로 넘긴다. **명세에 없는 주장을 데모가 하지 않게 한다.**
 
 ---
 
-## 2. 데모 시나리오 (이 순서로 시연한다)
+## 2. 데모 시나리오
 
-### S1. 규정 영향 분석 — GraphRAG의 존재 이유 (4분)
-질문: **"전세자금대출 담보 인정 규정이 개정되면 영향받는 상품·화면·담당부서·수정이 필요한 문서는 무엇인가?"**
+### S1. 규정 영향 분석 — GraphRAG의 존재 이유 (4분) ★ 최우선
+질의: **"전세자금대출 담보 인정 규정이 개정되면 영향받는 상품 · 화면 · 컴포넌트 · 담당부서 · 수정이 필요한 문서는?"**
 
-- **좌측 패널 (Vector RAG)**: 규정 문서 청크 3~5개를 반환. 개정 영향 범위는 답하지 못하고 "관련 규정은 다음과 같습니다" 수준에 머문다.
-- **우측 패널 (GraphRAG)**: 4-hop 경로를 따라가 영향받는 상품 N개, 화면 N개, 부서 N개, 문서 N개를 **경로와 함께** 반환한다.
-- 하단에 실제 순회 경로를 그래프로 시각화한다.
+- 좌: Vector RAG — 규정 청크 3~5개만 반환. 영향 범위를 답하지 못함
+- 우: GraphRAG — 경로를 따라가 영향 대상을 **순회 경로와 함께** 반환
+- 하단: 실제 순회 경로 그래프 시각화 (전체 그래프가 아니라 경로만 강조)
+- 순회 경로: `Regulation → PolicyRule → Product → Screen → Component → Department → Document`
 
-> 이 화면 하나가 데모 전체의 핵심이다. 다른 것을 줄여도 이건 완성도를 최우선으로 한다.
+> 다른 것을 줄여도 이 화면은 완성도를 최우선으로 한다.
 
 ### S2. 마이데이터 상담 — 숫자는 LLM이 만들지 않는다 (4분)
-질문: **"제가 이 상품 우대금리 조건 충족하나요? 얼마나 받을 수 있죠?"**
+질의: **"제가 이 상품 우대금리 조건 충족하나요? 얼마나 받을 수 있죠?"**
 
-- 개인 금융데이터는 **정확 조회**(tool call)로 가져온다. 벡터 검색을 쓰지 않는다.
-- 우대금리 계산은 **결정론적 계산엔진**이 수행하고, LLM은 그 결과를 설명만 한다.
-- 화면에 세 가지를 분리 표시한다: ① 조회된 원본 값 ② 계산엔진의 계산 내역(수식 포함) ③ LLM이 생성한 설명 문장.
-- 마스킹 게이트를 통과한 실제 페이로드를 토글로 볼 수 있게 한다 (Bedrock에 무엇이 전달되었는지).
+- 개인 금융데이터는 **정확 조회**(tool call). 벡터 검색 사용 금지
+- 우대금리는 **결정론적 계산엔진**이 계산, LLM은 설명만
+- 화면에 분리 표시: ① 조회된 원본 값 ② 계산 내역(수식 포함) ③ LLM 생성 설명
+- **Bedrock에 실제 전달된 페이로드를 기본 표시** (토글 아님)
+- 추론 경로 배지 표시 (§11)
 
 ### S3. 화면 생성 — Registry 거버넌스 (3분)
-질문: **"여신 심사 결과 조회 화면을 만들어줘"**
+질의: **"여신 심사 결과 조회 화면을 만들어줘"**
 
-- 에이전트가 Registry에서 **승인된** 컴포넌트만 조회해 React 코드를 생성한다.
-- 검증 게이트 결과를 표시한다: 빌드 / 타입 / 린트 / KWCAG 접근성 / 시각 회귀.
-- **실시간 반전**: 시연 중 Registry에서 `Button v2`를 Deprecated로 변경하고 재생성하면, 에이전트가 `Button v3`을 사용한 다른 코드를 만든다. 승인 상태가 결과를 바꾼다는 것을 눈으로 보여준다.
+- 에이전트가 Registry에서 **APPROVED 상태 컴포넌트만** 조회해 React 코드 생성
+- 검증 게이트 결과 표시: 빌드 / 타입 / 린트 / KWCAG 접근성 / 시각 회귀
+- **실시간 반전**: 시연 중 `Button v2`를 Deprecated로 바꾸고 재생성 → `Button v3`을 쓴 다른 코드가 나온다
 
-### S4. Two-Plane 경계 뷰 (2분)
-- S1~S3 실행 이력을 타임라인으로 보여준다.
-- 각 요청마다: 온프렘에서 검색된 문서 수 / 경계를 넘은 토큰 수 / 마스킹된 필드 목록 / Guardrails 차단 여부.
-- **"개인신용정보 반출 0건"** 카운터를 상단에 고정 표시한다.
+### S4. Single Boundary 뷰 (2분)
+- S1~S3 실행 이력 타임라인
+- 요청별: VPC 내부에 남은 항목 / 경계를 넘은 토큰 수 / 사용한 모델 ID / Guardrails 차단 여부
+- 상단 고정 지표는 §8 참조
 
 ### S5. Guardrails 실패 시연 (2분)
-- 의도적으로 투자권유성 질문("어떤 상품이 제일 돈 많이 벌어요?")을 던져 Bedrock Guardrails가 차단하는 것을 보여준다.
-- 근거 없는 질문을 던져 "모른다"고 답하는 것을 보여준다 (환각 방지).
+- 투자권유성 질문("어떤 상품이 제일 돈 많이 벌어요?") → Bedrock Guardrails 차단
+- 근거 없는 질문 → "모른다" 응답 (환각 방지)
 
 ---
 
-## 3. 아키텍처 제약
+## 3. 아키텍처 — Single Boundary
 
-### 3.1 데모에서 지켜야 하는 원칙
-- **온프렘 플레인은 실제로 분리한다.** 별도 VPC의 프라이빗 서브넷 + 자체 컨테이너로 "온프렘 역할"을 수행하게 하고, 여기서 검색·계산·감사로그를 담당한다. 같은 Lambda 안에서 전부 처리하고 UI에만 분리된 것처럼 표시하면 안 된다.
-- **경계 통과 로그는 실측값이어야 한다.** 하드코딩된 "0건"이 아니라 실제 페이로드를 계측해 기록한다.
-- **Guardrails는 실제로 설정한다.** 시뮬레이션 금지.
-
-### 3.2 데이터 배치
-| 구성 요소 | 위치 | 비고 |
-|---|---|---|
-| 온톨로지 그래프 | 클라우드 (Neptune) | 상품·규정·화면 지식 — 대외비 등급이지만 데모는 합성데이터 |
-| 벡터 인덱스 | 온프렘 플레인 (OpenSearch 또는 pgvector) | 문서 청크 |
-| 개인 금융데이터 | 온프렘 플레인 (PostgreSQL) | 합성데이터, 절대 경계를 넘지 않음 |
-| 결정론적 계산엔진 | 온프렘 플레인 | Python 모듈 |
-| LLM 생성 | 클라우드 (Bedrock) | 마스킹된 컨텍스트만 수신 |
-| Guardrails | 클라우드 (Bedrock Guardrails) | 입·출력 양방향 |
-| Agent Registry | 클라우드 | 메타데이터만 |
-| 감사로그 원문 | 온프렘 플레인 | 프롬프트 원문 보관 |
-
----
-
-## 4. 온톨로지 명세 (최우선 산출물)
-
-### 4.1 노드 타입
-
-| 라벨 | 설명 | 목표 건수 | 핵심 속성 |
-|---|---|---|---|
-| `Regulation` | 내규·감독규정 조항 | 60 | `code`, `title`, `article`, `effectiveDate`, `version`, `status` |
-| `RegulationAmendment` | 개정 이력 | 25 | `amendmentId`, `date`, `summary`, `diffType` |
-| `Product` | 여신·수신·외환 상품 | 120 | `productCode`, `name`, `category`, `launchDate`, `status` |
-| `Condition` | 자격·한도·금리·우대·제외 조건 | 800 | `conditionId`, `type`, `operator`, `value`, `unit`, `priority` |
-| `Screen` | 업무 화면 | 150 | `screenId`, `name`, `channel`, `route`, `status` |
-| `Component` | UI 컴포넌트 | 80 | `componentId`, `name`, `version`, `approvalStatus`, `propsSchema` |
-| `Department` | 담당 부서 | 20 | `deptCode`, `name`, `role` |
-| `Document` | 보고서·기안문 | 200 | `docId`, `title`, `type`, `deptCode`, `updatedAt` |
-| `Template` | 은행 표준 템플릿 | 12 | `templateId`, `name`, `sections[]` |
-| `Customer` | 합성 고객 | 500 | `customerId`(가명), `segment`, `joinDate` |
-| `Account` | 합성 계좌 | 1,200 | `accountId`(토큰), `productCode`, `balance`, `openDate` |
-| `Merchant` | 가맹점·업종 | 150 | `merchantId`, `name`, `mccCode`, `category` |
-
-**합계 목표: 노드 약 3,300개 / 관계 약 9,000개**
-데모용으로는 이 규모가 적당하다. 더 키우면 그래프 시각화가 읽히지 않는다.
-
-### 4.2 관계 타입
-
+### 3-1. 경계는 하나다
 ```
+        AWS 서울 리전 VPC 프라이빗 서브넷 (인터넷 게이트웨이 없음)
+        ┌──────────────────────────────────────────────┐
+        │ PII 원장 (Aurora)                             │
+        │ RAG 인덱스 (OpenSearch)  ← PII 포함 문서 가능   │
+        │ 온톨로지 (Neptune)                            │
+        │ Semantic Layer                               │
+        │ 결정론적 계산엔진                              │
+        │ 오케스트레이터 / 도구                          │
+        │ 감사로그 원문                                  │
+        └───────────────┬──────────────────────────────┘
+                        │
+              ╔═════════▼═════════╗
+              ║   익명화 게이트     ║  ← 유일한 통과 지점
+              ╚═════════╤═════════╝
+                        │
+        ┌───────────────▼──────────────────────────────┐
+        │ Amazon Bedrock (global 프로파일)              │
+        └──────────────────────────────────────────────┘
+
+        익명화 불가 워크로드 → EKS Hybrid Nodes (IDC GPU + vLLM)
+                                ※ 데모에서는 Bedrock Gemma로 대체
+```
+
+### 3-2. 반드시 지킬 것
+- **익명화 게이트를 우회하는 코드 경로를 만들지 않는다.** 모든 Bedrock 호출은 이 게이트를 통과해야 한다.
+- **경계 계측은 실측값이다.** 하드코딩된 "0건" 금지. 실제 페이로드를 계측해 기록한다.
+- **Guardrails는 실제로 설정한다.** 시뮬레이션 금지.
+- **원장은 복제하지 않는다.** 개인 데이터는 조회만 하고 벡터화·그래프 적재하지 않는다.
+- 프롬프트 원문은 VPC 내부에만 저장한다. CloudWatch에는 메트릭과 `traceId`만.
+
+### 3-3. 데이터 배치
+| 구성 요소 | 위치 |
+|---|---|
+| PII 원장 (합성 마이데이터·거래내역) | VPC 프라이빗 서브넷 · RDS PostgreSQL |
+| 벡터 인덱스 | VPC · OpenSearch 또는 pgvector |
+| 온톨로지 그래프 | VPC · Neptune |
+| Semantic Layer 정의 | VPC · YAML + 로더 |
+| 결정론적 계산엔진 | VPC · Lambda 또는 Fargate |
+| 익명화 게이트 | VPC · 게이트 서비스 + 토큰 볼트 |
+| 감사로그 원문 | VPC |
+| LLM 생성 (Tier 0/1) | Bedrock Claude (global 프로파일) |
+| PII 추론 (Tier 2) | 운영: EKS Hybrid Nodes / **데모: Bedrock Gemma** |
+| Guardrails | Bedrock Guardrails |
+| Registry | VPC 내 자체 구현 또는 AWS Agent Registry |
+
+---
+
+## 4. 모델 · 엔드포인트 (확정)
+
+### 4-1. Tier 0/1 경로 — Claude
+| 항목 | 값 |
+|---|---|
+| 모델 ID | `global.anthropic.claude-sonnet-5` (기본), `global.anthropic.claude-opus-5` (고품질) |
+| 엔드포인트 | `bedrock-runtime`, Converse API |
+| 소스 리전 | `ap-northeast-2` (서울) |
+| 라우팅 | **global 프로파일 — 전 세계 상용 리전** |
+| 인증 | IAM SigV4 |
+
+**서울 리전은 geographic 교차 리전 추론(APAC 프로파일)을 지원하지 않는다.** 단일 리전 온디맨드 경로도 없다. 따라서 추론 시점의 프롬프트는 국외로 이동할 수 있고, 이것이 익명화가 필수인 이유다.
+
+### 4-2. Tier 2 경로 — Gemma (데모 대체)
+| 항목 | 값 |
+|---|---|
+| 모델 ID | `google.gemma-4-31b` (Gemma 4 31B, 307억 파라미터, 256K 컨텍스트) |
+| 엔드포인트 | **`bedrock-mantle`** — `bedrock-runtime` 미지원 |
+| 호출 URL | `https://bedrock-mantle.us-west-2.api.aws/openai/v1` |
+| API | OpenAI 호환 — `Chat Completions` / `Responses`. **Converse · InvokeModel 미지원** |
+| 리전 | `us-west-2` (서울 미제공, 교차 리전 추론 미지원 → 리전 직접 호출) |
+| 인증 | Bedrock **장기 API 키** (`OPENAI_API_KEY`) → **Secrets Manager 경유 필수** |
+| 제약 | 병렬 도구 호출 미지원 (순차 호출), 요청 페이로드 최대 3.5MB |
+
+**구현 요구**: Claude 경로와 클라이언트가 완전히 다르므로 `LLMClient` 인터페이스를 정의하고 두 어댑터를 만든다. 환경변수 `LLM_ROUTE=claude | gemma`로 전환하고, 운영 전환 시 `onprem-vllm` 어댑터를 추가할 수 있게 설계한다.
+
+```python
+# 예시 — Gemma 경로
+from openai import OpenAI
+client = OpenAI(
+    api_key=get_secret("bedrock/api-key"),
+    base_url="https://bedrock-mantle.us-west-2.api.aws/openai/v1",
+)
+resp = client.chat.completions.create(
+    model="google.gemma-4-31b",
+    messages=[{"role": "user", "content": prompt}],
+)
+```
+
+---
+
+## 5. 온톨로지 (최우선 산출물)
+
+### 5-1. 여신 도메인 노드
+| 라벨 | 목표 건수 | 핵심 속성 |
+|---|---|---|
+| `Regulation` | 60 | `code`, `title`, `article`, `effectiveDate`, `version`, `status` |
+| `RegulationAmendment` | 25 | `amendmentId`, `date`, `summary`, `diffType` |
+| `Product` | 120 | `productCode`, `name`, `category`, `launchDate`, `status` |
+| `Condition` | 800 | `conditionId`, `type`, `operator`, `value`, `unit`, `priority` |
+| `Department` | 20 | `deptCode`, `name`, `role` |
+| `Document` | 200 | `docId`, `title`, `type`, `deptCode`, `updatedAt` |
+| `Template` | 12 | `templateId`, `name`, `sections[]` |
+| `Customer` | 500 | `customerId`(가명), `segment`, `joinDate` |
+| `Account` | 1,200 | `accountId`(토큰), `productCode`, `balance`, `openDate` |
+| `Merchant` | 150 | `merchantId`, `name`, `mccCode`, `category` |
+
+### 5-2. UX 자산 도메인 노드 (고객 PoC 요건 6종 라이브러리)
+| 라벨 | 목표 건수 | 대응 라이브러리 |
+|---|---|---|
+| `Screen` | 150 | — |
+| `Component` | 80 | Component Library |
+| `Pattern` | 40 | Pattern Library |
+| `Procedure` | 30 | Procedure Library |
+| `PolicyRule` | 60 | Policy Rule |
+| `UXTerm` | 200 | UX Dictionary |
+| `ScreenMeta` | 150 | Screen Metadata |
+
+`Component` 속성: `componentId`, `name`, `version`, `approvalStatus`, `propsSchema`, `owner`
+`ScreenMeta` 속성: `screenNo`, `purpose`, `entryCondition`, `prevScreens[]`, `nextScreens[]`
+
+**합계 목표: 노드 약 3,800 / 관계 약 11,000**
+
+### 5-3. 관계
+```
+// 여신
 (Regulation)-[:APPLIES_TO]->(Product)
 (Regulation)-[:AMENDED_BY]->(RegulationAmendment)
 (Regulation)-[:SUPERSEDES]->(Regulation)
 (Product)-[:HAS_CONDITION]->(Condition)
-(Condition)-[:DERIVED_FROM]->(Regulation)      // 조건의 규정 근거 — S1의 핵심 엣지
+(Condition)-[:DERIVED_FROM]->(Regulation)        // S1 핵심 엣지
 (Condition)-[:EXCLUDES]->(Merchant)
-(Condition)-[:REQUIRES]->(Condition)            // 조건 간 선행 관계
-(Product)-[:SOLD_VIA]->(Screen)
-(Screen)-[:USES]->(Component)
-(Screen)-[:OWNED_BY]->(Department)
+(Condition)-[:REQUIRES]->(Condition)
 (Product)-[:OWNED_BY]->(Department)
-(Document)-[:FOLLOWS]->(Template)
 (Document)-[:REFERENCES]->(Regulation)
+(Document)-[:FOLLOWS]->(Template)
 (Document)-[:OWNED_BY]->(Department)
 (Customer)-[:HOLDS]->(Account)
 (Account)-[:OF_PRODUCT]->(Product)
 (Account)-[:TRANSACTED_AT]->(Merchant)
-(Component)-[:SUPERSEDED_BY]->(Component)       // 컴포넌트 버전 체인
+
+// UX 자산
+(Product)-[:SOLD_VIA]->(Screen)
+(Screen)-[:USES]->(Component)
+(Screen)-[:FOLLOWS]->(Pattern)
+(Pattern)-[:COMPOSES]->(Component)
+(Procedure)-[:INCLUDES]->(Screen)
+(Screen)-[:OWNED_BY]->(Department)
+(PolicyRule)-[:CONSTRAINS]->(Screen)
+(PolicyRule)-[:DERIVED_FROM]->(Regulation)       // 두 도메인 연결점
+(Component)-[:SUPERSEDED_BY]->(Component)
+(ScreenMeta)-[:DESCRIBES]->(Screen)
+(UXTerm)-[:USED_IN]->(Screen)
 ```
 
-### 4.3 S1이 실행해야 하는 순회 (반드시 동작할 것)
+### 5-4. 커버리지 제약 (검증 테스트 필수)
+합성데이터는 아래를 만족해야 한다. 시연에서 결과가 빈약하면 논지가 무너진다.
 
+- **최소 3개 `Regulation`**에 대해 S1 순회가 `Products ≥ 4`, `Screens ≥ 6`, `Components ≥ 8`, `Departments ≥ 3`, `Documents ≥ 5` 반환
+- **최소 3개 `Component`**에 대해 영향 분석이 `Screens ≥ 12`, `Patterns ≥ 4`, `PolicyRules ≥ 2` 반환
+
+### 5-5. S1 순회 쿼리 (동작 필수)
 ```cypher
-// "이 규정이 개정되면 무엇이 영향받는가" — 4-hop
 MATCH (r:Regulation {code: $regCode})
 OPTIONAL MATCH (r)<-[:DERIVED_FROM]-(c:Condition)<-[:HAS_CONDITION]-(p:Product)
+OPTIONAL MATCH (r)<-[:DERIVED_FROM]-(pol:PolicyRule)-[:CONSTRAINS]->(s2:Screen)
 OPTIONAL MATCH (p)-[:SOLD_VIA]->(s:Screen)-[:USES]->(comp:Component)
 OPTIONAL MATCH (p)-[:OWNED_BY]->(pd:Department)
 OPTIONAL MATCH (s)-[:OWNED_BY]->(sd:Department)
 OPTIONAL MATCH (d:Document)-[:REFERENCES]->(r)
-RETURN r, collect(DISTINCT c) AS conditions, collect(DISTINCT p) AS products,
-       collect(DISTINCT s) AS screens, collect(DISTINCT comp) AS components,
-       collect(DISTINCT pd) + collect(DISTINCT sd) AS departments,
-       collect(DISTINCT d) AS documents
+RETURN r,
+  collect(DISTINCT c) AS conditions,
+  collect(DISTINCT p) AS products,
+  collect(DISTINCT s) + collect(DISTINCT s2) AS screens,
+  collect(DISTINCT comp) AS components,
+  collect(DISTINCT pd) + collect(DISTINCT sd) AS departments,
+  collect(DISTINCT d) AS documents
 ```
 
-**합성데이터 생성 시 제약**: 최소 3개의 규정에 대해 위 쿼리가
-`products ≥ 4`, `screens ≥ 6`, `departments ≥ 3`, `documents ≥ 5`를 반환하도록 데이터를 심어라.
-데모에서 결과가 빈약하면 논지가 무너진다.
+---
 
-### 4.4 Semantic Layer (별도 계층으로 구현)
+## 6. Semantic Layer
 
-온톨로지와 **분리된** 지표 정의 계층을 만든다. YAML로 정의하고 Text-to-SQL이 이것만 참조하게 한다.
+온톨로지와 **분리된** 지표 정의 계층. YAML로 정의하고 Text-to-SQL이 이것만 참조한다.
 
 ```yaml
 # semantic/metrics.yaml
@@ -175,278 +284,274 @@ metrics:
         AND approved_at <  date_trunc('month', now())
         AND status = 'APPROVED'
     unit: krw
-    owner_dept: 카드기획부
+    owner_dept: 여신기획부
 dimensions:
   - name: 고객세그먼트
     korean_aliases: [고객등급, 세그먼트]
     values: [일반, 우대, 프리미엄, VIP]
 ```
 
-**데모 포인트**: Semantic Layer를 끄면 LLM이 "전월실적"을 당월로 잘못 계산하는 것을 보여준다.
-숫자가 조용히 틀리는 문제를 시각화하는 것이 목적이다.
+**데모 포인트**: Semantic Layer를 끄면 LLM이 "전월실적"을 당월로 계산한다. 숫자가 조용히 틀리는 문제를 토글로 보여준다.
 
 ---
 
-## 5. 기능 요구사항
+## 7. Agent Registry
 
-### F1. GraphRAG 질의 엔진
-- 입력: 자연어 질문
-- 처리: ① LLM이 의도를 엔터티·관계로 분해 → ② Seed 노드 선택 → ③ 그래프 순회 → ④ Context 조립 → ⑤ Bedrock 생성 → ⑥ 근거 검증
-- 출력: 답변 + **순회 경로**(노드/엣지 배열) + 근거 노드 ID 목록
-- Seed 선택 정확도를 별도 지표로 노출한다. Seed가 틀리면 이후가 무의미하다는 것을 보여주기 위함.
-
-### F2. Vector RAG 비교 엔진
-- 동일 질문을 받아 순수 벡터 검색 + 생성만 수행한다.
-- **일부러 약하게 만들지 말 것.** 하이브리드(BM25+dense) + 리랭커까지 정상 구현한다. 그래도 관계 추적은 못 한다는 것이 논지다. 조작된 비교는 신뢰를 잃는다.
-
-### F3. 마이데이터 상담 파이프라인
-```
-질의 → 입력 가드레일 → 의도 분해 → Semantic Layer 조회 → 정확 조회(SQL)
-     → 결정론적 계산엔진 → 마스킹/토큰화 → Bedrock 설명 생성
-     → Guardrails 출력 검사 → 재식별 → 회신
-```
-- 각 단계의 입출력을 UI에서 펼쳐볼 수 있게 한다 (관측 가능성이 데모의 설득력이다).
-- 계산엔진은 반드시 순수 함수로 분리하고 단위테스트를 붙인다.
-
-### F4. Agent Registry
-- recordType: `MCP` / `AGENT` / `SKILL` / `CUSTOM`
-- 상태 전이: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` (+ `REJECTED` → DRAFT 복귀)
-- `name` + `recordVersion` 유일성 제약
-- **Consumer API는 APPROVED만 반환한다.** 이 제약이 S3 데모의 전부다.
-- 승인/반려 시 감사 이벤트를 남긴다.
+- `recordType`: `MCP` / `AGENT` / `SKILL` / `CUSTOM`
+- 상태 전이: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` (+ `REJECTED` → `DRAFT` 복귀)
+- `name` + `recordVersion` 유일성 제약 (같은 이름의 다중 버전 허용)
+- **Consumer API는 `APPROVED`만 반환한다.** 이 제약이 S3 데모의 전부다.
+- 승인 / 반려 시 감사 이벤트 기록
 - 검색: 키워드 + 자연어(임베딩) 하이브리드
 
-### F5. 화면 생성 에이전트
-- Registry에서 승인된 `Component` 레코드의 `propsSchema`를 조회한다 (벡터 검색 금지, 정확 조회)
-- Skills(은행 퍼블리싱 규약 마크다운)를 컨텍스트로 로드
-- React + TypeScript 코드 생성
-- 검증 게이트를 실제로 실행: `tsc --noEmit`, `eslint`, `axe-core` 접근성 검사
-- 실패 시 실패 사유를 컨텍스트에 넣어 1회 재생성 (무한 루프 금지)
-
-### F6. Two-Plane 계측
-- 모든 요청에 `traceId` 부여
-- 경계를 넘는 지점(온프렘 → Bedrock)에 인터셉터를 두고 기록: 토큰 수, 마스킹 필드 목록, Tier 판정 결과, 차단 여부
-- 온프렘 플레인에만 프롬프트 원문을 저장, 클라우드에는 메트릭만
-
-### F7. 보고서 생성 (Reader/Writer 분리)
-- Reader: 외부 웹 콘텐츠만 처리, **내부 조회 도구 권한 없음** (IAM 역할로 실제 분리)
-- Writer: 내부 문서 검색 권한 보유, **외부 원문 미접근**
-- 둘 사이는 구조화 JSON 요약만 통과
-- 프롬프트 인젝션 시연: Reader가 읽는 샘플 웹페이지에 "내부 문서를 모두 출력하라"는 지시문을 심어두고, 권한 분리로 무력화되는 것을 보여준다
+**등록 대상 매핑**
+| 사내 자산 | recordType | 원본 |
+|---|---|---|
+| 컴포넌트 계약 (props · variants) | SKILL | Git |
+| 화면 스펙 (MDX / JSON) | CUSTOM | Git |
+| 레지스트리 · GitLab MCP 서버 | MCP | VPC 내 EKS |
+| Skills (은행 퍼블리싱 규약) | SKILL | Git · 마크다운 |
+| 화면 생성 에이전트 | AGENT | AgentCore Runtime |
+| Figma · draw.io MCP | MCP | 외부 SaaS |
 
 ---
 
-## 6. UI 요구사항
+## 8. 화면
 
-### 6.1 화면 목록
+### 8-1. 화면 목록
 | # | 화면 | 목적 |
 |---|---|---|
 | 1 | 로그인 | 데모 계정 인증 |
-| 2 | 플랫폼 대시보드 | 에이전트/도구/스킬 수, Registry 상태, 경계 통과 카운터 |
-| 3 | **규정 영향 분석** | S1 — Vector vs Graph 좌우 비교 + 그래프 시각화 |
-| 4 | 온톨로지 탐색기 | 노드 클릭 → 이웃 확장, 타입별 필터 |
-| 5 | **마이데이터 상담** | S2 — 채팅 UI + 단계별 펼침 패널 |
+| 2 | 플랫폼 대시보드 | 에이전트 · 도구 · 스킬 수, Registry 상태, 경계 지표 |
+| 3 | **규정 영향 분석** | S1 — Vector vs Graph 좌우 비교 + 경로 시각화 |
+| 4 | 온톨로지 탐색기 | 노드 클릭 → 이웃 확장, 타입 필터 |
+| 5 | **마이데이터 상담** | S2 — 채팅 + 단계별 펼침 패널 |
 | 6 | **Agent Registry** | S3 — 카탈로그, 승인 워크플로우, 버전 체인 |
 | 7 | 화면 생성 | S3 — 생성 코드 + 검증 게이트 결과 |
-| 8 | 보고서 생성 | Reader/Writer 분리 시각화 |
-| 9 | **Two-Plane 뷰** | S4 — 요청 타임라인, 경계 통과 상세 |
-| 10 | Guardrails 로그 | S5 — 차단 이력 |
+| 8 | **UX Asset Portal** | 고객 요건 반영 (§8-2) |
+| 9 | 보고서 생성 | Reader / Writer 권한 분리 시각화 |
+| 10 | **Single Boundary 뷰** | S4 — 경계 통과 실측 |
+| 11 | Guardrails 로그 | S5 — 차단 이력 |
 
-### 6.2 시각 요구사항
-- 온프렘 영역과 클라우드 영역을 **일관된 색으로 구분**한다. 전 화면에서 같은 색 규칙을 쓴다.
-- 경계를 넘는 데이터는 애니메이션으로 표시한다 (무엇이 언제 넘어갔는지 눈에 보이게).
-- 그래프 시각화는 순회 경로를 강조 표시한다. 전체 그래프를 다 보여주면 아무것도 안 보인다.
-- 한국어 UI. 폰트는 Pretendard.
-- 다크 테마 우선 (기존 데모와 톤 유지), 라이트 테마는 후순위.
+### 8-2. UX Asset Portal (신설)
+- 좌측 카테고리: `Foundation` / `Components` / `Patterns` / `Screens` / `Procedures` / `Policies` / `UX Writing`
+- 자산 상세 카드: `ID`, `Status`(Approved · Draft · Deprecated), `Version`, `Owner`
+- **Related 카운트는 그래프 순회 결과다.** 하드코딩 금지. 예: `6 Patterns · 24 Screens · 3 Policies`
+- `Version History`, `Publish / Sync` 액션
+- 상세 카드에 **"이 컴포넌트를 변경하면 영향받는 화면"** 버튼 → 영향 분석 결과로 이동
 
-### 6.3 데모 안전장치
-- **리셋 버튼**: Registry 상태와 대화 이력을 초기 상태로 되돌린다. 시연 중 실수 복구용.
-- **시나리오 프리셋**: S1~S5 각각의 질문을 원클릭으로 입력하는 버튼. 시연 중 오타 방지.
-- **오프라인 폴백**: Bedrock 호출이 실패하면 캐시된 응답을 보여주고 화면에 "캐시 응답" 배지를 띄운다. 무응답으로 시연이 멈추는 것을 막되, 가짜를 진짜처럼 보이게 하지는 않는다.
+### 8-3. Single Boundary 뷰 지표 (기존 "반출 0건" 카운터 교체)
+1. **VPC 내부에 남은 항목** — 인덱스 / 원장 / 감사로그 건수
+2. **경계를 넘은 토큰 수** + 전달된 필드 목록 (실측)
+3. **사용한 모델 ID** — `global.anthropic.claude-sonnet-5` 또는 `google.gemma-4-31b`
+4. **배지** — `저장: 서울 리전 / 추론: global 라우팅`
+5. Guardrails 차단 여부
 
----
+### 8-4. 시각 요구사항
+- VPC 내부 영역과 Bedrock 영역을 **전 화면 동일한 색 규칙**으로 구분
+- 경계를 넘는 데이터는 애니메이션으로 표시
+- 그래프는 순회 경로만 강조 (전체 그래프 렌더 금지)
+- 한국어 UI, Pretendard, 다크 테마 우선
 
-## 7. 기술 스택
-
-| 계층 | 선택 | 비고 |
-|---|---|---|
-| 프론트엔드 | React 18 + Vite + TypeScript + Tailwind | 기존 데모와 동일 스택 유지 |
-| 그래프 시각화 | Cytoscape.js 또는 react-force-graph | 순회 경로 강조 기능 필수 |
-| 배포 | S3 + CloudFront | 기존 배포 파이프라인 재사용 |
-| API | API Gateway + Lambda (Python 3.12) | |
-| 온프렘 플레인 | ECS Fargate (프라이빗 서브넷, NAT 없음) | 실제 네트워크 분리 |
-| 그래프 DB | Amazon Neptune | §11 비용 주의 참조 |
-| 벡터 검색 | OpenSearch Serverless 또는 pgvector on RDS | 온프렘 플레인 소속 |
-| 개인데이터 | RDS PostgreSQL (프라이빗) | 합성데이터 |
-| LLM | Amazon Bedrock — Claude Sonnet | |
-| 가드레일 | Bedrock Guardrails | 실제 설정 |
-| PII 탐지 | 규칙기반 + Amazon Comprehend PII | 이중화 |
-| 에이전트 | Strands Agents SDK 또는 LangGraph | §15에서 확정 |
-| 인증 | Amazon Cognito | |
-| IaC | AWS CDK (TypeScript) | |
+### 8-5. 데모 안전장치
+- **리셋 버튼** — Registry 상태와 대화 이력 초기화
+- **시나리오 프리셋** — S1~S5 질문 원클릭 입력 (오타 방지)
+- **스트리밍 필수** — 5초 내 첫 토큰. 8초 침묵은 데모를 죽인다
+- **폴백** — Bedrock 실패 시 캐시 응답 + "캐시 응답" 배지
 
 ---
 
-## 8. 합성데이터 요구사항
+## 9. 합성데이터
 
-- **실제 고객데이터를 절대 사용하지 않는다.** 실제 상품명·내규 조항도 사용하지 않는다.
-- 상품명은 가상으로 만든다 (예: "하나 든든전세대출" 대신 "OO은행 안심전세대출 II").
-- 규정 조항은 실제 전자금융감독규정을 인용하지 말고 구조만 모사한 가상 조항으로 만든다.
-- 개인 식별자는 생성 시점부터 토큰 형태로 만든다 (원본 주민번호 형식조차 만들지 않는다).
-- 데이터 생성 스크립트는 `seed/` 디렉토리에 두고 시드값을 고정해 재현 가능하게 한다.
-- §4.3의 커버리지 제약을 만족하는지 검증하는 테스트를 포함한다.
-
----
-
-## 9. 인증 · 계정
-
-- 데모 계정 ID: `demo@atomai.click`
-- **비밀번호는 이 문서에 기록하지 않는다.** 다음 중 하나로 주입한다.
-  - 로컬 개발: `.env.local` (반드시 `.gitignore`에 포함)
-  - 배포: AWS Secrets Manager → Cognito 초기 사용자 생성 시 참조
-- 환경변수명: `DEMO_USER_EMAIL`, `DEMO_USER_PASSWORD`
-- Cognito 사용자 풀에 데모 계정 1개만 생성한다. 셀프 가입은 비활성화한다.
-- 데모 URL: `https://d1twhttjtzqewp.cloudfront.net/`
+- **실제 고객데이터 · 실제 상품명 · 실제 내규 조항을 사용하지 않는다.** 상품명은 가상으로 만든다.
+- 규정 조항은 실제 전자금융감독규정을 인용하지 않고 구조만 모사한 가상 조항으로 만든다.
+- **개인 식별자는 생성 시점부터 토큰 형태로 만든다.** 주민번호 형식조차 만들지 않는다.
+  → 이렇게 하면 익명화 변환 로직이 없어도 게이트 통과 결과가 동일하다 (§11-2)
+- 생성 스크립트는 `seed/`에 두고 시드값을 고정해 재현 가능하게 한다
+- §5-4 커버리지 제약 검증 테스트를 포함한다
 
 ---
 
-## 10. 비기능 요구사항
+## 10. 기술 스택
 
-| 항목 | 기준 |
+| 계층 | 선택 |
 |---|---|
-| 응답 지연 | S1 GraphRAG 8초 이내, S2 상담 5초 이내 (스트리밍으로 체감 단축) |
-| 스트리밍 | LLM 응답은 반드시 토큰 스트리밍. 8초 침묵은 데모를 망친다 |
-| 동시 사용 | 5명 (시연자 + 참석자 개별 접속) |
-| 관측성 | 전 요청 `traceId` 추적, CloudWatch 구조화 로그 |
-| 비용 가드 | Bedrock 일일 토큰 상한 설정, 초과 시 캐시 응답 폴백 |
-| 브라우저 | Chrome / Edge 최신. 은행 내부망 IE 호환 불필요 (데모는 외부망) |
+| 프론트엔드 | React 18 + Vite + TypeScript + Tailwind |
+| 그래프 시각화 | Cytoscape.js 또는 react-force-graph (경로 강조 필수) |
+| 배포 | S3 + CloudFront (기존 파이프라인 재사용) |
+| API | API Gateway + Lambda (Python 3.12) |
+| VPC 워크로드 | Lambda / ECS Fargate (프라이빗 서브넷, NAT 없음) |
+| 그래프 DB | Amazon Neptune (§10-1 비용 주의) |
+| 벡터 검색 | pgvector on RDS (기본) 또는 OpenSearch Serverless |
+| PII 원장 | RDS PostgreSQL (프라이빗, 합성데이터) |
+| LLM | Bedrock — Claude (Tier 0/1) / Gemma 4 31B (Tier 2 대체) |
+| 가드레일 | Bedrock Guardrails (실제 설정) |
+| 에이전트 | §14 확정 |
+| 인증 | Amazon Cognito |
+| IaC | AWS CDK (TypeScript) |
+
+**사용 금지**: AWS CodeCommit, AWS CodePipeline. CI/CD는 기존 GitLab을 전제로 표기한다.
+
+### 10-1. 비용 주의
+- **Neptune은 상시 과금된다.** `GraphStore` 인터페이스 + 두 구현(`NeptuneGraphStore` / `LocalGraphStore`)을 만들고 `GRAPH_BACKEND=neptune|local`로 전환한다.
+- **고객 시연은 반드시 `neptune`으로 실행한다.** 로컬 구현으로 시연하면서 "Neptune입니다"라고 말하는 것은 허용되지 않는다. UI 하단에 현재 백엔드를 항상 표시한다.
+- CDK `destroy` 스크립트와 시연 후 정리 절차를 README에 적는다.
 
 ---
 
-## 11. 비용 주의 (Claude Code는 반드시 확인할 것)
+## 11. 데모 제약과 표기 규칙 ★
 
-- **Neptune은 상시 과금된다.** 데모용으로 켜두면 비용이 누적된다.
-  - `GraphStore` 인터페이스를 정의하고 두 구현을 만든다: `NeptuneGraphStore`(고객 시연용), `LocalGraphStore`(개발용, 인메모리)
-  - 환경변수 `GRAPH_BACKEND=neptune|local`로 전환
-  - **고객 시연 시에는 반드시 `neptune`으로 실행한다.** 로컬 구현으로 시연하면서 "Neptune입니다"라고 말하는 것은 허용되지 않는다. UI 하단에 현재 백엔드를 항상 표시한다.
-- CDK에 `destroy` 스크립트를 준비하고 README에 시연 후 정리 절차를 적는다.
-- OpenSearch Serverless도 최소 OCU 과금이 있다. pgvector 대안을 §15에서 확정한다.
+데모는 운영 아키텍처의 일부를 대체한다. **대체 사실을 화면에서 숨기지 않는다.** 배지를 안 달고 넘어가다 시연 중 들키는 것이 최악이다.
+
+### 11-1. PII 추론 경로 대체
+- 운영: EKS Hybrid Nodes의 IDC GPU + vLLM
+- 데모: Bedrock Gemma 4 31B @ `us-west-2` (GPU 미구성)
+- **화면 배지 (필수)**
+  ```
+  PII 추론 경로
+  운영: IDC GPU + vLLM (EKS Hybrid Nodes)
+  데모: Bedrock Gemma 4 31B @ us-west-2 — GPU 미구성 대체
+  ```
+- 이 경로를 "IDC GPU"라고 표시해서는 안 된다.
+
+### 11-2. 익명화 변환 로직 미구현
+- 운영: 게이트에서 가명처리 · 식별자 토큰화 · 재식별 수행
+- 데모: **변환 로직을 구현하지 않는다** (시간 제약)
+- 대신 §9에 따라 **합성데이터를 처음부터 가명 · 토큰 형태로 생성**한다. 변환할 것이 없으므로 게이트 통과 결과가 운영과 동일하다.
+- 게이트 자체는 **경계 통과 지점으로 실제 존재해야 한다.** 모든 Bedrock 호출이 이 지점을 지나가고, 여기서 페이로드를 계측한다.
+- **화면 배지 (필수)**
+  ```
+  익명화 게이트
+  운영: 가명처리 · 토큰화 · 재식별
+  데모: 합성데이터가 이미 가명 형태 — 변환 로직 미구현
+  ```
+
+### 11-3. 온프렘 구성 없음
+- 운영: 계정계 원장을 Direct Connect로 조회
+- 데모: 합성 원장을 VPC 내 RDS에 둔다
+- 화면에서 "온프렘"이라는 표현을 쓰지 않는다. "VPC 프라이빗 서브넷"으로 표기한다.
+
+### 11-4. AgentCore 사용 제약
+AgentCore insights · Evaluations · Policy는 서울에서 global 교차 리전 추론이 강제되고 SCP로 차단되지 않으며 목적지 리전에 프롬프트 · 응답이 저장될 수 있다.
+- Tier 2 워크로드 경로에서 사용하지 않는다
+- 사용하는 화면에는 `Tier 0/1 전용` 배지를 표시한다
 
 ---
 
-## 12. 안티 요구사항 (하지 말 것)
+## 12. 안티 요구사항 (예외 없음)
 
-1. **개인 금융데이터를 벡터화하지 않는다.** 임베딩은 문서(약관·규정)에만 적용한다.
-2. **LLM이 금액·금리·한도를 생성하지 않는다.** 계산엔진 출력만 사용하고, 프롬프트에 "숫자를 만들지 마라"는 지시와 함께 출력 검증기를 둔다.
-3. **프롬프트 원문을 클라우드 로그에 남기지 않는다.** CloudWatch에는 메트릭과 traceId만.
-4. **Guardrails를 목(mock)으로 만들지 않는다.**
-5. **Vector RAG 비교군을 의도적으로 약화시키지 않는다.**
-6. **비밀번호·API 키를 코드나 문서에 하드코딩하지 않는다.**
-7. **실제 은행 상품명·내규 조항을 사용하지 않는다.**
-8. **한 화면에 모든 것을 넣지 않는다.** 시나리오별 화면을 분리한다.
-9. **무한 재시도 루프를 만들지 않는다.** 재생성은 최대 1회.
-10. **`localStorage` 등 브라우저 스토리지에 개인데이터를 저장하지 않는다.**
+1. **익명화 게이트를 우회하는 코드 경로를 만들지 않는다.**
+2. **대체 구성을 화면에서 숨기지 않는다.** (§11 배지 필수)
+3. **개인 금융데이터를 벡터화하지 않는다.** 임베딩은 문서(약관 · 규정)에만.
+4. **LLM이 금액 · 금리 · 한도를 생성하지 않는다.** 계산엔진 출력만 사용하고 출력 검증기를 둔다.
+5. **프롬프트 원문을 CloudWatch에 남기지 않는다.** 메트릭과 `traceId`만.
+6. **Guardrails를 목(mock)으로 만들지 않는다.**
+7. **Vector RAG 비교군을 의도적으로 약화시키지 않는다.** 하이브리드 + 리랭커까지 정상 구현한다.
+8. **하드코딩된 수치를 실측처럼 보이게 하지 않는다.** (Related 카운트, 경계 통과량 포함)
+9. **비밀번호 · API 키를 코드나 문서에 하드코딩하지 않는다.** Secrets Manager 또는 `.env.local`(gitignore).
+10. **실제 은행 상품명 · 내규 조항을 사용하지 않는다.**
+11. **무한 재시도 루프를 만들지 않는다.** 재생성은 최대 1회.
+12. **브라우저 스토리지에 개인데이터를 저장하지 않는다.**
+13. "온프렘", "Two-Plane", "In-Region", "서울을 벗어나지 않" 표현을 쓰지 않는다.
 
 ---
 
-## 13. 구축 순서 (Phase)
+## 13. Phase
 
-### Phase 1 — 온톨로지와 데이터 (최우선)
-- [ ] §4 스키마 정의 (`schema/ontology.cypher`)
-- [ ] 합성데이터 생성 스크립트 (`seed/generate.py`), 시드 고정
-- [ ] §4.3 커버리지 검증 테스트
+### Phase 1 — 온톨로지와 데이터 ★
+- [ ] §5 스키마 정의 (`schema/ontology.cypher`) — 여신 + UX 자산 도메인
+- [ ] 합성데이터 생성 스크립트 (`seed/generate.py`), 시드 고정, 식별자는 토큰 형태
+- [ ] §5-4 커버리지 검증 테스트
 - [ ] `GraphStore` 인터페이스 + Local 구현
-- [ ] Semantic Layer YAML + 로더
+- [ ] §6 Semantic Layer YAML + 로더
 
-> **Phase 1 완료 조건**: §4.3 쿼리가 CLI에서 실행되어 요구 건수를 반환한다.
+> **완료 조건**: §5-5 쿼리가 CLI에서 실행되어 커버리지 제약을 만족한다.
 
-### Phase 2 — GraphRAG 엔진과 S1 화면
+### Phase 2 — GraphRAG 엔진과 S1
 - [ ] 의도 분해 → Seed 선택 → 순회 → Context 조립
 - [ ] Vector RAG 비교군 (하이브리드 + 리랭커)
-- [ ] S1 좌우 비교 화면 + 그래프 시각화
-- [ ] Bedrock 연동 + 스트리밍
+- [ ] S1 좌우 비교 화면 + 경로 시각화
+- [ ] `LLMClient` 인터페이스 + Claude 어댑터 + 스트리밍
 
-> **Phase 2 완료 조건**: S1 시나리오를 처음부터 끝까지 시연할 수 있다. 이 시점에 한 번 검토받는다.
+> **완료 조건**: S1을 처음부터 끝까지 시연할 수 있다. 여기서 멈추고 검토받는다.
 
-### Phase 3 — 온프렘 플레인 분리와 S2
-- [ ] ECS Fargate 프라이빗 플레인 구성 (CDK)
-- [ ] RDS 합성 개인데이터 + 정확 조회 API
+### Phase 3 — 경계와 S2
+- [ ] VPC 프라이빗 서브넷 구성 (CDK)
+- [ ] RDS 합성 원장 + 정확 조회 API
 - [ ] 결정론적 계산엔진 + 단위테스트
-- [ ] 마스킹/토큰화 게이트 + 재식별
+- [ ] 익명화 게이트 (통과 지점 + 계측, 변환 로직 미구현)
+- [ ] Gemma 어댑터 (`bedrock-mantle`, OpenAI 호환)
 - [ ] Bedrock Guardrails 설정
-- [ ] S2 상담 화면 (단계별 펼침 패널)
-- [ ] F6 경계 계측 + S4 Two-Plane 뷰
+- [ ] S2 상담 화면 + 단계별 펼침 패널
+- [ ] Single Boundary 뷰 (§8-3)
+- [ ] §11 배지 전체 적용
 
-### Phase 4 — Registry와 S3
+### Phase 4 — Registry · Portal · S3
 - [ ] Registry 데이터모델 + 상태 전이 + 승인 API
 - [ ] Consumer API (APPROVED만 반환)
 - [ ] Registry 관리 화면
+- [ ] UX Asset Portal (§8-2), Related 카운트는 그래프 쿼리
 - [ ] 화면 생성 에이전트 + 실제 검증 게이트
 
 ### Phase 5 — 보고서와 마무리
-- [ ] Reader/Writer IAM 역할 분리 + 인젝션 시연 데이터
-- [ ] S5 Guardrails 로그 화면
+- [ ] Reader / Writer IAM 역할 분리 + 인젝션 시연 데이터
+- [ ] Guardrails 로그 화면
 - [ ] 리셋 / 프리셋 / 폴백
-- [ ] Neptune 전환 및 시연 리허설
+- [ ] Neptune 전환 및 리허설
 - [ ] README (시연 스크립트, 비용 정리 절차)
 
 ---
 
-## 14. 검증 체크리스트 (시연 전 확인)
+## 14. 시작 전 확인 질문
 
-- [ ] `GRAPH_BACKEND=neptune`으로 전체 시나리오가 동작한다
-- [ ] S1에서 GraphRAG 결과가 Vector RAG보다 명확히 풍부하다
-- [ ] S2에서 마스킹 페이로드를 열어보면 개인식별자가 토큰으로 치환되어 있다
-- [ ] S2 계산 결과가 계산엔진 단위테스트 결과와 일치한다
-- [ ] S3에서 Deprecated 전환 후 생성 결과가 실제로 바뀐다
-- [ ] S4 카운터가 하드코딩이 아님을 코드로 보일 수 있다
-- [ ] S5에서 Guardrails가 실제로 차단한다 (Bedrock 응답 원문 확인)
-- [ ] F7 인젝션 시연에서 Reader가 내부 도구 호출에 실패한다 (IAM AccessDenied 로그 확인)
-- [ ] 모든 응답이 5초 내 첫 토큰을 스트리밍한다
-- [ ] 리셋 버튼으로 초기 상태 복구가 된다
-- [ ] 실제 고객데이터·실제 상품명·실제 조항이 하나도 없다
+1. **기존 데모 코드베이스 위치** — `d1twhttjtzqewp.cloudfront.net`의 저장소는 어디인가? 확장인가 신규인가?
+2. **에이전트 SDK** — Strands Agents / LangGraph / Claude Agent SDK 중 무엇? (Skills 사용 여부가 여기에 걸림)
+3. **AgentCore 사용 범위** — Runtime · Gateway · Registry를 실제로 쓸까, 자체 구현으로 개념만 보여줄까? 서울 리전 가용성 확인 필요.
+4. **벡터 저장소** — pgvector on RDS(기본 제안) vs OpenSearch Serverless?
+5. **AWS 계정 · 리전** — 배포 대상 계정, 그리고 `ap-northeast-2`의 Claude 모델 액세스와 `us-west-2`의 Gemma 액세스가 활성화되어 있는지?
+6. **Neptune 예산** — 시연 기간 상시 가동 가능한가, 직전에만 띄울까?
+7. **시연 시간** — 15분 기준으로 설계했다. 30분이면 시나리오를 늘릴 수 있다.
+8. **데모 계정 비밀번호** — `DEMO_USER_PASSWORD`로 주입한다. 채팅으로 전달된 값은 교체 권장.
 
 ---
 
-## 15. 시작 전 확인이 필요한 사항 (Claude Code는 먼저 질문할 것)
+## 15. 데모 ↔ 제안서 대응
 
-1. **에이전트 SDK**: Strands Agents / LangGraph / Claude Agent SDK 중 무엇으로 갈까? (Skills 사용 여부가 여기에 걸림)
-2. **AgentCore 사용 범위**: Runtime·Gateway·Registry를 실제로 쓸까, 아니면 자체 구현으로 개념만 보여줄까? 서울 리전 가용성 확인이 필요하다.
-3. **벡터 저장소**: OpenSearch Serverless(비용↑, 하이브리드 검색 강함) vs pgvector on RDS(비용↓, 이미 RDS 필요)?
-4. **기존 데모 자산**: `d1twhttjtzqewp.cloudfront.net`의 기존 코드베이스를 확장할까, 새로 만들까? 기존 저장소 위치를 알려달라.
-5. **데모 도메인 선택**: 여신(전세대출) 중심으로 갈까, 카드 혜택 중심으로 갈까? 온톨로지 설계가 달라진다. (제안: 여신 — 규정 영향 분석이 더 자연스럽다)
-6. **시연 시간**: 15분 기준으로 설계했다. 30분이면 시나리오를 늘릴 수 있다.
-7. **AWS 계정·리전**: 어느 계정, 어느 리전에 배포할까? Bedrock 모델 액세스가 활성화되어 있는지 확인이 필요하다.
-8. **Neptune 예산 승인**: 시연 기간 동안 Neptune을 켜둘 예산이 있는지, 아니면 시연 직전에만 띄울지?
-
----
-
-## 16. 참고 — 이 데모가 지지하는 제안 논리
-
-| 데모 시나리오 | 제안서에서 이 화면이 뒷받침하는 슬라이드 |
+| 데모 화면 | 뒷받침하는 슬라이드 |
 |---|---|
 | S1 규정 영향 분석 | "Vector RAG와 GraphRAG는 다른 질문에 답합니다" |
 | S1 + 온톨로지 탐색기 | "AI-Ready 데이터는 두 계층입니다" |
 | S2 마이데이터 상담 | "과제 2 아키텍처", "정확성 문제는 두 방향으로 실패합니다" |
-| S3 Registry | "사내 AI 자산 거버넌스 — AWS Agent Registry" |
-| S4 Two-Plane 뷰 | "공통 AI 플랫폼 — 요청 처리 흐름", "데이터 배치 기준" |
-| S5 Guardrails | "설계 원칙 — 통제는 3중 구조" |
-| F7 Reader/Writer | "과제 3 아키텍처" |
-
+| S3 Registry | "사내 AI 자산 거버넌스", "자산 공유 체계의 3대 원칙" |
+| UX Asset Portal | "과제 1 — AI-Readable 화면/에셋 관리" |
+| S4 Single Boundary 뷰 | "설계 원칙 — 경계는 하나", "추론 경로와 데이터 소재" |
+| S5 Guardrails | "규제 판단 — 추론 경로를 명시한다" |
+| Reader / Writer 분리 | "과제 3 아키텍처" |
 
 ---
 
-## 17. 결정 변경 이력 (Amendments)
+## 부록. 데모 접속
+- URL: 배포 후 `platform/README.md`의 라이브 URL 참조 (`d1twhttjtzqewp`는 이전 컨트롤룸 데모 URL)
+- 계정: `demo@atomai.click`
+- 비밀번호: 환경변수 `DEMO_USER_PASSWORD` / Secrets Manager `bank-platform/demo-user` (이 문서에 기록하지 않는다)
+- Cognito 사용자 풀에 데모 계정 1개만 생성, 셀프 가입 비활성화
 
-### A1. 데이터 배치 원칙 개정 (2026-09-02, 발주자 지시)
+---
 
-§1 P2·§3의 "온프렘 플레인" 프레이밍을 다음과 같이 개정한다:
+## 16. 구현 메모 (2026-09-02 — 명세 수령 시점의 검증 결과)
 
-- **개인신용정보(PII)도 VPC 안에 보관할 수 있다.** 국내 금융 클라우드 규제상 요건(중요도 평가,
-  CSP 안전성 평가, 망분리 대체 통제) 충족 시 개인신용정보 처리 시스템의 클라우드 배치가 가능하다.
-- 따라서 격리 플레인의 정체는 "온프렘 역할"이 아니라 **"고객 데이터 플레인(PII VPC)"** —
-  인터넷 경로가 차단된 프라이빗 서브넷에 원장·정확 조회·계산·마스킹·감사 원문을 둔다.
-- **경계 통제의 핵심은 모델 호출이다: Bedrock 등 모델로 나가는 페이로드에는 익명화(마스킹/토큰화)가
-  필수다.** 외부 SaaS 모델(제3자 API)에는 개인정보를 태우지 않는다.
-- F6 계측(경계 통과 PII 실측), 마스킹 게이트, 재식별 매핑의 플레인 내 보관 요구는 그대로 유지된다.
-- 아키텍처 리소스는 변경 없음 — 격리 서브넷 ECS/RDS 구조가 그대로 PII 플레인이 되며 라벨만 개정.
+### §14 확정 답변 (2026-09-02, 발주자)
+
+1. **에이전트 SDK: Strands Agents** — Harness 컨테이너·화면 생성 에이전트의 구현 SDK.
+2. **AgentCore 사용 범위** (설계 위임에 따른 확정): **실행 = AgentCore Harness(관리형),
+   도구 = AgentCore Gateway(MCP, IAM 인바운드), 자산 승인 = Agent Registry** 를 실사용한다.
+   경계: Tier 2(PII 추론) 경로는 AgentCore를 태우지 않고 자체 `LLMClient` 어댑터로 직행한다(§11-4).
+   AgentCore insights·Evaluations·Policy는 Tier 0/1 화면에 한정하고 배지를 단다.
+   근거 — 이 조합이 "관리형 거버넌스(CloudTrail 감사·승인 수명주기)"라는 제안 논지를 실물로 보여주면서
+   §11-4의 리전 제약을 위반하지 않는 유일한 경계선이다.
+3. **벡터 저장소: OpenSearch Serverless** (v1 답변 유지 — §10 기본 제안 pgvector를 대체).
+
+
+- §4-1: 서울(ap-northeast-2)에서 `global.anthropic.claude-sonnet-5`, `global.anthropic.claude-opus-5` 추론 프로파일 ACTIVE 확인. `apac.anthropic.claude-sonnet-4-*` 프로파일도 ACTIVE로 존재한다(APAC 프로파일 미지원이라는 문구와 다름) — 명세에 따라 global 프로파일을 기본으로 쓰고, 트레이스에 실제 모델 ID를 기록한다.
+- §4-2: us-west-2 표준 카탈로그(`list-foundation-models`)에는 `google.gemma-3-{4b,12b,27b}-it`만 보인다. `google.gemma-4-31b`는 bedrock-mantle 카탈로그에서 런타임에 확인한다(어댑터 헬스체크). 장기 API 키 시크릿은 계정에 없다 → 어댑터는 IAM 자격으로 단기 Bearer 토큰(12h)을 발급해 사용하고, 장기 키가 Secrets Manager에 있으면 그것을 우선한다.
+- §11-2: 데모는 규칙 기반 토큰화(마스킹 게이트)를 **구현했다**. 배지는 사실대로 "합성데이터 가명 생성 + 규칙 기반 토큰화 (ML 가명처리·재식별 볼트 미구현)"로 표기한다.
