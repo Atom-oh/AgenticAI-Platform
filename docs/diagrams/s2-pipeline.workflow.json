@@ -1,0 +1,320 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "S2 마이데이터 상담 파이프라인",
+    "output": "../public/s2-workflow.html",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "happy",
+        "label": "정상 상담",
+        "focus": [
+          "user",
+          "gin",
+          "semantic",
+          "lookup",
+          "calc",
+          "maskgate",
+          "llm",
+          "verify",
+          "reply"
+        ],
+        "note": "숫자는 계산엔진이 만들고, 마스킹된 페이로드만 경계를 넘고, 출력은 수치 검증을 통과해야 한다."
+      },
+      {
+        "id": "blocked",
+        "label": "S5 차단 경로",
+        "focus": [
+          "user",
+          "gin",
+          "blocked"
+        ],
+        "note": "투자권유성 질문은 실물 Bedrock Guardrails가 입력 단계에서 차단한다."
+      },
+      {
+        "id": "evidence",
+        "label": "계측과 감사",
+        "focus": [
+          "maskgate",
+          "trace",
+          "audit"
+        ],
+        "note": "경계 통과 PII 실측과 traceId는 클라우드에, 프롬프트 원문은 온프렘에만 남는다."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "ui",
+      "label": "사용자"
+    },
+    {
+      "id": "guard",
+      "label": "안전장치 (Bedrock Guardrails)",
+      "variant": "exception"
+    },
+    {
+      "id": "cloud",
+      "label": "클라우드 플레인"
+    },
+    {
+      "id": "onprem",
+      "label": "온프렘 플레인 — 격리 서브넷 ECS"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "질의 · 입력 검사",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "compute",
+      "label": "정확 조회 · 결정론 계산",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "explain",
+      "label": "설명 생성 · 검증",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "groups": [
+    {
+      "id": "onprem_zone",
+      "label": "프롬프트 원문은 여기 밖으로 나가지 않는다",
+      "lane": "onprem",
+      "fromCol": 1,
+      "toCol": 5,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "user",
+    "gin",
+    "semantic",
+    "lookup",
+    "calc",
+    "maskgate",
+    "llm",
+    "verify",
+    "reply"
+  ],
+  "nodes": [
+    {
+      "id": "user",
+      "lane": "ui",
+      "col": 0,
+      "type": "external",
+      "label": "질문",
+      "sublabel": "우대금리 충족하나요?",
+      "width": 138
+    },
+    {
+      "id": "reply",
+      "lane": "ui",
+      "col": 5,
+      "type": "frontend",
+      "label": "회신",
+      "sublabel": "재식별 후 표시",
+      "width": 138
+    },
+    {
+      "id": "gin",
+      "lane": "guard",
+      "col": 1,
+      "type": "security",
+      "label": "입력 검사",
+      "sublabel": "투자권유 토픽 DENY",
+      "tag": "실물 · 목 아님",
+      "width": 138
+    },
+    {
+      "id": "blocked",
+      "lane": "guard",
+      "col": 2,
+      "type": "security",
+      "label": "차단",
+      "sublabel": "S5 시연 경로",
+      "width": 138
+    },
+    {
+      "id": "verify",
+      "lane": "guard",
+      "col": 4,
+      "type": "security",
+      "label": "출력 검사 + 수치 검증",
+      "sublabel": "계산엔진 밖 숫자 거부",
+      "width": 152
+    },
+    {
+      "id": "semantic",
+      "lane": "onprem",
+      "col": 1,
+      "type": "backend",
+      "label": "Semantic Layer",
+      "sublabel": "지표 정의만 신뢰",
+      "width": 138
+    },
+    {
+      "id": "lookup",
+      "lane": "onprem",
+      "col": 2,
+      "type": "database",
+      "label": "정확 조회",
+      "sublabel": "RDS · 벡터 검색 없음",
+      "width": 138
+    },
+    {
+      "id": "calc",
+      "lane": "onprem",
+      "col": 3,
+      "type": "backend",
+      "label": "계산엔진",
+      "sublabel": "우대금리·한도 (수식)",
+      "tag": "순수 함수 + 단위테스트",
+      "width": 138
+    },
+    {
+      "id": "maskgate",
+      "lane": "onprem",
+      "col": 4,
+      "type": "security",
+      "label": "마스킹 게이트",
+      "sublabel": "토큰화 · 재식별 매핑 보관",
+      "width": 148
+    },
+    {
+      "id": "audit",
+      "lane": "onprem",
+      "col": 5,
+      "type": "database",
+      "label": "감사 원문",
+      "sublabel": "온프렘 보관",
+      "width": 138
+    },
+    {
+      "id": "llm",
+      "lane": "cloud",
+      "col": 4,
+      "type": "cloud",
+      "label": "Bedrock 설명 생성",
+      "sublabel": "마스킹 페이로드만 수신",
+      "tag": "토큰 스트리밍",
+      "width": 152
+    },
+    {
+      "id": "trace",
+      "lane": "cloud",
+      "col": 5,
+      "type": "database",
+      "label": "경계 계측",
+      "sublabel": "traceId · PII 실측",
+      "width": 138
+    }
+  ],
+  "edges": [
+    {
+      "id": "q-in",
+      "from": "user",
+      "to": "gin",
+      "variant": "security"
+    },
+    {
+      "id": "gin-blocked",
+      "from": "gin",
+      "to": "blocked",
+      "label": "투자권유",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "gin-sem",
+      "from": "gin",
+      "to": "semantic",
+      "label": "통과",
+      "variant": "emphasis"
+    },
+    {
+      "id": "sem-lookup",
+      "from": "semantic",
+      "to": "lookup",
+      "variant": "default"
+    },
+    {
+      "id": "lookup-calc",
+      "from": "lookup",
+      "to": "calc",
+      "label": "원본 값",
+      "variant": "emphasis"
+    },
+    {
+      "id": "calc-mask",
+      "from": "calc",
+      "to": "maskgate",
+      "label": "확정 수치",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mask-llm",
+      "from": "maskgate",
+      "to": "llm",
+      "label": "경계 통과 (마스킹됨)",
+      "variant": "security"
+    },
+    {
+      "id": "llm-verify",
+      "from": "llm",
+      "to": "verify",
+      "variant": "default"
+    },
+    {
+      "id": "verify-reply",
+      "from": "verify",
+      "to": "reply",
+      "label": "재식별",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mask-audit",
+      "from": "maskgate",
+      "to": "audit",
+      "label": "원문 + 매핑",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "audit-trace",
+      "from": "audit",
+      "to": "trace",
+      "label": "메트릭·traceId만",
+      "variant": "dashed",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "안티 요구사항 시행",
+      "items": [
+        "LLM이 금액·금리를 만들면 수치 검증기가 표시한다",
+        "개인 금융데이터는 벡터화하지 않는다 — 키 기반 조회만"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "관측 가능성",
+      "items": [
+        "각 단계가 UI에서 펼쳐지고 온프렘/클라우드 색으로 구분",
+        "경계 통과 페이로드는 토글로 원문 확인 가능"
+      ]
+    }
+  ]
+}

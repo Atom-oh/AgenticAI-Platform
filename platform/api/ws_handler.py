@@ -51,12 +51,14 @@ def _apply_guardrail(text: str, source: str) -> dict:
 def _studio(method: str, path: str, token: str = "", body: dict | None = None) -> dict:
     """UI/UX 스튜디오 API 프록시 — 쓰기는 사용자 본인의 스튜디오 토큰(x-hana-auth)을
     그대로 전달한다 (같은 공유 계정, 신원이 스튜디오 감사에 그대로 남는다)."""
+    data = json.dumps(body, ensure_ascii=False).encode() if body else None
     headers = {"Content-Type": "application/json"}
+    if data is not None:  # CloudFront OAC는 본문 있는 요청에 payload hash를 요구한다
+        import hashlib
+        headers["x-amz-content-sha256"] = hashlib.sha256(data).hexdigest()
     if token:
         headers["x-hana-auth"] = token
-    req = urllib.request.Request(STUDIO + path,
-        data=json.dumps(body, ensure_ascii=False).encode() if body else None,
-        headers=headers, method=method)
+    req = urllib.request.Request(STUDIO + path, data=data, headers=headers, method=method)
     try:
         return json.loads(urllib.request.urlopen(req, timeout=60).read().decode())
     except urllib.error.HTTPError as e:
@@ -64,6 +66,17 @@ def _studio(method: str, path: str, token: str = "", body: dict | None = None) -
             return {"error": json.loads(e.read().decode()).get("error", str(e.code))}
         except Exception:
             return {"error": f"HTTP {e.code}"}
+
+
+ONPREM_URL = os.environ.get("ONPREM_URL", "")
+
+
+def _onprem(path: str, body: dict) -> dict:
+    """온프렘 플레인(격리 서브넷 ECS) 호출 — 정확 조회·계산·마스킹·감사 원문 담당."""
+    req = urllib.request.Request(ONPREM_URL + path,
+        data=json.dumps(body, ensure_ascii=False).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    return json.loads(urllib.request.urlopen(req, timeout=20).read().decode())
 
 
 def _save_trace(rec: dict) -> None:
@@ -167,9 +180,6 @@ def _run_s2(apigw, conn_id: str, email: str, query: str, rid: str) -> None:
     """
     import uuid
     from engine import bedrock
-    from onprem import masking
-    from onprem.calc_engine import jeonse_loan_limit, preferential_rate, verify_no_generated_numbers
-    from personal_data import exact_lookup
 
     trace_id = uuid.uuid4().hex[:12]
     t_start = time.time()
@@ -197,64 +207,83 @@ def _run_s2(apigw, conn_id: str, email: str, query: str, rid: str) -> None:
                               "ownerDept": metric.owner_dept,
                               "sql": metric.sql_template.strip()})
 
-    # ③ 정확 조회 (tool call — 벡터 검색 없음)
-    profile = exact_lookup(email)
-    raw_values = {
-        "고객": f"{profile['name']} ({profile['customerId']}, {profile['segment']})",
-        "상품": f"{profile['product']['name']} · 기본금리 {profile['product']['baseRate']}%",
-        "급여이체": f"{profile['salaryTransferMonths']}개월 연속",
-        "전월 카드사용": f"{profile['cardMonthlyKrw']:,}원",
-        "자동이체": f"{profile['autoTransferCount']}건",
-        "생애최초/신혼": f"{profile['isFirstHome']}/{profile['isNewlywed']}",
-        "임차보증금": f"{profile['jeonse']['depositKrw']:,}원",
-        "연소득": f"{profile['jeonse']['annualIncomeKrw']:,}원",
-        "기존대출": f"{profile['jeonse']['existingDebtKrw']:,}원",
-    }
-    stage("lookup", values=raw_values, source="온프렘 정확 조회(합성) — Phase 3에서 RDS 이관")
-
-    # ④ 결정론적 계산엔진
-    rate = preferential_rate(profile, profile["product"]["baseRate"])
-    limit = jeonse_loan_limit(profile["jeonse"]["depositKrw"],
-                              profile["jeonse"]["guaranteeRatio"],
-                              profile["jeonse"]["annualIncomeKrw"],
-                              profile["jeonse"]["existingDebtKrw"])
-    stage("calc", rate=rate.to_dict(), limit=limit.to_dict())
-
-    # ⑤ 마스킹/토큰화 게이트 — 이 페이로드만 경계를 넘는다
-    prompt = (f"고객 세그먼트: {profile['segment']}\n"
-              f"고객 식별: {profile['customerId']} / 계좌 {profile['account']['accountId']}\n"
-              f"상품: {profile['product']['name']}\n"
-              f"[계산엔진 확정값 — 이 숫자만 사용할 것]\n"
-              f"- 적용금리: {rate.value}% (기본 {profile['product']['baseRate']}%)\n"
-              f"- 우대 판정: " + "; ".join(f"{s.label}→{s.value}" for s in rate.steps[1:-1]) + "\n"
-              f"- 대출 가능 한도: {int(limit.value):,}원\n\n질문: {query}")
-    m = masking.mask(prompt, {"customerName": profile["name"]})
-    pii_out = _pii_outbound_count(m.text)
-    stage("mask", maskedFields=m.masked_fields, maskedPayload=m.text,
-          piiOutbound=pii_out)
+    # ③④⑤ 정확 조회 → 결정론적 계산 → 마스킹: 온프렘 플레인(격리 서브넷 ECS)이 수행
+    if ONPREM_URL:
+        prep = _onprem("/s2/prepare", {"email": email, "query": query, "traceId": trace_id})
+        plane = f"온프렘 플레인 (ECS 격리 서브넷 · {prep.get('dataSource', '')})"
+        stage("lookup", values=prep["rawValues"], source=plane)
+        stage("calc", rate=prep["rate"], limit=prep["limit"])
+        masked_payload = prep["maskedPayload"]
+        masked_fields = prep["maskedFields"]
+        allowed = prep["allowedNumbers"]
+        pii_out = _pii_outbound_count(masked_payload)
+        stage("mask", maskedFields=masked_fields, maskedPayload=masked_payload,
+              piiOutbound=pii_out)
+        mapping = None  # 재식별 매핑은 온프렘 밖으로 나오지 않는다
+    else:  # 로컬 폴백 (개발용)
+        from onprem import masking
+        from onprem.calc_engine import jeonse_loan_limit, preferential_rate
+        from personal_data import exact_lookup
+        profile = exact_lookup(email)
+        raw_values = {
+            "고객": f"{profile['name']} ({profile['customerId']}, {profile['segment']})",
+            "상품": f"{profile['product']['name']} · 기본금리 {profile['product']['baseRate']}%",
+            "급여이체": f"{profile['salaryTransferMonths']}개월 연속",
+            "전월 카드사용": f"{profile['cardMonthlyKrw']:,}원",
+            "자동이체": f"{profile['autoTransferCount']}건",
+            "생애최초/신혼": f"{profile['isFirstHome']}/{profile['isNewlywed']}",
+            "임차보증금": f"{profile['jeonse']['depositKrw']:,}원",
+            "연소득": f"{profile['jeonse']['annualIncomeKrw']:,}원",
+            "기존대출": f"{profile['jeonse']['existingDebtKrw']:,}원",
+        }
+        stage("lookup", values=raw_values, source="로컬 폴백 (개발용)")
+        rate = preferential_rate(profile, profile["product"]["baseRate"])
+        limit = jeonse_loan_limit(profile["jeonse"]["depositKrw"],
+                                  profile["jeonse"]["guaranteeRatio"],
+                                  profile["jeonse"]["annualIncomeKrw"],
+                                  profile["jeonse"]["existingDebtKrw"])
+        stage("calc", rate=rate.to_dict(), limit=limit.to_dict())
+        prompt = (f"고객 세그먼트: {profile['segment']}\n"
+                  f"고객 식별: {profile['customerId']} / 계좌 {profile['account']['accountId']}\n"
+                  f"상품: {profile['product']['name']}\n"
+                  f"[계산엔진 확정값 — 이 숫자만 사용할 것]\n"
+                  f"- 적용금리: {rate.value}% (기본 {profile['product']['baseRate']}%)\n"
+                  f"- 우대 판정: " + "; ".join(f"{st.label}→{st.value}" for st in rate.steps[1:-1]) + "\n"
+                  f"- 대출 가능 한도: {int(limit.value):,}원\n\n질문: {query}")
+        m = masking.mask(prompt, {"customerName": profile["name"]})
+        masked_payload, masked_fields, mapping = m.text, m.masked_fields, m.mapping
+        allowed = ([str(rate.value), f"{int(limit.value):,}", str(int(limit.value)),
+                    profile["product"]["baseRate"]]
+                   + [st.value for st in rate.steps] + [st.value for st in limit.steps]
+                   + [st.formula for st in rate.steps] + [st.formula for st in limit.steps])
+        allowed = [a.replace("%", "").replace("원", "").replace("%p", "") for a in allowed]
+        pii_out = _pii_outbound_count(masked_payload)
+        stage("mask", maskedFields=masked_fields, maskedPayload=masked_payload,
+              piiOutbound=pii_out)
 
     # ⑥ Bedrock 설명 생성 (스트리밍) — 마스킹된 컨텍스트만 수신
     system = ("당신은 아톰은행 상담 도우미입니다. 제공된 계산엔진 확정값만 사용해 우대금리 "
               "충족 여부와 가능 금액을 한국어로 친절히 설명하세요. 어떤 숫자도 새로 만들지 "
               "마세요. 확정 신청은 영업점/앱에서 진행하도록 안내하세요.")
     full = []
-    for tk in bedrock.generate_stream(system, m.text, max_tokens=800):
+    for tk in bedrock.generate_stream(system, masked_payload, max_tokens=800):
         full.append(tk)
         _post(apigw, conn_id, {"type": "s2.token", "reqId": rid, "t": tk})
     answer = "".join(full)
 
     # ⑦ 출력 가드레일 + 수치 검증기 + 재식별
     g_out = _apply_guardrail(answer, "OUTPUT")
-    allowed = [str(rate.value), f"{int(limit.value):,}", str(int(limit.value)),
-               profile["product"]["baseRate"], f"{profile['cardMonthlyKrw']:,}",
-               f"{profile['jeonse']['depositKrw']:,}", f"{profile['jeonse']['annualIncomeKrw']:,}",
-               f"{profile['jeonse']['existingDebtKrw']:,}"] + \
-              [s.value for s in rate.steps] + [s.value for s in limit.steps] + \
-              [s.formula for s in rate.steps] + [s.formula for s in limit.steps]
-    invented = verify_no_generated_numbers(answer, [a.replace("%", "").replace("원", "").replace("%p", "") for a in allowed])
-    unmasked = masking.unmask(answer, m.mapping)
+    if ONPREM_URL:
+        fin = _onprem("/s2/finalize", {"traceId": trace_id, "answer": answer,
+                                       "allowedNumbers": allowed})
+        invented, unmasked = fin["inventedNumbers"], fin["unmasked"]
+    else:
+        from onprem import masking as _mk
+        from onprem.calc_engine import verify_no_generated_numbers as _vf
+        invented = _vf(answer, allowed)
+        unmasked = _mk.unmask(answer, mapping or {})
 
-    usage_tokens = len(m.text) // 3  # 추정치 표기용 (정확 usage는 스트림 API 미제공)
+    usage_tokens = len(masked_payload) // 3  # 추정치 표기용 (정확 usage는 스트림 API 미제공)
     _save_trace({"traceId": trace_id, "scenario": "S2", "email": email,
                  "query": query[:120], "blocked": False,
                  "maskedFields": [f["field"] for f in m.masked_fields],
@@ -417,6 +446,25 @@ def handler(event, context):
                     {"name": body.get("name", ""), "type": body.get("assetType", ""),
                      "content": body.get("content", ""), "scope": body.get("scope", "shared")})
         _post(apigw, conn_id, {"type": "studio_register", "reqId": rid, **r})
+        return {"statusCode": 200}
+
+    if action == "load_neptune":
+        # 시드 데이터를 Neptune에 적재 (관리 작업 — 시연 준비용, 멱등: wipe 후 재적재)
+        from graph.store import LocalGraphStore, NeptuneGraphStore
+        try:
+            nep = NeptuneGraphStore()
+            local = LocalGraphStore.from_seed_dir(
+                os.path.join(os.path.dirname(__file__), "seed", "out"))
+            nep.wipe()
+            nep.upsert_nodes([local._nodes[i] for i in local._nodes])
+            edges = [e for rels in local._out.values() for lst in rels.values() for e in lst]
+            nep.upsert_edges(edges)
+            n, e = nep.count()
+            _post(apigw, conn_id, {"type": "load_neptune", "reqId": rid,
+                                   "nodes": n, "edges": e})
+        except Exception as ex:
+            _post(apigw, conn_id, {"type": "load_neptune", "reqId": rid,
+                                   "error": str(ex)[:300]})
         return {"statusCode": 200}
 
     if action == "traces":

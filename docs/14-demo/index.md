@@ -38,5 +38,6 @@ GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 
 ## 설계 문서
 
 - [아키텍처와 설계 결정](./architecture) — 구성도, SPEC 매핑, 정직한 미완 사항
+- [플랫폼 아키텍처 인터랙티브 다이어그램](/AgenticAI-Platform/platform-architecture.html) · [S2 워크플로우](/AgenticAI-Platform/s2-workflow.html)
 - 요구사항 명세 원문: 저장소 루트 `SPEC.md`
 - 보안·거버넌스: 저장소 `demo/SECURITY-GOVERNANCE.md`

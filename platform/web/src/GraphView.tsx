@@ -10,7 +10,9 @@ const TYPE_COLOR: Record<string, string> = {
 export type GNode = { id: string; label: string; name: string };
 export type GEdge = { src: string; rel: string; dst: string };
 
-export default function GraphView({ nodes, edges }: { nodes: GNode[]; edges: GEdge[] }) {
+export default function GraphView({ nodes, edges, onSelect, onOpen }:
+  { nodes: GNode[]; edges: GEdge[]; onSelect?: (id: string) => void;
+    onOpen?: (id: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,6 +51,20 @@ export default function GraphView({ nodes, edges }: { nodes: GNode[]; edges: GEd
       layout: { name: 'cose', animate: false, nodeRepulsion: () => 8000, idealEdgeLength: () => 55 } as any,
       wheelSensitivity: 0.2,
     });
+    // 노드 클릭: 이웃 강조 + 상위 콜백(탐색기 재중심/이동)
+    cy.on('tap', 'node', (ev) => {
+      const n = ev.target;
+      cy.elements().removeClass('dim hl');
+      cy.elements().addClass('dim');
+      n.closedNeighborhood().removeClass('dim').addClass('hl');
+      onSelect?.(n.id());
+    });
+    cy.on('tap', (ev) => { if (ev.target === cy) cy.elements().removeClass('dim hl'); });
+    cy.on('dbltap', 'node', (ev) => onOpen?.(ev.target.id()));
+    cy.style().selector('.dim').style({ opacity: 0.15 } as any)
+      .selector('node.hl').style({ 'border-width': 2, 'border-color': '#e2e8f0' } as any)
+      .selector('edge.hl').style({ 'line-color': '#7dd3fc', 'target-arrow-color': '#7dd3fc', width: 2 } as any)
+      .update();
     return () => { cy.destroy(); };
   }, [nodes, edges]);
 

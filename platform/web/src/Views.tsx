@@ -51,14 +51,20 @@ export function Dashboard({ go }: { go: (v: string) => void }) {
 }
 
 /* ---------------- 온톨로지 탐색기 ---------------- */
+export let pendingExploreNode = '';
+export function setPendingExploreNode(id: string) { pendingExploreNode = id; }
+
 export function Explore() {
-  const [center, setCenter] = useState('REG-LN-001');
+  const [center, setCenter] = useState(pendingExploreNode || 'REG-LN-001');
   const [data, setData] = useState<WsEvent | null>(null);
   const load = (id: string) => {
     setCenter(id);
     sock.request('explore', { nodeId: id }).then(setData).catch(() => {});
   };
-  useEffect(() => { load('REG-LN-001'); }, []);
+  useEffect(() => {
+    load(pendingExploreNode || 'REG-LN-001');
+    pendingExploreNode = '';
+  }, []);
   return (
     <div>
       <div className="panel p-3 mb-3 flex gap-2 items-center">
@@ -78,7 +84,9 @@ export function Explore() {
           ))}
         </div>
       )}
-      {data?.graph && <GraphView nodes={data.graph.nodes} edges={data.graph.edges} />}
+      <div className="text-xs text-slate-500 mb-2">노드를 클릭하면 그 노드를 중심으로 이웃 관계를 다시 펼칩니다.</div>
+      {data?.graph && <GraphView nodes={data.graph.nodes} edges={data.graph.edges}
+        onSelect={(id) => load(id)} />}
     </div>
   );
 }
@@ -187,7 +195,8 @@ export function TwoPlane({ blockedOnly }: { blockedOnly?: boolean }) {
         </div>
         <div className="text-xs text-slate-500 max-w-md">
           하드코딩이 아니다 — 매 요청의 경계 통과 페이로드를 정규식 스캔해 DynamoDB에 기록한 값의 합.
-          온프렘 플레인 물리 분리(별도 VPC·ECS)는 Phase 3에서 적용 예정이며 현재는 단일 Lambda 내 논리 분리다.</div>
+          정확 조회·계산·마스킹·감사 원문은 <b style={{ color: 'var(--onprem)' }}>NAT 없는 격리 서브넷의 ECS 온프렘 플레인</b>이
+          수행하고, 클라우드에는 마스킹된 페이로드와 메트릭만 나간다.</div>
         <button className="chip ml-auto hover:border-sky-500" onClick={reload}>새로고침</button>
       </div>
       <div className="panel overflow-hidden">

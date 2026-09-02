@@ -7,7 +7,7 @@ import { auth, sock } from './lib';
 type Draft = { id: string; title: string; axis: string; status: string; url: string; created_at: string };
 type Asset = { name: string; type: string; version: string; actor: string; updated_at: string; scope: string; asset_id?: string };
 
-const ASSET_TYPES = ['token', 'palette', 'iconset', 'component', 'styleguide', 'skill', 'workflow', 'agent'];
+const ASSET_TYPES = ['token', 'palette', 'icon-set', 'component', 'style-guide', 'skill', 'workflow', 'agent'];
 
 export default function Studio() {
   const [tab, setTab] = useState<'gallery' | 'assets' | 'generate'>('gallery');

@@ -111,7 +111,13 @@ export default function S1() {
         </section>
       </div>
 
-      <GraphView nodes={graph.nodes} edges={graph.edges} />
+      {graph.nodes.length > 0 && (
+        <div className="text-xs text-slate-500 mb-1">노드 클릭: 이웃 강조 · 더블클릭: 온톨로지 탐색기에서 열기</div>
+      )}
+      <GraphView nodes={graph.nodes} edges={graph.edges}
+        onOpen={(id) => {
+          import('./Views').then(v => { v.setPendingExploreNode(id); location.hash = '#/explore'; });
+        }} />
     </div>
   );
 }

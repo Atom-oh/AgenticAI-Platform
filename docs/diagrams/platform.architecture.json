@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "종합 Agentic AI Platform — 아톰은행 데모",
+    "output": "../public/platform-architecture.html",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "request",
+        "label": "요청 경로",
+        "focus": [
+          "users",
+          "spa",
+          "cognito",
+          "wsapi",
+          "cloudfn",
+          "bedrock"
+        ],
+        "note": "로그인 한 번으로 두 Cognito 풀에 인증하고, WebSocket 연결은 토큰 없이는 거부된다."
+      },
+      {
+        "id": "twoplane",
+        "label": "Two-Plane 경계",
+        "focus": [
+          "cloudfn",
+          "onprem",
+          "rds",
+          "guardrails"
+        ],
+        "note": "정확 조회·계산·마스킹·감사 원문은 NAT 없는 격리 서브넷의 온프렘 플레인이 수행한다. 클라우드로는 마스킹된 페이로드만 나간다."
+      },
+      {
+        "id": "governance",
+        "label": "MCP · 거버넌스",
+        "focus": [
+          "mcp",
+          "registry",
+          "cloudfn"
+        ],
+        "note": "중앙 MCP(Gateway)가 은행 툴 3종을 노출하고, 전 서피스 자산은 Agent Registry에서 승인 수명주기를 가진다."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "users",
+      "type": "external",
+      "label": "사용자",
+      "sublabel": "심사·기획·디자이너",
+      "pos": [
+        30,
+        340
+      ],
+      "size": [
+        130,
+        60
+      ]
+    },
+    {
+      "id": "spa",
+      "type": "frontend",
+      "label": "단일 SPA",
+      "sublabel": "CloudFront + S3 · React",
+      "pos": [
+        230,
+        340
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "유일한 퍼블릭 진입점"
+    },
+    {
+      "id": "cognito",
+      "type": "security",
+      "label": "Cognito ×2",
+      "sublabel": "플랫폼 + 스튜디오 풀",
+      "pos": [
+        230,
+        130
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "가입 불가 · 초대 전용"
+    },
+    {
+      "id": "wsapi",
+      "type": "cloud",
+      "label": "WebSocket API",
+      "sublabel": "$connect 토큰 필수",
+      "pos": [
+        460,
+        340
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "cloudfn",
+      "type": "backend",
+      "label": "클라우드 플레인 Lambda",
+      "sublabel": "GraphRAG · 오케스트레이션",
+      "pos": [
+        690,
+        340
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "F6 경계 계측"
+    },
+    {
+      "id": "bedrock",
+      "type": "cloud",
+      "label": "Bedrock",
+      "sublabel": "Claude Sonnet · 스트리밍",
+      "pos": [
+        1120,
+        340
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "guardrails",
+      "type": "security",
+      "label": "Guardrails",
+      "sublabel": "투자권유 차단 · 실물",
+      "pos": [
+        1120,
+        150
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "입·출력 양방향"
+    },
+    {
+      "id": "neptune",
+      "type": "database",
+      "label": "Neptune",
+      "sublabel": "온톨로지 3,317노드",
+      "pos": [
+        930,
+        150
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "onprem",
+      "type": "backend",
+      "label": "온프렘 플레인 ECS",
+      "sublabel": "정확 조회·계산·마스킹",
+      "pos": [
+        690,
+        560
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "감사 원문 보관"
+    },
+    {
+      "id": "rds",
+      "type": "database",
+      "label": "RDS PostgreSQL",
+      "sublabel": "합성 개인데이터",
+      "pos": [
+        930,
+        560
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "중앙 MCP Gateway",
+      "sublabel": "bank + platform 툴 6종",
+      "pos": [
+        230,
+        560
+      ],
+      "size": [
+        170,
+        62
+      ],
+      "tag": "Cognito JWT 인바운드"
+    },
+    {
+      "id": "registry",
+      "type": "security",
+      "label": "Agent Registry",
+      "sublabel": "us-east-1 · 승인 정본",
+      "pos": [
+        460,
+        130
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "tag": "CloudTrail 감사"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "AWS ap-northeast-2 · Two-Plane VPC",
+      "wraps": [
+        "wsapi",
+        "cloudfn",
+        "bedrock",
+        "guardrails",
+        "neptune",
+        "onprem",
+        "rds",
+        "mcp"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "온프렘 플레인 — 격리 서브넷 (NAT 없음)",
+      "wraps": [
+        "onprem",
+        "rds"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "u-spa",
+      "from": "users",
+      "to": "spa",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "u-cog",
+      "from": "users",
+      "to": "cognito",
+      "label": "로그인 1회 · 풀 2곳 인증",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "spa-ws",
+      "from": "spa",
+      "to": "wsapi",
+      "label": "wss + access token",
+      "variant": "security",
+      "labelDy": 55
+    },
+    {
+      "id": "ws-fn",
+      "from": "wsapi",
+      "to": "cloudfn",
+      "label": "스트리밍 push",
+      "labelDy": 55
+    },
+    {
+      "id": "fn-br",
+      "from": "cloudfn",
+      "to": "bedrock",
+      "label": "마스킹된 페이로드만",
+      "variant": "emphasis",
+      "labelDy": 55
+    },
+    {
+      "id": "fn-gr",
+      "from": "cloudfn",
+      "to": "guardrails",
+      "label": "ApplyGuardrail 입·출력",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "fn-nep",
+      "from": "cloudfn",
+      "to": "neptune",
+      "label": "openCypher 4-hop",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelSegment": 1
+    },
+    {
+      "id": "fn-on",
+      "from": "cloudfn",
+      "to": "onprem",
+      "label": "내부 ALB (SG 전용)",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 26
+    },
+    {
+      "id": "on-rds",
+      "from": "onprem",
+      "to": "rds",
+      "label": "키 기반 정확 조회",
+      "labelDy": 55
+    },
+    {
+      "id": "u-mcp",
+      "from": "users",
+      "to": "mcp",
+      "label": "MCP (JWT)",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "fn-reg",
+      "from": "cloudfn",
+      "to": "registry",
+      "label": "승인 수명주기 조회",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "Two-Plane 원칙",
+      "items": [
+        "온프렘 플레인은 인터넷 경로가 없다 — VPC 엔드포인트만",
+        "프롬프트 원문·재식별 매핑은 플레인 밖으로 나가지 않는다",
+        "경계 통과 PII를 정규식 실측 — 현재 반출 0건"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "하나의 플랫폼",
+      "items": [
+        "S1 GraphRAG · S2 상담 · Registry · Two-Plane · Guardrails가 한 SPA",
+        "컨트롤룸·디자인 스튜디오는 사용자 토큰 프록시로 네이티브 통합",
+        "중앙 MCP가 은행 툴 3종을 조직 전체에 노출"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "숫자의 출처",
+      "items": [
+        "금액·금리는 결정론적 계산엔진만 생성 (LLM은 설명)",
+        "출력 검증기가 계산엔진에 없는 수치를 차단",
+        "합성데이터 · 토큰 식별자 · 실계정 미사용"
+      ]
+    }
+  ]
+}

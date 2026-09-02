@@ -1,0 +1,30 @@
+{
+  "gatewayIdentifier": "nexus-platform-tools-dgt6g0wppb",
+  "name": "bank",
+  "description": "AtomBank platform tools (regulation impact via ontology 4-hop, semantic metric resolve)",
+  "targetConfiguration": {
+    "mcp": {
+      "lambda": {
+        "lambdaArn": "arn:aws:lambda:ap-northeast-2:180294183052:function:bank-mcp-tools",
+        "toolSchema": {
+          "inlinePayload": [
+            {"name": "analyze_regulation_impact",
+             "description": "규정 개정 영향을 온톨로지 4-hop 순회로 분석한다. reg_code(예: REG-LN-001) 또는 question(자연어)을 준다. 영향 상품·화면·부서·문서 목록을 반환.",
+             "inputSchema": {"type": "object", "properties": {
+               "reg_code": {"type": "string", "description": "규정 코드 (선택)"},
+               "question": {"type": "string", "description": "자연어 질문 (선택)"}}}},
+            {"name": "resolve_metric",
+             "description": "한국어 지표 용어(우대금리·전월실적·LTV·잔여한도 등)를 Semantic Layer 정의로 해석해 SQL 템플릿과 소관 부서를 반환한다.",
+             "inputSchema": {"type": "object", "properties": {
+               "term": {"type": "string", "description": "지표 용어"}}, "required": ["term"]}},
+            {"name": "list_regulations",
+             "description": "아톰은행 규정 목록을 조회/검색한다.",
+             "inputSchema": {"type": "object", "properties": {
+               "query": {"type": "string", "description": "제목 검색어(선택)"}}}}
+          ]
+        }
+      }
+    }
+  },
+  "credentialProviderConfigurations": [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+}
