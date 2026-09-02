@@ -11,10 +11,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `demo/builder-harness/` | 자매 데모: 에이전트 컨트롤룸 (한울증권 도메인, AgentCore Harness) | `demo/SECURITY-GOVERNANCE.md` |
 | `demo/uiux-studio/` | 자매 데모: 디자이너용 UI/UX 스튜디오 (자체 CDK 스택) | `demo/uiux-studio/README.md` |
 
-SPEC.md는 사용자가 준 정본이며 §17에 결정 변경 이력이 쌓인다(예: A1 — PII는 VPC 안에 두되
-Bedrock 등 모델 호출 페이로드에는 익명화 필수). §12 안티 요구사항(LLM이 금액·금리 생성 금지,
-Guardrails 목 금지, Vector RAG 비교군 약화 금지, 브라우저 스토리지에 개인데이터 금지 등)을 위반하는
-구현은 하지 않는다.
+SPEC.md는 사용자가 준 정본이다(2026-09-02 전면 개정판). 착수 전 반드시 읽을 절:
+§3 **Single Boundary**(모든 데이터 플레인은 한 VPC 프라이빗 서브넷, **익명화 게이트가 Bedrock으로
+나가는 유일한 통과 지점** — 우회 경로 금지), §11 **대체 표기 규칙 ★**(데모가 운영 구성을 대체한
+곳은 화면 배지로 사실대로 표기 — 숨기면 최악), §12 **안티 요구사항 13개(예외 없음)**,
+§16 구현 메모(명세와 실측이 다른 지점의 기록). 주의: §12.13이 "온프렘", "Two-Plane",
+"In-Region" 표현 사용을 금지한다 — "VPC 프라이빗 서브넷"으로 표기한다.
 
 ## 명령
 
@@ -30,7 +32,7 @@ python3 -m pytest tests/test_calc_engine.py -q   # 단일 파일
 bash deploy.sh                          # 코드 변경 재배포 (api-dist 조립→CDK→프론트 S3+무효화)
 bash deploy.sh --plane                  # 플레인 스택 포함 첫 배포 (20~30분)
 GRAPH_BACKEND=neptune bash deploy.sh    # 시연용 — Neptune 적재 자동
-python3 cli.py admin health             # 브리지→온프렘/Neptune 상태
+python3 cli.py admin health             # 브리지→플레인 서비스/Neptune 상태
 python3 cli.py admin reset_demo         # 시연 리셋
 bash teardown.sh                        # 플레인 스택 삭제 (Neptune·RDS·ECS 상시 과금)
 ```
@@ -40,20 +42,28 @@ CDK 함정: 배포 전 `platform/infra/cdk.out`이 오래됐으면 지워라 —
 
 ## 은행 데모 아키텍처 (platform/)
 
-두 CDK 스택, NAT 없음 — 상세 다이어그램은 `platform/README.md`:
+구조 다이어그램·스택 이름·리소스는 **`platform/README.md`가 살아있는 정본**이다(자주 바뀐다 —
+여기 복제하지 않는다). 오래 유지되는 원칙만 적는다:
 
-- **`BankPlatform`(클라우드 플레인)**: CloudFront+S3(유일한 퍼블릭 진입점) / WebSocket API
-  (`$connect`에서 Cognito access token 검증 — 무토큰 연결 거부) / `WsFn`(VPC 밖) / Guardrails·
-  Registry는 IaC. `ReaderFn`은 F7 시연용으로 내부 도구 invoke 권한이 없다(IAM AccessDenied가 의도).
-- **`BankPlatformPlane`(격리 VPC)**: `onprem-isolated` 서브넷(인터넷 경로 0)의 ECS 온프렘 서비스
-  (정확 조회·계산엔진·마스킹·감사원문·벡터 인덱스) + RDS. Neptune·`BridgeFn`·`WriterFn`은
-  cloud-isolated 서브넷. **브리지 Lambda(IAM invoke 전용)가 플레인의 유일한 입구**이고, 관리 작업
-  (Neptune 적재·시드·리셋)은 `AdminFn`(IAM 전용) — 사용자 WebSocket 경로에 관리 액션을 노출하지 않는다.
-- 데이터 원칙: 프롬프트 원문·재식별 매핑은 플레인 안(RDS `audit_log`)에만. 클라우드 트레이스에는
-  해시·길이·메트릭만(§12.3). PII 반출 카운터는 정규식 실측값이며 하드코딩 금지(§3.1).
-- 그래프: `graph/store.py`의 `GraphStore` 인터페이스 — `LocalGraphStore`(개발)와
-  `NeptuneGraphStore`(시연, 브리지 경유). `GRAPH_BACKEND` env로 전환하고 UI가 현재 백엔드를 항상 표시한다.
-  로컬로 시연하며 Neptune이라 말하는 것은 금지(§11).
+- **Single Boundary(§3)**: PII 원장(RDS)·벡터 인덱스·온톨로지(Neptune)·계산엔진·감사 원문은 전부
+  VPC 프라이빗 서브넷(인터넷 게이트웨이 없음) 안. Bedrock으로 나가는 **모든** 호출은 익명화 게이트
+  하나를 지나며 여기서 페이로드를 실측 계측한다. 원장은 복제·벡터화·그래프 적재하지 않는다.
+- **모델 라우팅(§4)**: `LLMClient` 인터페이스 + `LLM_ROUTE=claude|gemma`.
+  Tier 0/1 = Claude **global 프로파일**(`global.anthropic.claude-sonnet-5` 기본, Converse API).
+  Tier 2(PII 추론) 데모 대체 = **Gemma 4 31B via `bedrock-mantle`**(us-west-2, OpenAI 호환
+  Chat Completions — Converse/InvokeModel 미지원, 병렬 도구 호출 미지원, 인증은 Bearer 토큰(12h,
+  IAM으로 발급) 또는 Secrets Manager의 장기 키). 프롬프트가 국외로 이동할 수 있으므로 익명화가 필수라는
+  것이 이 설계의 근거다.
+- **관리/사용자 경로 분리**: Neptune 적재·시드·리셋 같은 관리 작업은 IAM invoke 전용 Lambda —
+  사용자 WebSocket 경로에 관리 액션을 노출하지 않는다(과거 `load_neptune` 노출 결함의 교훈).
+- **그래프**: `graph/store.py`의 `GraphStore` — `LocalGraphStore`(개발)/`NeptuneGraphStore`(시연).
+  UI가 현재 백엔드를 항상 표시하고, 로컬로 시연하며 Neptune이라 말하지 않는다.
+- **온톨로지 2개 도메인(§5)**: 여신(Regulation·Product·Condition…) + UX 자산(Pattern·Procedure·
+  PolicyRule·UXTerm·ScreenMeta). 두 도메인의 연결점은 `(PolicyRule)-[:DERIVED_FROM]->(Regulation)`.
+  합성데이터는 §5-4 커버리지 제약(Regulation 3건 + Component 3건 영향 기준)을 테스트로 검증한다.
+- **§11 배지 의무**: PII 추론 경로(운영 IDC GPU+vLLM / 데모 Gemma 대체), 익명화 게이트 구현 수준,
+  AgentCore insights·Evaluations·Policy를 쓰는 화면의 `Tier 0/1 전용` 배지. Related 카운트 등
+  수치는 전부 실쿼리 — 하드코딩을 실측처럼 보이게 하지 않는다(§12.8).
 
 ### 병렬 작업 계약
 
