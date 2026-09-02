@@ -17,7 +17,7 @@ export default function Studio() {
       <div className="flex items-center gap-2 mb-4">
         {([['gallery', '갤러리'], ['assets', '디자인 자산'], ['generate', '생성']] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
-            className={`chip ${tab === id ? 'text-sky-300 border-sky-700' : 'text-slate-400 hover:border-slate-500'}`}>{label}</button>
+            className={`chip ${tab === id ? 'text-teal-300 border-teal-600' : 'text-slate-400 hover:border-slate-500'}`}>{label}</button>
         ))}
         <span className="text-xs text-slate-500 ml-2">
           소스 기반 네이티브 통합 — 스튜디오 백엔드(자산 레지스트리·AgentCore Memory·Runtime)를 그대로 사용
@@ -54,7 +54,7 @@ function Gallery({ canWrite }: { canWrite: boolean }) {
             <div className="flex items-center gap-2 mt-1">
               <span className={`text-xs font-semibold ${color(d.status)}`}>{d.status}</span>
               <span className="chip text-[10px]">{d.axis}</span>
-              <a className="text-xs text-sky-400 ml-auto" href={d.url} target="_blank" rel="noopener">원본 ↗</a>
+              <a className="text-xs text-teal-400 ml-auto" href={d.url} target="_blank" rel="noopener">원본 ↗</a>
             </div>
             {canWrite && d.status === '검토중' && (
               <div className="flex gap-2 mt-2">
@@ -129,7 +129,7 @@ function Assets({ canWrite }: { canWrite: boolean }) {
             </select>
             <textarea className="w-full mb-2 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm h-28 font-mono"
               placeholder="내용 (markdown 또는 JSON)" value={reg.content} onChange={e => setReg({ ...reg, content: e.target.value })} />
-            <button onClick={register} className="w-full py-2 rounded-lg bg-sky-500/90 text-slate-950 font-semibold text-sm">등록 (버전 히스토리 기록)</button>
+            <button onClick={register} className="w-full py-2 rounded-lg bg-teal-500/90 text-slate-950 font-semibold text-sm">등록 (버전 히스토리 기록)</button>
             {msg && <div className="text-xs text-slate-400 mt-2">{msg}</div>}
           </div>
         )}
@@ -178,10 +178,10 @@ function Generate({ canWrite }: { canWrite: boolean }) {
         {assets.map(a => {
           const id = (a as any).asset_id || `${a.type}:${a.name}`;
           return <button key={id} onClick={() => toggle(id)}
-            className={`chip text-xs ${selAssets.includes(id) ? 'text-sky-300 border-sky-700' : 'text-slate-400'}`}>{a.name}</button>;
+            className={`chip text-xs ${selAssets.includes(id) ? 'text-teal-300 border-teal-600' : 'text-slate-400'}`}>{a.name}</button>;
         })}
       </div>
-      <button onClick={run} className="px-5 py-2 rounded-lg bg-sky-500/90 text-slate-950 font-semibold text-sm">
+      <button onClick={run} className="px-5 py-2 rounded-lg bg-teal-500/90 text-slate-950 font-semibold text-sm">
         생성 (3개 축 variant · AgentCore Runtime)</button>
       {job && <div className="panel p-3 text-sm">
         잡 {job.job_id || job.asset_id} — 상태: <b className={job.status === 'done' ? 'text-emerald-400' : 'text-amber-300'}>{job.status}</b>

@@ -2,12 +2,13 @@
 
 :root {
   /* 색 규칙 (SPEC v2 §8-4): 전 화면 공통 — Bedrock 영역=시안, VPC 내부 영역=앰버 */
-  --cloud: #38bdf8;
-  --onprem: #fbbf24;
+  --cloud: #2dd4bf;       /* 하나 청록 계열 (Bedrock 영역) — 브랜드 #008485의 다크 대비 톤 */
+  --onprem: #fbbf24;      /* VPC 내부 영역 (유지 — §8-4 색 규칙) */
   --ok: #34d399;
-  --bg: #0b0f14;
-  --panel: #111823;
-  --line: #1e2a3a;
+  --hana: #008485;        /* 하나금융 시그니처 청록 */
+  --bg: #081413;          /* 청록 틴트 다크 */
+  --panel: #0d1b1a;
+  --line: #1c3431;
   /* Single Boundary 별칭 — 새 코드는 --vpc / --bedrock 을 쓴다 (기존 변수는 호환용으로 유지) */
   --vpc: var(--onprem);
   --bedrock: var(--cloud);
@@ -17,7 +18,7 @@ html, body, #root { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
-  color: #dbe4ee;
+  color: #dfe9e7;
   font-family: "Pretendard Variable", Pretendard, -apple-system, "Segoe UI", sans-serif;
 }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -74,3 +75,29 @@ body {
   100% { left: 30%; opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .bx-dot { animation-duration: 0.01ms; animation-iteration-count: 1; } }
+
+
+/* ---- Md 렌더러 (LLM 출력) ---- */
+.mdbox { line-height: 1.7; font-size: 14px; word-break: break-word; }
+.mdbox .mdp { margin: 2px 0; }
+.mdbox .mds { height: 8px; }
+.mdbox .mdh { color: #eefaf7; margin: 12px 0 4px; font-size: 15px; font-weight: 700;
+  border-left: 3px solid var(--hana); padding-left: 8px; }
+.mdbox h3.mdh { font-size: 16px; }
+.mdbox strong { color: #f0fdfa; }
+.mdbox em { color: #99f6e4; font-style: normal; }
+.mdbox code { background: #12312d; color: #5eead4; padding: 1px 6px; border-radius: 6px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; }
+.mdbox .mdc { background: #0a1f1d; border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; overflow-x: auto; margin: 6px 0; }
+.mdbox .mdc code { background: none; padding: 0; }
+.mdbox .mdl { margin: 4px 0 4px 4px; padding-left: 18px; }
+.mdbox .mdl li { margin: 2px 0; }
+.mdbox .mdt { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 13px; }
+.mdbox .mdt th { background: #0f2a27; color: #99f6e4; text-align: left; padding: 6px 10px;
+  border: 1px solid var(--line); }
+.mdbox .mdt td { padding: 5px 10px; border: 1px solid var(--line); }
+.mdbox .mdt tr:nth-child(even) td { background: rgba(0,132,133,.06); }
+.mdbox .mdq { border-left: 3px solid var(--onprem); margin: 6px 0; padding: 2px 10px;
+  color: #cbd5d1; }
+.mdbox .mdr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }

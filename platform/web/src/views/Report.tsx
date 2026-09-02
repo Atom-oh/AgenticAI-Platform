@@ -1,6 +1,7 @@
 // F7 보고서 생성 — Reader / 인계 / Writer 3열 시각화 + 프롬프트 인젝션 시연 (SPEC §5 F7, §6.1 화면 8)
 // Reader(외부 콘텐츠 전용, 내부 도구 권한 없음) | 인계(구조화 JSON만) | Writer(내부 문서 접근, 외부 원문 미접근)
 import { useEffect, useState } from 'react';
+import Md from '../Md';
 import { sock, WsEvent } from '../lib';
 
 const SAMPLE_PATH = '/samples/vendor-news.html';
@@ -231,7 +232,7 @@ function WriterColumn({ search, gen, report, done, running }: { search?: Stage; 
             {gen.streamedChars != null && <> (스트리밍 전달 {gen.streamedChars} / 전체 {gen.chars} 자)</>}. STREAM_TABLE·DynamoDB 게이트웨이 엔드포인트·IAM 을 확인하세요.</div>
         )}
         {report
-          ? <div className="md text-slate-200 mt-2 text-[13px]">{report}{gen?.status === 'running' && <span className="blink">▌</span>}</div>
+          ? <div className="text-slate-200 mt-2 text-[13px]"><Md text={report} />{gen?.status === 'running' && <span className="blink">▌</span>}</div>
           : running && <div className="text-slate-600 text-xs mt-2">…</div>}
         {done && !done.error && (
           <div className="text-[11px] text-slate-500 mt-3">
@@ -287,13 +288,13 @@ export default function ReportView() {
     <div>
       {/* 실행 바 */}
       <div className="panel p-3 mb-3 flex gap-2 items-center flex-wrap">
-        <button className="chip whitespace-nowrap hover:border-sky-500 text-sky-300" onClick={() => run(`${location.origin}${SAMPLE_PATH}`)} disabled={running}>
+        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-300" onClick={() => run(`${location.origin}${SAMPLE_PATH}`)} disabled={running}>
           샘플 페이지로 보고서 생성
         </button>
         <input className="flex-1 min-w-[280px] px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm font-mono"
           value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} placeholder="https://…" />
         <button onClick={() => run()} disabled={running}
-          className="px-5 py-2 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+          className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
           {running ? `진행 중… ${progress}/${STEP_ORDER.length}` : '보고서 생성'}
         </button>
         {cached && <span className="chip text-amber-300 border-amber-600">캐시 응답</span>}
@@ -313,7 +314,7 @@ export default function ReportView() {
       {/* 시연 안내 */}
       <div className="panel p-3 mb-4 text-xs flex gap-4 items-start flex-wrap">
         <div className="flex-1 min-w-[320px]">
-          <div className="text-slate-400 mb-1">샘플 페이지(<a className="underline text-sky-300" href={SAMPLE_PATH} target="_blank" rel="noreferrer">{SAMPLE_PATH}</a>)에 심어둔 인젝션 지시문
+          <div className="text-slate-400 mb-1">샘플 페이지(<a className="underline text-teal-300" href={SAMPLE_PATH} target="_blank" rel="noreferrer">{SAMPLE_PATH}</a>)에 심어둔 인젝션 지시문
             {sample?.placements && <span className="text-slate-500"> — {sample.placements.join(' · ')}</span>}</div>
           <div className="rounded border border-rose-800 bg-rose-950/40 text-rose-200 px-2 py-1 break-words">
             {sample?.injectedInstruction || '…'}

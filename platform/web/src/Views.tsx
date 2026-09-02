@@ -89,7 +89,7 @@ export function Dashboard({ go }: { go: (v: string) => void }) {
           ['boundary', 'S4 Single Boundary 뷰', '경계 통과 실측 (2분)'],
           ['guardrails', 'S5 Guardrails', '차단 시연 (2분)'],
           ['report', 'F7 보고서 Reader/Writer', '인젝션 무력화 (보너스)']].map(([v, t, s]) => (
-            <button key={v} onClick={() => go(v)} className="panel p-3 text-left hover:border-sky-600">
+            <button key={v} onClick={() => go(v)} className="panel p-3 text-left hover:border-teal-600">
               <div className="font-semibold text-sm">{t}</div>
               <div className="text-xs text-slate-500 mt-1">{s}</div>
             </button>
@@ -121,7 +121,7 @@ export function Explore() {
         <input className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-sm font-mono w-56"
           value={center} onChange={e => setCenter(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && load(center)} />
-        <button className="chip hover:border-sky-500" onClick={() => load(center)}>탐색</button>
+        <button className="chip hover:border-teal-500" onClick={() => load(center)}>탐색</button>
         {['REG-LN-001', 'PRD-LN-001', 'CMP-Button-v2', 'D-LNP'].map(p => (
           <button key={p} className="chip text-xs font-mono hover:border-slate-500" onClick={() => load(p)}>{p}</button>
         ))}
@@ -168,7 +168,7 @@ export function Agents() {
         <div className="text-xs text-slate-500 mb-1">컨트롤룸 카탈로그 — 예산·감사·승인은 컨트롤룸 백엔드가 그대로 시행</div>
         {agents.map(a => (
           <button key={a.id} onClick={() => { setSel(a); setLog([]); }}
-            className={`panel p-3 w-full text-left hover:border-slate-500 ${sel?.id === a.id ? 'border-sky-600' : ''}`}>
+            className={`panel p-3 w-full text-left hover:border-slate-500 ${sel?.id === a.id ? 'border-teal-600' : ''}`}>
             <div className="text-sm font-semibold">{a.name}
               <span className={`chip text-[10px] ml-2 ${a.status === 'APPROVED' ? 'text-emerald-400' : 'text-amber-400'}`}>{a.status}</span></div>
             <div className="text-xs text-slate-500 truncate">{a.description}</div>
@@ -181,7 +181,7 @@ export function Agents() {
             <div className="text-sm font-semibold mb-2">{sel.name} <span className="text-xs text-slate-500">Tier {sel.riskTier} · {sel.team}</span></div>
             <div className="flex-1 overflow-y-auto space-y-2 mb-3">
               {log.map((l, i) => (
-                <div key={i} className={`md text-sm p-2 rounded-lg max-w-[85%] ${l.who === 'me' ? 'bg-sky-950/60 ml-auto' : 'bg-slate-900'}`}>{l.text}</div>
+                <div key={i} className={`md text-sm p-2 rounded-lg max-w-[85%] ${l.who === 'me' ? 'bg-teal-950/60 ml-auto' : 'bg-slate-900'}`}>{l.text}</div>
               ))}
               {busy && <div className="text-slate-500 text-sm">답변 생성 중…</div>}
             </div>
@@ -189,7 +189,7 @@ export function Agents() {
               <input className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm"
                 value={msg} onChange={e => setMsg(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()}
                 placeholder="메시지…" />
-              <button onClick={send} disabled={busy} className="px-4 rounded-lg bg-sky-500/90 text-slate-950 font-semibold text-sm disabled:opacity-40">전송</button>
+              <button onClick={send} disabled={busy} className="px-4 rounded-lg bg-teal-500/90 text-slate-950 font-semibold text-sm disabled:opacity-40">전송</button>
             </div>
           </>
         )}
@@ -275,7 +275,7 @@ export function TwoPlane({ blockedOnly }: { blockedOnly?: boolean }) {
               )}
             </Tile>
             <Tile n="②" title="경계를 넘은 토큰 (Bedrock 실측 usage)" accent="var(--bedrock)">
-              <div className="text-xl font-bold text-sky-300">{data ? `${fmt(tokensIn)} in · ${fmt(data.tokensOutTotal)} out` : '…'}</div>
+              <div className="text-xl font-bold text-teal-300">{data ? `${fmt(tokensIn)} in · ${fmt(data.tokensOutTotal)} out` : '…'}</div>
               <div className="flex flex-wrap gap-1 mt-1">
                 {fields.length ? fields.map(f => <span key={f} className="chip text-[10px] text-amber-300" style={{ borderColor: 'var(--vpc)' }}>{f}</span>)
                   : <span className="text-[10px] text-slate-500">전달된 필드 기록 없음</span>}
@@ -288,7 +288,7 @@ export function TwoPlane({ blockedOnly }: { blockedOnly?: boolean }) {
                 ? <div className="text-xs text-slate-500">기록 없음{data.genModel && <> — 설정값 <span className="font-mono text-slate-400">{data.genModel}</span> (실측 아님)</>}</div>
                 : <div className="space-y-0.5">{models.map(m => (
                   <div key={m.modelId} className="text-xs flex items-center gap-2">
-                    <span className={`font-mono break-all ${routeOfModel(m.modelId).gemma ? 'text-rose-300' : 'text-sky-200'}`}>{m.modelId}</span>
+                    <span className={`font-mono break-all ${routeOfModel(m.modelId).gemma ? 'text-rose-300' : 'text-teal-200'}`}>{m.modelId}</span>
                     <span className="chip text-[10px] ml-auto">{m.count}건</span>
                   </div>))}</div>}
             </Tile>
@@ -318,7 +318,7 @@ export function TwoPlane({ blockedOnly }: { blockedOnly?: boolean }) {
           <div className="flex items-center gap-3 mb-3 text-xs text-slate-500">
             <span>모든 값은 요청마다 기록된 트레이스와 플레인 헬스의 실측 합이다 — 하드코딩 없음(§3-2). 질문·프롬프트 원문은 클라우드에 저장하지 않는다(해시·길이만).</span>
             <span className="ml-auto whitespace-nowrap">현재 플레인: <b style={{ color: planeColor(data?.plane) }}>{data ? planeLabel(data.plane) : '…'}</b></span>
-            <button className="chip hover:border-sky-500" onClick={reload}>새로고침</button>
+            <button className="chip hover:border-teal-500" onClick={reload}>새로고침</button>
           </div>
         </>
       )}
@@ -329,7 +329,7 @@ export function TwoPlane({ blockedOnly }: { blockedOnly?: boolean }) {
             <div className="text-2xl font-bold text-rose-300">{data ? `${guardrailBlocked}건 / ${gateRejected}건` : '…'}</div>
           </div>
           <div className="text-xs text-slate-500 max-w-xl">Bedrock Guardrails 실물 판정(투자권유 토픽·PII·비속어)과 익명화 게이트 거부만 표시한다. 시뮬레이션 없음 — S2 화면의 "S5 차단 시연"으로 기록을 만든다.</div>
-          <button className="chip ml-auto hover:border-sky-500" onClick={reload}>새로고침</button>
+          <button className="chip ml-auto hover:border-teal-500" onClick={reload}>새로고침</button>
         </div>
       )}
       <div className="panel overflow-x-auto">
@@ -352,7 +352,7 @@ export function TwoPlane({ blockedOnly }: { blockedOnly?: boolean }) {
                 <td className="p-3 text-xs">{i.scenario}</td>
                 <td className="p-3 text-xs text-slate-400 font-mono whitespace-nowrap">{i.queryHash} · {i.queryLen}자</td>
                 <td className="p-3 text-xs whitespace-nowrap" style={{ color: planeColor(i.plane) }}>{planeCell(i.plane)}</td>
-                <td className={`p-3 text-xs font-mono break-all ${ro?.gemma ? 'text-rose-300' : 'text-sky-200'}`}>{mid || <span className="text-slate-600">미기록</span>}</td>
+                <td className={`p-3 text-xs font-mono break-all ${ro?.gemma ? 'text-rose-300' : 'text-teal-200'}`}>{mid || <span className="text-slate-600">미기록</span>}</td>
                 <td className="p-3 text-xs whitespace-nowrap">{tier || route ? `${tier || ''}${tier && route ? ' · ' : ''}${route}` : <span className="text-slate-600">—</span>}</td>
                 <td className="p-3 text-xs text-amber-300">{f.join(', ') || '—'}</td>
                 <td className="p-3 text-xs whitespace-nowrap">{fmt(i.tokensIn)} / {fmt(i.tokensOut)}</td>
@@ -376,7 +376,7 @@ export { TwoPlane as BoundaryView };
 export function Frame({ src, note }: { src: string; note: string }) {
   return (
     <div className="h-[calc(100vh-120px)] flex flex-col">
-      <div className="text-xs text-slate-500 mb-2">{note} · <a className="text-sky-400" href={src} target="_blank" rel="noopener">새 탭에서 열기 ↗</a></div>
+      <div className="text-xs text-slate-500 mb-2">{note} · <a className="text-teal-400" href={src} target="_blank" rel="noopener">새 탭에서 열기 ↗</a></div>
       <iframe src={src} className="flex-1 w-full rounded-xl border border-slate-800 bg-white" />
     </div>
   );

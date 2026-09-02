@@ -243,7 +243,7 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
           )}
           <button onClick={onPublish} disabled={!!busy || !d.publishable}
             title={d.publishable ? `Registry 로 발행 — ${d.publishTarget?.recordType}/${d.publishTarget?.subtype} (DRAFT)` : 'Publish 미구현 — §7 등록 대상 매핑에 없는 자산 유형'}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500/90 hover:bg-sky-400 text-slate-950 disabled:opacity-40">
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-500/90 hover:bg-teal-400 text-slate-950 disabled:opacity-40">
             {busy === 'publish' ? '발행 중…' : 'Publish'}
           </button>
           <button onClick={onSync} disabled={!!busy} title="그래프 재순회 + Registry 재조회 (외부 원본 Git · Figma 동기화는 미구현)"
@@ -257,7 +257,7 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
           </div>
         )}
         {publishRes && (
-          <section className="rounded-lg border border-sky-900 p-3 mb-3 text-xs" style={{ borderColor: pubErr ? '#9f1239' : undefined }}>
+          <section className="rounded-lg border border-teal-900 p-3 mb-3 text-xs" style={{ borderColor: pubErr ? '#9f1239' : undefined }}>
             <div className="flex items-center gap-2 mb-1"><b>Publish 결과</b> <TierBadge /></div>
             {pubErr ? <div className="text-rose-400">{pubErr}</div> : (
               <>
@@ -268,7 +268,7 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
                   <span className={`chip text-[10px] ${publishRes.action === 'created' ? 'text-emerald-300 border-emerald-700' : 'text-slate-300'}`}>{publishRes.action === 'created' ? '새로 생성 (DRAFT)' : '기존 레코드'}</span>
                 </div>
                 <div className="text-slate-500 mt-1">{publishRes.note} · 저장소 {publishRes.registryBackend === 'dynamodb' ? 'DynamoDB' : '인메모리(개발용)'}</div>
-                <a href="#/registry" className="text-sky-300 hover:underline">Agent Registry 화면에서 승인 요청 →</a>
+                <a href="#/registry" className="text-teal-300 hover:underline">Agent Registry 화면에서 승인 요청 →</a>
               </>
             )}
           </section>

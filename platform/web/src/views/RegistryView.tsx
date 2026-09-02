@@ -58,7 +58,7 @@ function DemoPanel({ records, consumer, busy, onTransition, onRefresh }: {
         <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--cloud)' }} />
         <b className="text-sm">S3 시연 패널 — 승인 상태가 생성 결과를 바꾼다</b>
         <span className="text-xs text-slate-500">Registry(클라우드 · 메타데이터만) → Consumer API(APPROVED 만) → 화면 생성 에이전트</span>
-        <button className="chip ml-auto hover:border-sky-500" onClick={onRefresh}>새로고침</button>
+        <button className="chip ml-auto hover:border-teal-500" onClick={onRefresh}>새로고침</button>
       </div>
       <div className="grid grid-cols-[1fr_1fr_1.4fr] gap-3">
         <div className="rounded-lg border border-slate-800 p-3">
@@ -81,7 +81,7 @@ function DemoPanel({ records, consumer, busy, onTransition, onRefresh }: {
             className="px-3 py-2 rounded-lg text-sm font-semibold bg-emerald-500/90 hover:bg-emerald-400 text-slate-950 disabled:opacity-30 text-left">
             {busy === 'Button@v3' ? '전이 중…' : '② Button v3 → APPROVED'}
           </button>
-          <a href="#/screengen" className="chip justify-center hover:border-sky-500 text-sky-300 mt-auto">③ 재생성하러 가기 → 화면 생성</a>
+          <a href="#/screengen" className="chip justify-center hover:border-teal-500 text-teal-300 mt-auto">③ 재생성하러 가기 → 화면 생성</a>
         </div>
         <div className="rounded-lg border border-slate-800 p-3">
           <div className="text-xs text-slate-500 mb-1 flex items-center gap-2">
@@ -123,7 +123,7 @@ function Drawer({ detail, busy, err, onClose, onTransition, onOpenVersion }: {
         style={{ background: 'var(--panel)' }} role="dialog" aria-label={`${r.name} ${r.recordVersion} 상세`}>
         <div className="flex items-start gap-3 mb-3">
           <div>
-            <div className="text-lg font-bold font-mono">{r.name} <span className="text-sky-300">{r.recordVersion}</span></div>
+            <div className="text-lg font-bold font-mono">{r.name} <span className="text-teal-300">{r.recordVersion}</span></div>
             <div className="text-xs text-slate-500 mt-0.5">{r.recordType}{r.subtype ? ` / ${r.subtype}` : ''} · 소유 {r.owner || '—'} · 갱신 {fmtTs(r.updatedAt)} · by {r.updatedBy || '—'}</div>
           </div>
           <StatusChip s={r.status} />
@@ -152,7 +152,7 @@ function Drawer({ detail, busy, err, onClose, onTransition, onOpenVersion }: {
             })}
             {allowed.length === 0 && <span className="text-xs text-slate-500">종료 상태 — 더 이상 전이할 수 없습니다.</span>}
           </div>
-          {busy === recKey(r) && <div className="text-xs text-sky-300 mt-2">전이 중…</div>}
+          {busy === recKey(r) && <div className="text-xs text-teal-300 mt-2">전이 중…</div>}
           {err && <div className="text-xs text-rose-400 mt-2">{err}</div>}
         </section>
 
@@ -233,7 +233,7 @@ function CreateForm({ onCreated }: { onCreated: (r: Rec) => void }) {
         <input className={cls} placeholder="tags (쉼표 구분)" value={f.tags} onChange={set('tags')} />
         <input className={`${cls} col-span-5`} placeholder="description (한국어)" value={f.description} onChange={set('description')} />
         <button onClick={submit} disabled={busy || !f.name}
-          className="px-3 py-1.5 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-xs disabled:opacity-40">{busy ? '등록 중…' : '등록'}</button>
+          className="px-3 py-1.5 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-xs disabled:opacity-40">{busy ? '등록 중…' : '등록'}</button>
       </div>
       {msg && <div className={`text-xs mt-2 ${msg.startsWith('등록됨') ? 'text-emerald-400' : 'text-rose-400'}`}>{msg}</div>}
       <div className="text-[11px] text-slate-500 mt-2">payload 편집 UI 는 미구현 — 등록 후 payload 는 비어 있다. 컴포넌트 propsSchema 는 시드 기준선에서만 제공된다.</div>
@@ -341,13 +341,13 @@ export default function RegistryView() {
       <div className="panel p-3 mb-3 flex flex-wrap items-center gap-2">
         <span className="text-xs text-slate-500">타입</span>
         {TYPES.map(t => (
-          <button key={t} onClick={() => setType(t)} className={`chip text-xs ${type === t ? 'border-sky-500 text-sky-300' : 'hover:border-slate-500'}`}>
+          <button key={t} onClick={() => setType(t)} className={`chip text-xs ${type === t ? 'border-teal-500 text-teal-300' : 'hover:border-slate-500'}`}>
             {t}{counts?.byType && t !== 'ALL' ? <span className="text-slate-500">{counts.byType[t] ?? 0}</span> : t === 'ALL' && counts ? <span className="text-slate-500">{counts.total}</span> : null}
           </button>
         ))}
         <span className="text-xs text-slate-500 ml-3">상태</span>
         {STATUSES.map(s => (
-          <button key={s} onClick={() => setStatus(s)} className={`chip text-xs ${status === s ? 'border-sky-500 text-sky-300' : `hover:border-slate-500 ${s !== 'ALL' ? statusColor(s) : ''}`}`}>
+          <button key={s} onClick={() => setStatus(s)} className={`chip text-xs ${status === s ? 'border-teal-500 text-teal-300' : `hover:border-slate-500 ${s !== 'ALL' ? statusColor(s) : ''}`}`}>
             {s === 'ALL' ? '전체' : STATUS_KO[s]}{counts?.byStatus && s !== 'ALL' && <span className="text-slate-500">{counts.byStatus[s] ?? 0}</span>}
           </button>
         ))}
@@ -356,12 +356,12 @@ export default function RegistryView() {
             placeholder="하이브리드 검색 — 키워드(한국어 부분일치) + 임베딩(Titan) → RRF 융합" value={q}
             onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && runSearch()} />
           <button onClick={() => runSearch()} disabled={searching}
-            className="px-4 py-1.5 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm disabled:opacity-40">{searching ? '검색 중…' : '검색'}</button>
+            className="px-4 py-1.5 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">{searching ? '검색 중…' : '검색'}</button>
           {search && <button className="chip hover:border-slate-500" onClick={() => { setSearch(null); setQ(''); }}>목록으로</button>}
         </div>
         <div className="w-full flex flex-wrap items-center gap-1 text-xs">
           <span className="text-slate-500">프리셋</span>
-          {SEARCH_PRESETS.map(p => <button key={p} className="chip text-[11px] hover:border-sky-500" onClick={() => runSearch(p)}>{p}</button>)}
+          {SEARCH_PRESETS.map(p => <button key={p} className="chip text-[11px] hover:border-teal-500" onClick={() => runSearch(p)}>{p}</button>)}
           <span className="ml-auto text-slate-500">
             {meta.embeddingsEnabled === false && <span className="text-amber-300">임베딩 미사용 (REGISTRY_EMBED=0) — 키워드만</span>}
             {search && <> · 결과 {hits.length}건 · {search.dense ? <span className="text-emerald-400">키워드 + 임베딩 융합</span> : <span className="text-amber-300">{search.note || '키워드만'}</span>}</>}
@@ -385,11 +385,11 @@ export default function RegistryView() {
                 onClick={() => open(r.name, r.recordVersion)}>
                 {search && <td className="p-3 text-xs whitespace-nowrap">
                   <span className="font-mono text-slate-300">{h?.score.toFixed(4)}</span>
-                  <span className={`chip text-[10px] ml-1 ${h?.match === 'hybrid' ? 'text-emerald-300 border-emerald-800' : h?.match === 'dense' ? 'text-sky-300 border-sky-800' : 'text-slate-300'}`}
+                  <span className={`chip text-[10px] ml-1 ${h?.match === 'hybrid' ? 'text-emerald-300 border-emerald-800' : h?.match === 'dense' ? 'text-teal-300 border-teal-800' : 'text-slate-300'}`}
                     title={`키워드 순위 ${h?.keywordRank ?? '—'} (${h?.keywordScore ?? '—'}) · 임베딩 순위 ${h?.denseRank ?? '—'} (cos ${h?.denseScore ?? '—'})`}>
                     {h?.match === 'hybrid' ? '키워드+임베딩' : h?.match === 'dense' ? '임베딩' : '키워드'}</span></td>}
                 <td className="p-3 font-mono text-xs">{r.name}</td>
-                <td className="p-3 font-mono text-xs text-sky-300">{r.recordVersion}</td>
+                <td className="p-3 font-mono text-xs text-teal-300">{r.recordVersion}</td>
                 <td className="p-3 text-xs">{r.recordType}{r.subtype && <span className="text-slate-500"> / {r.subtype}</span>}</td>
                 <td className={`p-3 text-xs font-semibold ${statusColor(r.status)}`}>{STATUS_KO[r.status] || r.status}</td>
                 <td className="p-3 text-xs text-slate-400">{r.owner || '—'}</td>

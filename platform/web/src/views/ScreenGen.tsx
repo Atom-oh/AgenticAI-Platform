@@ -61,7 +61,7 @@ function UsedBadges({ used, size = 'md' }: { used: Used[]; size?: 'sm' | 'md' })
       {sorted.map(u => u.name === 'Button'
         ? <span key={u.name + u.version} className={`chip font-bold ${size === 'md' ? 'text-sm px-3 py-1' : 'text-xs'}`}
             style={{ borderColor: 'var(--cloud)', background: 'rgba(56,189,248,.12)', color: '#bae6fd' }}>
-            Button <span className="ml-1 text-sky-300">{u.version}</span></span>
+            Button <span className="ml-1 text-teal-300">{u.version}</span></span>
         : <span key={u.name + u.version} className={`chip ${size === 'md' ? 'text-xs' : 'text-[10px]'} text-slate-300`}>{u.name}@{u.version}</span>)}
     </div>
   );
@@ -168,7 +168,7 @@ function StagePanel({ s }: { s: Stage }) {
       </button>
       {open && <div className="mt-2 text-xs text-slate-300 space-y-1">
         {s.step === 'registry_lookup' && (
-          <div>승인 컴포넌트 <b className="text-sky-300">{s.count}개</b> · 조회 방식 <b>정확 조회(exact)</b> · 출처{' '}
+          <div>승인 컴포넌트 <b className="text-teal-300">{s.count}개</b> · 조회 방식 <b>정확 조회(exact)</b> · 출처{' '}
             {s.source === 'registry' ? <b className="text-emerald-400">Registry Consumer API</b>
               : <b className="text-amber-300">픽스처 (Registry 미연결 — 기준선 목록)</b>}
             <div className="text-slate-500 mt-1">{(s.components || []).map((c: Comp) => `${c.name}@${c.version}`).join(', ')}</div>
@@ -214,7 +214,7 @@ function ResultSummary({ r, title, accent }: { r: Result; title: string; accent:
         <span>종합 {okIcon(r.ok)} {okText(r.ok)}</span>
         <span>· 시도 {r.attempts}회{r.regenerated ? ' (재생성 1회)' : ''}</span>
         <span>· {r.code.split('\n').length}줄</span>
-        {r.approvedButton && <span>· 승인 Button: <b className="text-sky-300">{r.approvedButton}</b></span>}
+        {r.approvedButton && <span>· 승인 Button: <b className="text-teal-300">{r.approvedButton}</b></span>}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">{GATE_TILES.map(t => <span key={t.key} className="mr-2">{t.label} {okIcon(r.gates?.[t.key]?.ok)}</span>)}</div>
       <button className="chip text-[10px] mt-2 hover:border-slate-500" onClick={() => setShowCode(s => !s)}>{showCode ? '코드 접기' : '코드 보기'}</button>
@@ -293,11 +293,11 @@ export default function ScreenGen() {
     <div>
       {/* 프리셋 + 입력 */}
       <div className="panel p-3 mb-3 flex gap-2 items-center">
-        <button className="chip whitespace-nowrap hover:border-sky-500 text-sky-300" onClick={() => run(S3_PRESET)}>시나리오 S3</button>
+        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-300" onClick={() => run(S3_PRESET)}>시나리오 S3</button>
         <input className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm"
           value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} />
         <button onClick={() => run()} disabled={running}
-          className="px-5 py-2 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+          className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
           {running ? (attempt > 1 ? '재생성 중…' : '생성 중…') : result ? '다시 생성' : '화면 생성'}
         </button>
       </div>
@@ -307,11 +307,11 @@ export default function ScreenGen() {
       <div className="panel p-3 mb-4 text-xs flex items-center gap-3" style={{ borderColor: 'var(--cloud)' }}>
         <span className="text-lg">⇄</span>
         <div className="flex-1">
-          <b>실시간 반전:</b> Registry에서 <b className="text-sky-300">Button v2</b>를 DEPRECATED, <b className="text-sky-300">v3</b>를 APPROVED로 바꾼 뒤
+          <b>실시간 반전:</b> Registry에서 <b className="text-teal-300">Button v2</b>를 DEPRECATED, <b className="text-teal-300">v3</b>를 APPROVED로 바꾼 뒤
           다시 생성하면 결과가 달라진다 — 승인 상태가 에이전트에게 보이는 컴포넌트를 바꾸고, 그것이 코드를 바꾼다.
           이전 결과는 아래에 나란히 남는다.
         </div>
-        <a href="#/registry" className="chip hover:border-sky-500 text-sky-300 whitespace-nowrap">Registry 열기 →</a>
+        <a href="#/registry" className="chip hover:border-teal-500 text-teal-300 whitespace-nowrap">Registry 열기 →</a>
       </div>
 
       <div className="grid grid-cols-[340px_1fr] gap-4">
@@ -335,7 +335,7 @@ export default function ScreenGen() {
                 <div key={c.name + c.version} className="rounded-lg p-2 border"
                   style={{ borderColor: c.name === 'Button' ? 'var(--cloud)' : 'var(--line)', background: c.name === 'Button' ? 'rgba(56,189,248,.06)' : undefined }}>
                   <div className="flex items-center gap-2">
-                    <span className={`font-mono text-xs ${c.name === 'Button' ? 'text-sky-200 font-bold text-sm' : 'text-slate-200'}`}>{c.name}<span className="text-sky-400">@{c.version}</span></span>
+                    <span className={`font-mono text-xs ${c.name === 'Button' ? 'text-teal-200 font-bold text-sm' : 'text-slate-200'}`}>{c.name}<span className="text-teal-400">@{c.version}</span></span>
                     <span className="chip text-[9px] text-emerald-400 ml-auto">APPROVED</span>
                   </div>
                   <div className="text-[10px] text-slate-500 font-mono truncate">{c.module}</div>
@@ -372,7 +372,7 @@ export default function ScreenGen() {
           <div className="flex items-center gap-2 mb-2 text-xs flex-wrap">
             <span className="chip" title="§12.9 재생성은 최대 1회">
               시도 {[...Array(maxAttempts)].map((_, i) => (
-                <span key={i} className={`inline-block w-2 h-2 rounded-full mx-0.5 ${i < attemptsNow ? (i === 0 ? 'bg-sky-400' : 'bg-amber-400') : 'bg-slate-700'}`} />
+                <span key={i} className={`inline-block w-2 h-2 rounded-full mx-0.5 ${i < attemptsNow ? (i === 0 ? 'bg-teal-400' : 'bg-amber-400') : 'bg-slate-700'}`} />
               ))} {attemptsNow}/{maxAttempts} <span className="text-slate-500 ml-1">(재생성 상한 1회)</span>
             </span>
             {(cached || result?.cached) && <span className="chip text-amber-300" style={{ borderColor: 'var(--onprem)' }}>캐시 응답 — Bedrock 호출 실패/예산 초과로 재생</span>}
@@ -387,7 +387,7 @@ export default function ScreenGen() {
             <div className="panel p-3 mb-3 flex items-center gap-3">
               <span className="text-xs text-slate-400 whitespace-nowrap">사용 컴포넌트</span>
               <UsedBadges used={result.componentsUsed} />
-              <span className="ml-auto text-[11px] text-slate-500 whitespace-nowrap">승인 Button: <b className="text-sky-300">{result.approvedButton}</b></span>
+              <span className="ml-auto text-[11px] text-slate-500 whitespace-nowrap">승인 Button: <b className="text-teal-300">{result.approvedButton}</b></span>
             </div>
           )}
 
@@ -398,7 +398,7 @@ export default function ScreenGen() {
               <b className="text-sm">생성 코드 — Screen.tsx</b>
               {running && <span className="text-xs text-slate-500">스트리밍 중{attempt > 1 ? ` (재생성 ${attempt - 1}/1)` : ''}…</span>}
               <span className="ml-auto text-[10px] text-slate-500">{shownCode ? `${shownCode.split('\n').length}줄` : ''}</span>
-              <button className="chip text-[10px] hover:border-sky-500" onClick={copy} disabled={!shownCode}>{copied ? '복사됨 ✓' : '복사'}</button>
+              <button className="chip text-[10px] hover:border-teal-500" onClick={copy} disabled={!shownCode}>{copied ? '복사됨 ✓' : '복사'}</button>
             </div>
             <pre ref={codeRef} className="bg-slate-950 rounded-lg p-3 text-[11px] leading-4 font-mono overflow-auto max-h-[460px] whitespace-pre">
               {shownCode || <span className="text-slate-600">프리셋 버튼을 누르면 Registry 승인 컴포넌트만으로 코드를 생성합니다.</span>}

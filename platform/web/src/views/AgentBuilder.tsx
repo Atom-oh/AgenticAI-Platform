@@ -1,6 +1,7 @@
 // 에이전트 빌더 — AgentCore Harness 기반 에이전트를 만들고(→ Registry PENDING_APPROVAL), 승인된 것만 호출한다 (Consumer 게이트).
 // 색 규칙: Bedrock/AgentCore = var(--bedrock)(시안), VPC 내부(도구 실행·마스킹) = var(--vpc)(앰버). 이 화면은 Tier 0/1 전용 (SPEC §11-4).
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Md from '../Md';
 import { sock, WsEvent } from '../lib';
 
 type Agent = {
@@ -63,14 +64,14 @@ function AcChip({ s }: { s: string | null }) {
 }
 function HarnessChip({ s, err }: { s: string; err?: string }) {
   const ready = s === 'READY' || s === 'ACTIVE';
-  const cls = ready ? 'text-sky-300' : s === 'none' ? 'text-slate-500' : s === 'FAILED' ? 'text-rose-400' : 'text-amber-300';
+  const cls = ready ? 'text-teal-300' : s === 'none' ? 'text-slate-500' : s === 'FAILED' ? 'text-rose-400' : 'text-amber-300';
   const label = s === 'none' ? 'Harness 없음' : s === 'unknown' ? 'Harness ?' : `Harness · ${s}`;
   return <span className={`chip text-[10px] ${cls}`} style={{ borderColor: ready ? 'var(--bedrock)' : undefined }}
     title={err || (s === 'none' ? '이 레코드에 연결된 AgentCore Harness 가 없다 (파이프라인형 에이전트)' : 'AgentCore Harness 상태')}>{label}</span>;
 }
 function ScenarioTag({ s }: { s: string }) {
   const custom = !PRESETS[s];
-  return <span className={`chip text-[10px] ${custom ? 'text-slate-400' : 'text-sky-300'}`}>{custom ? '사용자 정의' : `시나리오 ${s}`}</span>;
+  return <span className={`chip text-[10px] ${custom ? 'text-slate-400' : 'text-teal-300'}`}>{custom ? '사용자 정의' : `시나리오 ${s}`}</span>;
 }
 
 /* ---------------- 좌: 카탈로그 ---------------- */
@@ -102,7 +103,7 @@ function CatalogList({ cat, sel, onSelect, onRefresh, loading }: {
           const on = sel?.name === a.name && sel?.version === a.version;
           return (
             <button key={`${a.name}@${a.version}`} onClick={() => onSelect(a)}
-              className={`w-full text-left rounded-lg border p-2.5 hover:border-slate-500 ${on ? 'border-sky-500 bg-sky-500/5' : 'border-slate-800'}`}>
+              className={`w-full text-left rounded-lg border p-2.5 hover:border-slate-500 ${on ? 'border-teal-500 bg-teal-500/5' : 'border-slate-800'}`}>
               <div className="flex items-center gap-2">
                 <b className="text-sm truncate">{a.title}</b>
                 <ScenarioTag s={a.scenario} />
@@ -204,9 +205,9 @@ function CreateForm({ cat, onCreated, onApprove }: {
             </label>
             <label className="text-xs text-slate-400 flex flex-col">메모리 <span className="text-slate-600">(AgentCore managed memory · SEMANTIC · 30일)</span>
               <button type="button" onClick={() => setMemory(m => !m)}
-                className={`mt-1 self-start chip text-xs ${memory ? 'text-sky-300' : 'text-slate-400'}`}
+                className={`mt-1 self-start chip text-xs ${memory ? 'text-teal-300' : 'text-slate-400'}`}
                 style={{ borderColor: memory ? 'var(--bedrock)' : undefined }}>
-                <span className={`inline-block w-2 h-2 rounded-full ${memory ? 'bg-sky-400' : 'bg-slate-600'}`} />{memory ? '켬 — 세션 간 기억' : '끔 — 세션 안에서만'}
+                <span className={`inline-block w-2 h-2 rounded-full ${memory ? 'bg-teal-400' : 'bg-slate-600'}`} />{memory ? '켬 — 세션 간 기억' : '끔 — 세션 안에서만'}
               </button>
             </label>
           </div>
@@ -225,7 +226,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
                 {(cat?.skills || []).map(s => {
                   const on = skills.includes(s.name);
                   return <button key={s.name} onClick={() => toggle(skills, setSkills, s.name)} title={`${s.name}@${s.version} · ${STATUS_KO[s.status] || s.status}`}
-                    className={`chip text-[11px] ${on ? 'text-sky-200' : s.status === 'APPROVED' ? 'text-slate-300' : 'text-slate-500'} hover:border-slate-500`}
+                    className={`chip text-[11px] ${on ? 'text-teal-200' : s.status === 'APPROVED' ? 'text-slate-300' : 'text-slate-500'} hover:border-slate-500`}
                     style={{ borderColor: on ? 'var(--bedrock)' : undefined, background: on ? 'rgba(56,189,248,.12)' : undefined }}>
                     {on ? '✓ ' : ''}{s.name}{s.status !== 'APPROVED' && <span className="text-[9px] text-amber-400">{STATUS_KO[s.status] || s.status}</span>}
                   </button>;
@@ -258,7 +259,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
 
           <div className="flex items-center gap-3 mt-3">
             <button onClick={submit} disabled={busy || !nameOk || !prompt.trim() || !cat}
-              className="px-5 py-2 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+              className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
               {busy ? 'Harness 생성 중… (READY 대기 최대 90초)' : '만들기 → 승인 대기'}
             </button>
             <span className="text-[11px] text-slate-500">생성 순서: Harness(ensure, 멱등) → Registry 레코드 DRAFT → PENDING_APPROVAL → AgentCore Registry 미러</span>
@@ -288,7 +289,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
               {nowStatus === 'PENDING_APPROVAL' && (
                 <div className="flex items-center gap-2 mt-2">
                   <span className="text-amber-300">승인 대기 — Consumer 게이트가 호출을 거부한다.</span>
-                  <a href="#/registry" className="chip hover:border-sky-500 text-sky-300">#/registry 에서 승인 →</a>
+                  <a href="#/registry" className="chip hover:border-teal-500 text-teal-300">#/registry 에서 승인 →</a>
                   <button onClick={approve} disabled={approving}
                     className="chip hover:border-emerald-500 text-emerald-300 disabled:opacity-40" title="관리자 편의 — 감사 이벤트에 actor·사유가 남는다">
                     {approving ? '승인 중…' : '데모: 즉시 승인'}
@@ -331,7 +332,7 @@ function Bubble({ m }: { m: Msg }) {
       <div className="max-w-[88%] rounded-2xl rounded-bl-md px-3 py-2 text-sm" style={{ background: 'rgba(56,189,248,.06)', borderLeft: '3px solid var(--bedrock)' }}>
         {m.tools.length > 0 && <div className="space-y-1.5 mb-2">{m.tools.map((t, i) => <ToolCard key={`${t.toolUseId || t.name}-${i}`} t={t} />)}</div>}
         {(m.text || m.running) && (
-          <div className="md text-slate-200">{m.text}{m.running && <span className="blink">▌</span>}</div>
+          <div className="text-slate-200"><Md text={m.text} />{m.running && <span className="blink">▌</span>}</div>
         )}
         {(m.stageErrors || []).map((s, i) => <div key={i} className="text-[11px] text-rose-300 mt-1 font-mono break-all">스트림 오류: {s}</div>)}
         {m.error && (
@@ -442,7 +443,7 @@ function Chat({ sel, onApprove, onRefresh }: {
       {sel && (
         <>
           <div className="flex items-center gap-2 mt-2 flex-wrap text-[11px]">
-            {preset && <button className="chip hover:border-sky-500 text-sky-300" onClick={() => send(preset)} disabled={running}>시나리오 질문 ({sel.scenario})</button>}
+            {preset && <button className="chip hover:border-teal-500 text-teal-300" onClick={() => send(preset)} disabled={running}>시나리오 질문 ({sel.scenario})</button>}
             <span className="text-slate-500">도구 {sel.allowedTools.length ? sel.allowedTools.map(t => <span key={t} className="font-mono text-amber-200/80 mr-1">{t}</span>) : '없음'}</span>
             <button className="chip text-[10px] ml-auto hover:border-slate-500" onClick={() => setCfgOpen(o => !o)}>{cfgOpen ? 'Harness 설정 닫기' : 'Harness 설정 보기'}</button>
           </div>
@@ -471,7 +472,7 @@ function Chat({ sel, onApprove, onRefresh }: {
             <div className="mt-2 rounded-lg border border-amber-800 bg-amber-950/20 p-2 text-[11px] text-amber-300 flex items-center gap-2 flex-wrap">
               <span>{STATUS_KO[sel.status] || sel.status} 상태 — 전송하면 Consumer 게이트가 거부한다 (거부 자체가 시연 포인트).</span>
               {sel.status === 'PENDING_APPROVAL' && <>
-                <a href="#/registry" className="chip hover:border-sky-500 text-sky-300">#/registry 에서 승인 →</a>
+                <a href="#/registry" className="chip hover:border-teal-500 text-teal-300">#/registry 에서 승인 →</a>
                 <button className="chip hover:border-emerald-500 text-emerald-300 disabled:opacity-40" onClick={approve} disabled={approving}>{approving ? '승인 중…' : '데모: 즉시 승인'}</button>
               </>}
               {approveErr && <span className="text-rose-300">{approveErr}</span>}
@@ -490,7 +491,7 @@ function Chat({ sel, onApprove, onRefresh }: {
               value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && send()}
               placeholder={preset ? `예: ${preset}` : '메시지'} disabled={running} />
             <button onClick={() => send()} disabled={running || !input.trim()}
-              className="px-5 py-2 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+              className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
               {running ? '응답 중…' : '보내기'}
             </button>
           </div>
@@ -530,11 +531,11 @@ export default function AgentBuilder() {
       <div className="panel p-3 mb-3 text-xs flex items-center gap-3" style={{ borderColor: 'var(--bedrock)' }}>
         <span className="text-lg">🧩</span>
         <div className="flex-1">
-          <b>에이전트 빌더</b> — 모델·시스템 프롬프트·Skills·Gateway 도구·메모리를 골라 <b className="text-sky-300">AgentCore Harness</b>를 만들면
+          <b>에이전트 빌더</b> — 모델·시스템 프롬프트·Skills·Gateway 도구·메모리를 골라 <b className="text-teal-300">AgentCore Harness</b>를 만들면
           Registry 에 <b className="text-amber-300">승인 대기</b>로 들어간다. 승인된 에이전트만 호출된다(Consumer 게이트) — 미승인 호출은 Harness 에 닿기 전에 거부된다.
           {cat?.registryBackend && <span className="text-slate-500"> · Registry 백엔드 {cat.registryBackend}</span>}
         </div>
-        <a href="#/registry" className="chip hover:border-sky-500 text-sky-300 whitespace-nowrap">Registry 열기 →</a>
+        <a href="#/registry" className="chip hover:border-teal-500 text-teal-300 whitespace-nowrap">Registry 열기 →</a>
       </div>
       {err && <div className="text-rose-400 text-sm mb-3">{err} <button className="chip text-[10px] ml-2" onClick={load}>다시 시도</button></div>}
       <div className="grid grid-cols-[360px_1fr] gap-4 items-start">

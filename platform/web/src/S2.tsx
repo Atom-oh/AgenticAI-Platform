@@ -3,6 +3,7 @@
 // 배지 문구의 출처는 서버 engine/gate.py(route_info · gate_info) 하나다 — 아래 *_FALLBACK 은 실행 전 표시용 동일 문구이며
 // 실행하면 서버가 보낸 'route' / 'mask' 스테이지 값으로 대체된다 (§11 배지는 항상 보여야 한다 — 툴팁 금지).
 import { useState } from 'react';
+import Md from './Md';
 import type { ReactNode } from 'react';
 import { sock } from './lib';
 
@@ -116,7 +117,7 @@ function SemanticCheck({ s }: { s: Stage }) {
         </div>
         <div className="rounded-lg border p-2" style={{ borderColor: mismatch ? ROSE : BEDROCK }}>
           <div className="text-[10px] text-slate-500">모델이 말한 전월실적 — 회신에서 파싱 (만들어내지 않음)</div>
-          <div className={`text-lg font-bold ${mismatch ? 'text-rose-300' : stated ? 'text-sky-200' : 'text-slate-500'}`}>{stated ? fmtKrw(s.modelValue) : '—'}</div>
+          <div className={`text-lg font-bold ${mismatch ? 'text-rose-300' : stated ? 'text-teal-200' : 'text-slate-500'}`}>{stated ? fmtKrw(s.modelValue) : '—'}</div>
           <div className="text-[10px] text-slate-500">{on ? '정의 + 계산엔진 값을 받은 상태' : '정의 없이 거래내역 원본만 받은 상태 (안티패턴 시연)'}</div>
         </div>
       </div>
@@ -147,7 +148,7 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
       {open && <div className="mt-2 text-xs text-slate-300">
         {s.step === 'route' && (
           <div className="space-y-1">
-            <div>모델 ID <span className="font-mono text-sky-200">{s.modelId}</span> · Tier <b>{s.tier}</b>
+            <div>모델 ID <span className="font-mono text-teal-200">{s.modelId}</span> · Tier <b>{s.tier}</b>
               {s.endpoint && <> · 엔드포인트 <span className="font-mono">{s.endpoint}</span></>}
               {s.region && <> · 호출 리전 <span className="font-mono">{s.region}</span></>}</div>
             <div><span style={{ color: BEDROCK }}>{s.badge?.region || `저장: ${s.storageLabel || '서울 리전'} / 추론: ${s.inferenceRoutingLabel || s.inferenceRouting || '—'}`}</span>
@@ -165,7 +166,7 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
         {s.step === 'semantic' && (
           <div>
             {s.metric
-              ? <div>지표 <b className="text-sky-300">{s.metric.name}</b> ({s.metric.unit}, 소관 {s.metric.ownerDept})
+              ? <div>지표 <b className="text-teal-300">{s.metric.name}</b> ({s.metric.unit}, 소관 {s.metric.ownerDept})
                 <pre className="mt-1 bg-slate-950 rounded p-2 overflow-x-auto">{s.metric.sql}</pre></div>
               : <div className="text-amber-300">{s.note}</div>}
             <div className="mt-2 border-t border-slate-800 pt-2">
@@ -327,12 +328,12 @@ export default function S2() {
     <div>
       <div className="panel p-3 mb-3 flex flex-col gap-2">
         <div className="flex gap-2 items-center">
-          <button className="chip whitespace-nowrap hover:border-sky-500 text-sky-300" onClick={() => run(S2_PRESET)}>시나리오 S2</button>
+          <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-300" onClick={() => run(S2_PRESET)}>시나리오 S2</button>
           <button className="chip whitespace-nowrap hover:border-rose-500 text-rose-300" onClick={() => run(S5_PRESET)}>S5 차단 시연</button>
           <input className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm"
             value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} />
           <button onClick={() => run()} disabled={running}
-            className="px-5 py-2 rounded-lg bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+            className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
             {running ? '상담 중…' : '상담 실행'}
           </button>
         </div>
@@ -341,7 +342,7 @@ export default function S2() {
           {ROUTES.map(r => (
             <button key={r.id} disabled={running} onClick={() => setRoute(r.id)} title={r.sub}
               className={`chip whitespace-nowrap disabled:opacity-50 ${route === r.id
-                ? (r.id === 'gemma' ? 'border-rose-500 text-rose-200 bg-rose-950/40' : 'border-sky-500 text-sky-200 bg-sky-950/40')
+                ? (r.id === 'gemma' ? 'border-rose-500 text-rose-200 bg-rose-950/40' : 'border-teal-500 text-teal-200 bg-teal-950/40')
                 : 'text-slate-400 hover:border-slate-500'}`}>
               {route === r.id ? '● ' : '○ '}{r.label}
             </button>
@@ -362,7 +363,7 @@ export default function S2() {
       <div className="grid grid-cols-2 gap-3 mb-3">
         <BadgeCard no="11-1" b={routeBadge} source={live ? '서버 게이트 값' : '기본 문구 — 실행 시 서버 값으로 갱신'} live={!!live} accent={route === 'gemma' ? ROSE : BEDROCK}>
           <div className="mt-1 text-[11px] text-slate-400">
-            모델 ID <span className="font-mono text-sky-200">{live?.modelId || fb.modelId}</span> · Tier {live?.tier || fb.tier}
+            모델 ID <span className="font-mono text-teal-200">{live?.modelId || fb.modelId}</span> · Tier {live?.tier || fb.tier}
             {' '}· 호출 리전 <span className="font-mono">{live?.region || fb.region}</span>
             {' '}· <span style={{ color: BEDROCK }}>{live?.badge?.region || fb.regionBadge}</span>
           </div>
@@ -410,7 +411,7 @@ export default function S2() {
                 🛡 Bedrock Guardrails 차단: {done.message}
                 {done.topics?.length > 0 && <div className="text-xs mt-1 text-rose-200">토픽: {done.topics.join(', ')}</div>}
               </div>)
-            : <div className="md text-slate-200">{text}{running && !done && <span className="blink">▌</span>}</div>}
+            : <div className="text-slate-200"><Md text={text} />{running && !done && <span className="blink">▌</span>}</div>}
           {done && !done.blocked && (
             <div className="mt-3 text-xs space-y-1">
               {done.guardrailOut && <div>출력 가드레일: <b className={done.guardrailOut.action === 'NONE' ? 'text-emerald-400' : 'text-rose-400'}>{done.guardrailOut.action}</b>
@@ -429,7 +430,7 @@ export default function S2() {
                   <span className="text-slate-500 ml-1">· Semantic Layer {done.semanticLayer === false ? 'OFF' : 'ON'}</span></div>
               )}
               {done.modelId && (
-                <div className="text-slate-400">모델 ID <span className="font-mono text-sky-200">{done.modelId}</span> · Tier {done.tier}
+                <div className="text-slate-400">모델 ID <span className="font-mono text-teal-200">{done.modelId}</span> · Tier {done.tier}
                   {' '}· <span style={{ color: BEDROCK }}>{done.regionBadge || `저장: ${done.storageLabel || '서울 리전'} / 추론: ${done.inferenceRoutingLabel || done.inferenceRouting || '—'}`}</span>
                   {done.nonStream && <span className="text-amber-300 ml-1">· 비스트림 응답 (어댑터 폴백)</span>}</div>
               )}
