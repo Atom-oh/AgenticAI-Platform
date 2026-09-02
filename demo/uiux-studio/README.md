@@ -1,4 +1,10 @@
-# Hana UI/UX Agentic AI Platform (PoC)
+# UI/UX Studio — Agentic AI Platform의 디자이너 모듈
+
+Agentic AI Platform(demo/builder-harness)의 자매 데모로, 디자이너(비개발자)를 위한
+UI/UX 특화 플랫폼입니다. 라이브: https://d4zwmnh2s47e9.cloudfront.net/
+(공유 데모 계정은 ../SECURITY-GOVERNANCE.md 참고)
+
+원 명칭: Hana UI/UX Agentic AI Platform (PoC) — account-test 저장소에서 히스토리째 이관.
 
 Org-wide agentic platform for UI/UX work: Figma ingestion → shared design-asset
 MCP (AgentCore Gateway) → shared skill registry → design-draft harness
