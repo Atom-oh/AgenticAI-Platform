@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 LOG=${LOG:-/tmp/bank-platform-deploy.log}
 REGION=${AWS_REGION:-ap-northeast-2}
 GRAPH_BACKEND=${GRAPH_BACKEND:-local}
-MAIN_STACK=${MAIN_STACK:-BankPlatform}   # 구 스택이 롤백 정리에 고착되면 MAIN_STACK=BankPlatformCore 로 우회
+MAIN_STACK=${MAIN_STACK:-BankPlatformCore}   # 라이브 메인 스택. (구 `BankPlatform` 스택은 롤백 정리 고착 — 갱신하지 않는다)
 WITH_PLANE=0; NO_WEB=0; NO_SEED=0
 for a in "$@"; do
   [ "$a" = "--plane" ] && WITH_PLANE=1

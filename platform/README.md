@@ -65,9 +65,9 @@
 ```bash
 cd platform
 python3 -m pytest tests/ -q                       # 오프라인 테스트 (AWS 호출 없음, 344개)
-MAIN_STACK=BankPlatformCore bash deploy.sh --plane            # 플레인 스택 + 메인 스택 + 시드 + 프론트 (첫 배포 25~35분)
-MAIN_STACK=BankPlatformCore GRAPH_BACKEND=neptune bash deploy.sh   # 시연 표준: Neptune 백엔드 (Neptune 재적재 자동)
-MAIN_STACK=BankPlatformCore bash deploy.sh --no-web           # 백엔드만 재배포
+bash deploy.sh --plane                             # 플레인 스택 + 메인 스택 + 시드 + 프론트 (첫 배포 25~35분, 기본 MAIN_STACK=BankPlatformCore)
+GRAPH_BACKEND=neptune bash deploy.sh               # 시연 표준: Neptune 백엔드 (Neptune 재적재 자동)
+bash deploy.sh --no-web --no-seed                  # 백엔드 코드만 재배포 (시드·Neptune 재적재 생략)
 python3 cli.py admin health                       # 브리지 → VPC 내부 서비스(/health: RDS·벡터·AOSS) · Neptune /status
 python3 cli.py admin seed_agents                  # 시나리오 에이전트 4종 등록(AgentCore Runtime/Strands) + Registry 승인 + AgentCore Registry 미러
 python3 cli.py admin reset_demo                   # 시연 리셋 (UI의 ⟲ 버튼과 동일)
