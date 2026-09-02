@@ -7,8 +7,8 @@ GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 
 
 | 항목 | 값 |
 |---|---|
-| **데모 URL** | <https://d15n7n9ypt87h8.cloudfront.net/> |
-| **접속 계정** | `demo@atomai.click` / `!234Qwer` (공유 데모 계정 — 로그인 화면에도 표기) |
+| **데모 URL** | <https://d8f5f6gxuiuxw.cloudfront.net/> |
+| **접속 계정** | `demo@atomai.click` — 비밀번호는 Secrets Manager `bank-platform/demo-user` (SPEC §9, 문서에 기록하지 않음) |
 | 가입 | 불가 — 계정은 관리자 초대(admin-create)로만 발급 |
 
 > 전부 **합성데이터**다. 실제 고객 데이터·실제 상품명·실제 내규 조항을 사용하지 않는다.
@@ -20,7 +20,7 @@ GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 
 | S1 | 규정 영향 분석 | 동일 질문을 Vector RAG / GraphRAG에 동시에 — 벡터는 청크만, 그래프는 영향 상품 12·화면 39·부서 7·문서 7건을 노드 ID·순회 경로와 함께 | 4분 |
 | S2 | 마이데이터 상담 | 숫자는 LLM이 만들지 않는다 — 정확 조회 → 결정론적 계산엔진(수식) → 마스킹 → 설명 생성 → 수치 검증 | 4분 |
 | S3 | Agent Registry | 전 서피스 자산의 승인 수명주기 (AgentCore Agent Registry 실물, CloudTrail 감사) | 3분 |
-| S4 | Two-Plane 뷰 | 요청별 경계 통과 실측 — 마스킹 필드·PII 반출 카운터(하드코딩 아님) | 2분 |
+| S4 | Single Boundary 뷰 | 요청별 실측 — VPC 잔류 항목·경계 통과 토큰·사용 모델 ID·차단 여부 (§8-3) | 2분 |
 | S5 | Guardrails 로그 | "어떤 상품이 제일 돈 많이 벌어요?" → 실물 Bedrock Guardrails가 차단 | 2분 |
 
 시연 프리셋 버튼이 각 화면에 있다 — 질문을 타이핑할 필요가 없다.
