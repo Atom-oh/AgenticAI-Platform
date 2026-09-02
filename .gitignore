@@ -5,3 +5,5 @@ docs/.vitepress/dist/
 .DS_Store
 demo/builder-harness/site/function.zip
 demo/builder-harness/site/architecture.visual-check.*
+platform/seed/out/
+platform/**/__pycache__/
