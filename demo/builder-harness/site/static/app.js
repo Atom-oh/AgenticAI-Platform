@@ -84,6 +84,7 @@ function shell(inner){
       <button data-v="admin" class="${r==='admin'?'on':''}"><span class="ic">⚙</span><span class="tx">플랫폼 운영</span></button>`:''}
       <div class="sect">PLATFORM SURFACES</div>
       <div class="foot">
+        <a href="https://d15n7n9ypt87h8.cloudfront.net/" target="_blank">🏦 플랫폼 허브 · 규정 영향 분석 ↗</a><br>
         <a href="https://d4zwmnh2s47e9.cloudfront.net/" target="_blank">🎨 UI/UX 스튜디오 ↗</a><br>
         <a href="https://www.atomai.click/AgenticAI-Platform/" target="_blank">📖 가이드북 ↗</a><br>
         <a href="https://www.atomai.click/AgenticAI-Platform/demo-architecture.html" target="_blank">🗺 아키텍처 ↗</a>

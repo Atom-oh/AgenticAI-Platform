@@ -66,3 +66,18 @@
 - `usePersonalHr` 플래그 에이전트에 한해, 그 이메일의 `EMP` 레코드 1건만 시스템 프롬프트에 주입.
 - `EMP`는 공개 쓰기 API가 없다 — HR 마스터에서 동기화(데모는 `demo/builder-harness/seed_employees.py`).
 - 검증: 김데모→본인 5.5일, 이알파→본인 12일, 타인 조회는 거절. 가이드북 Part 9 엔타이틀먼트 스코핑의 시연.
+
+## 플랫폼 재편 — 종합 서피스 맵 (2026-09-02)
+
+UI/UX 스튜디오 합류를 계기로 전 데모를 하나의 종합 플랫폼으로 재편했다.
+
+| 서피스 | URL | Registry 레코드 |
+|---|---|---|
+| 플랫폼 허브 · 규정 영향 분석(S1) | d15n7n9ypt87h8.cloudfront.net | `surface_bank_regulation_impact` (APPROVED) |
+| UI/UX 스튜디오 | d4zwmnh2s47e9.cloudfront.net | `surface_uiux_studio` (APPROVED) |
+| 에이전트 컨트롤룸 | d1twhttjtzqewp.cloudfront.net | `nexus_platform_gateway` 외 에이전트별 레코드 |
+
+- 거버넌스 정본: AgentCore Agent Registry(us-east-1) — 서피스 편입 승인 사유가 CloudTrail에 기록됨.
+- 상호 내비게이션: 허브 카드 ↔ 컨트롤룸 레일 ↔ 스튜디오 헤더 링크.
+- 신규 서피스(S1)의 WebSocket API는 $connect에서 Cognito access token을 요구하며 무토큰 연결을 거부한다
+  (프론트는 CloudFront+OAC만 공개). 토큰은 브라우저 스토리지에 저장하지 않는다.

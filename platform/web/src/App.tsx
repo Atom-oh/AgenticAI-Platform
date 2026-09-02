@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { auth, login, openS1Socket, WsEvent } from './lib';
 import GraphView, { GEdge, GNode } from './GraphView';
+import Hub from './Hub';
 
 const PRESET = '전세자금대출 담보 인정 규정이 개정되면 영향받는 상품·화면·담당부서·수정이 필요한 문서는 무엇인가?';
 
@@ -9,7 +10,22 @@ type Counts = Record<string, number>;
 
 export default function App() {
   const [authed, setAuthed] = useState(false);
-  return authed ? <S1 /> : <Login onDone={() => setAuthed(true)} />;
+  const [route, setRoute] = useState(location.hash || '#/');
+  const [studioAssets, setStudioAssets] = useState<number | null>(null);
+  useEffect(() => {
+    const h = () => setRoute(location.hash || '#/');
+    window.addEventListener('hashchange', h);
+    return () => window.removeEventListener('hashchange', h);
+  }, []);
+  useEffect(() => {
+    if (!authed) return;
+    // UI/UX 스튜디오 공개 자산 API — 실패해도 허브는 정상 동작
+    fetch('https://d4zwmnh2s47e9.cloudfront.net/api/assets')
+      .then(r => r.json()).then(d => setStudioAssets((d.assets || []).length))
+      .catch(() => setStudioAssets(null));
+  }, [authed]);
+  if (!authed) return <Login onDone={() => setAuthed(true)} />;
+  return route.startsWith('#/s1') ? <S1 /> : <Hub studioAssets={studioAssets} />;
 }
 
 function Login({ onDone }: { onDone: () => void }) {
@@ -91,6 +107,7 @@ function S1() {
   return (
     <div className="max-w-[1400px] mx-auto p-5">
       <header className="flex items-center gap-3 mb-4">
+        <a href="#/" className="chip hover:border-sky-500 text-slate-300">← 플랫폼 허브</a>
         <div className="text-lg font-bold">아톰은행 <span className="text-sky-400">규정 영향 분석</span></div>
         <span className="chip text-slate-400">S1 — Vector RAG vs GraphRAG</span>
         <div className="flex-1" />

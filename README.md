@@ -1,33 +1,45 @@
-# Agentic AI 플랫폼 엔지니어링
+# Agentic AI Platform
 
-AWS Bedrock AgentCore 기반 Agentic AI 메타플랫폼을 설계·운영하는 플랫폼 엔지니어를 위한 기술 레퍼런스 북. VitePress로 빌드된다.
+하나의 종합 Agentic AI 플랫폼 — 역할별 서피스가 공통 거버넌스(AgentCore Agent Registry ·
+Cognito 초대 전용 · CloudFront 단일 진입) 위에서 동작한다. 기술 레퍼런스 북(가이드북)이
+모든 설계 결정의 근거를 제공한다.
 
-## 개발
+## 서피스
+
+| 서피스 | 대상 | 라이브 | 소스 |
+|---|---|---|---|
+| **플랫폼 허브 · 규정 영향 분석(S1)** | 심사·기획 | https://d15n7n9ypt87h8.cloudfront.net/ | `platform/` |
+| **UI/UX 스튜디오** | 디자이너 | https://d4zwmnh2s47e9.cloudfront.net/ | `demo/uiux-studio/` |
+| **에이전트 컨트롤룸** | 플랫폼 엔지니어·현업 | https://d1twhttjtzqewp.cloudfront.net/ | `demo/builder-harness/` |
+| **가이드북** (93챕터) | 전 직군 | https://www.atomai.click/AgenticAI-Platform/ | `docs/` |
+
+계정: 공유 데모 계정은 `demo/SECURITY-GOVERNANCE.md` 참고. 전 서피스 가입 버튼 없음 —
+admin-create 초대 전용.
+
+## 통합 구조 (2026-09-02 재편)
+
+- **거버넌스 정본 단일화**: 전 서피스가 AgentCore Agent Registry(us-east-1)에
+  `surface_*` 레코드로 등록·승인되어 있고, 상태 변경이 CloudTrail에 감사 기록된다.
+- **상호 내비게이션**: 허브 ↔ 스튜디오 ↔ 컨트롤룸 ↔ 가이드북이 서로 링크된다.
+- **온톨로지 편입**: 컨트롤룸 커버리지 그래프에 서피스 간 관계가 존재한다
+  (위키 `platform-reorg` 문서 참조).
+
+## 은행 데모 (SPEC.md — 진행 중)
+
+`SPEC.md`가 정본 요구사항. 진행 상황은 `platform/README.md`.
+
+- Phase 1 완료 — 온톨로지(3,317노드/8,520엣지) · GraphStore · Semantic Layer · 커버리지 테스트
+- Phase 2 완료 — S1 규정 영향 분석 라이브 (GraphRAG vs Vector RAG, 스트리밍, 근거 검증)
+- Phase 3~5 — 온프렘 플레인 분리(ECS·RDS·Guardrails), Registry S3 반전 시연, 보고서·마무리
+
+## 가이드북 개발
 
 ```bash
 npm install
 npm run docs:dev       # 로컬 개발 서버
 npm run docs:build     # 정적 빌드
-npm run docs:preview   # 빌드 결과 프리뷰
 ```
 
-## 구조
-
 - `docs/00-intro/` ~ `docs/13-appendix/` — Part별 챕터
-- `docs/.vitepress/config.ts` — 사이드바·네비게이션·검색 설정
-
-## 샘플 데모 — Agentic AI Platform (v4)
-
-`demo/builder-harness/` — 상용화 수준을 지향한 Agentic AI 플랫폼 데모: https://d1twhttjtzqewp.cloudfront.net/ (Cognito 로그인 필요, 계정은 `demo/SECURITY-GOVERNANCE.md` 참고). 팀 셀프서비스 에이전트, 중앙 MCP(AgentCore Gateway+Identity), Agent Registry 거버넌스, Agent Skills, 온톨로지(AI-Ready Data), AI Wiki, 커버리지 그래프, GUI 워크플로우(Chain/Loop), Cognito RBAC + 감사. 상세는 `demo/PLATFORM-V4-PLAN.md`와 `demo/SECURITY-GOVERNANCE.md`.
-
-## 샘플 데모 — UI/UX Studio (디자이너용)
-
-`demo/uiux-studio/` — 디자이너(비개발자)용 UI/UX Agentic AI 플랫폼: https://d4zwmnh2s47e9.cloudfront.net/ (공유 데모 계정은 `demo/SECURITY-GOVERNANCE.md` 참고). 디자인 자산 8종(토큰·팔레트·아이콘셋·컴포넌트·스타일가이드·스킬·워크플로우·에이전트) 등록/버전 히스토리, AgentCore Gateway 공유 MCP, Bedrock 전 모델 선택, 플레이그라운드(에이전트 기반 생성 + **컴포넌트 클릭 후 프롬프트 수정**), AgentCore Memory 기반 디자이너 취향 학습, 승인 패턴 few-shot 루프. 스펙/플랜은 `demo/uiux-studio/docs/` 참고.
-
-## 이전 데모 문서
-
-`demo/builder-harness/` — Part 11(빌더 에이전트)을 실제 AgentCore Harness로 배포한 데모. 코드 없이 config만으로 배포해 Strands SDK 직접 사용을 피한다. 자세한 내용은 해당 디렉터리의 README 참고.
-
-## 집필 규칙
-
-챕터 작성 규칙과 목차는 `PROMPT.md`(집필 지시 원문)를 참고한다. 모든 챕터는 "이 장에서 얻는 것 → 왜 문제가 되는가 → 핵심 개념 → 결정 표 → 실패 모드 → 안티패턴 → 계측(SLI) → 체크리스트 → 참고" 골격을 따른다.
+- 집필 규칙과 목차는 `PROMPT.md` 참고. 모든 챕터는 "이 장에서 얻는 것 → 왜 문제가 되는가
+  → 핵심 개념 → 결정 표 → 실패 모드 → 안티패턴 → 계측(SLI) → 체크리스트 → 참고" 골격.
