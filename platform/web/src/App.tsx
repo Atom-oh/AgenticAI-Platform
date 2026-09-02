@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { auth, login } from './lib';
 import S1 from './S1';
 import S2 from './S2';
+import Studio from './Studio';
 import { Agents, Dashboard, Explore, Frame, RegistryView, TwoPlane } from './Views';
 
 const NAV = [
@@ -71,7 +72,7 @@ export default function App() {
           {view === 'twoplane' && <TwoPlane />}
           {view === 'guardrails' && <TwoPlane blockedOnly />}
           {view === 'agents' && <Agents />}
-          {view === 'studio' && <Frame src="https://d4zwmnh2s47e9.cloudfront.net/" note="UI/UX 스튜디오 — 같은 플랫폼의 디자이너 서피스 (임베드)" />}
+          {view === 'studio' && <Studio />}
           {view === 'guide' && <Frame src="https://www.atomai.click/AgenticAI-Platform/" note="Agentic AI 플랫폼 엔지니어링 가이드북 (임베드)" />}
         </div>
       </main>

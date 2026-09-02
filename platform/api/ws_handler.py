@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -45,6 +46,24 @@ def _apply_guardrail(text: str, source: str) -> dict:
               for t in a.get("topicPolicy", {}).get("topics", [])]
     return {"action": r["action"], "topics": topics,
             "message": (r.get("outputs") or [{}])[0].get("text", "")}
+
+
+def _studio(method: str, path: str, token: str = "", body: dict | None = None) -> dict:
+    """UI/UX 스튜디오 API 프록시 — 쓰기는 사용자 본인의 스튜디오 토큰(x-hana-auth)을
+    그대로 전달한다 (같은 공유 계정, 신원이 스튜디오 감사에 그대로 남는다)."""
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["x-hana-auth"] = token
+    req = urllib.request.Request(STUDIO + path,
+        data=json.dumps(body, ensure_ascii=False).encode() if body else None,
+        headers=headers, method=method)
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=60).read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            return {"error": json.loads(e.read().decode()).get("error", str(e.code))}
+        except Exception:
+            return {"error": f"HTTP {e.code}"}
 
 
 def _save_trace(rec: dict) -> None:
@@ -349,6 +368,55 @@ def handler(event, context):
         except Exception as e:
             _post(apigw, conn_id, {"type": "registry", "reqId": rid, "records": [],
                                    "error": str(e)[:200]})
+        return {"statusCode": 200}
+
+    # ---------- 디자인 스튜디오 네이티브 통합 (embed 아님 — 소스 기반 프록시) ----------
+    if action == "studio_drafts":
+        r = _studio("GET", "/drafts.json")
+        drafts = list(reversed(r.get("drafts", [])))[:30]
+        _post(apigw, conn_id, {"type": "studio_drafts", "reqId": rid, "drafts": drafts,
+                               "error": r.get("error")})
+        return {"statusCode": 200}
+
+    if action == "studio_asset":
+        aid = body.get("assetId", "")
+        content = _studio("GET", f"/api/assets/content?asset_id={urllib.parse.quote(aid)}")
+        history = _studio("GET", f"/api/assets/history?asset_id={urllib.parse.quote(aid)}")
+        _post(apigw, conn_id, {"type": "studio_asset", "reqId": rid,
+                               "content": content, "history": history.get("history", history)})
+        return {"statusCode": 200}
+
+    if action == "studio_models":
+        r = _studio("GET", "/api/models")
+        _post(apigw, conn_id, {"type": "studio_models", "reqId": rid,
+                               "models": r.get("models", [])[:30], "error": r.get("error")})
+        return {"statusCode": 200}
+
+    if action == "studio_jobs":
+        jid = body.get("jobId")
+        r = _studio("GET", f"/api/jobs?job_id={jid}" if jid else "/api/jobs")
+        _post(apigw, conn_id, {"type": "studio_jobs", "reqId": rid, **{k: r.get(k) for k in ("job", "jobs", "error")}})
+        return {"statusCode": 200}
+
+    if action == "studio_generate":
+        r = _studio("POST", "/api/generate", body.get("studioToken", ""),
+                    {"brief": body.get("brief", "")[:1000], "model_id": body.get("modelId", ""),
+                     "asset_ids": body.get("assetIds", []), "output_type": body.get("outputType", "design")})
+        _post(apigw, conn_id, {"type": "studio_generate", "reqId": rid, **r})
+        return {"statusCode": 200}
+
+    if action == "studio_feedback":
+        r = _studio("POST", "/api/feedback", body.get("studioToken", ""),
+                    {"draft_id": body.get("draftId"), "action": body.get("decision"),
+                     "comment": body.get("comment", "")})
+        _post(apigw, conn_id, {"type": "studio_feedback", "reqId": rid, **r})
+        return {"statusCode": 200}
+
+    if action == "studio_register":
+        r = _studio("POST", "/api/assets", body.get("studioToken", ""),
+                    {"name": body.get("name", ""), "type": body.get("assetType", ""),
+                     "content": body.get("content", ""), "scope": body.get("scope", "shared")})
+        _post(apigw, conn_id, {"type": "studio_register", "reqId": rid, **r})
         return {"statusCode": 200}
 
     if action == "traces":

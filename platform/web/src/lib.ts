@@ -13,13 +13,17 @@ export async function loadConfig(): Promise<AppConfig> {
 // 토큰은 메모리에만 둔다 — 브라우저 스토리지에 저장하지 않는다 (SPEC §12.10)
 let _accessToken: string | null = null;
 let _idToken: string | null = null;
+let _studioToken: string | null = null;
 let _email: string | null = null;
 export const auth = {
   get token() { return _accessToken; },
   get idToken() { return _idToken; },
+  get studioToken() { return _studioToken; },
   get email() { return _email; },
-  logout() { _accessToken = null; _idToken = null; _email = null; sock.close(); },
+  logout() { _accessToken = null; _idToken = null; _studioToken = null; _email = null; sock.close(); },
 };
+
+const STUDIO_CLIENT_ID = '6f4kpa5l1qqrjfv73uvl724gul'; // UI/UX 스튜디오 풀 (같은 공유 계정)
 
 export async function login(email: string, password: string): Promise<void> {
   const cfg = await loadConfig();
@@ -42,6 +46,22 @@ export async function login(email: string, password: string): Promise<void> {
   _accessToken = data.AuthenticationResult.AccessToken;
   _idToken = data.AuthenticationResult.IdToken;
   _email = email;
+  // 같은 자격증명으로 스튜디오 풀에도 인증 (실패해도 무방 — 스튜디오 쓰기만 비활성)
+  try {
+    const r2 = await fetch(`https://cognito-idp.${cfg.region}.amazonaws.com/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-amz-json-1.1',
+        'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+      },
+      body: JSON.stringify({
+        AuthFlow: 'USER_PASSWORD_AUTH', ClientId: STUDIO_CLIENT_ID,
+        AuthParameters: { USERNAME: email, PASSWORD: password },
+      }),
+    });
+    const d2 = await r2.json();
+    _studioToken = d2.AuthenticationResult?.AccessToken || null;
+  } catch { _studioToken = null; }
 }
 
 export type WsEvent = { type: string; [k: string]: any };

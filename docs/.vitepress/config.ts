@@ -14,6 +14,7 @@ export default withMermaid(defineConfig({
       { text: '권한 제어', link: '/09-authorization/' },
       { text: 'AgentCore', link: '/10-agentcore/runtime-deep-dive' },
       { text: '보안·규제', link: '/12-security-korea/korea-fsc-regulation' },
+      { text: '🚀 라이브 데모', link: '/14-demo/' },
     ],
 
     sidebar: [
@@ -191,6 +192,14 @@ export default withMermaid(defineConfig({
           { text: 'VitePress 설정', link: '/13-appendix/vitepress-setup' },
           { text: 'VitePress 컨벤션', link: '/13-appendix/vitepress-conventions' },
           { text: '용어집', link: '/13-appendix/glossary' },
+        ],
+      },
+      {
+        text: '라이브 데모',
+        collapsed: false,
+        items: [
+          { text: '데모 안내 · 접속 정보', link: '/14-demo/' },
+          { text: '아키텍처와 설계 결정', link: '/14-demo/architecture' },
         ],
       },
     ],
