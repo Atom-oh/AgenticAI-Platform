@@ -1,4 +1,4 @@
-/* NEXUS — Agentic AI Platform SPA */
+/* Agentic AI Platform SPA */
 'use strict';
 
 /* ---------------- auth (Cognito hosted UI, PKCE) ---------------- */
@@ -76,8 +76,8 @@ function shell(inner){
   app.innerHTML = `
   <div class="shell">
     <nav class="rail">
-      <div class="brand">NE<em>X</em>US</div>
-      <div class="sub">AGENTIC AI PLATFORM</div>
+      <div class="brand">AGENTIC <em>AI</em></div>
+      <div class="sub">PLATFORM CONTROL ROOM</div>
       ${VIEWS.map(v=>`<button data-v="${v.id}" class="${r===v.id?'on':''}">
         <span class="ic">${v.ic}</span><span class="tx">${v.label}</span></button>`).join('')}
       ${ME&&ME.isAdmin?`<div class="sect">PLATFORM ENGINEER</div>
@@ -106,8 +106,8 @@ function setTitle(t){ const e=$('#vtitle'); if(e) e.textContent=t; }
 function renderLogin(expired){
   app.innerHTML = `
   <div class="login">
-    <div class="mark">NEXUS</div>
-    <div class="tag">AGENTIC AI PLATFORM · AgentCore 기반 사내 에이전트 관제실</div>
+    <div class="mark">AGENTIC AI</div>
+    <div class="tag">AgentCore 기반 사내 에이전트 플랫폼 · 관제실</div>
     <div class="panel">
       ${expired?'<p style="color:var(--amber)">세션이 만료되었습니다.</p>':''}
       <p>에이전트를 만들고, 승인하고, 지식과 연결하고, 관측하는 곳.<br>

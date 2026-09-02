@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "NEXUS — Agentic AI 플랫폼 아키텍처 (v4)",
+    "title": "Agentic AI 플랫폼 아키텍처 (v4)",
     "output": "architecture.html",
     "quality_profile": "showcase",
     "animation": "trace",
@@ -106,7 +106,7 @@
     {
       "id": "fn",
       "type": "backend",
-      "label": "NEXUS Lambda",
+      "label": "Platform Lambda",
       "sublabel": "SPA + API + RBAC",
       "pos": [
         680,

@@ -1,4 +1,4 @@
-"""NEXUS — Agentic AI Platform (v4, commercial-grade demo).
+"""Agentic AI Platform (v4, commercial-grade demo).
 
 Pillars: team self-service agents / central MCP (Gateway+Identity) /
 Agent Registry governance / Agent Skills (S3) / ontology / AI wiki /
@@ -246,7 +246,7 @@ def registry_register(agent_id, name, desc, risk, team):
         description=f"[{team}] {name} — {desc or 'no description'} (Tier {risk})"[:250],
         descriptorType="CUSTOM",
         descriptors={"custom": {"inlineContent": json.dumps(
-            {"platform": "nexus", "agentId": agent_id, "team": team,
+            {"platform": "agentic-ai-platform", "agentId": agent_id, "team": team,
              "riskTier": risk, "execution": "harness-systemPrompt-override"},
             ensure_ascii=False)}})
     record_id = rec["recordArn"].rsplit("/", 1)[-1]

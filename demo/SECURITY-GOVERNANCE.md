@@ -1,4 +1,4 @@
-# NEXUS 보안·거버넌스 전략 (v4)
+# Agentic AI Platform 보안·거버넌스 전략 (v4)
 
 플랫폼에 **시행 중인** 통제와 **residual gap**을 구분해 기록한다. 데모라도 시행되지 않은 통제를 시행 중이라고 쓰지 않는다.
 
@@ -55,3 +55,5 @@
 | beta@demo.nexus | team-beta | 서비스팀 셀프서비스 |
 
 가입 버튼은 존재하지 않는다 — 계정은 `admin-create-user`로만 발급한다. (데모 편의로 비밀번호 최소 길이를 8자로 완화 — 프로덕션은 12자+ 권장)
+
+> 참고: 일부 AWS 리소스 ID(`nexus-gateway-tools`, `NexusGateway*` 역할, `agentic-nexus-skills-*` 버킷)는 초기 명명이 남아 있다 — 기능과 무관하며 재생성 비용 때문에 유지.

@@ -16,9 +16,9 @@ npm run docs:preview   # 빌드 결과 프리뷰
 - `docs/00-intro/` ~ `docs/13-appendix/` — Part별 챕터
 - `docs/.vitepress/config.ts` — 사이드바·네비게이션·검색 설정
 
-## 샘플 데모 — NEXUS 플랫폼 (v4)
+## 샘플 데모 — Agentic AI Platform (v4)
 
-`demo/builder-harness/` — 상용화 수준을 지향한 Agentic AI 플랫폼 데모 **NEXUS**: https://d1twhttjtzqewp.cloudfront.net/ (Cognito 로그인 필요, 계정은 `demo/SECURITY-GOVERNANCE.md` 참고). 팀 셀프서비스 에이전트, 중앙 MCP(AgentCore Gateway+Identity), Agent Registry 거버넌스, Agent Skills, 온톨로지(AI-Ready Data), AI Wiki, 커버리지 그래프, GUI 워크플로우(Chain/Loop), Cognito RBAC + 감사. 상세는 `demo/PLATFORM-V4-PLAN.md`와 `demo/SECURITY-GOVERNANCE.md`.
+`demo/builder-harness/` — 상용화 수준을 지향한 Agentic AI 플랫폼 데모: https://d1twhttjtzqewp.cloudfront.net/ (Cognito 로그인 필요, 계정은 `demo/SECURITY-GOVERNANCE.md` 참고). 팀 셀프서비스 에이전트, 중앙 MCP(AgentCore Gateway+Identity), Agent Registry 거버넌스, Agent Skills, 온톨로지(AI-Ready Data), AI Wiki, 커버리지 그래프, GUI 워크플로우(Chain/Loop), Cognito RBAC + 감사. 상세는 `demo/PLATFORM-V4-PLAN.md`와 `demo/SECURITY-GOVERNANCE.md`.
 
 ## 이전 데모 문서
 
