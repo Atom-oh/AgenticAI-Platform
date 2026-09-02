@@ -182,6 +182,46 @@
              border-top-color:#008485; animation:spin 0.9s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
   .btn[disabled] { opacity:.55; cursor:wait; }
+
+  /* ---- dedicated login page ---- */
+  body.gate header, body.gate main { display:none; }
+  #login-view { display:none; }
+  body.gate #login-view { display:flex; }
+  #login-view { position:fixed; inset:0; align-items:center; justify-content:center;
+                background:#fbfcfb; padding:16px; overflow:hidden; z-index:40; }
+  #login-view .glow { position:absolute; inset:0; pointer-events:none;
+    background: radial-gradient(circle at 16% 12%, rgba(0,132,133,.14), transparent 42%),
+                radial-gradient(circle at 84% 88%, rgba(0,97,95,.10), transparent 42%); }
+  .login-wrap { position:relative; width:100%; max-width:400px; display:flex;
+                flex-direction:column; gap:14px; }
+  .login-brand { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  .login-mark { width:52px; height:52px; border-radius:50%; background:#008485; position:relative; }
+  .login-mark::after { content:''; position:absolute; inset:14px; border-radius:50%;
+                       background:#fbfcfb; }
+  .login-brand .name { font-size:20px; font-weight:900; letter-spacing:-0.02em; color:#17332f; }
+  .login-brand .sub { font-size:13px; color:#8aa19c; }
+  .login-card { background:#fff; border:1px solid #e2e8e6; border-radius:14px; padding:28px;
+                display:flex; flex-direction:column; gap:16px;
+                box-shadow:0 12px 40px rgba(0,51,50,.08); }
+  .login-card .head { display:flex; align-items:center; justify-content:space-between; }
+  .login-card .head h1 { margin:0; font-size:17px; font-weight:700; color:#17332f; }
+  .login-card .secure { display:flex; align-items:center; gap:6px; font-size:11px; color:#8aa19c; }
+  .login-card .secure i { width:6px; height:6px; border-radius:50%; background:#2e9e5b; display:block; }
+  .login-error { display:none; border:1px solid #efc7c7; background:#fbe9e9; color:#a13232;
+                 border-radius:8px; padding:9px 12px; font-size:13px; }
+  .login-error.show { display:block; }
+  .login-field { display:flex; flex-direction:column; gap:6px; }
+  .login-field span { font-size:12px; color:#8aa19c; }
+  .login-field input { height:44px; border:1px solid #d5e0dd; border-radius:8px; padding:0 12px;
+                       font-size:14px; font-family:inherit; color:#17332f; outline:none;
+                       transition:border-color .15s, box-shadow .15s; }
+  .login-field input:focus { border-color:#008485; box-shadow:0 0 0 3px rgba(0,132,133,.15); }
+  .login-remember { display:flex; align-items:center; gap:8px; font-size:13px; color:#5c6f6b;
+                    cursor:pointer; min-height:24px; }
+  .login-submit { height:46px; border:none; border-radius:8px; background:#008485; color:#fff;
+                  font-size:14px; font-weight:700; font-family:inherit; cursor:pointer; }
+  .login-submit[disabled] { opacity:.6; cursor:wait; }
+  .login-foot { text-align:center; font-size:12px; color:#8aa19c; }
 </style>
 </head>
 <body>
@@ -354,16 +394,35 @@
   </section>
 </main>
 
-<div id="login-backdrop" style="position:fixed; inset:0; background:rgba(23,51,47,.45); display:none; align-items:center; justify-content:center; z-index:50;">
-  <div class="card-box" style="width:360px; max-width:92vw; background:#fff;">
-    <div class="label" style="font-size:16px;">디자이너 로그인</div>
-    <div class="desc" style="margin:0;">계정은 관리자가 발급합니다 (셀프 가입 없음)</div>
-    <input class="input" id="login-username" placeholder="아이디" autocomplete="username">
-    <input class="input" id="login-password" type="password" placeholder="비밀번호" autocomplete="current-password">
-    <div style="display:flex; gap:10px; justify-content:flex-end;">
-      <button class="btn btn-outline" id="btn-login-cancel">닫기</button>
-      <button class="btn btn-primary" id="btn-login-submit">로그인</button>
+<div id="login-view">
+  <div class="glow" aria-hidden="true"></div>
+  <div class="login-wrap">
+    <div class="login-brand">
+      <div class="login-mark" aria-hidden="true"></div>
+      <div class="name">Hana Design Studio</div>
+      <div class="sub">하나은행 UI/UX Agentic AI 플랫폼</div>
     </div>
+    <form class="login-card" id="login-form">
+      <div class="head">
+        <h1>로그인</h1>
+        <span class="secure"><i></i>보안 연결</span>
+      </div>
+      <div class="login-error" id="login-error" role="alert"></div>
+      <label class="login-field">
+        <span>아이디</span>
+        <input id="login-username" autocomplete="username" required>
+      </label>
+      <label class="login-field">
+        <span>비밀번호</span>
+        <input id="login-password" type="password" autocomplete="current-password" required>
+      </label>
+      <label class="login-remember">
+        <input type="checkbox" id="login-remember" checked style="width:16px; height:16px; accent-color:#008485;">
+        로그인 상태 유지
+      </label>
+      <button class="login-submit" id="btn-login-submit" type="submit">로그인</button>
+      <div class="login-foot">계정은 관리자가 발급합니다 · 셀프 가입 없음</div>
+    </form>
   </div>
 </div>
 
@@ -385,8 +444,8 @@
 
   /* ---- designer identity (Cognito) ---- */
   let appConfig = null;
-  const getToken = () => sessionStorage.getItem('hana_token') || '';
-  const getUser = () => sessionStorage.getItem('hana_user') || '';
+  const getToken = () => sessionStorage.getItem('hana_token') || localStorage.getItem('hana_token') || '';
+  const getUser = () => sessionStorage.getItem('hana_user') || localStorage.getItem('hana_user') || '';
 
   async function loadConfig() {
     if (!appConfig) appConfig = await apiGet('/api/config');
@@ -395,36 +454,75 @@
 
   function renderAuthButton() {
     const b = document.getElementById('btn-auth');
-    if (getToken()) {
-      b.textContent = `${getUser()} · 로그아웃`;
-      b.onclick = () => { sessionStorage.removeItem('hana_token'); sessionStorage.removeItem('hana_user'); renderAuthButton(); };
-    } else {
-      b.textContent = '로그인';
-      b.onclick = openLogin;
-    }
+    b.textContent = `${getUser()} · 로그아웃`;
+    b.onclick = () => {
+      for (const st of [sessionStorage, localStorage]) {
+        st.removeItem('hana_token'); st.removeItem('hana_user');
+      }
+      openLogin();
+    };
   }
-  function openLogin() { document.getElementById('login-backdrop').style.display = 'flex'; }
-  function closeLogin() { document.getElementById('login-backdrop').style.display = 'none'; }
+  function openLogin() {
+    document.body.classList.add('gate');
+    setTimeout(() => document.getElementById('login-username').focus(), 50);
+  }
+  function closeLogin() { document.body.classList.remove('gate'); }
+  function showLoginError(msg) {
+    const el = document.getElementById('login-error');
+    el.textContent = msg;
+    el.classList.add('show');
+  }
 
-  async function doLogin() {
+  async function doLogin(e) {
+    if (e) e.preventDefault();
+    document.getElementById('login-error').classList.remove('show');
     const cfg = await loadConfig();
-    if (!cfg || !cfg.spa_client_id) { alert('로그인 설정을 불러올 수 없습니다.'); return; }
+    if (!cfg || !cfg.spa_client_id) { showLoginError('로그인 설정을 불러올 수 없습니다. 잠시 후 다시 시도해 주세요.'); return; }
     const username = document.getElementById('login-username').value.trim();
     const password = document.getElementById('login-password').value;
-    if (!username || !password) { alert('아이디와 비밀번호를 입력해 주세요.'); return; }
-    const r = await fetch(`https://cognito-idp.${cfg.region}.amazonaws.com/`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-amz-json-1.1',
-                'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth'},
-      body: JSON.stringify({AuthFlow: 'USER_PASSWORD_AUTH', ClientId: cfg.spa_client_id,
-                            AuthParameters: {USERNAME: username, PASSWORD: password}})});
-    const out = await r.json().catch(() => ({}));
-    const token = out.AuthenticationResult && out.AuthenticationResult.AccessToken;
-    if (!token) { alert(out.message || '로그인 실패'); return; }
-    sessionStorage.setItem('hana_token', token);
-    sessionStorage.setItem('hana_user', username);
-    document.getElementById('login-password').value = '';
-    closeLogin();
+    if (!username || !password) { showLoginError('아이디와 비밀번호를 입력해 주세요.'); return; }
+    const btn = document.getElementById('btn-login-submit');
+    btn.disabled = true; btn.textContent = '로그인 중...';
+    try {
+      const r = await fetch(`https://cognito-idp.${cfg.region}.amazonaws.com/`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-amz-json-1.1',
+                  'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth'},
+        body: JSON.stringify({AuthFlow: 'USER_PASSWORD_AUTH', ClientId: cfg.spa_client_id,
+                              AuthParameters: {USERNAME: username, PASSWORD: password}})});
+      const out = await r.json().catch(() => ({}));
+      const token = out.AuthenticationResult && out.AuthenticationResult.AccessToken;
+      if (!token) {
+        showLoginError(out.__type && String(out.__type).includes('NotAuthorized')
+          ? '아이디 또는 비밀번호가 올바르지 않습니다.'
+          : (out.message || '로그인에 실패했습니다. 잠시 후 다시 시도해 주세요.'));
+        return;
+      }
+      const store = document.getElementById('login-remember').checked ? localStorage : sessionStorage;
+      store.setItem('hana_token', token);
+      store.setItem('hana_user', username);
+      document.getElementById('login-password').value = '';
+      closeLogin();
+      renderAuthButton();
+      renderRoute();
+    } catch (err) {
+      showLoginError('네트워크 오류로 로그인하지 못했습니다.');
+    } finally {
+      btn.disabled = false; btn.textContent = '로그인';
+    }
+  }
+
+  async function bootAuth() {
+    if (!getToken()) { openLogin(); return; }
+    const r = await fetch('/api/me', {headers: {'x-hana-auth': getToken()}, cache: 'no-store'})
+      .catch(() => null);
+    if (!r || !r.ok) {
+      for (const st of [sessionStorage, localStorage]) {
+        st.removeItem('hana_token'); st.removeItem('hana_user');
+      }
+      openLogin();
+      return;
+    }
     renderAuthButton();
   }
 
@@ -435,7 +533,7 @@
     if (getToken()) headers['x-hana-auth'] = getToken();
     const r = await fetch(path, {method: 'POST', headers, body});
     const out = await r.json().catch(() => ({}));
-    if (r.status === 401) { openLogin(); return null; }
+    if (r.status === 401) { openLogin(); return null; }  // session expired → login page
     if (!r.ok || out.error) { alert(out.error || `요청 실패 (${r.status})`); return null; }
     return out;
   }
@@ -1010,11 +1108,9 @@
   /* ===================== init ===================== */
   setupAssetsTab();
   setupGenerateTab();
-  renderAuthButton();
-  document.getElementById('btn-login-cancel').onclick = closeLogin;
-  document.getElementById('btn-login-submit').onclick = doLogin;
-  document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  document.getElementById('login-form').addEventListener('submit', doLogin);
   loadConfig();
+  bootAuth();
   if (!TABS.includes((location.hash || '').replace('#', ''))) location.hash = '#gallery';
   renderRoute();
 </script>
