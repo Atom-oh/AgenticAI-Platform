@@ -190,7 +190,7 @@ def chat(ctx: Ctx, body: dict) -> None:
 def assets(ctx: Ctx, body: dict) -> None:
     r = _studio("GET", "/api/assets")
     ctx.post({"type": "assets", "error": r.get("error"), "assets": [
-        {k: a.get(k) for k in ("name", "type", "version", "actor", "updated_at", "scope")}
+        {k: a.get(k) for k in ("asset_id", "name", "type", "version", "actor", "updated_at", "scope")}
         for a in r.get("assets", [])][:60]})
 
 

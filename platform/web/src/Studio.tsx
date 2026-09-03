@@ -17,7 +17,7 @@ const BRIEF_PRESETS = [
   { label: '환전 위저드', brief: '외화 환전 신청 스텝 위저드 — 통화 선택, 금액 입력, 우대율 표시, 확인 단계' },
 ];
 
-const aid = (a: Asset) => (a as any).asset_id || `${a.type}:${a.name}`;
+const aid = (a: Asset) => (a as any).asset_id || `${a.type}:${a.name.trim().replace(/\s+/g, '-')}`;
 
 /* 팔레트 JSON → 색 스와치 */
 function Swatches({ content }: { content: any }) {
@@ -236,8 +236,10 @@ function Assets({ assets, canWrite, reload }: { assets: Asset[]; canWrite: boole
   const [msg, setMsg] = useState('');
   const open = async (a: Asset) => {
     const r = await sock.request('studio_asset', { assetId: aid(a) }).catch(() => ({} as any));
-    const c = (r as any).content;
-    setSel({ ...a, ...r, content: (c && typeof c === 'object' && 'content' in c) ? (c as any).content : c });
+    const c = (r as any).content;  // 응답 전체를 스프레드하면 r.type이 자산 type을 덮어쓴다 — 필요한 필드만
+    setSel({ ...a,
+      history: (r as any).history,
+      content: (c && typeof c === 'object' && 'content' in c) ? (c as any).content : c });
   };
   const register = async () => {
     if (!reg.name || !reg.content) { setMsg('이름과 내용을 입력하세요'); return; }
