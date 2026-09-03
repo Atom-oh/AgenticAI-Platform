@@ -93,7 +93,8 @@ CDK 배포는 한 세션이 단독 소유해야 한다 — 동시 배포는 Clou
 
 ## 자격증명·보안 (이 저장소 고유)
 
-- 은행 데모 비밀번호는 Secrets Manager `bank-platform/demo-user` — 문서·코드에 적지 않는다(SPEC §9).
+- 은행 데모 비밀번호의 원본은 Secrets Manager `bank-platform/demo-user`. 사용자 결정(2026-09-03)으로 가이드북 `docs/14-demo/`
+  접속 정보에만 적는다(SPEC §12.9 완화, §16 기록) — 코드·로그·메모리에는 적지 않는다.
   자매 데모(builder-harness·uiux-studio)는 공유 데모 계정 `demo@atomai.click`을 쓴다.
 - Cognito는 전부 초대 전용(`AllowAdminCreateUserOnly=true`) — 가입 UI를 만들지 않는다.
 - uiux-studio API에 POST할 때는 CloudFront OAC 때문에 `x-amz-content-sha256`(본문 sha256 hex)

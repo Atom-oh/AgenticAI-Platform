@@ -1,6 +1,6 @@
 # 시연 리허설 — 15분 스크립트와 체크리스트
 
-시연 URL: <https://agent.atomai.click/> · 계정은 시연 운영자에게 확인.
+시연 URL: <https://agent.atomai.click/> · 계정·비밀번호는 [접속 정보](./index.md) 참고.
 시작 전 좌측 하단 배지 확인: **그래프 백엔드 = Neptune Serverless**, **PII 추론 경로 배지(운영 IDC GPU+vLLM / 데모 Gemma 대체)**.
 
 ## 오프닝 (30초)

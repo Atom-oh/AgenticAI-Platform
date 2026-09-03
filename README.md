@@ -32,7 +32,8 @@ admin-create 초대 전용.
 - 구조: 두 CDK 스택 — `BankPlatform`(클라우드 플레인: CloudFront·WebSocket API·엔진·Registry·Guardrails IaC)
   + `BankPlatformPlane`(격리 VPC: ECS 온프렘 서비스·RDS·Neptune·브리지·Writer, NAT 없음)
 - 시나리오 S1~S5 + F7(Reader/Writer)이 한 SPA(레일 내비)에 있고, 관리 작업(Neptune 적재·시드·리셋)은 IAM 전용 AdminFn
-- 데모 계정 비밀번호는 Secrets Manager `bank-platform/demo-user` — 문서·코드에 기록하지 않는다 (SPEC §9)
+- 데모 계정 `demo@atomai.click`의 비밀번호는 가이드북 [라이브 데모 접속 정보](docs/14-demo/index.md)에 적혀 있다
+  (사용자 결정 2026-09-03, 데모 전용 계정). 원본은 Secrets Manager `bank-platform/demo-user` — 코드·로그에는 적지 않는다
 
 ## 가이드북 개발
 

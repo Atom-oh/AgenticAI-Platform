@@ -555,3 +555,4 @@ AgentCore insights · Evaluations · Policy는 서울에서 global 교차 리전
 - §4-1: 서울(ap-northeast-2)에서 `global.anthropic.claude-sonnet-5`, `global.anthropic.claude-opus-5` 추론 프로파일 ACTIVE 확인. `apac.anthropic.claude-sonnet-4-*` 프로파일도 ACTIVE로 존재한다(APAC 프로파일 미지원이라는 문구와 다름) — 명세에 따라 global 프로파일을 기본으로 쓰고, 트레이스에 실제 모델 ID를 기록한다.
 - §4-2: us-west-2 표준 카탈로그(`list-foundation-models`)에는 `google.gemma-3-{4b,12b,27b}-it`만 보인다. `google.gemma-4-31b`는 bedrock-mantle 카탈로그에서 런타임에 확인한다(어댑터 헬스체크). 장기 API 키 시크릿은 계정에 없다 → 어댑터는 IAM 자격으로 단기 Bearer 토큰(12h)을 발급해 사용하고, 장기 키가 Secrets Manager에 있으면 그것을 우선한다.
 - §11-2: 데모는 규칙 기반 토큰화(마스킹 게이트)를 **구현했다**. 배지는 사실대로 "합성데이터 가명 생성 + 규칙 기반 토큰화 (ML 가명처리·재식별 볼트 미구현)"로 표기한다.
+- §12.9·부록(데모 접속): 사용자 결정(2026-09-03)으로 데모 계정 비밀번호를 가이드북 `docs/14-demo/index.md` 접속 정보에 적는다(데모 전용 계정, 합성데이터만 접근). 코드·로그·이 문서에는 적지 않으며 원본은 Secrets Manager `bank-platform/demo-user`다.

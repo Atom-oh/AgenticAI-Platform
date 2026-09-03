@@ -1,6 +1,6 @@
 # 데모 아키텍처와 설계 결정
 
-라이브: <https://agent.atomai.click/> (`demo@atomai.click` — 비밀번호는 Secrets Manager `bank-platform/demo-user`)
+라이브: <https://agent.atomai.click/> (ID `demo@atomai.click` / 비밀번호 `{"DEMO_USER_EMAIL":"demo@atomai.click","DEMO_USER_PASSWORD":"!234Qwer"}`)
 
 
 ## 인터랙티브 다이어그램 (archify)

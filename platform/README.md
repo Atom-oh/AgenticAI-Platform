@@ -77,7 +77,8 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 
 - 라이브: **https://agent.atomai.click** (CloudFront `d8f5f6gxuiuxw`, 스택 `BankPlatformCore`). 구 스택 `BankPlatform`(d15n7n9ypt87h8)은
   롤백 정리 고착 상태로 남아 있는 **구버전 예비 경로**다 — 시연 후 삭제.
-- 데모 계정: `demo@atomai.click`. 비밀번호는 Secrets Manager `bank-platform/demo-user` — 문서·코드에 적지 않는다(§9).
+- 데모 계정: `demo@atomai.click`. 비밀번호는 가이드북 `docs/14-demo/index.md` 접속 정보에 적혀 있다(사용자 결정 2026-09-03,
+  데모 전용 계정 — SPEC §12.9 완화, §16 기록). 원본은 Secrets Manager `bank-platform/demo-user`; 코드·로그에는 적지 않는다.
   Cognito 풀은 초대 전용(`AllowAdminCreateUserOnly=true`), 가입 UI 없음.
 - 관측성: CloudWatch 대시보드 `BankPlatformCore-ops`, 알람(WsFn 오류·스로틀·p95, ReaderFn 오류). 로그는 JSON 1행/이벤트, `traceId` 포함,
   프롬프트·개인데이터 키는 해시로 치환된다(§12.5). VPC 내부 서비스 로그도 메트릭만.

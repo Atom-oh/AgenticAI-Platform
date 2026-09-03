@@ -8,7 +8,7 @@ GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 
 | 항목 | 값 |
 |---|---|
 | **데모 URL** | <https://agent.atomai.click/> |
-| **접속 계정** | `demo@atomai.click` — 비밀번호는 Secrets Manager `bank-platform/demo-user` (SPEC §9, 문서에 기록하지 않음) |
+| **접속 계정** | ID `demo@atomai.click` / 비밀번호 `{"DEMO_USER_EMAIL":"demo@atomai.click","DEMO_USER_PASSWORD":"!234Qwer"}` — 데모 전용 계정(합성데이터만 접근). 원본은 Secrets Manager `bank-platform/demo-user` |
 | 가입 | 불가 — 계정은 관리자 초대(admin-create)로만 발급 |
 
 > 전부 **합성데이터**다. 실제 고객 데이터·실제 상품명·실제 내규 조항을 사용하지 않는다.
