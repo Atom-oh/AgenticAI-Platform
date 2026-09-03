@@ -83,6 +83,8 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 - 관측성: CloudWatch 대시보드 `BankPlatformCore-ops`, 알람(WsFn 오류·스로틀·p95, ReaderFn 오류). 로그는 JSON 1행/이벤트, `traceId` 포함,
   프롬프트·개인데이터 키는 해시로 치환된다(§12.5). VPC 내부 서비스 로그도 메트릭만.
 - CI: `.github/workflows/platform-ci.yml` — pytest · 웹 타입체크/빌드 · 게이트 node:test · cdk synth · 비밀번호/키 패턴 검사.
+  pytest 잡은 `seed/generate.py`·`seed/corpus.py`로 합성데이터를 재생성하고, Bedrock 호출 없이 돌리기 위해 임베딩 캐시
+  `seed/out/corpus.embeddings.json`만 저장소에 커밋한다(나머지 `seed/out/*`은 무시).
   (고객 제안은 GitLab CI 전제 — 이 저장소의 GitHub Actions는 같은 파이프라인의 검증용이다. CodeCommit/CodePipeline 미사용.)
 
 ## 시연 리허설 체크리스트 (SPEC v2 §8-5·§10-1)

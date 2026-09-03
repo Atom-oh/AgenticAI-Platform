@@ -5,7 +5,9 @@ docs/.vitepress/dist/
 .DS_Store
 demo/builder-harness/site/function.zip
 demo/builder-harness/site/architecture.visual-check.*
-platform/seed/out/
+# seed/out 은 생성물 — 단, Bedrock 임베딩 캐시만 커밋(CI·신규 클론이 모델 호출 없이 재현)
+platform/seed/out/*
+!platform/seed/out/corpus.embeddings.json
 platform/**/__pycache__/
 platform/api-dist/
 platform/infra/node_modules/

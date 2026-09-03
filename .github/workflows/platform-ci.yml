@@ -19,8 +19,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - run: pip install pytest boto3 pyyaml pg8000
+      - run: pip install pytest boto3 pyyaml pg8000 httpx
       - run: python3 seed/generate.py
+      - run: python3 seed/corpus.py   # corpus.jsonl (임베딩 캐시 seed/out/corpus.embeddings.json 은 커밋됨)
       - run: python3 -m pytest tests/ -q
       - name: 금지 패턴 검사 (비밀번호·실 계정·프롬프트 원문 로그)
         run: |
