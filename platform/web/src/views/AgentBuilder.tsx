@@ -44,11 +44,11 @@ const STATUS_KO: Record<string, string> = {
   DRAFT: '초안', PENDING_APPROVAL: '승인 대기', APPROVED: '승인', REJECTED: '반려', DEPRECATED: '폐기',
 };
 const statusColor = (s: string) =>
-  s === 'APPROVED' ? 'text-emerald-400' : s === 'PENDING_APPROVAL' ? 'text-amber-400'
-    : s === 'DEPRECATED' ? 'text-rose-400' : s === 'REJECTED' ? 'text-rose-300' : 'text-slate-400';
+  s === 'APPROVED' ? 'text-emerald-600' : s === 'PENDING_APPROVAL' ? 'text-amber-700'
+    : s === 'DEPRECATED' ? 'text-[#E90061]' : s === 'REJECTED' ? 'text-[#E90061]' : 'text-slate-400';
 const statusBorder = (s: string) =>
-  s === 'APPROVED' ? 'border-emerald-700' : s === 'PENDING_APPROVAL' ? 'border-amber-700'
-    : s === 'DEPRECATED' || s === 'REJECTED' ? 'border-rose-800' : 'border-slate-700';
+  s === 'APPROVED' ? 'border-emerald-700' : s === 'PENDING_APPROVAL' ? 'border-amber-400'
+    : s === 'DEPRECATED' || s === 'REJECTED' ? 'border-rose-800' : 'border-slate-300';
 const shortModel = (m?: string) => (m || '—').replace('global.anthropic.', '');
 const shortSid = (s?: string | null) => (s ? `${s.slice(0, 8)}…${s.slice(-8)}` : '—');
 const errOf = (e: WsEvent | null | undefined) => (e && (e.type === 'error' || e.ok === false)) ? (e.error || e.message || '오류') : '';
@@ -64,14 +64,14 @@ function AcChip({ s }: { s: string | null }) {
 }
 function HarnessChip({ s, err }: { s: string; err?: string }) {
   const ready = s === 'READY' || s === 'ACTIVE';
-  const cls = ready ? 'text-teal-300' : s === 'none' ? 'text-slate-500' : s === 'FAILED' ? 'text-rose-400' : 'text-amber-300';
+  const cls = ready ? 'text-teal-700' : s === 'none' ? 'text-slate-500' : s === 'FAILED' ? 'text-[#E90061]' : 'text-amber-700';
   const label = s === 'none' ? 'Harness 없음' : s === 'unknown' ? 'Harness ?' : `Harness · ${s}`;
   return <span className={`chip text-[10px] ${cls}`} style={{ borderColor: ready ? 'var(--bedrock)' : undefined }}
     title={err || (s === 'none' ? '이 레코드에 연결된 AgentCore Harness 가 없다 (파이프라인형 에이전트)' : 'AgentCore Harness 상태')}>{label}</span>;
 }
 function ScenarioTag({ s }: { s: string }) {
   const custom = !PRESETS[s];
-  return <span className={`chip text-[10px] ${custom ? 'text-slate-400' : 'text-teal-300'}`}>{custom ? '사용자 정의' : `시나리오 ${s}`}</span>;
+  return <span className={`chip text-[10px] ${custom ? 'text-slate-400' : 'text-teal-700'}`}>{custom ? '사용자 정의' : `시나리오 ${s}`}</span>;
 }
 
 /* ---------------- 좌: 카탈로그 ---------------- */
@@ -89,13 +89,13 @@ function CatalogList({ cat, sel, onSelect, onRefresh, loading }: {
         <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--bedrock)' }} />
         <b className="text-sm">카탈로그</b>
         <span className="text-xs text-slate-500">AGENT 레코드 {agents.length}건</span>
-        <button className="chip text-[10px] ml-auto hover:border-slate-500" onClick={onRefresh} disabled={loading}>{loading ? '조회 중…' : '새로고침'}</button>
+        <button className="chip text-[10px] ml-auto hover:border-slate-400" onClick={onRefresh} disabled={loading}>{loading ? '조회 중…' : '새로고침'}</button>
       </div>
       <div className="text-[11px] text-slate-500 mb-2">
         플랫폼 Registry(거버넌스 원장) ⟷ AgentCore Registry(발견) ⟷ Harness(실행). 세 상태를 그대로 보인다.
       </div>
-      {cat?.harnessError && <div className="text-[11px] text-amber-300 mb-2">Harness 목록 조회 실패 — {cat.harnessError}</div>}
-      {cat?.agentcoreRegistryError && <div className="text-[11px] text-amber-300 mb-2">AgentCore Registry 도달 불가 — {cat.agentcoreRegistryError}</div>}
+      {cat?.harnessError && <div className="text-[11px] text-amber-700 mb-2">Harness 목록 조회 실패 — {cat.harnessError}</div>}
+      {cat?.agentcoreRegistryError && <div className="text-[11px] text-amber-700 mb-2">AgentCore Registry 도달 불가 — {cat.agentcoreRegistryError}</div>}
       <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-1" style={{ maxHeight: 'calc(100vh - 240px)' }}>
         {!cat && <div className="text-xs text-slate-500">카탈로그 불러오는 중…</div>}
         {cat && agents.length === 0 && <div className="text-xs text-slate-500">AGENT 레코드가 없다 — 오른쪽에서 만들거나 관리자 seed_agents 를 실행한다.</div>}
@@ -103,7 +103,7 @@ function CatalogList({ cat, sel, onSelect, onRefresh, loading }: {
           const on = sel?.name === a.name && sel?.version === a.version;
           return (
             <button key={`${a.name}@${a.version}`} onClick={() => onSelect(a)}
-              className={`w-full text-left rounded-lg border p-2.5 hover:border-slate-500 ${on ? 'border-teal-500 bg-teal-500/5' : 'border-slate-800'}`}>
+              className={`w-full text-left rounded-lg border p-2.5 hover:border-slate-400 ${on ? 'border-teal-500 bg-teal-500/5' : 'border-slate-200'}`}>
               <div className="flex items-center gap-2">
                 <b className="text-sm truncate">{a.title}</b>
                 <ScenarioTag s={a.scenario} />
@@ -114,7 +114,7 @@ function CatalogList({ cat, sel, onSelect, onRefresh, loading }: {
                 <RegChip s={a.status} /><AcChip s={a.agentcoreStatus} /><HarnessChip s={a.harnessStatus} err={a.harnessError} />
               </div>
               <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">{a.description}</div>
-              <div className="text-[10px] text-slate-600 mt-1">
+              <div className="text-[10px] text-slate-400 mt-1">
                 도구 {a.allowedTools.length}개{a.skills.length ? ` · 스킬 ${a.skills.length}개` : ''}{a.runtime ? ` · ${a.runtime}` : ''}
               </div>
             </button>
@@ -185,62 +185,62 @@ function CreateForm({ cat, onCreated, onApprove }: {
       {open && (
         <div className="mt-3">
           <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-slate-400">이름 <span className="text-slate-600">(영문 snake_case · Harness 이름 bank_&lt;이름&gt;)</span>
-              <input className={`mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-900 border text-sm font-mono ${name && !nameOk ? 'border-rose-700' : 'border-slate-700'}`}
+            <label className="text-xs text-slate-400">이름 <span className="text-slate-400">(영문 snake_case · Harness 이름 bank_&lt;이름&gt;)</span>
+              <input className={`mt-1 w-full px-3 py-1.5 rounded-lg bg-white border text-sm font-mono ${name && !nameOk ? 'border-rose-300' : 'border-slate-300'}`}
                 value={name} onChange={e => setName(e.target.value.trim())} placeholder="card_benefit_agent" />
             </label>
             <label className="text-xs text-slate-400">제목
-              <input className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-sm"
+              <input className="mt-1 w-full px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm"
                 value={title} onChange={e => setTitle(e.target.value)} placeholder="카드 혜택 상담 에이전트" />
             </label>
             <label className="text-xs text-slate-400 col-span-2">설명
-              <input className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-sm"
+              <input className="mt-1 w-full px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm"
                 value={desc} onChange={e => setDesc(e.target.value)} placeholder="무엇을 하고, 어떤 도구만 쓰는지" />
             </label>
-            <label className="text-xs text-slate-400">모델 <span className="text-slate-600">(Bedrock · global 교차 리전 추론)</span>
-              <select className="mt-1 w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-sm font-mono"
+            <label className="text-xs text-slate-400">모델 <span className="text-slate-400">(Bedrock · global 교차 리전 추론)</span>
+              <select className="mt-1 w-full px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-mono"
                 value={model} onChange={e => setModel(e.target.value)}>
                 {(cat?.models || [model]).filter(Boolean).map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </label>
-            <label className="text-xs text-slate-400 flex flex-col">메모리 <span className="text-slate-600">(AgentCore managed memory · SEMANTIC · 30일)</span>
+            <label className="text-xs text-slate-400 flex flex-col">메모리 <span className="text-slate-400">(AgentCore managed memory · SEMANTIC · 30일)</span>
               <button type="button" onClick={() => setMemory(m => !m)}
-                className={`mt-1 self-start chip text-xs ${memory ? 'text-teal-300' : 'text-slate-400'}`}
+                className={`mt-1 self-start chip text-xs ${memory ? 'text-teal-700' : 'text-slate-400'}`}
                 style={{ borderColor: memory ? 'var(--bedrock)' : undefined }}>
-                <span className={`inline-block w-2 h-2 rounded-full ${memory ? 'bg-teal-400' : 'bg-slate-600'}`} />{memory ? '켬 — 세션 간 기억' : '끔 — 세션 안에서만'}
+                <span className={`inline-block w-2 h-2 rounded-full ${memory ? 'bg-[#008485]' : 'bg-slate-600'}`} />{memory ? '켬 — 세션 간 기억' : '끔 — 세션 안에서만'}
               </button>
             </label>
           </div>
 
           <div className="mt-2 text-xs text-slate-400 flex items-center gap-2">시스템 프롬프트
-            <span className="text-slate-600">— 끝에 플랫폼 공통 규칙이 붙는다 (서버 정본 agent_specs.COMMON_RULES)</span>
-            {promptDirty && <button className="chip text-[10px] ml-auto hover:border-slate-500" onClick={() => { setPromptDirty(false); setPrompt(promptTemplate(title, rules)); }}>템플릿으로 되돌리기</button>}
+            <span className="text-slate-400">— 끝에 플랫폼 공통 규칙이 붙는다 (서버 정본 agent_specs.COMMON_RULES)</span>
+            {promptDirty && <button className="chip text-[10px] ml-auto hover:border-slate-400" onClick={() => { setPromptDirty(false); setPrompt(promptTemplate(title, rules)); }}>템플릿으로 되돌리기</button>}
           </div>
-          <textarea className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm leading-relaxed" rows={5}
+          <textarea className="mt-1 w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm leading-relaxed" rows={5}
             value={prompt} onChange={e => { setPrompt(e.target.value); setPromptDirty(true); }} />
 
           <div className="grid grid-cols-2 gap-3 mt-2">
             <div>
-              <div className="text-xs text-slate-400 mb-1">Skills <span className="text-slate-600">(Registry SKILL → S3 SKILL.md 로 Harness 에 연결)</span></div>
+              <div className="text-xs text-slate-400 mb-1">Skills <span className="text-slate-400">(Registry SKILL → S3 SKILL.md 로 Harness 에 연결)</span></div>
               <div className="flex flex-wrap gap-1">
                 {(cat?.skills || []).map(s => {
                   const on = skills.includes(s.name);
                   return <button key={s.name} onClick={() => toggle(skills, setSkills, s.name)} title={`${s.name}@${s.version} · ${STATUS_KO[s.status] || s.status}`}
-                    className={`chip text-[11px] ${on ? 'text-teal-200' : s.status === 'APPROVED' ? 'text-slate-300' : 'text-slate-500'} hover:border-slate-500`}
+                    className={`chip text-[11px] ${on ? 'text-teal-900' : s.status === 'APPROVED' ? 'text-slate-700' : 'text-slate-500'} hover:border-slate-400`}
                     style={{ borderColor: on ? 'var(--bedrock)' : undefined, background: on ? 'rgba(56,189,248,.12)' : undefined }}>
-                    {on ? '✓ ' : ''}{s.name}{s.status !== 'APPROVED' && <span className="text-[9px] text-amber-400">{STATUS_KO[s.status] || s.status}</span>}
+                    {on ? '✓ ' : ''}{s.name}{s.status !== 'APPROVED' && <span className="text-[9px] text-amber-700">{STATUS_KO[s.status] || s.status}</span>}
                   </button>;
                 })}
                 {cat && cat.skills.length === 0 && <span className="text-[11px] text-slate-500">SKILL 레코드 없음</span>}
               </div>
             </div>
             <div>
-              <div className="text-xs text-slate-400 mb-1">Tools <span className="text-slate-600">(AgentCore Gateway · Lambda 타깃 · IAM 인바운드)</span></div>
+              <div className="text-xs text-slate-400 mb-1">Tools <span className="text-slate-400">(AgentCore Gateway · Lambda 타깃 · IAM 인바운드)</span></div>
               <div className="flex flex-wrap gap-1">
                 {(cat?.tools || []).map(t => {
                   const on = tools.includes(t.name);
                   return <button key={t.name} onClick={() => toggle(tools, setTools, t.name)} title={t.description}
-                    className={`chip text-[11px] font-mono ${on ? 'text-amber-100' : 'text-slate-300'} hover:border-slate-500`}
+                    className={`chip text-[11px] font-mono ${on ? 'text-amber-100' : 'text-slate-700'} hover:border-slate-400`}
                     style={{ borderColor: on ? 'var(--vpc)' : undefined, background: on ? 'rgba(251,191,36,.10)' : undefined }}>
                     {on ? '✓ ' : ''}{t.name}
                   </button>;
@@ -259,20 +259,20 @@ function CreateForm({ cat, onCreated, onApprove }: {
 
           <div className="flex items-center gap-3 mt-3">
             <button onClick={submit} disabled={busy || !nameOk || !prompt.trim() || !cat}
-              className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+              className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
               {busy ? 'Harness 생성 중… (READY 대기 최대 90초)' : '만들기 → 승인 대기'}
             </button>
             <span className="text-[11px] text-slate-500">생성 순서: Harness(ensure, 멱등) → Registry 레코드 DRAFT → PENDING_APPROVAL → AgentCore Registry 미러</span>
           </div>
 
           {res && !res.ok && (
-            <div className="mt-3 rounded-lg border border-rose-800 bg-rose-950/30 p-2 text-xs text-rose-300">
+            <div className="mt-3 rounded-lg border border-rose-800 bg-rose-950/30 p-2 text-xs text-[#E90061]">
               생성 실패{res.stage ? ` (${res.stage})` : ''}: {res.error}
               {res.harness?.arn && <div className="text-slate-400 mt-1">Harness 는 만들어졌다 — {res.harness.status} · {res.harness.arn}</div>}
             </div>
           )}
           {res?.ok && rec && (
-            <div className="mt-3 rounded-lg border border-slate-700 p-3 text-xs">
+            <div className="mt-3 rounded-lg border border-slate-300 p-3 text-xs">
               <div className="flex items-center gap-2 flex-wrap">
                 <b className="text-sm">{rec.payload?.title || rec.name}</b>
                 <span className="font-mono text-slate-500">{rec.name}@{rec.recordVersion}</span>
@@ -281,23 +281,23 @@ function CreateForm({ cat, onCreated, onApprove }: {
                 <AcChip s={approved?.ok ? approved.agentcoreRegistry?.status : (res.agentcoreRegistry?.error ? null : res.agentcoreRegistry?.status)} />
               </div>
               <div className="text-slate-400 mt-1.5 font-mono break-all">Harness ARN: {res.harness?.arn || '—'}</div>
-              {res.harness?.note && <div className="text-amber-300 mt-1">{res.harness.note}</div>}
-              {res.agentcoreRegistry?.error && <div className="text-amber-300 mt-1">AgentCore Registry 미러 실패 — {res.agentcoreRegistry.error} (플랫폼 Registry 에는 등록됨)</div>}
+              {res.harness?.note && <div className="text-amber-700 mt-1">{res.harness.note}</div>}
+              {res.agentcoreRegistry?.error && <div className="text-amber-700 mt-1">AgentCore Registry 미러 실패 — {res.agentcoreRegistry.error} (플랫폼 Registry 에는 등록됨)</div>}
               {!res.agentcoreRegistry?.error && res.agentcoreRegistry && (
                 <div className="text-slate-500 mt-1">AgentCore Registry: {res.agentcoreRegistry.action} · {res.agentcoreRegistry.status} · {res.agentcoreRegistry.recordId}</div>
               )}
               {nowStatus === 'PENDING_APPROVAL' && (
                 <div className="flex items-center gap-2 mt-2">
-                  <span className="text-amber-300">승인 대기 — Consumer 게이트가 호출을 거부한다.</span>
-                  <a href="#/registry" className="chip hover:border-teal-500 text-teal-300">#/registry 에서 승인 →</a>
+                  <span className="text-amber-700">승인 대기 — Consumer 게이트가 호출을 거부한다.</span>
+                  <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">#/registry 에서 승인 →</a>
                   <button onClick={approve} disabled={approving}
-                    className="chip hover:border-emerald-500 text-emerald-300 disabled:opacity-40" title="관리자 편의 — 감사 이벤트에 actor·사유가 남는다">
+                    className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" title="관리자 편의 — 감사 이벤트에 actor·사유가 남는다">
                     {approving ? '승인 중…' : '데모: 즉시 승인'}
                   </button>
                 </div>
               )}
-              {approved && !approved.ok && <div className="text-rose-300 mt-1">승인 실패: {errOf(approved)}</div>}
-              {approved?.ok && <div className="text-emerald-400 mt-2">승인됨 — 아래 채팅에서 호출할 수 있다 (감사: {approved.audit?.actor} · {approved.audit?.reason})</div>}
+              {approved && !approved.ok && <div className="text-[#E90061] mt-1">승인 실패: {errOf(approved)}</div>}
+              {approved?.ok && <div className="text-emerald-600 mt-2">승인됨 — 아래 채팅에서 호출할 수 있다 (감사: {approved.audit?.actor} · {approved.audit?.reason})</div>}
             </div>
           )}
         </div>
@@ -312,7 +312,7 @@ function ToolCard({ t }: { t: ToolCall }) {
   if (t.input) { try { pretty = JSON.stringify(JSON.parse(t.input), null, 2); } catch { pretty = t.input; } }
   return (
     <div className="rounded-lg p-2 text-[11px]" style={{ border: '1px solid var(--vpc)', background: 'rgba(251,191,36,.08)' }}>
-      <div className="font-semibold text-amber-300">🔧 도구 호출: <span className="font-mono">{t.name}</span>
+      <div className="font-semibold text-amber-700">🔧 도구 호출: <span className="font-mono">{t.name}</span>
         <span className="text-slate-500 font-normal"> · Gateway → Lambda · VPC 내부에서 마스킹 후 반환</span></div>
       {t.input != null
         ? <pre className="font-mono whitespace-pre-wrap break-words text-amber-100/80 mt-1 max-h-40 overflow-y-auto">{pretty}</pre>
@@ -332,11 +332,11 @@ function Bubble({ m }: { m: Msg }) {
       <div className="max-w-[88%] rounded-2xl rounded-bl-md px-3 py-2 text-sm" style={{ background: 'rgba(56,189,248,.06)', borderLeft: '3px solid var(--bedrock)' }}>
         {m.tools.length > 0 && <div className="space-y-1.5 mb-2">{m.tools.map((t, i) => <ToolCard key={`${t.toolUseId || t.name}-${i}`} t={t} />)}</div>}
         {(m.text || m.running) && (
-          <div className="text-slate-200"><Md text={m.text} />{m.running && <span className="blink">▌</span>}</div>
+          <div className="text-slate-800"><Md text={m.text} />{m.running && <span className="blink">▌</span>}</div>
         )}
-        {(m.stageErrors || []).map((s, i) => <div key={i} className="text-[11px] text-rose-300 mt-1 font-mono break-all">스트림 오류: {s}</div>)}
+        {(m.stageErrors || []).map((s, i) => <div key={i} className="text-[11px] text-[#E90061] mt-1 font-mono break-all">스트림 오류: {s}</div>)}
         {m.error && (
-          <div className={`rounded-lg p-2 mt-1 text-xs border ${isGate ? 'border-rose-700 bg-rose-950/40 text-rose-300' : 'border-rose-800 bg-rose-950/20 text-rose-300'}`}>
+          <div className={`rounded-lg p-2 mt-1 text-xs border ${isGate ? 'border-rose-300 bg-rose-950/40 text-[#E90061]' : 'border-rose-800 bg-rose-950/20 text-[#E90061]'}`}>
             {isGate ? '⛔ 거버넌스 게이트 (Consumer): ' : '⚠ 호출 실패: '}{m.error}
             {m.status && <span className="ml-2"><RegChip s={m.status} /></span>}
             {isGate && <div className="text-[11px] text-rose-200/70 mt-1">APPROVED 가 아닌 레코드는 Harness 를 호출하는 코드 경로에 들어가지 않는다 — Registry 에서 승인한 뒤 다시 보낸다.</div>}
@@ -429,11 +429,11 @@ function Chat({ sel, onApprove, onRefresh }: {
         <b className="text-sm">{sel ? sel.title : '채팅'}</b>
         {sel && <span className="font-mono text-[11px] text-slate-500">{sel.name}@{sel.version}</span>}
         {sel && <RegChip s={sel.status} />}
-        <span className="chip text-[10px] text-amber-300 border-amber-700" title="SPEC §11-4 — AgentCore 는 global 교차 리전 추론이 강제되므로 Tier 2 경로에는 쓰지 않는다">
+        <span className="chip text-[10px] text-amber-700 border-amber-400" title="SPEC §11-4 — AgentCore 는 global 교차 리전 추론이 강제되므로 Tier 2 경로에는 쓰지 않는다">
           AgentCore Harness · Tier 0/1 전용
         </span>
         <span className="ml-auto text-[10px] text-slate-500">세션 <span className="font-mono">{shortSid(sessionId)}</span></span>
-        {sessionId && <button className="chip text-[10px] hover:border-slate-500" onClick={() => { setSessionId(null); setMsgs([]); }}>새 세션</button>}
+        {sessionId && <button className="chip text-[10px] hover:border-slate-400" onClick={() => { setSessionId(null); setMsgs([]); }}>새 세션</button>}
       </div>
       <div className="text-[11px] text-slate-500 mt-1">
         에이전트는 Bedrock을 직접 호출한다 — 개인데이터는 도구가 VPC 내부에서 마스킹한 뒤에만 반환된다(도구 출력 = 경계).
@@ -443,39 +443,39 @@ function Chat({ sel, onApprove, onRefresh }: {
       {sel && (
         <>
           <div className="flex items-center gap-2 mt-2 flex-wrap text-[11px]">
-            {preset && <button className="chip hover:border-teal-500 text-teal-300" onClick={() => send(preset)} disabled={running}>시나리오 질문 ({sel.scenario})</button>}
+            {preset && <button className="chip hover:border-teal-500 text-teal-700" onClick={() => send(preset)} disabled={running}>시나리오 질문 ({sel.scenario})</button>}
             <span className="text-slate-500">도구 {sel.allowedTools.length ? sel.allowedTools.map(t => <span key={t} className="font-mono text-amber-200/80 mr-1">{t}</span>) : '없음'}</span>
-            <button className="chip text-[10px] ml-auto hover:border-slate-500" onClick={() => setCfgOpen(o => !o)}>{cfgOpen ? 'Harness 설정 닫기' : 'Harness 설정 보기'}</button>
+            <button className="chip text-[10px] ml-auto hover:border-slate-400" onClick={() => setCfgOpen(o => !o)}>{cfgOpen ? 'Harness 설정 닫기' : 'Harness 설정 보기'}</button>
           </div>
           {cfgOpen && (
-            <div className="mt-2 rounded-lg border border-slate-800 p-2 text-[11px] text-slate-400">
+            <div className="mt-2 rounded-lg border border-slate-200 p-2 text-[11px] text-slate-400">
               {!cfg && <span>조회 중…</span>}
-              {cfg && errOf(cfg) && <span className="text-rose-300">{errOf(cfg)}</span>}
-              {cfg && !errOf(cfg) && cfg.harnessError && <span className="text-amber-300">Harness 조회 실패 — {cfg.harnessError}</span>}
+              {cfg && errOf(cfg) && <span className="text-[#E90061]">{errOf(cfg)}</span>}
+              {cfg && !errOf(cfg) && cfg.harnessError && <span className="text-amber-700">Harness 조회 실패 — {cfg.harnessError}</span>}
               {cfg && !errOf(cfg) && !cfg.harnessError && !hz && <span>연결된 Harness 없음 (파이프라인형 · {sel.runtime})</span>}
               {hz && (
                 <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-                  <div>상태 <b className="text-slate-200">{hz.status}</b></div>
-                  <div>모델 <span className="font-mono text-slate-300">{hz.model?.bedrockModelConfig?.modelId || '—'}</span></div>
+                  <div>상태 <b className="text-slate-800">{hz.status}</b></div>
+                  <div>모델 <span className="font-mono text-slate-700">{hz.model?.bedrockModelConfig?.modelId || '—'}</span></div>
                   <div>반복 상한 {hz.maxIterations ?? '—'} · 타임아웃 {hz.timeoutSeconds ?? '—'}s</div>
                   <div>메모리 {hz.memory?.disabled ? '끔' : (hz.memory?.managedMemoryConfiguration?.strategies || []).join(',') || '—'}</div>
                   <div className="col-span-2 break-all">허용 도구 <span className="font-mono">{(hz.allowedTools || []).join(', ') || '—'}</span></div>
                   <div className="col-span-2 break-all">스킬 <span className="font-mono">{(hz.skills || []).map((s: any) => s?.s3?.uri || JSON.stringify(s)).join(', ') || '없음'}</span></div>
                   <div className="col-span-2 break-all font-mono text-slate-500">{hz.arn}</div>
                   <details className="col-span-2 mt-1"><summary className="cursor-pointer">시스템 프롬프트</summary>
-                    <div className="md text-slate-300 mt-1 text-[11px]">{hz.systemPrompt}</div></details>
+                    <div className="md text-slate-700 mt-1 text-[11px]">{hz.systemPrompt}</div></details>
                 </div>
               )}
             </div>
           )}
           {sel.status !== 'APPROVED' && (
-            <div className="mt-2 rounded-lg border border-amber-800 bg-amber-950/20 p-2 text-[11px] text-amber-300 flex items-center gap-2 flex-wrap">
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-950/20 p-2 text-[11px] text-amber-700 flex items-center gap-2 flex-wrap">
               <span>{STATUS_KO[sel.status] || sel.status} 상태 — 전송하면 Consumer 게이트가 거부한다 (거부 자체가 시연 포인트).</span>
               {sel.status === 'PENDING_APPROVAL' && <>
-                <a href="#/registry" className="chip hover:border-teal-500 text-teal-300">#/registry 에서 승인 →</a>
-                <button className="chip hover:border-emerald-500 text-emerald-300 disabled:opacity-40" onClick={approve} disabled={approving}>{approving ? '승인 중…' : '데모: 즉시 승인'}</button>
+                <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">#/registry 에서 승인 →</a>
+                <button className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" onClick={approve} disabled={approving}>{approving ? '승인 중…' : '데모: 즉시 승인'}</button>
               </>}
-              {approveErr && <span className="text-rose-300">{approveErr}</span>}
+              {approveErr && <span className="text-[#E90061]">{approveErr}</span>}
             </div>
           )}
           {sel.harnessStatus === 'none' && !sel.harnessArn && (
@@ -483,15 +483,15 @@ function Chat({ sel, onApprove, onRefresh }: {
           )}
 
           <div ref={listRef} className="flex-1 overflow-y-auto space-y-3 mt-3 pr-1" style={{ minHeight: 220, maxHeight: 'calc(100vh - 560px)' }}>
-            {msgs.length === 0 && <div className="text-xs text-slate-600 py-6 text-center">메시지를 보내면 Harness 스트림(토큰·도구 호출)이 여기에 나타난다</div>}
+            {msgs.length === 0 && <div className="text-xs text-slate-400 py-6 text-center">메시지를 보내면 Harness 스트림(토큰·도구 호출)이 여기에 나타난다</div>}
             {msgs.map((m, i) => <Bubble key={i} m={m} />)}
           </div>
           <div className="flex gap-2 mt-3">
-            <input className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm"
+            <input className="flex-1 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
               value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && send()}
               placeholder={preset ? `예: ${preset}` : '메시지'} disabled={running} />
             <button onClick={() => send()} disabled={running || !input.trim()}
-              className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+              className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
               {running ? '응답 중…' : '보내기'}
             </button>
           </div>
@@ -531,13 +531,13 @@ export default function AgentBuilder() {
       <div className="panel p-3 mb-3 text-xs flex items-center gap-3" style={{ borderColor: 'var(--bedrock)' }}>
         <span className="text-lg">🧩</span>
         <div className="flex-1">
-          <b>에이전트 빌더</b> — 모델·시스템 프롬프트·Skills·Gateway 도구·메모리를 골라 <b className="text-teal-300">AgentCore Harness</b>를 만들면
-          Registry 에 <b className="text-amber-300">승인 대기</b>로 들어간다. 승인된 에이전트만 호출된다(Consumer 게이트) — 미승인 호출은 Harness 에 닿기 전에 거부된다.
+          <b>에이전트 빌더</b> — 모델·시스템 프롬프트·Skills·Gateway 도구·메모리를 골라 <b className="text-teal-700">AgentCore Harness</b>를 만들면
+          Registry 에 <b className="text-amber-700">승인 대기</b>로 들어간다. 승인된 에이전트만 호출된다(Consumer 게이트) — 미승인 호출은 Harness 에 닿기 전에 거부된다.
           {cat?.registryBackend && <span className="text-slate-500"> · Registry 백엔드 {cat.registryBackend}</span>}
         </div>
-        <a href="#/registry" className="chip hover:border-teal-500 text-teal-300 whitespace-nowrap">Registry 열기 →</a>
+        <a href="#/registry" className="chip hover:border-teal-500 text-teal-700 whitespace-nowrap">Registry 열기 →</a>
       </div>
-      {err && <div className="text-rose-400 text-sm mb-3">{err} <button className="chip text-[10px] ml-2" onClick={load}>다시 시도</button></div>}
+      {err && <div className="text-[#E90061] text-sm mb-3">{err} <button className="chip text-[10px] ml-2" onClick={load}>다시 시도</button></div>}
       <div className="grid grid-cols-[360px_1fr] gap-4 items-start">
         <CatalogList cat={cat} sel={sel} onSelect={a => setSelKey(`${a.name}@${a.version}`)} onRefresh={load} loading={loading} />
         <div className="min-w-0">

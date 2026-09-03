@@ -1,33 +1,32 @@
 @import "tailwindcss";
 
 :root {
-  /* 색 규칙 (SPEC v2 §8-4): 전 화면 공통 — Bedrock 영역=시안, VPC 내부 영역=앰버 */
-  --cloud: #2dd4bf;       /* 하나 청록 계열 (Bedrock 영역) — 브랜드 #008485의 다크 대비 톤 */
-  --onprem: #fbbf24;      /* VPC 내부 영역 (유지 — §8-4 색 규칙) */
-  --ok: #34d399;
-  --hana: #008485;        /* 하나금융 시그니처 청록 */
-  --bg: #081413;          /* 청록 틴트 다크 */
-  --panel: #0d1b1a;
-  --line: #1c3431;
-  /* Single Boundary 별칭 — 새 코드는 --vpc / --bedrock 을 쓴다 (기존 변수는 호환용으로 유지) */
-  --vpc: var(--onprem);
-  --bedrock: var(--cloud);
+  /* 색 규칙 (SPEC v2 §8-4) — 하나 브랜드 재정의: Bedrock 영역=Hana Green, VPC 내부=Hana Gold */
+  --cloud: #008485;        /* Hana Green (Pantone 327C) */
+  --onprem: #8a7947;       /* Hana Gold(#AD9A5F)의 본문 대비 강화 톤 */
+  --onprem-soft: #AD9A5F;
+  --ok: #0e9f6e;
+  --hana: #008485;
+  --hana-red: #E90061;     /* Hana Red (Pantone 206C) — 오류·차단 */
+  --bg: #f4f7f6;           /* 밝은 민트 그레이 */
+  --panel: #ffffff;
+  --line: #dde5e3;
 }
 
 html, body, #root { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
-  color: #dfe9e7;
+  color: #21322f;
   font-family: "Pretendard Variable", Pretendard, -apple-system, "Segoe UI", sans-serif;
 }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #22304a; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #c3d2ce; border-radius: 4px; }
 
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 3px rgba(23,58,54,.05); }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
   border-radius: 999px; border: 1px solid var(--line); font-size: 12px; }
-.md h2, .md h3, .md strong { color: #f1f6fc; }
+.md h2, .md h3, .md strong { color: #12302c; }
 .md { line-height: 1.65; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
 .blink { animation: bl 1s step-end infinite; }
 @keyframes bl { 50% { opacity: 0; } }
@@ -37,13 +36,13 @@ body {
    .bx-dot    : 트레이스 1건 = 점 1개. 좌에서 우로 이동 (경계 통과), 게이트에서 멈춤(차단/거부), VPC 내부에 머묾(캐시 응답) */
 .bx-track {
   position: relative; height: 22px; border-radius: 999px; overflow: hidden;
-  background: linear-gradient(90deg, rgba(251,191,36,.18) 0%, rgba(251,191,36,.10) 46%,
-    rgba(56,189,248,.10) 54%, rgba(56,189,248,.18) 100%);
+  background: linear-gradient(90deg, rgba(173,154,95,.22) 0%, rgba(173,154,95,.12) 46%,
+    rgba(0,132,133,.10) 54%, rgba(0,132,133,.20) 100%);
   border: 1px solid var(--line);
 }
 .bx-track::before {       /* 익명화 게이트 — 유일한 통과 지점 */
   content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px;
-  background: repeating-linear-gradient(180deg, #e2e8f0 0 3px, transparent 3px 6px); opacity: .7;
+  background: repeating-linear-gradient(180deg, #476662 0 3px, transparent 3px 6px); opacity: .55;
 }
 .bx-dot {
   position: absolute; top: 7px; left: 2px; width: 8px; height: 8px; border-radius: 999px;
@@ -64,8 +63,8 @@ body {
   0%   { left: 2px; opacity: 0; background: var(--vpc); box-shadow: 0 0 6px var(--vpc); }
   8%   { opacity: 1; }
   46%  { left: calc(50% - 6px); background: var(--vpc); }
-  52%  { background: #f43f5e; box-shadow: 0 0 8px #f43f5e; }
-  90%  { left: calc(50% - 6px); background: #f43f5e; opacity: 1; }
+  52%  { background: var(--hana-red); box-shadow: 0 0 8px var(--hana-red); }
+  90%  { left: calc(50% - 6px); background: var(--hana-red); opacity: 1; }
   100% { left: calc(50% - 6px); opacity: 0; }
 }
 @keyframes bx-stay {
@@ -81,23 +80,23 @@ body {
 .mdbox { line-height: 1.7; font-size: 14px; word-break: break-word; }
 .mdbox .mdp { margin: 2px 0; }
 .mdbox .mds { height: 8px; }
-.mdbox .mdh { color: #eefaf7; margin: 12px 0 4px; font-size: 15px; font-weight: 700;
+.mdbox .mdh { color: #103a36; margin: 12px 0 4px; font-size: 15px; font-weight: 700;
   border-left: 3px solid var(--hana); padding-left: 8px; }
 .mdbox h3.mdh { font-size: 16px; }
-.mdbox strong { color: #f0fdfa; }
-.mdbox em { color: #99f6e4; font-style: normal; }
-.mdbox code { background: #12312d; color: #5eead4; padding: 1px 6px; border-radius: 6px;
+.mdbox strong { color: #0b2f2b; }
+.mdbox em { color: #0f766e; font-style: normal; }
+.mdbox code { background: #e6f2f1; color: #0b6b6c; padding: 1px 6px; border-radius: 6px;
   font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; }
-.mdbox .mdc { background: #0a1f1d; border: 1px solid var(--line); border-radius: 10px;
+.mdbox .mdc { background: #f2f6f5; border: 1px solid var(--line); border-radius: 10px;
   padding: 10px 12px; overflow-x: auto; margin: 6px 0; }
 .mdbox .mdc code { background: none; padding: 0; }
 .mdbox .mdl { margin: 4px 0 4px 4px; padding-left: 18px; }
 .mdbox .mdl li { margin: 2px 0; }
 .mdbox .mdt { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 13px; }
-.mdbox .mdt th { background: #0f2a27; color: #99f6e4; text-align: left; padding: 6px 10px;
+.mdbox .mdt th { background: #e6f2f1; color: #0b4f4b; text-align: left; padding: 6px 10px;
   border: 1px solid var(--line); }
 .mdbox .mdt td { padding: 5px 10px; border: 1px solid var(--line); }
-.mdbox .mdt tr:nth-child(even) td { background: rgba(0,132,133,.06); }
-.mdbox .mdq { border-left: 3px solid var(--onprem); margin: 6px 0; padding: 2px 10px;
-  color: #cbd5d1; }
+.mdbox .mdt tr:nth-child(even) td { background: rgba(0,132,133,.045); }
+.mdbox .mdq { border-left: 3px solid var(--onprem-soft); margin: 6px 0; padding: 2px 10px;
+  color: #4b5e5a; }
 .mdbox .mdr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }

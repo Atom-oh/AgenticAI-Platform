@@ -44,8 +44,8 @@ const RUNNER_LABEL: Record<string, string> = {
 };
 
 function okIcon(ok: boolean | null | undefined) {
-  if (ok === true) return <span className="text-emerald-400 font-bold">✓</span>;
-  if (ok === false) return <span className="text-rose-400 font-bold">✗</span>;
+  if (ok === true) return <span className="text-emerald-600 font-bold">✓</span>;
+  if (ok === false) return <span className="text-[#E90061] font-bold">✗</span>;
   return <span className="text-slate-500 font-bold">—</span>;
 }
 function okText(ok: boolean | null | undefined) {
@@ -61,8 +61,8 @@ function UsedBadges({ used, size = 'md' }: { used: Used[]; size?: 'sm' | 'md' })
       {sorted.map(u => u.name === 'Button'
         ? <span key={u.name + u.version} className={`chip font-bold ${size === 'md' ? 'text-sm px-3 py-1' : 'text-xs'}`}
             style={{ borderColor: 'var(--cloud)', background: 'rgba(56,189,248,.12)', color: '#bae6fd' }}>
-            Button <span className="ml-1 text-teal-300">{u.version}</span></span>
-        : <span key={u.name + u.version} className={`chip ${size === 'md' ? 'text-xs' : 'text-[10px]'} text-slate-300`}>{u.name}@{u.version}</span>)}
+            Button <span className="ml-1 text-teal-700">{u.version}</span></span>
+        : <span key={u.name + u.version} className={`chip ${size === 'md' ? 'text-xs' : 'text-[10px]'} text-slate-700`}>{u.name}@{u.version}</span>)}
     </div>
   );
 }
@@ -82,15 +82,15 @@ function GateTile({ label, sub, gate, k }: { label: string; sub: string; gate?: 
           <span className="ml-auto text-[11px] text-slate-400">{okText(ok)}{typeof count === 'number' && count > 0 ? ` · ${count}건` : ''}</span>
         </div>
         <div className="text-[10px] text-slate-500 mt-1">{sub}</div>
-        {ok == null && gate?.note && <div className="text-[10px] text-amber-300 mt-1">{gate.note}</div>}
+        {ok == null && gate?.note && <div className="text-[10px] text-amber-700 mt-1">{gate.note}</div>}
         {k === 'visual' && ok === true && (
-          <div className="text-[11px] mt-1 text-slate-300">
-            {gate?.changed === true ? <span className="text-amber-300">이전 실행과 구조 변경 감지</span>
-              : gate?.changed === false ? <span className="text-emerald-400">이전 실행과 구조 동일</span>
+          <div className="text-[11px] mt-1 text-slate-700">
+            {gate?.changed === true ? <span className="text-amber-700">이전 실행과 구조 변경 감지</span>
+              : gate?.changed === false ? <span className="text-emerald-600">이전 실행과 구조 동일</span>
               : <span className="text-slate-500">기준선 없음 (첫 실행)</span>}
           </div>
         )}
-        {gate && <div className="text-[10px] text-slate-600 mt-1">{open ? '▾ 상세 닫기' : '▸ 상세 보기'}</div>}
+        {gate && <div className="text-[10px] text-slate-400 mt-1">{open ? '▾ 상세 닫기' : '▸ 상세 보기'}</div>}
       </button>
       {open && gate && <GateDetail k={k} gate={gate} />}
     </div>
@@ -99,12 +99,12 @@ function GateTile({ label, sub, gate, k }: { label: string; sub: string; gate?: 
 
 function GateDetail({ k, gate }: { k: GateKey; gate: Gate }) {
   return (
-    <div className="mt-2 text-[11px] text-slate-300 space-y-1 max-h-64 overflow-y-auto">
+    <div className="mt-2 text-[11px] text-slate-700 space-y-1 max-h-64 overflow-y-auto">
       {gate.note && <div className="text-slate-400">{gate.note}</div>}
       {(k === 'build' || k === 'types' || k === 'lint') && (gate.errors || []).map((e: any, i: number) => (
-        <div key={i} className="font-mono bg-slate-950 rounded p-1.5 whitespace-pre-wrap break-words">
-          <span className="text-rose-300">{e.file || 'Screen.tsx'}{e.line ? `:${e.line}` : ''}</span>
-          {e.ruleId && <span className="text-amber-300"> [{e.ruleId}]</span>} {e.message}
+        <div key={i} className="font-mono bg-slate-50 rounded p-1.5 whitespace-pre-wrap break-words">
+          <span className="text-[#E90061]">{e.file || 'Screen.tsx'}{e.line ? `:${e.line}` : ''}</span>
+          {e.ruleId && <span className="text-amber-700"> [{e.ruleId}]</span>} {e.message}
         </div>
       ))}
       {k === 'types' && gate.declaredModules && (
@@ -114,8 +114,8 @@ function GateDetail({ k, gate }: { k: GateKey; gate: Gate }) {
         <div className="text-slate-500">경고 {gate.warnings.length}건 (실패 아님)</div>
       )}
       {k === 'a11y' && (gate.violations || []).map((v: any, i: number) => (
-        <div key={i} className="bg-slate-950 rounded p-1.5">
-          <div><span className="text-rose-300 font-mono">{v.id}</span> <span className="text-slate-400">{v.impact}</span>
+        <div key={i} className="bg-slate-50 rounded p-1.5">
+          <div><span className="text-[#E90061] font-mono">{v.id}</span> <span className="text-slate-400">{v.impact}</span>
             {v.kwcag && <span className="chip text-[10px] ml-1" style={{ borderColor: 'var(--onprem)' }}>KWCAG {v.kwcag}</span>}
             <span className="text-slate-500 ml-1">({v.source === 'kwcag-check' ? '구조 검사' : 'axe'})</span></div>
           <div>{v.help}</div>
@@ -148,8 +148,8 @@ function GateDetail({ k, gate }: { k: GateKey; gate: Gate }) {
       {k === 'registry' && (
         <div>
           <div className="mb-1"><UsedBadges used={gate.used || []} size="sm" /></div>
-          {(gate.problems || []).map((p: string, i: number) => <div key={i} className="text-rose-300">✗ {p}</div>)}
-          {(gate.warnings || []).map((w: string, i: number) => <div key={i} className="text-amber-300">△ {w}</div>)}
+          {(gate.problems || []).map((p: string, i: number) => <div key={i} className="text-[#E90061]">✗ {p}</div>)}
+          {(gate.warnings || []).map((w: string, i: number) => <div key={i} className="text-amber-700">△ {w}</div>)}
         </div>
       )}
     </div>
@@ -166,22 +166,22 @@ function StagePanel({ s }: { s: Stage }) {
         <span className="flex-1">{STEP_LABEL[s.step] || s.step}{s.attempt ? <span className="text-slate-500 font-normal"> · 시도 {s.attempt}</span> : null}</span>
         <span className="chip text-[10px]" style={{ borderColor: 'var(--cloud)' }}>{STEP_WHERE[s.step] || '클라우드'}</span>
       </button>
-      {open && <div className="mt-2 text-xs text-slate-300 space-y-1">
+      {open && <div className="mt-2 text-xs text-slate-700 space-y-1">
         {s.step === 'registry_lookup' && (
-          <div>승인 컴포넌트 <b className="text-teal-300">{s.count}개</b> · 조회 방식 <b>정확 조회(exact)</b> · 출처{' '}
-            {s.source === 'registry' ? <b className="text-emerald-400">Registry Consumer API</b>
-              : <b className="text-amber-300">픽스처 (Registry 미연결 — 기준선 목록)</b>}
+          <div>승인 컴포넌트 <b className="text-teal-700">{s.count}개</b> · 조회 방식 <b>정확 조회(exact)</b> · 출처{' '}
+            {s.source === 'registry' ? <b className="text-emerald-600">Registry Consumer API</b>
+              : <b className="text-amber-700">픽스처 (Registry 미연결 — 기준선 목록)</b>}
             <div className="text-slate-500 mt-1">{(s.components || []).map((c: Comp) => `${c.name}@${c.version}`).join(', ')}</div>
           </div>
         )}
         {s.step === 'skills' && (
           <div>{(s.names || []).map((n: string) => <span key={n} className="chip text-[10px] mr-1">{n}</span>)}
             <span className="text-slate-500">{s.chars?.toLocaleString()}자</span>
-            {s.missing?.length > 0 && <div className="text-rose-300">누락 스킬: {s.missing.join(', ')}</div>}</div>
+            {s.missing?.length > 0 && <div className="text-[#E90061]">누락 스킬: {s.missing.join(', ')}</div>}</div>
         )}
         {s.step === 'generate' && (
           <div>모델 <span className="font-mono text-slate-400">{s.model}</span> · 시스템 프롬프트 {s.systemChars?.toLocaleString()}자 · 요청 {s.userChars?.toLocaleString()}자
-            {s.piiOutbound != null && <> · 경계 페이로드 PII 실측 <b className={s.piiOutbound === 0 ? 'text-emerald-400' : 'text-rose-400'}>{s.piiOutbound}건</b></>}</div>
+            {s.piiOutbound != null && <> · 경계 페이로드 PII 실측 <b className={s.piiOutbound === 0 ? 'text-emerald-600' : 'text-[#E90061]'}>{s.piiOutbound}건</b></>}</div>
         )}
         {s.step === 'gates' && (
           <div>실행기 <b>{RUNNER_LABEL[s.runner] || s.runner || '—'}</b> · 종합 {okIcon(s.ok)} {okText(s.ok)}
@@ -191,8 +191,8 @@ function StagePanel({ s }: { s: Stage }) {
           </div>
         )}
         {s.step === 'regenerate' && (
-          <div><div className="text-amber-300 mb-1">재생성 {(s.attempt ?? 2) - 1}/{s.limit}회 — 아래 사유를 컨텍스트에 넣어 다시 생성 (무한 루프 금지 §12.9)</div>
-            {(s.reasons || []).map((r: string, i: number) => <div key={i} className="font-mono text-[11px] bg-slate-950 rounded p-1 break-words">{r}</div>)}</div>
+          <div><div className="text-amber-700 mb-1">재생성 {(s.attempt ?? 2) - 1}/{s.limit}회 — 아래 사유를 컨텍스트에 넣어 다시 생성 (무한 루프 금지 §12.9)</div>
+            {(s.reasons || []).map((r: string, i: number) => <div key={i} className="font-mono text-[11px] bg-slate-50 rounded p-1 break-words">{r}</div>)}</div>
         )}
       </div>}
     </div>
@@ -206,7 +206,7 @@ function ResultSummary({ r, title, accent }: { r: Result; title: string; accent:
     <div className="panel p-3" style={{ borderTop: `2px solid ${accent}` }}>
       <div className="flex items-center gap-2 mb-2">
         <b className="text-sm">{title}</b>
-        {r.cached && <span className="chip text-[10px] text-amber-300" style={{ borderColor: 'var(--onprem)' }}>캐시 응답</span>}
+        {r.cached && <span className="chip text-[10px] text-amber-700" style={{ borderColor: 'var(--onprem)' }}>캐시 응답</span>}
         <span className="ml-auto text-[10px] text-slate-500">{r.runAt}</span>
       </div>
       <UsedBadges used={r.componentsUsed} />
@@ -214,11 +214,11 @@ function ResultSummary({ r, title, accent }: { r: Result; title: string; accent:
         <span>종합 {okIcon(r.ok)} {okText(r.ok)}</span>
         <span>· 시도 {r.attempts}회{r.regenerated ? ' (재생성 1회)' : ''}</span>
         <span>· {r.code.split('\n').length}줄</span>
-        {r.approvedButton && <span>· 승인 Button: <b className="text-teal-300">{r.approvedButton}</b></span>}
+        {r.approvedButton && <span>· 승인 Button: <b className="text-teal-700">{r.approvedButton}</b></span>}
       </div>
       <div className="mt-1 text-[11px] text-slate-500">{GATE_TILES.map(t => <span key={t.key} className="mr-2">{t.label} {okIcon(r.gates?.[t.key]?.ok)}</span>)}</div>
-      <button className="chip text-[10px] mt-2 hover:border-slate-500" onClick={() => setShowCode(s => !s)}>{showCode ? '코드 접기' : '코드 보기'}</button>
-      {showCode && <pre className="mt-2 bg-slate-950 rounded p-2 text-[10px] leading-4 overflow-auto max-h-72 font-mono">{r.code}</pre>}
+      <button className="chip text-[10px] mt-2 hover:border-slate-400" onClick={() => setShowCode(s => !s)}>{showCode ? '코드 접기' : '코드 보기'}</button>
+      {showCode && <pre className="mt-2 bg-slate-50 rounded p-2 text-[10px] leading-4 overflow-auto max-h-72 font-mono">{r.code}</pre>}
     </div>
   );
 }
@@ -293,25 +293,25 @@ export default function ScreenGen() {
     <div>
       {/* 프리셋 + 입력 */}
       <div className="panel p-3 mb-3 flex gap-2 items-center">
-        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-300" onClick={() => run(S3_PRESET)}>시나리오 S3</button>
-        <input className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm"
+        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-700" onClick={() => run(S3_PRESET)}>시나리오 S3</button>
+        <input className="flex-1 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
           value={prompt} onChange={e => setPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} />
         <button onClick={() => run()} disabled={running}
-          className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+          className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
           {running ? (attempt > 1 ? '재생성 중…' : '생성 중…') : result ? '다시 생성' : '화면 생성'}
         </button>
       </div>
-      {err && <div className="text-rose-400 text-sm mb-3">{err}</div>}
+      {err && <div className="text-[#E90061] text-sm mb-3">{err}</div>}
 
       {/* 반전 시연 콜아웃 */}
       <div className="panel p-3 mb-4 text-xs flex items-center gap-3" style={{ borderColor: 'var(--cloud)' }}>
         <span className="text-lg">⇄</span>
         <div className="flex-1">
-          <b>실시간 반전:</b> Registry에서 <b className="text-teal-300">Button v2</b>를 DEPRECATED, <b className="text-teal-300">v3</b>를 APPROVED로 바꾼 뒤
+          <b>실시간 반전:</b> Registry에서 <b className="text-teal-700">Button v2</b>를 DEPRECATED, <b className="text-teal-700">v3</b>를 APPROVED로 바꾼 뒤
           다시 생성하면 결과가 달라진다 — 승인 상태가 에이전트에게 보이는 컴포넌트를 바꾸고, 그것이 코드를 바꾼다.
           이전 결과는 아래에 나란히 남는다.
         </div>
-        <a href="#/registry" className="chip hover:border-teal-500 text-teal-300 whitespace-nowrap">Registry 열기 →</a>
+        <a href="#/registry" className="chip hover:border-teal-500 text-teal-700 whitespace-nowrap">Registry 열기 →</a>
       </div>
 
       <div className="grid grid-cols-[340px_1fr] gap-4">
@@ -321,38 +321,38 @@ export default function ScreenGen() {
             <div className="flex items-center gap-2 mb-2">
               <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--cloud)' }} />
               <b className="text-sm">Registry가 에이전트에게 보여주는 승인 컴포넌트</b>
-              <button className="chip text-[10px] ml-auto hover:border-slate-500" onClick={loadComps}>새로고침</button>
+              <button className="chip text-[10px] ml-auto hover:border-slate-400" onClick={loadComps}>새로고침</button>
             </div>
             <div className="text-[11px] text-slate-500 mb-2">
               Consumer API `list_approved(subtype=COMPONENT)` — APPROVED만 · 정확 조회 · {compsMeta.count ?? comps?.length ?? '…'}개
-              {compsMeta.source && compsMeta.source !== 'registry' && <span className="text-amber-300"> · 출처: 픽스처(Registry 미연결)</span>}
-              {compsMeta.source === 'registry' && <span className="text-emerald-400"> · 출처: Registry</span>}
+              {compsMeta.source && compsMeta.source !== 'registry' && <span className="text-amber-700"> · 출처: 픽스처(Registry 미연결)</span>}
+              {compsMeta.source === 'registry' && <span className="text-emerald-600"> · 출처: Registry</span>}
             </div>
             {comps === null && <div className="text-xs text-slate-500">불러오는 중…</div>}
-            {comps?.length === 0 && <div className="text-xs text-rose-300">승인된 컴포넌트가 없다 — 에이전트는 시맨틱 HTML만 쓸 수 있다.</div>}
+            {comps?.length === 0 && <div className="text-xs text-[#E90061]">승인된 컴포넌트가 없다 — 에이전트는 시맨틱 HTML만 쓸 수 있다.</div>}
             <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
               {(comps || []).map(c => (
                 <div key={c.name + c.version} className="rounded-lg p-2 border"
                   style={{ borderColor: c.name === 'Button' ? 'var(--cloud)' : 'var(--line)', background: c.name === 'Button' ? 'rgba(56,189,248,.06)' : undefined }}>
                   <div className="flex items-center gap-2">
-                    <span className={`font-mono text-xs ${c.name === 'Button' ? 'text-teal-200 font-bold text-sm' : 'text-slate-200'}`}>{c.name}<span className="text-teal-400">@{c.version}</span></span>
-                    <span className="chip text-[9px] text-emerald-400 ml-auto">APPROVED</span>
+                    <span className={`font-mono text-xs ${c.name === 'Button' ? 'text-teal-900 font-bold text-sm' : 'text-slate-800'}`}>{c.name}<span className="text-[#008485]">@{c.version}</span></span>
+                    <span className="chip text-[9px] text-emerald-600 ml-auto">APPROVED</span>
                   </div>
                   <div className="text-[10px] text-slate-500 font-mono truncate">{c.module}</div>
                   <div className="flex flex-wrap gap-1 mt-1">
                     {c.props.map(p => (
-                      <span key={p.name} className="text-[10px] px-1.5 rounded bg-slate-900 border border-slate-800 font-mono"
-                        title={p.type}>{p.name}{p.required ? <span className="text-rose-300">*</span> : ''}</span>
+                      <span key={p.name} className="text-[10px] px-1.5 rounded bg-white border border-slate-200 font-mono"
+                        title={p.type}>{p.name}{p.required ? <span className="text-[#E90061]">*</span> : ''}</span>
                     ))}
                   </div>
                 </div>
               ))}
             </div>
-            <div className="text-[10px] text-slate-600 mt-2">* 필수 props · 게이트 실행기: {RUNNER_LABEL[compsMeta.gatesRunner || ''] || '…'}</div>
+            <div className="text-[10px] text-slate-400 mt-2">* 필수 props · 게이트 실행기: {RUNNER_LABEL[compsMeta.gatesRunner || ''] || '…'}</div>
           </div>
 
           <div className="text-xs text-slate-500 mb-2">파이프라인 단계 (펼쳐보기) — <span style={{ color: 'var(--cloud)' }}>■ 클라우드/플랫폼</span>
-            <span className="text-slate-600"> · 이 시나리오는 개인데이터 플레인(<span style={{ color: 'var(--onprem)' }}>■</span>)을 거치지 않는다</span></div>
+            <span className="text-slate-400"> · 이 시나리오는 개인데이터 플레인(<span style={{ color: 'var(--onprem)' }}>■</span>)을 거치지 않는다</span></div>
           {stages.map((s, i) => <StagePanel key={i} s={s} />)}
           {running && stages.length === 0 && <div className="text-xs text-slate-500 blink">연결 중…</div>}
         </div>
@@ -372,14 +372,14 @@ export default function ScreenGen() {
           <div className="flex items-center gap-2 mb-2 text-xs flex-wrap">
             <span className="chip" title="§12.9 재생성은 최대 1회">
               시도 {[...Array(maxAttempts)].map((_, i) => (
-                <span key={i} className={`inline-block w-2 h-2 rounded-full mx-0.5 ${i < attemptsNow ? (i === 0 ? 'bg-teal-400' : 'bg-amber-400') : 'bg-slate-700'}`} />
+                <span key={i} className={`inline-block w-2 h-2 rounded-full mx-0.5 ${i < attemptsNow ? (i === 0 ? 'bg-[#008485]' : 'bg-amber-400') : 'bg-slate-700'}`} />
               ))} {attemptsNow}/{maxAttempts} <span className="text-slate-500 ml-1">(재생성 상한 1회)</span>
             </span>
-            {(cached || result?.cached) && <span className="chip text-amber-300" style={{ borderColor: 'var(--onprem)' }}>캐시 응답 — Bedrock 호출 실패/예산 초과로 재생</span>}
+            {(cached || result?.cached) && <span className="chip text-amber-700" style={{ borderColor: 'var(--onprem)' }}>캐시 응답 — Bedrock 호출 실패/예산 초과로 재생</span>}
             {result && <span className="chip">종합 {okIcon(result.ok)} {okText(result.ok)}</span>}
             {result?.usage && <span className="text-slate-500">토큰 in {result.usage.inputTokens?.toLocaleString()} / out {result.usage.outputTokens?.toLocaleString()}</span>}
-            {result?.piiOutbound != null && <span className={result.piiOutbound === 0 ? 'text-emerald-400' : 'text-rose-400'}>경계 PII {result.piiOutbound}건</span>}
-            {result && <span className="text-slate-600 ml-auto">traceId {result.traceId} · {result.elapsedMs}ms</span>}
+            {result?.piiOutbound != null && <span className={result.piiOutbound === 0 ? 'text-emerald-600' : 'text-[#E90061]'}>경계 PII {result.piiOutbound}건</span>}
+            {result && <span className="text-slate-400 ml-auto">traceId {result.traceId} · {result.elapsedMs}ms</span>}
           </div>
 
           {/* 사용 컴포넌트 */}
@@ -387,7 +387,7 @@ export default function ScreenGen() {
             <div className="panel p-3 mb-3 flex items-center gap-3">
               <span className="text-xs text-slate-400 whitespace-nowrap">사용 컴포넌트</span>
               <UsedBadges used={result.componentsUsed} />
-              <span className="ml-auto text-[11px] text-slate-500 whitespace-nowrap">승인 Button: <b className="text-teal-300">{result.approvedButton}</b></span>
+              <span className="ml-auto text-[11px] text-slate-500 whitespace-nowrap">승인 Button: <b className="text-teal-700">{result.approvedButton}</b></span>
             </div>
           )}
 
@@ -400,19 +400,19 @@ export default function ScreenGen() {
               <span className="ml-auto text-[10px] text-slate-500">{shownCode ? `${shownCode.split('\n').length}줄` : ''}</span>
               <button className="chip text-[10px] hover:border-teal-500" onClick={copy} disabled={!shownCode}>{copied ? '복사됨 ✓' : '복사'}</button>
             </div>
-            <pre ref={codeRef} className="bg-slate-950 rounded-lg p-3 text-[11px] leading-4 font-mono overflow-auto max-h-[460px] whitespace-pre">
-              {shownCode || <span className="text-slate-600">프리셋 버튼을 누르면 Registry 승인 컴포넌트만으로 코드를 생성합니다.</span>}
+            <pre ref={codeRef} className="bg-slate-50 rounded-lg p-3 text-[11px] leading-4 font-mono overflow-auto max-h-[460px] whitespace-pre">
+              {shownCode || <span className="text-slate-400">프리셋 버튼을 누르면 Registry 승인 컴포넌트만으로 코드를 생성합니다.</span>}
               {running && <span className="blink">▌</span>}
             </pre>
             {result?.history && result.history.length > 0 && (
               <div className="mt-2 text-xs">
-                <button className="chip text-[10px] hover:border-slate-500" onClick={() => setShowHistory(s => !s)}>
+                <button className="chip text-[10px] hover:border-slate-400" onClick={() => setShowHistory(s => !s)}>
                   {showHistory ? '1차 시도 접기' : `1차 시도 결과 보기 (실패 → 재생성)`}</button>
                 {showHistory && result.history.map(h => (
                   <div key={h.attempt} className="mt-2">
                     <div className="text-slate-400 mb-1">시도 {h.attempt} — 종합 {okIcon(h.ok)} · <UsedBadges used={h.componentsUsed} size="sm" /></div>
                     <div className="text-slate-500 mb-1">{GATE_TILES.map(t => <span key={t.key} className="mr-2">{t.label} {okIcon(h.gates?.[t.key]?.ok)}</span>)}</div>
-                    <pre className="bg-slate-950 rounded p-2 text-[10px] leading-4 font-mono overflow-auto max-h-56">{h.code || '(코드블록 없음)'}</pre>
+                    <pre className="bg-slate-50 rounded p-2 text-[10px] leading-4 font-mono overflow-auto max-h-56">{h.code || '(코드블록 없음)'}</pre>
                   </div>
                 ))}
               </div>
@@ -421,7 +421,7 @@ export default function ScreenGen() {
 
           {/* 게이트 결과 */}
           <div className="flex items-center gap-2 mb-2 text-xs text-slate-400">
-            <b className="text-slate-200">검증 게이트</b>
+            <b className="text-slate-800">검증 게이트</b>
             <span>— 실제 도구 실행 결과 (typescript · eslint · axe-core)</span>
             {gates?.runner && <span className="chip text-[10px] ml-auto">{RUNNER_LABEL[gates.runner] || gates.runner}</span>}
           </div>
@@ -429,12 +429,12 @@ export default function ScreenGen() {
             {GATE_TILES.map(t => <GateTile key={t.key} k={t.key} label={t.label} sub={t.sub} gate={gates?.[t.key] as Gate | undefined} />)}
           </div>
           {result?.reasons && result.reasons.length > 0 && (
-            <div className="mt-3 text-xs text-rose-300 border border-rose-900 rounded-lg p-3">
+            <div className="mt-3 text-xs text-[#E90061] border border-rose-300 rounded-lg p-3">
               <b>최종 실패 사유 (재생성 1회 후에도 남음 — 더 재시도하지 않는다)</b>
               {result.reasons.map((r, i) => <div key={i} className="font-mono text-[11px] mt-1 break-words">{r}</div>)}
             </div>
           )}
-          <div className="text-[10px] text-slate-600 mt-3">
+          <div className="text-[10px] text-slate-400 mt-3">
             시각 회귀는 정규화 HTML 해시·태그 개수의 <b>구조 스냅샷</b> 비교다 — 픽셀 비교는 미구현. KWCAG 매핑은 참고용(공식 대응표 아님).
             게이트 실행기가 연결되지 않으면 통과를 흉내내지 않고 "미판정"으로 표기한다.
           </div>

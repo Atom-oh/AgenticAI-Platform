@@ -3,8 +3,8 @@ import { useEffect, useRef } from 'react';
 import cytoscape from 'cytoscape';
 
 const TYPE_COLOR: Record<string, string> = {
-  Regulation: '#f472b6', Condition: '#94a3b8', Product: '#38bdf8',
-  Screen: '#34d399', Component: '#a78bfa', Department: '#fbbf24', Document: '#fb923c',
+  Regulation: '#E90061', Condition: '#94a3b8', Product: '#008485',
+  Screen: '#0e9f6e', Component: '#7c5cd6', Department: '#AD9A5F', Document: '#d97706',
 };
 
 export type GNode = { id: string; label: string; name: string };
@@ -39,13 +39,13 @@ export default function GraphView({ nodes, edges, onSelect, onOpen }:
       style: [
         { selector: 'node', style: {
           'background-color': (el: any) => TYPE_COLOR[el.data('type')] || '#64748b',
-          label: 'data(name)', color: '#cbd5e1', 'font-size': 9,
+          label: 'data(name)', color: '#3b4a47', 'font-size': 9,
           'text-valign': 'bottom', 'text-margin-y': 4, width: 16, height: 16,
         } },
-        { selector: 'node[type="Regulation"]', style: { width: 34, height: 34, 'font-size': 11, color: '#f9a8d4' } },
+        { selector: 'node[type="Regulation"]', style: { width: 34, height: 34, 'font-size': 11, color: '#a3134f' } },
         { selector: 'edge', style: {
-          width: 1, 'line-color': '#2a3a52', 'curve-style': 'bezier',
-          'target-arrow-shape': 'triangle', 'target-arrow-color': '#2a3a52', 'arrow-scale': 0.6,
+          width: 1, 'line-color': '#c7d6d2', 'curve-style': 'bezier',
+          'target-arrow-shape': 'triangle', 'target-arrow-color': '#c7d6d2', 'arrow-scale': 0.6,
         } },
       ],
       layout: { name: 'cose', animate: false, nodeRepulsion: () => 8000, idealEdgeLength: () => 55 } as any,
@@ -62,8 +62,8 @@ export default function GraphView({ nodes, edges, onSelect, onOpen }:
     cy.on('tap', (ev) => { if (ev.target === cy) cy.elements().removeClass('dim hl'); });
     cy.on('dbltap', 'node', (ev) => onOpen?.(ev.target.id()));
     cy.style().selector('.dim').style({ opacity: 0.15 } as any)
-      .selector('node.hl').style({ 'border-width': 2, 'border-color': '#e2e8f0' } as any)
-      .selector('edge.hl').style({ 'line-color': '#7dd3fc', 'target-arrow-color': '#7dd3fc', width: 2 } as any)
+      .selector('node.hl').style({ 'border-width': 2, 'border-color': '#134e4a' } as any)
+      .selector('edge.hl').style({ 'line-color': '#008485', 'target-arrow-color': '#008485', width: 2 } as any)
       .update();
     return () => { cy.destroy(); };
   }, [nodes, edges]);
@@ -72,7 +72,7 @@ export default function GraphView({ nodes, edges, onSelect, onOpen }:
   return (
     <div className="panel p-3">
       <div className="flex items-center gap-3 mb-2 text-xs text-slate-400">
-        <span className="font-semibold text-slate-200">순회 경로 시각화</span>
+        <span className="font-semibold text-slate-800">순회 경로 시각화</span>
         {Object.entries(TYPE_COLOR).filter(([t]) => t !== 'Condition').map(([t, c]) => (
           <span key={t} className="chip" style={{ borderColor: c + '55' }}>
             <span className="w-2 h-2 rounded-full" style={{ background: c }} />{t}

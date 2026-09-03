@@ -51,26 +51,26 @@ function ReaderColumn({ fetch, summ, running }: { fetch?: Stage; summ?: Stage; r
       <div>
         <div className="flex items-center gap-2"><Dot color="var(--cloud)" /><b>Reader</b>
           <span className="chip text-[10px]" style={{ borderColor: 'var(--cloud)' }}>클라우드 · 외부 콘텐츠 전용</span></div>
-        <div className="text-[11px] text-slate-500 mt-1">역할: <span className="font-mono">ReaderRole</span> — 내부 도구 invoke 권한 <b className="text-rose-300">없음</b> (IAM 역할로 실제 분리). Bedrock invoke 만 허용.</div>
+        <div className="text-[11px] text-slate-500 mt-1">역할: <span className="font-mono">ReaderRole</span> — 내부 도구 invoke 권한 <b className="text-[#E90061]">없음</b> (IAM 역할로 실제 분리). Bedrock invoke 만 허용.</div>
       </div>
 
       {/* ① fetch */}
-      <div className="rounded-lg border border-slate-800 p-3">
+      <div className="rounded-lg border border-slate-200 p-3">
         <div className="text-xs font-semibold flex items-center gap-2">① 외부 페이지 읽기
           {fetch?.status === 'running' && <Running label="가져오는 중" />}
-          {!fetch && running && <span className="text-[11px] text-slate-600">대기</span>}
+          {!fetch && running && <span className="text-[11px] text-slate-400">대기</span>}
         </div>
         {fetch?.status === 'done' && (
-          <div className="text-xs text-slate-300 mt-1 space-y-1">
+          <div className="text-xs text-slate-700 mt-1 space-y-1">
             <div>URL <span className="font-mono text-slate-400 break-all">{fetch.url}</span></div>
             <div>추출 텍스트 <b>{Number(fetch.chars).toLocaleString()}</b>자
               {fetch.fetch?.bytes != null && <> · 수신 {Number(fetch.fetch.bytes).toLocaleString()} bytes{fetch.fetch.truncated && ' (200KB 상한 절단)'}</>}
-              {fetch.fetch?.hostListed === false && <span className="text-amber-300"> · 허용 목록 미설정(공개 https 허용, 로그 기록)</span>}
+              {fetch.fetch?.hostListed === false && <span className="text-amber-700"> · 허용 목록 미설정(공개 https 허용, 로그 기록)</span>}
             </div>
             <div className="text-slate-500">script/style 은 제거하고 숨김 텍스트·HTML 주석은 남겨 Reader 가 실제로 읽은 그대로 보여준다.</div>
             {fetch.textExcerpt && (
               <details><summary className="cursor-pointer text-slate-400">Reader 가 읽은 transcript (앞 1,500자)</summary>
-                <pre className="mt-1 bg-slate-950 rounded p-2 overflow-x-auto whitespace-pre-wrap text-[11px] max-h-60 overflow-y-auto">{fetch.textExcerpt}</pre>
+                <pre className="mt-1 bg-slate-50 rounded p-2 overflow-x-auto whitespace-pre-wrap text-[11px] max-h-60 overflow-y-auto">{fetch.textExcerpt}</pre>
               </details>
             )}
           </div>
@@ -78,12 +78,12 @@ function ReaderColumn({ fetch, summ, running }: { fetch?: Stage; summ?: Stage; r
       </div>
 
       {/* ② summarize */}
-      <div className="rounded-lg border border-slate-800 p-3">
+      <div className="rounded-lg border border-slate-200 p-3">
         <div className="text-xs font-semibold flex items-center gap-2 flex-wrap">② 요약 + 인젠션 판정
           {fetch?.status === 'done' && !summ && <Running label="Bedrock 요약 중" />}
           {summ && (summary.injectionDetected
-            ? <span className="chip text-[10px] text-rose-300 border-rose-700">⚠ 인젝션 감지</span>
-            : <span className="chip text-[10px] text-emerald-300">인젠션 미감지</span>)}
+            ? <span className="chip text-[10px] text-[#E90061] border-rose-300">⚠ 인젝션 감지</span>
+            : <span className="chip text-[10px] text-emerald-700">인젠션 미감지</span>)}
           {summ && <Tokens u={summ.usage} />}
         </div>
         {summ && (
@@ -101,19 +101,19 @@ function ReaderColumn({ fetch, summ, running }: { fetch?: Stage; summ?: Stage; r
               </div>
             )}
             <div>
-              <div className="text-slate-400 mb-1">내부 도구 호출 시도 <b className="text-slate-200">{realDenied.length}</b>건 — 모두 거부됨
-                <span className="ml-2 text-rose-300 font-semibold">IAM이 막았다</span></div>
-              {realDenied.length === 0 && <div className="text-slate-600">시도 기록 없음</div>}
+              <div className="text-slate-400 mb-1">내부 도구 호출 시도 <b className="text-slate-800">{realDenied.length}</b>건 — 모두 거부됨
+                <span className="ml-2 text-[#E90061] font-semibold">IAM이 막았다</span></div>
+              {realDenied.length === 0 && <div className="text-slate-400">시도 기록 없음</div>}
               {realDenied.map((d, i) => (
-                <div key={i} className="rounded border border-slate-700 bg-slate-950 p-2 mb-1 font-mono text-[11px] break-words">
+                <div key={i} className="rounded border border-slate-300 bg-slate-50 p-2 mb-1 font-mono text-[11px] break-words">
                   <div className="text-slate-500">{ORIGIN_LABEL[d.origin || ''] || d.origin} · {d.tool}({JSON.stringify(d.args || {})})
                     {d.origin === 'model' && (d.injectionLike
-                      ? <span className="ml-2 text-rose-300">지시문 유사 질의</span>
+                      ? <span className="ml-2 text-[#E90061]">지시문 유사 질의</span>
                       : <span className="ml-2 text-slate-400">일반 질의</span>)}
                   </div>
                   <div><span className="text-slate-500">FunctionName</span> {d.functionName}</div>
-                  <div><span className="text-rose-400 font-bold">{d.error}</span>
-                    {d.requestId && <span className="text-slate-600"> · requestId {d.requestId}</span>}</div>
+                  <div><span className="text-[#E90061] font-bold">{d.error}</span>
+                    {d.requestId && <span className="text-slate-400"> · requestId {d.requestId}</span>}</div>
                   <div className="text-rose-200/90">{d.message}</div>
                 </div>
               ))}
@@ -131,7 +131,7 @@ function ReaderColumn({ fetch, summ, running }: { fetch?: Stage; summ?: Stage; r
               <div className="text-slate-500">모델은 도구를 요청하지 않았다 — 위 거부 기록은 코드 자가 검증(probe) 실측이다.</div>
             )}
             <div className="text-slate-500">사실 {summary.facts?.length ?? 0}건 · 엔터티 {summary.entities?.length ?? 0} · 주제 {summary.topics?.length ?? 0}
-              {summary.fallback && <span className="text-amber-300"> · 폴백: {summary.fallback}</span>}</div>
+              {summary.fallback && <span className="text-amber-700"> · 폴백: {summary.fallback}</span>}</div>
           </div>
         )}
       </div>
@@ -148,22 +148,22 @@ function HandoffColumn({ h, waiting }: { h?: Stage; waiting: boolean }) {
           <span className="chip text-[10px]">구조화 JSON만</span></div>
         <div className="text-[11px] text-slate-500 mt-1">외부 원문·transcript·도구 응답은 여기서 끊긴다. 스키마 키만 통과.</div>
       </div>
-      <div className="text-center text-slate-600 text-lg leading-none">→</div>
+      <div className="text-center text-slate-400 text-lg leading-none">→</div>
       {!h && waiting && <Running label="Reader 완료 대기" />}
       {h && (
         <div className="text-xs space-y-2">
           <div className="text-slate-400">{h.bytes?.toLocaleString()} bytes · 키 {h.keys?.length}개</div>
           <div className="flex flex-wrap gap-1">{(h.keys || []).map((k: string) => <span key={k} className="chip text-[10px] font-mono">{k}</span>)}</div>
           {h.piiScan && (
-            <div>경계 페이로드 개인식별자(규칙 스캔 실측): <b className={h.piiScan.count === 0 ? 'text-emerald-400' : 'text-rose-400'}>{h.piiScan.count}건</b></div>
+            <div>경계 페이로드 개인식별자(규칙 스캔 실측): <b className={h.piiScan.count === 0 ? 'text-emerald-600' : 'text-[#E90061]'}>{h.piiScan.count}건</b></div>
           )}
           <details open><summary className="cursor-pointer text-slate-400">인계 JSON</summary>
-            <pre className="mt-1 bg-slate-950 rounded p-2 overflow-x-auto whitespace-pre-wrap text-[11px] max-h-96 overflow-y-auto">{JSON.stringify(h.summary, null, 1)}</pre>
+            <pre className="mt-1 bg-slate-50 rounded p-2 overflow-x-auto whitespace-pre-wrap text-[11px] max-h-96 overflow-y-auto">{JSON.stringify(h.summary, null, 1)}</pre>
           </details>
           <div className="text-slate-500">{h.note}</div>
         </div>
       )}
-      <div className="text-center text-slate-600 text-lg leading-none">→</div>
+      <div className="text-center text-slate-400 text-lg leading-none">→</div>
     </div>
   );
 }
@@ -176,7 +176,7 @@ function WriterColumn({ search, gen, report, done, running }: { search?: Stage; 
       <div>
         <div className="flex items-center gap-2"><Dot color="var(--cloud)" /><b>Writer</b>
           <span className="chip text-[10px]" style={{ borderColor: 'var(--cloud)' }}>클라우드 · 격리 서브넷</span></div>
-        <div className="text-[11px] text-slate-500 mt-1">역할: <span className="font-mono">WriterRole</span> — 내부 문서 검색 <b className="text-emerald-300">허용</b>, 외부 원문 <b className="text-rose-300">미접근</b> (URL fetch 코드 자체가 없음 — 테스트로 검증).</div>
+        <div className="text-[11px] text-slate-500 mt-1">역할: <span className="font-mono">WriterRole</span> — 내부 문서 검색 <b className="text-emerald-700">허용</b>, 외부 원문 <b className="text-[#E90061]">미접근</b> (URL fetch 코드 자체가 없음 — 테스트로 검증).</div>
       </div>
 
       {/* ③ 내부 검색 — 내부 자산(앰버) */}
@@ -190,12 +190,12 @@ function WriterColumn({ search, gen, report, done, running }: { search?: Stage; 
             {search.searchQueries?.length > 0 && (
               <div className="text-slate-500">질의: {search.searchQueries.map((q: any) => `${q.query}(${q.count})`).join(' · ')}</div>
             )}
-            {search.searchError && <div className="text-rose-300">검색 오류: {search.searchError}</div>}
+            {search.searchError && <div className="text-[#E90061]">검색 오류: {search.searchError}</div>}
             {docs.length === 0 && !search.searchError && <div className="text-slate-500">일치하는 내부 문서 없음</div>}
             {docs.map((d, i) => (
               <div key={i} className="flex gap-2 items-baseline">
                 <span className="font-mono text-[11px]" style={{ color: 'var(--onprem)' }}>{d.docId}</span>
-                <span className="text-slate-200">{d.title}</span>
+                <span className="text-slate-800">{d.title}</span>
                 <span className="text-slate-500 text-[11px]">{d.type} · {d.dept}{d.score != null && ` · ${d.score}`}</span>
               </div>
             ))}
@@ -204,7 +204,7 @@ function WriterColumn({ search, gen, report, done, running }: { search?: Stage; 
       </div>
 
       {/* ④ 보고서 — Writer Lambda 가 토큰을 WebSocket 으로 직접 스트리밍 (실패 시 폴백을 그대로 표기) */}
-      <div className="rounded-lg border border-slate-800 p-3 flex-1">
+      <div className="rounded-lg border border-slate-200 p-3 flex-1">
         <div className="text-xs font-semibold flex items-center gap-2 flex-wrap">④ 보고서 생성
           {gen?.status === 'running' && (
             <>
@@ -214,7 +214,7 @@ function WriterColumn({ search, gen, report, done, running }: { search?: Stage; 
           )}
           {gen?.status === 'done' && (
             <>
-              <span className={`chip text-[10px] ${gen.delivery === 'stream' ? 'text-emerald-300' : 'text-amber-300 border-amber-700'}`}>
+              <span className={`chip text-[10px] ${gen.delivery === 'stream' ? 'text-emerald-700' : 'text-amber-700 border-amber-400'}`}>
                 {DELIVERY_LABEL[gen.delivery] || gen.delivery || '전달 방식 미기록'}
               </span>
               {gen.delivery === 'stream' && gen.tokenEvents != null && (
@@ -223,17 +223,17 @@ function WriterColumn({ search, gen, report, done, running }: { search?: Stage; 
               <Tokens u={gen.usage} />
             </>
           )}
-          {search?.status === 'done' && !gen && <span className="text-[11px] text-slate-600">대기</span>}
+          {search?.status === 'done' && !gen && <span className="text-[11px] text-slate-400">대기</span>}
         </div>
         {gen?.status === 'done' && (gen.streamError || gen.relayError) && (
-          <div className="text-[11px] text-amber-300 mt-1 break-words">스트리밍 릴레이 실패 → 폴백:
+          <div className="text-[11px] text-amber-700 mt-1 break-words">스트리밍 릴레이 실패 → 폴백:
             {gen.streamError && <> Writer 쓰기 <span className="font-mono">{gen.streamError}</span></>}
             {gen.relayError && <> WsFn 읽기 <span className="font-mono">{gen.relayError}</span></>}
             {gen.streamedChars != null && <> (스트리밍 전달 {gen.streamedChars} / 전체 {gen.chars} 자)</>}. STREAM_TABLE·DynamoDB 게이트웨이 엔드포인트·IAM 을 확인하세요.</div>
         )}
         {report
-          ? <div className="text-slate-200 mt-2 text-[13px]"><Md text={report} />{gen?.status === 'running' && <span className="blink">▌</span>}</div>
-          : running && <div className="text-slate-600 text-xs mt-2">…</div>}
+          ? <div className="text-slate-800 mt-2 text-[13px]"><Md text={report} />{gen?.status === 'running' && <span className="blink">▌</span>}</div>
+          : running && <div className="text-slate-400 text-xs mt-2">…</div>}
         {done && !done.error && (
           <div className="text-[11px] text-slate-500 mt-3">
             traceId {done.traceId} · {done.elapsedMs}ms · 거부된 내부 도구 호출 {done.deniedAttempts}건 · 내부 문서 {done.internalDocs?.length ?? 0}건 · 전달 {done.delivery || '-'} — Two-Plane 뷰에 F7 계측 기록됨
@@ -288,33 +288,33 @@ export default function ReportView() {
     <div>
       {/* 실행 바 */}
       <div className="panel p-3 mb-3 flex gap-2 items-center flex-wrap">
-        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-300" onClick={() => run(`${location.origin}${SAMPLE_PATH}`)} disabled={running}>
+        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-700" onClick={() => run(`${location.origin}${SAMPLE_PATH}`)} disabled={running}>
           샘플 페이지로 보고서 생성
         </button>
-        <input className="flex-1 min-w-[280px] px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm font-mono"
+        <input className="flex-1 min-w-[280px] px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm font-mono"
           value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} placeholder="https://…" />
         <button onClick={() => run()} disabled={running}
-          className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+          className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
           {running ? `진행 중… ${progress}/${STEP_ORDER.length}` : '보고서 생성'}
         </button>
-        {cached && <span className="chip text-amber-300 border-amber-600">캐시 응답</span>}
+        {cached && <span className="chip text-amber-700 border-amber-600">캐시 응답</span>}
         {deployed && (
           <span className="text-[11px] text-slate-500 flex gap-2">
             {[['Reader', deployed.reader], ['InternalTool', deployed.internalTool], ['Writer', deployed.writer], ['스트리밍 릴레이', deployed.stream]].map(([n, ok]) => (
-              <span key={String(n)} className={`chip text-[10px] ${ok ? 'text-emerald-300' : 'text-rose-300 border-rose-800'}`}>{n} {ok ? '배포됨' : '미배포'}</span>
+              <span key={String(n)} className={`chip text-[10px] ${ok ? 'text-emerald-700' : 'text-[#E90061] border-rose-800'}`}>{n} {ok ? '배포됨' : '미배포'}</span>
             ))}
           </span>
         )}
       </div>
-      {err && <div className="text-rose-400 text-sm mb-3">{err}</div>}
+      {err && <div className="text-[#E90061] text-sm mb-3">{err}</div>}
       {undeployed && !err && (
-        <div className="text-amber-300 text-xs mb-3">Reader/Writer Lambda 가 아직 배포되지 않았습니다 (미배포). 실행하면 결과 대신 미배포 안내가 표시됩니다 — 흉내 내지 않습니다.</div>
+        <div className="text-amber-700 text-xs mb-3">Reader/Writer Lambda 가 아직 배포되지 않았습니다 (미배포). 실행하면 결과 대신 미배포 안내가 표시됩니다 — 흉내 내지 않습니다.</div>
       )}
 
       {/* 시연 안내 */}
       <div className="panel p-3 mb-4 text-xs flex gap-4 items-start flex-wrap">
         <div className="flex-1 min-w-[320px]">
-          <div className="text-slate-400 mb-1">샘플 페이지(<a className="underline text-teal-300" href={SAMPLE_PATH} target="_blank" rel="noreferrer">{SAMPLE_PATH}</a>)에 심어둔 인젝션 지시문
+          <div className="text-slate-400 mb-1">샘플 페이지(<a className="underline text-teal-700" href={SAMPLE_PATH} target="_blank" rel="noreferrer">{SAMPLE_PATH}</a>)에 심어둔 인젝션 지시문
             {sample?.placements && <span className="text-slate-500"> — {sample.placements.join(' · ')}</span>}</div>
           <div className="rounded border border-rose-800 bg-rose-950/40 text-rose-200 px-2 py-1 break-words">
             {sample?.injectedInstruction || '…'}
@@ -322,7 +322,7 @@ export default function ReportView() {
         </div>
         <div className="text-slate-500 max-w-md leading-relaxed">
           코드 자가 검증(probe)이 Reader IAM 역할의 <span className="font-mono">lambda:InvokeFunction</span> 부재를
-          <b className="text-rose-300"> AccessDeniedException</b> 으로 실측한다. Reader 시스템 프롬프트는 도구를 언급하지 않으며
+          <b className="text-[#E90061]"> AccessDeniedException</b> 으로 실측한다. Reader 시스템 프롬프트는 도구를 언급하지 않으며
           <span className="font-mono"> search_internal_documents</span> 는 노출만 되어 있다 — 모델이 도구를 요청하면 그 args 를 그대로 보여준다.
           지시문을 따른 요청('모두·원문·출력')인지 일반 주제 질의인지 화면에서 판단할 수 있다. Writer 는 인계 JSON 만 받으므로 지시문 원문 자체를 명령으로 볼 수 없다.
         </div>
@@ -338,7 +338,7 @@ export default function ReportView() {
         <WriterColumn search={st('writer_search')} gen={st('writer_generate')} report={report} done={done} running={running} />
       </div>
 
-      <div className="text-[11px] text-slate-600 mt-4">
+      <div className="text-[11px] text-slate-400 mt-4">
         미구현: 보고서 저장·내보내기, 임의 URL 의 사이트별 렌더링(JS 실행 없음 — 정적 HTML 만 읽음).
         Reader 의 fetch·요약은 Reader Lambda 1회 invoke 안에서 함께 실행되므로 ①의 완료 표시는 ②와 동시에 도착한다.
         Writer 보고서는 Writer Lambda 가 DynamoDB 릴레이에 쓴 토큰을 WsFn 이 폴링(0.25s)해 스트리밍한다 — 격리 서브넷에서는 WebSocket 관리 API 에 직접 닿을 수 없어 릴레이를 쓴다. 릴레이가 없거나 실패하면 ④에 폴백(단일 이벤트)과 오류가 그대로 표기된다.

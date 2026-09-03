@@ -20,7 +20,7 @@ function ModelFooter({ ev }: { ev: any }) {
   const u = ev.usage || {};
   return (
     <div className="mt-2 text-[11px] text-slate-500">
-      모델 ID <span className="font-mono text-teal-200">{ev.modelId}</span>
+      모델 ID <span className="font-mono text-teal-900">{ev.modelId}</span>
       {u.inputTokens != null && <> · 실측 토큰 {Number(u.inputTokens).toLocaleString()}/{Number(u.outputTokens || 0).toLocaleString()}</>}
       {ev.route && <> · 경로 {String(ev.route)}{ev.tier != null && ` (Tier ${ev.tier})`}</>}
     </div>
@@ -75,18 +75,18 @@ export default function S1() {
   return (
     <div>
       <div className="panel p-3 mb-4 flex gap-2 items-center">
-        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-300"
+        <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-700"
           onClick={() => setQuery(S1_PRESET)}>시나리오 S1</button>
-        <input className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm"
+        <input className="flex-1 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
           value={query} onChange={e => setQuery(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && run()} />
         <button onClick={run} disabled={running}
-          className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+          className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
           {running ? '분석 중…' : '동시 실행'}
         </button>
       </div>
-      {err && <div className="text-rose-400 text-sm mb-3">{err}</div>}
-      {cached && <div className="mb-3 text-xs"><span className="chip text-amber-300 border-amber-700">캐시 응답</span> <span className="text-slate-400">{cached} — Bedrock 실시간 응답이 아닙니다 (이전 실행 결과 재생)</span></div>}
+      {err && <div className="text-[#E90061] text-sm mb-3">{err}</div>}
+      {cached && <div className="mb-3 text-xs"><span className="chip text-amber-700 border-amber-400">캐시 응답</span> <span className="text-slate-400">{cached} — Bedrock 실시간 응답이 아닙니다 (이전 실행 결과 재생)</span></div>}
 
       <div className="grid grid-cols-2 gap-4 mb-4">
         <section className="panel p-4">
@@ -100,46 +100,46 @@ export default function S1() {
           {vChunks.length > 0 && (
             <div className="mb-3 space-y-1">
               {vChunks.map(c => (
-                <div key={c.id} className="text-xs text-slate-400 border border-slate-800 rounded-lg px-2 py-1">
-                  <span className="text-slate-200 font-mono">{c.id}</span>
-                  <span className="text-teal-400 ml-2">{c.score.toFixed(3)}</span>
+                <div key={c.id} className="text-xs text-slate-400 border border-slate-200 rounded-lg px-2 py-1">
+                  <span className="text-slate-800 font-mono">{c.id}</span>
+                  <span className="text-[#008485] ml-2">{c.score.toFixed(3)}</span>
                   <div className="truncate">{c.text}</div>
                 </div>
               ))}
             </div>
           )}
-          {vErr && <div className="text-rose-300 text-xs border border-rose-900 rounded-lg p-2 mb-2">⚠ {vErr}</div>}
-          <div className="text-slate-300"><Md text={vText} />{running && !vDone && <span className="blink">▌</span>}</div>
-          {vDone && <div className="mt-3 text-xs text-amber-400/90">
+          {vErr && <div className="text-[#E90061] text-xs border border-rose-300 rounded-lg p-2 mb-2">⚠ {vErr}</div>}
+          <div className="text-slate-700"><Md text={vText} />{running && !vDone && <span className="blink">▌</span>}</div>
+          {vDone && <div className="mt-3 text-xs text-amber-700">
             → 관련 규정 청크는 정확히 찾았지만, 개정이 미치는 상품 · 화면 · 컴포넌트 · 부서 · 문서의 <b>목록</b>은 답하지 못한다.</div>}
           <ModelFooter ev={vDone} />
         </section>
 
         <section className="panel p-4" style={{ borderColor: '#155e75' }}>
           <div className="flex items-center gap-2 mb-3 flex-wrap">
-            <span className="w-2.5 h-2.5 rounded-full bg-teal-400" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#008485]" />
             <b>GraphRAG</b>
             {gSeed && <span className="chip text-xs">seed: <b className="font-mono">{gSeed.code}</b></span>}
-            {gSeed && <span className="chip text-xs">seed 신뢰도 <b className={gConf > 0.6 ? 'text-emerald-400' : 'text-amber-400'}>{(gConf * 100).toFixed(0)}%</b></span>}
+            {gSeed && <span className="chip text-xs">seed 신뢰도 <b className={gConf > 0.6 ? 'text-emerald-600' : 'text-amber-700'}>{(gConf * 100).toFixed(0)}%</b></span>}
           </div>
           {gCounts && (
             <div className="flex gap-2 mb-3 flex-wrap">
               {COUNT_LABELS.filter(([k]) => gCounts[k] != null).map(([k, label]) => (
                 <span key={k} className="chip" style={{ borderColor: 'var(--bedrock)' }}>
-                  {label} <b className="text-teal-300">{gCounts[k]}</b>
+                  {label} <b className="text-teal-700">{gCounts[k]}</b>
                 </span>
               ))}
             </div>
           )}
-          <div className="text-slate-200"><Md text={gText} />{running && !gDone && <span className="blink">▌</span>}</div>
+          <div className="text-slate-800"><Md text={gText} />{running && !gDone && <span className="blink">▌</span>}</div>
           {gDone && !gDone.error && (
             <div className="mt-3 text-xs">
               {gDone.hallucinatedIds?.length
-                ? <span className="text-rose-400">⚠ 근거 없는 ID 인용 {gDone.hallucinatedIds.length}건: {gDone.hallucinatedIds.join(', ')}</span>
-                : <span className="text-emerald-400">✓ 근거 검증 통과 — 인용된 노드 ID 전부가 순회 결과에 존재</span>}
+                ? <span className="text-[#E90061]">⚠ 근거 없는 ID 인용 {gDone.hallucinatedIds.length}건: {gDone.hallucinatedIds.join(', ')}</span>
+                : <span className="text-emerald-600">✓ 근거 검증 통과 — 인용된 노드 ID 전부가 순회 결과에 존재</span>}
             </div>
           )}
-          {gDone?.error && <div className="text-rose-400 text-sm">{gDone.error}</div>}
+          {gDone?.error && <div className="text-[#E90061] text-sm">{gDone.error}</div>}
           <ModelFooter ev={gDone} />
         </section>
       </div>

@@ -68,16 +68,16 @@ function BadgeCard({ no, b, source, live, accent, children }: {
   no: string; b: Badge; source: string; live: boolean; accent: string; children?: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-slate-800 p-3 text-xs" style={{ borderTop: `2px solid ${accent}` }}>
+    <div className="rounded-lg border border-slate-200 p-3 text-xs" style={{ borderTop: `2px solid ${accent}` }}>
       <div className="flex items-center gap-2 mb-1">
         <span className="text-slate-500">§{no}</span>
-        <b className="text-slate-200">{b.title}</b>
-        <span className={`chip text-[10px] ml-auto ${live ? 'text-emerald-300 border-emerald-800' : 'text-slate-400'}`}>{source}</span>
+        <b className="text-slate-800">{b.title}</b>
+        <span className={`chip text-[10px] ml-auto ${live ? 'text-emerald-700 border-emerald-300' : 'text-slate-400'}`}>{source}</span>
       </div>
       <div className="grid grid-cols-[36px_1fr] gap-x-2 gap-y-0.5">
-        <span className="text-slate-500">운영</span><span className="text-slate-300">{b.prod}</span>
+        <span className="text-slate-500">운영</span><span className="text-slate-700">{b.prod}</span>
         <span className="text-slate-500">데모</span>
-        <span className={b.substituted === false ? 'text-emerald-300' : 'text-amber-300'}>{b.demo}</span>
+        <span className={b.substituted === false ? 'text-emerald-700' : 'text-amber-700'}>{b.demo}</span>
       </div>
       {children}
     </div>
@@ -105,7 +105,7 @@ function SemanticCheck({ s }: { s: Stage }) {
         {mismatch
           ? <span className="chip text-[10px] font-bold text-white bg-rose-600 border-rose-400">조용히 틀림</span>
           : stated
-            ? <span className="chip text-[10px] text-emerald-300 border-emerald-700">일치 — 모델 제시값 = 계산엔진 값</span>
+            ? <span className="chip text-[10px] text-emerald-700 border-emerald-700">일치 — 모델 제시값 = 계산엔진 값</span>
             : <span className="chip text-[10px] text-slate-400">모델이 수치를 제시하지 않음</span>}
         {s.period && <span className="text-slate-500">직전월 {s.period.prevMonth} ({s.period.prevFrom} ~ {s.period.prevTo}) · 기준일 {s.period.refDate}</span>}
       </div>
@@ -117,11 +117,11 @@ function SemanticCheck({ s }: { s: Stage }) {
         </div>
         <div className="rounded-lg border p-2" style={{ borderColor: mismatch ? ROSE : BEDROCK }}>
           <div className="text-[10px] text-slate-500">모델이 말한 전월실적 — 회신에서 파싱 (만들어내지 않음)</div>
-          <div className={`text-lg font-bold ${mismatch ? 'text-rose-300' : stated ? 'text-teal-200' : 'text-slate-500'}`}>{stated ? fmtKrw(s.modelValue) : '—'}</div>
+          <div className={`text-lg font-bold ${mismatch ? 'text-[#E90061]' : stated ? 'text-teal-900' : 'text-slate-500'}`}>{stated ? fmtKrw(s.modelValue) : '—'}</div>
           <div className="text-[10px] text-slate-500">{on ? '정의 + 계산엔진 값을 받은 상태' : '정의 없이 거래내역 원본만 받은 상태 (안티패턴 시연)'}</div>
         </div>
       </div>
-      {s.note && <div className={`mt-2 ${mismatch ? 'text-rose-300' : 'text-slate-400'}`}>{s.note}</div>}
+      {s.note && <div className={`mt-2 ${mismatch ? 'text-[#E90061]' : 'text-slate-400'}`}>{s.note}</div>}
       {Array.isArray(s.candidates) && s.candidates.length > 1 && (
         <div className="text-[10px] text-slate-500 mt-1">회신 안 '전월실적' 근처 수치 후보: {s.candidates.map((c: any) => fmtKrw(c)).join(' · ')}</div>
       )}
@@ -141,42 +141,42 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
       <button className="w-full text-left text-sm font-semibold flex items-center gap-2" onClick={() => setOpen(o => !o)}>
         <span className="text-slate-500">{open ? '▾' : '▸'}</span>
         <span>{STEP_LABEL[s.step] || s.step}</span>
-        {s.cached && <span className="chip text-[10px] text-amber-300 border-amber-700">캐시 응답</span>}
+        {s.cached && <span className="chip text-[10px] text-amber-700 border-amber-400">캐시 응답</span>}
         <span className="chip text-[10px] ml-auto whitespace-nowrap"
           style={{ borderColor: plane === 'boundary' ? BEDROCK : ui.color, color: ui.color }}>{ui.chip}</span>
       </button>
-      {open && <div className="mt-2 text-xs text-slate-300">
+      {open && <div className="mt-2 text-xs text-slate-700">
         {s.step === 'route' && (
           <div className="space-y-1">
-            <div>모델 ID <span className="font-mono text-teal-200">{s.modelId}</span> · Tier <b>{s.tier}</b>
+            <div>모델 ID <span className="font-mono text-teal-900">{s.modelId}</span> · Tier <b>{s.tier}</b>
               {s.endpoint && <> · 엔드포인트 <span className="font-mono">{s.endpoint}</span></>}
               {s.region && <> · 호출 리전 <span className="font-mono">{s.region}</span></>}</div>
             <div><span style={{ color: BEDROCK }}>{s.badge?.region || `저장: ${s.storageLabel || '서울 리전'} / 추론: ${s.inferenceRoutingLabel || s.inferenceRouting || '—'}`}</span>
               {s.inferenceRoutingLabel && <span className="text-slate-500"> — {s.inferenceRoutingLabel}</span>}</div>
-            <div className="text-slate-500">Semantic Layer {s.semanticLayer === false ? <b className="text-rose-300">OFF (안티패턴 시연)</b> : <b className="text-emerald-300">ON</b>}
+            <div className="text-slate-500">Semantic Layer {s.semanticLayer === false ? <b className="text-[#E90061]">OFF (안티패턴 시연)</b> : <b className="text-emerald-700">ON</b>}
               {' '}· 이 요청의 페이로드는 아래 ⑤ 게이트를 지난 뒤에만 이 경로로 나간다</div>
-            {s.badge?.implemented === false && <div className="text-rose-300">이 경로는 미구현 — 데모에서는 사용할 수 없다</div>}
+            {s.badge?.implemented === false && <div className="text-[#E90061]">이 경로는 미구현 — 데모에서는 사용할 수 없다</div>}
           </div>
         )}
         {s.step === 'guardrail_in' && s.result && (
-          <div>판정: <b className={s.result.action === 'NONE' ? 'text-emerald-400' : 'text-rose-400'}>{s.result.action}</b>
+          <div>판정: <b className={s.result.action === 'NONE' ? 'text-emerald-600' : 'text-[#E90061]'}>{s.result.action}</b>
             {s.result.topics?.length > 0 && <> · 토픽: {s.result.topics.join(', ')}</>}
             {s.result.pii?.length > 0 && <> · PII: {s.result.pii.map((p: any) => p.type).join(', ')}</>}</div>
         )}
         {s.step === 'semantic' && (
           <div>
             {s.metric
-              ? <div>지표 <b className="text-teal-300">{s.metric.name}</b> ({s.metric.unit}, 소관 {s.metric.ownerDept})
-                <pre className="mt-1 bg-slate-950 rounded p-2 overflow-x-auto">{s.metric.sql}</pre></div>
-              : <div className="text-amber-300">{s.note}</div>}
-            <div className="mt-2 border-t border-slate-800 pt-2">
+              ? <div>지표 <b className="text-teal-700">{s.metric.name}</b> ({s.metric.unit}, 소관 {s.metric.ownerDept})
+                <pre className="mt-1 bg-slate-50 rounded p-2 overflow-x-auto">{s.metric.sql}</pre></div>
+              : <div className="text-amber-700">{s.note}</div>}
+            <div className="mt-2 border-t border-slate-200 pt-2">
               {s.semanticLayer !== false
                 ? (s.prevMonthMetric
-                  ? <div><b className="text-amber-300">{s.prevMonthMetric.name}</b> 정의 (Semantic Layer): <b>{s.prevMonthMetric.description}</b>
+                  ? <div><b className="text-amber-700">{s.prevMonthMetric.name}</b> 정의 (Semantic Layer): <b>{s.prevMonthMetric.description}</b>
                     <span className="text-slate-500"> · 소관 {s.prevMonthMetric.ownerDept} · 단위 {s.prevMonthMetric.unit}</span>
                     <div className="text-slate-500 mt-0.5">이 정의와 계산엔진 값이 프롬프트에 들어간다 — LLM 은 인용만 한다 (§12.4)</div></div>
-                  : <div className="text-amber-300">전월실적 정의를 Semantic Layer 에서 찾지 못했습니다</div>)
-                : <div className="text-rose-300">{s.toggleNote || "Semantic Layer OFF — '전월실적' 정의를 모델에 제공하지 않는다 (안티패턴 시연)"}</div>}
+                  : <div className="text-amber-700">전월실적 정의를 Semantic Layer 에서 찾지 못했습니다</div>)
+                : <div className="text-[#E90061]">{s.toggleNote || "Semantic Layer OFF — '전월실적' 정의를 모델에 제공하지 않는다 (안티패턴 시연)"}</div>}
             </div>
           </div>
         )}
@@ -187,18 +187,18 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
             ))}</tbody></table>
             {s.source && <div className="text-[10px] text-slate-500 mt-1">출처: {s.source}</div>}
             {Array.isArray(s.txnSample) && (
-              <div className="mt-2 border-t border-slate-800 pt-2">
+              <div className="mt-2 border-t border-slate-200 pt-2">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <b className="text-slate-200">합성 카드 거래내역</b>
+                  <b className="text-slate-800">합성 카드 거래내역</b>
                   <span className="text-slate-500">직전월 {period.prevMonth || '—'} 전체 + 당월 {period.currentMonth || '—'} (기준일 {period.refDate || '—'}) · {s.txnSample.length}건 · 가맹점명은 가상(§9)</span>
                   {s.metricByEngine && <>
                     <span className="chip text-[10px]" style={{ borderColor: VPC }}>전월실적 <b className="text-amber-200 ml-1">{fmtKrw(s.metricByEngine['전월실적'])}</b></span>
                     <span className="chip text-[10px]" style={{ borderColor: VPC }}>당월실적 <b className="text-amber-200 ml-1">{fmtKrw(s.metricByEngine['당월실적'])}</b></span>
                   </>}
                 </div>
-                <div className="max-h-48 overflow-y-auto rounded border border-slate-800">
+                <div className="max-h-48 overflow-y-auto rounded border border-slate-200">
                   <table className="w-full text-[11px]">
-                    <thead className="text-slate-500 sticky top-0 bg-slate-900"><tr>
+                    <thead className="text-slate-500 sticky top-0 bg-white"><tr>
                       <th className="text-left px-2 py-0.5">일자</th><th className="text-left px-2">가맹점</th><th className="text-right px-2">금액</th><th className="text-right px-2">상태</th>
                     </tr></thead>
                     <tbody>{s.txnSample.map((t: any, i: number) => {
@@ -207,7 +207,7 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
                         <tr key={i} className={cancelled ? 'text-slate-500' : ''}>
                           <td className="px-2 py-0.5 font-mono">{t.date}</td><td className="px-2">{t.merchant}</td>
                           <td className={`px-2 text-right font-mono ${cancelled ? 'line-through' : ''}`}>{Number(t.amountKrw).toLocaleString()}</td>
-                          <td className={`px-2 text-right ${cancelled ? 'text-rose-400' : 'text-emerald-400'}`}>{cancelled ? '취소' : '승인'}</td>
+                          <td className={`px-2 text-right ${cancelled ? 'text-[#E90061]' : 'text-emerald-600'}`}>{cancelled ? '취소' : '승인'}</td>
                         </tr>
                       );
                     })}</tbody>
@@ -221,7 +221,7 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
           <div>
             {['rate', 'limit'].filter(k => s[k]).map(key => (
               <div key={key} className="mb-2">
-                <b className="text-amber-300">{s[key].name}</b> = <b>{key === 'limit' ? Number(s[key].value).toLocaleString() + '원' : s[key].value + '%'}</b>
+                <b className="text-amber-700">{s[key].name}</b> = <b>{key === 'limit' ? Number(s[key].value).toLocaleString() + '원' : s[key].value + '%'}</b>
                 <table className="w-full mt-1"><tbody>{(s[key].steps || []).map((st: any, i: number) => (
                   <tr key={i}><td className="text-slate-500 pr-2 py-0.5">{st.label}</td>
                     <td className="font-mono text-slate-400 pr-2">{st.formula}</td>
@@ -229,15 +229,15 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
                 ))}</tbody></table>
               </div>
             ))}
-            <div className="border-t border-slate-800 pt-2">
-              <b className="text-amber-300">Semantic Layer 지표 (계산엔진 산출)</b>
+            <div className="border-t border-slate-200 pt-2">
+              <b className="text-amber-700">Semantic Layer 지표 (계산엔진 산출)</b>
               {s.metricByEngine
                 ? <table className="w-full mt-1"><tbody>{Object.entries(s.metricByEngine as Record<string, number>).map(([k, v]) => (
                   <tr key={k}><td className="text-slate-500 pr-2 py-0.5 whitespace-nowrap">{k}</td>
                     <td className="text-slate-400 pr-2">{s.metricDefinitions?.[k] || ''}</td>
                     <td className="font-mono text-right whitespace-nowrap">{fmtKrw(v)}</td></tr>
                 ))}</tbody></table>
-                : <div className="text-rose-300 mt-1">미제공 — VPC 내부 플레인이 metricByEngine 을 돌려주지 않았습니다 (구버전 플레인 · 재배포 필요)</div>}
+                : <div className="text-[#E90061] mt-1">미제공 — VPC 내부 플레인이 metricByEngine 을 돌려주지 않았습니다 (구버전 플레인 · 재배포 필요)</div>}
             </div>
           </div>
         )}
@@ -247,8 +247,8 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
               <span key={f.token} className="chip text-[10px] mr-1" style={{ borderColor: VPC }}>{f.field} → <span className="font-mono">{f.token}</span></span>
             ))}{(s.maskedFields || []).length === 0 && <span className="text-slate-500">없음</span>}</div>
             <div className="mb-2">경계 통과 개인식별자 — 독립 스캔({(s.piiDetectors || []).join(' + ')}):{' '}
-              <b className={s.piiOutbound === 0 ? 'text-emerald-400' : 'text-rose-400'}>{s.piiOutbound}건</b>
-              {s.piiHits?.length > 0 && <span className="text-rose-300 ml-2">{s.piiHits.map((h: any) => h.type).join(', ')}</span>}
+              <b className={s.piiOutbound === 0 ? 'text-emerald-600' : 'text-[#E90061]'}>{s.piiOutbound}건</b>
+              {s.piiHits?.length > 0 && <span className="text-[#E90061] ml-2">{s.piiHits.map((h: any) => h.type).join(', ')}</span>}
               {s.badge?.refuseTypes?.length > 0 && <span className="text-slate-500 ml-2">게이트 차단 유형: {s.badge.refuseTypes.join(' · ')}</span>}
             </div>
             {s.badge && (
@@ -259,7 +259,7 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
               </div>
             )}
             <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <b className="text-slate-200">경계를 넘은 실제 페이로드</b>
+              <b className="text-slate-800">경계를 넘은 실제 페이로드</b>
               <span className="chip text-[10px]" style={{ borderColor: BEDROCK, color: BEDROCK }}>Bedrock 입력 (user)</span>
               {boundary
                 ? <>
@@ -273,7 +273,7 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
                 <span key={f} className="chip text-[10px] mr-1 mb-1" style={{ borderColor: BEDROCK }}>{f}</span>
               ))}{boundary.fieldsPassed.length === 0 && <span className="text-slate-500">없음</span>}</div>
             )}
-            <pre className="bg-slate-950 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto">{s.maskedPayload}</pre>
+            <pre className="bg-slate-50 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-72 overflow-y-auto">{s.maskedPayload}</pre>
             {s.systemPromptChars != null && <div className="text-[10px] text-slate-500 mt-1">시스템 프롬프트 {Number(s.systemPromptChars).toLocaleString()}자는 별도 블록으로 함께 전달된다 (게이트 계측에 포함)</div>}
           </div>
         )}
@@ -328,12 +328,12 @@ export default function S2() {
     <div>
       <div className="panel p-3 mb-3 flex flex-col gap-2">
         <div className="flex gap-2 items-center">
-          <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-300" onClick={() => run(S2_PRESET)}>시나리오 S2</button>
-          <button className="chip whitespace-nowrap hover:border-rose-500 text-rose-300" onClick={() => run(S5_PRESET)}>S5 차단 시연</button>
-          <input className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm"
+          <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-700" onClick={() => run(S2_PRESET)}>시나리오 S2</button>
+          <button className="chip whitespace-nowrap hover:border-rose-400 text-[#E90061]" onClick={() => run(S5_PRESET)}>S5 차단 시연</button>
+          <input className="flex-1 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
             value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} />
           <button onClick={() => run()} disabled={running}
-            className="px-5 py-2 rounded-lg bg-teal-500/90 hover:bg-teal-400 text-slate-950 font-semibold text-sm disabled:opacity-40">
+            className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
             {running ? '상담 중…' : '상담 실행'}
           </button>
         </div>
@@ -342,15 +342,15 @@ export default function S2() {
           {ROUTES.map(r => (
             <button key={r.id} disabled={running} onClick={() => setRoute(r.id)} title={r.sub}
               className={`chip whitespace-nowrap disabled:opacity-50 ${route === r.id
-                ? (r.id === 'gemma' ? 'border-rose-500 text-rose-200 bg-rose-950/40' : 'border-teal-500 text-teal-200 bg-teal-950/40')
-                : 'text-slate-400 hover:border-slate-500'}`}>
+                ? (r.id === 'gemma' ? 'border-rose-500 text-rose-200 bg-rose-950/40' : 'border-teal-500 text-teal-900 bg-teal-50/40')
+                : 'text-slate-400 hover:border-slate-400'}`}>
               {route === r.id ? '● ' : '○ '}{r.label}
             </button>
           ))}
           <span className="mx-1 text-slate-700">|</span>
           <span className="text-slate-500">Semantic Layer</span>
           <Switch on={semanticOn} onChange={setSemanticOn} disabled={running} />
-          <span className={semanticOn ? 'text-emerald-300' : 'text-rose-300'}>
+          <span className={semanticOn ? 'text-emerald-700' : 'text-[#E90061]'}>
             {semanticOn ? 'ON — 전월실적 정의 + 계산엔진 값을 모델에 제공' : "OFF — 정의 없이 거래내역 원본만 제공, 모델이 '전월실적'을 스스로 계산 (안티패턴 시연)"}
           </span>
           <span className="ml-auto text-slate-500">
@@ -363,7 +363,7 @@ export default function S2() {
       <div className="grid grid-cols-2 gap-3 mb-3">
         <BadgeCard no="11-1" b={routeBadge} source={live ? '서버 게이트 값' : '기본 문구 — 실행 시 서버 값으로 갱신'} live={!!live} accent={route === 'gemma' ? ROSE : BEDROCK}>
           <div className="mt-1 text-[11px] text-slate-400">
-            모델 ID <span className="font-mono text-teal-200">{live?.modelId || fb.modelId}</span> · Tier {live?.tier || fb.tier}
+            모델 ID <span className="font-mono text-teal-900">{live?.modelId || fb.modelId}</span> · Tier {live?.tier || fb.tier}
             {' '}· 호출 리전 <span className="font-mono">{live?.region || fb.region}</span>
             {' '}· <span style={{ color: BEDROCK }}>{live?.badge?.region || fb.regionBadge}</span>
           </div>
@@ -371,7 +371,7 @@ export default function S2() {
             <div className="mt-1 text-[11px] text-slate-500">Tier 2 PII 추론 경로는 이 요청에서 미사용 — 선택하면 운영(IDC GPU + vLLM, EKS Hybrid Nodes) 대신 데모 대체(Bedrock Gemma 4 31B @ us-west-2, GPU 미구성)로 나간다.</div>
           )}
           {route === 'gemma' && (
-            <div className="mt-1 text-[11px] text-rose-300">이 경로는 IDC GPU 가 아니다 — us-west-2 의 Bedrock Gemma 로 직접 호출된다 (교차 리전 추론 미지원).</div>
+            <div className="mt-1 text-[11px] text-[#E90061]">이 경로는 IDC GPU 가 아니다 — us-west-2 의 Bedrock Gemma 로 직접 호출된다 (교차 리전 추론 미지원).</div>
           )}
         </BadgeCard>
         <BadgeCard no="11-2" b={gateBadge || GATE_FALLBACK} source={gateBadge ? '서버 게이트 값' : '기본 문구 — 실행 시 서버 값으로 갱신'} live={!!gateBadge} accent={VPC}>
@@ -379,13 +379,13 @@ export default function S2() {
         </BadgeCard>
       </div>
 
-      {err && <div className="text-rose-400 text-sm mb-3">{err}</div>}
-      {cached && <div className="mb-3 text-xs"><span className="chip text-amber-300 border-amber-700">캐시 응답</span> <span className="text-slate-400">{cached} — 실시간 응답이 아닙니다 (이전 실행 결과 재생)</span></div>}
+      {err && <div className="text-[#E90061] text-sm mb-3">{err}</div>}
+      {cached && <div className="mb-3 text-xs"><span className="chip text-amber-700 border-amber-400">캐시 응답</span> <span className="text-slate-400">{cached} — 실시간 응답이 아닙니다 (이전 실행 결과 재생)</span></div>}
 
       <div className="grid grid-cols-[1fr_1fr] gap-4">
         <div>
           <div className="text-xs text-slate-500 mb-2">파이프라인 단계 (펼쳐보기) — 왼쪽 띠 색: <span style={{ color: VPC }}>■ VPC 내부</span> / <span style={{ color: BEDROCK }}>■ Bedrock</span></div>
-          {stages.length === 0 && !running && <div className="text-xs text-slate-600 panel p-3">실행하면 ⓪ 추론 경로부터 ⑧ Semantic 검증까지 단계가 여기에 쌓인다.</div>}
+          {stages.length === 0 && !running && <div className="text-xs text-slate-400 panel p-3">실행하면 ⓪ 추론 경로부터 ⑧ Semantic 검증까지 단계가 여기에 쌓인다.</div>}
           {stages.map((s, i) => <StagePanel key={i} s={s} boundary={boundary} />)}
           {running && <div className="text-xs text-slate-500 mt-1"><span className="blink">▌</span> 진행 중…</div>}
         </div>
@@ -399,7 +399,7 @@ export default function S2() {
           </div>
           {done?.blocked
             ? (done.gateRefused
-              ? <div className="text-rose-300 text-sm border border-rose-900 rounded-lg p-3">
+              ? <div className="text-[#E90061] text-sm border border-rose-300 rounded-lg p-3">
                 <div className="font-semibold">⛔ 익명화 게이트 차단 — 페이로드가 Bedrock 에 전달되지 않았습니다</div>
                 <div className="text-xs mt-1 text-rose-200">{done.message}</div>
                 {Array.isArray(done.hits) && done.hits.length > 0 && (
@@ -407,32 +407,32 @@ export default function S2() {
                 )}
                 <div className="text-[10px] text-slate-500 mt-1">경로 {done.route} · 모델 {done.modelId} 로 나갈 예정이었음 · Single Boundary 뷰에 '게이트 거부'로 기록</div>
               </div>
-              : <div className="text-rose-300 text-sm border border-rose-900 rounded-lg p-3">
+              : <div className="text-[#E90061] text-sm border border-rose-300 rounded-lg p-3">
                 🛡 Bedrock Guardrails 차단: {done.message}
                 {done.topics?.length > 0 && <div className="text-xs mt-1 text-rose-200">토픽: {done.topics.join(', ')}</div>}
               </div>)
-            : <div className="text-slate-200"><Md text={text} />{running && !done && <span className="blink">▌</span>}</div>}
+            : <div className="text-slate-800"><Md text={text} />{running && !done && <span className="blink">▌</span>}</div>}
           {done && !done.blocked && (
             <div className="mt-3 text-xs space-y-1">
-              {done.guardrailOut && <div>출력 가드레일: <b className={done.guardrailOut.action === 'NONE' ? 'text-emerald-400' : 'text-rose-400'}>{done.guardrailOut.action}</b>
+              {done.guardrailOut && <div>출력 가드레일: <b className={done.guardrailOut.action === 'NONE' ? 'text-emerald-600' : 'text-[#E90061]'}>{done.guardrailOut.action}</b>
                 {done.guardrailOut.grounding?.length > 0 && <span className="text-slate-400 ml-2">근거 점수 {done.guardrailOut.grounding.map((g: any) => `${g.type} ${g.score}`).join(' · ')}</span>}</div>}
               <div className="text-slate-400">플레인: <span style={{ color: done.plane === 'bridge' || done.plane === 'direct' ? VPC : ROSE }}>{done.planeLabel}</span>
                 {done.usage && <> · 실측 토큰 {Number(done.usage.inputTokens || 0).toLocaleString()}/{Number(done.usage.outputTokens || 0).toLocaleString()}</>}</div>
               <div>{done.inventedNumbers?.length
-                ? <span className="text-rose-400">⚠ 계산엔진에 없는 수치 발견: {done.inventedNumbers.join(', ')}</span>
-                : <span className="text-emerald-400">✓ 수치 검증 통과 — 모든 숫자가 계산엔진 출력(또는 제공된 원장 값)과 일치</span>}</div>
+                ? <span className="text-[#E90061]">⚠ 계산엔진에 없는 수치 발견: {done.inventedNumbers.join(', ')}</span>
+                : <span className="text-emerald-600">✓ 수치 검증 통과 — 모든 숫자가 계산엔진 출력(또는 제공된 원장 값)과 일치</span>}</div>
               {chk && (
                 <div>Semantic 검증 (전월실적): {chk.mismatch
-                  ? <span className="text-rose-300">모델 {fmtKrw(chk.modelValue)} ≠ 계산엔진 {fmtKrw(chk.engineValue)} — <b className="chip text-[10px] text-white bg-rose-600 border-rose-400">조용히 틀림</b></span>
+                  ? <span className="text-[#E90061]">모델 {fmtKrw(chk.modelValue)} ≠ 계산엔진 {fmtKrw(chk.engineValue)} — <b className="chip text-[10px] text-white bg-rose-600 border-rose-400">조용히 틀림</b></span>
                   : chk.modelValue != null
-                    ? <span className="text-emerald-400">모델 {fmtKrw(chk.modelValue)} = 계산엔진 {fmtKrw(chk.engineValue)}</span>
+                    ? <span className="text-emerald-600">모델 {fmtKrw(chk.modelValue)} = 계산엔진 {fmtKrw(chk.engineValue)}</span>
                     : <span className="text-slate-400">{chk.note || '모델이 수치를 제시하지 않음'}</span>}
                   <span className="text-slate-500 ml-1">· Semantic Layer {done.semanticLayer === false ? 'OFF' : 'ON'}</span></div>
               )}
               {done.modelId && (
-                <div className="text-slate-400">모델 ID <span className="font-mono text-teal-200">{done.modelId}</span> · Tier {done.tier}
+                <div className="text-slate-400">모델 ID <span className="font-mono text-teal-900">{done.modelId}</span> · Tier {done.tier}
                   {' '}· <span style={{ color: BEDROCK }}>{done.regionBadge || `저장: ${done.storageLabel || '서울 리전'} / 추론: ${done.inferenceRoutingLabel || done.inferenceRouting || '—'}`}</span>
-                  {done.nonStream && <span className="text-amber-300 ml-1">· 비스트림 응답 (어댑터 폴백)</span>}</div>
+                  {done.nonStream && <span className="text-amber-700 ml-1">· 비스트림 응답 (어댑터 폴백)</span>}</div>
               )}
               <div className="text-slate-500">traceId {done.traceId} · {done.elapsedMs}ms — Single Boundary 뷰에 계측 기록됨{done.cached && ' · 캐시 응답'}</div>
             </div>

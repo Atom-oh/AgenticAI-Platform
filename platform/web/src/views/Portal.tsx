@@ -59,8 +59,8 @@ const IMPACT_TITLE: Record<string, string> = {
 };
 
 const statusColor = (s: string) =>
-  s === 'APPROVED' ? 'text-emerald-400 border-emerald-700' : s === 'DEPRECATED' || s === 'REJECTED' ? 'text-rose-400 border-rose-800'
-    : s === 'PENDING_APPROVAL' ? 'text-amber-400 border-amber-700' : 'text-slate-300 border-slate-600';
+  s === 'APPROVED' ? 'text-emerald-600 border-emerald-700' : s === 'DEPRECATED' || s === 'REJECTED' ? 'text-[#E90061] border-rose-800'
+    : s === 'PENDING_APPROVAL' ? 'text-amber-700 border-amber-400' : 'text-slate-700 border-slate-600';
 const errOf = (e: WsEvent | null | undefined) => (e && (e.type === 'error' || e.ok === false)) ? (e.error || e.message || '오류') : '';
 const idFromHash = (): string | null => {
   const h = location.hash; const q = h.indexOf('?');
@@ -78,16 +78,16 @@ function StatusChip({ s, raw }: { s: string; raw?: string | null }) {
     title={raw && raw !== s ? `원본 상태 ${raw} → ${s}` : s}>{STATUS_KO[s] || s}</span>;
 }
 function TierBadge({ text = 'Registry · Tier 0/1 전용' }: { text?: string }) {
-  return <span className="chip text-[10px] text-amber-300 border-amber-700"
+  return <span className="chip text-[10px] text-amber-700 border-amber-400"
     title="SPEC §11-4 — Registry(AgentCore 미러 포함)는 Tier 0/1 워크로드 전용. Tier 2(PII 추론) 경로에는 쓰지 않는다">{text}</span>;
 }
 function RelatedChips({ rel, max = 4 }: { rel: Related; max?: number }) {
   const items = sortedRelated(rel);
-  if (items.length === 0) return <span className="text-[11px] text-slate-600" title="그래프 순회 결과 — 이웃 없음">관계 없음</span>;
+  if (items.length === 0) return <span className="text-[11px] text-slate-400" title="그래프 순회 결과 — 이웃 없음">관계 없음</span>;
   const shown = items.slice(0, max);
   return (
-    <span className="text-[11px] text-slate-300" title="그래프 순회 결과 (store.related_counts — 양방향 이웃을 라벨별로 센 값, 하드코딩 없음)">
-      {shown.map(([k, v], i) => <span key={k}>{i > 0 && <span className="text-slate-600"> · </span>}<b>{v}</b> {REL_LABEL[k] || k}</span>)}
+    <span className="text-[11px] text-slate-700" title="그래프 순회 결과 (store.related_counts — 양방향 이웃을 라벨별로 센 값, 하드코딩 없음)">
+      {shown.map(([k, v], i) => <span key={k}>{i > 0 && <span className="text-slate-400"> · </span>}<b>{v}</b> {REL_LABEL[k] || k}</span>)}
       {items.length > max && <span className="text-slate-500"> +{items.length - max}</span>}
     </span>
   );
@@ -107,7 +107,7 @@ function AssetCard({ c, active, onOpen }: { c: Card; active: boolean; onOpen: (i
       </div>
       <div className="text-sm font-semibold truncate" title={c.name}>{c.name}</div>
       <div className="text-[11px] text-slate-500 truncate" title={c.brief}>{c.brief || ' '}</div>
-      <div className="text-[11px] text-slate-500">Owner <span className="text-slate-300">{c.owner || '—'}</span></div>
+      <div className="text-[11px] text-slate-500">Owner <span className="text-slate-700">{c.owner || '—'}</span></div>
       <RelatedChips rel={c.related} />
     </button>
   );
@@ -125,11 +125,11 @@ function ImpactPanel({ im, onOpen, onClose }: { im: Impact; onOpen: (id: string)
         <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--vpc)' }} />
         <b className="text-sm">{IMPACT_TITLE[im.label] || '영향 분석'} — <span className="font-mono">{im.id}</span> {im.name}</b>
         <span className="chip text-[10px] text-slate-400" title={im.traversal}>그래프 순회 결과 · {im.backend === 'neptune' ? 'Neptune' : 'Local(개발)'} · {im.elapsedMs}ms</span>
-        <button className="chip ml-auto hover:border-slate-500" onClick={onClose}>닫기</button>
+        <button className="chip ml-auto hover:border-slate-400" onClick={onClose}>닫기</button>
       </div>
       <div className="grid grid-cols-7 gap-2 mb-3">
         {tiles.map(([k, l]) => (
-          <div key={k} className={`rounded-lg border p-2 text-center ${k === 'screens' ? 'border-amber-600' : 'border-slate-800'}`}>
+          <div key={k} className={`rounded-lg border p-2 text-center ${k === 'screens' ? 'border-amber-600' : 'border-slate-200'}`}>
             <div className="text-xl font-bold">{im.counts[k] ?? 0}</div>
             <div className="text-[10px] text-slate-500">{l}</div>
           </div>
@@ -139,7 +139,7 @@ function ImpactPanel({ im, onOpen, onClose }: { im: Impact; onOpen: (id: string)
       <div className="flex flex-wrap gap-1 mb-3 max-h-[88px] overflow-y-auto">
         {im.screens.map(s => (
           <button key={s.id} className="chip text-[10px] hover:border-emerald-500" onClick={() => onOpen(s.id)} title={s.id}>
-            <span className="font-mono text-slate-500">{s.id}</span> {s.name}{s.channel && <span className="text-slate-600">· {s.channel}</span>}
+            <span className="font-mono text-slate-500">{s.id}</span> {s.name}{s.channel && <span className="text-slate-400">· {s.channel}</span>}
           </button>
         ))}
       </div>
@@ -150,9 +150,9 @@ function ImpactPanel({ im, onOpen, onClose }: { im: Impact; onOpen: (id: string)
       <div className="text-[11px] text-slate-500 mt-2 flex flex-wrap gap-x-3">
         <span>경로 엣지 {im.pathEdges}건 중 {im.graph.edges.length}건 표시 · 노드 {im.graph.nodes.length}개</span>
         {(im.graph.truncated.nodes > 0 || im.graph.truncated.edges > 0) &&
-          <span className="text-amber-300">시각화 상한으로 노드 {im.graph.truncated.nodes} · 엣지 {im.graph.truncated.edges}건 생략 (카운트는 전체 기준)</span>}
+          <span className="text-amber-700">시각화 상한으로 노드 {im.graph.truncated.nodes} · 엣지 {im.graph.truncated.edges}건 생략 (카운트는 전체 기준)</span>}
         {selNode && <span>선택: <span className="font-mono">{selNode.id}</span> {selNode.name} ({LABEL_KO[selNode.label] || selNode.label}) — 이웃 강조 · 더블클릭으로 상세</span>}
-        <span className="text-slate-600">순회: {im.traversal}</span>
+        <span className="text-slate-400">순회: {im.traversal}</span>
       </div>
     </div>
   );
@@ -168,38 +168,38 @@ function RegistryMap({ m, err, onReload }: { m: WsEvent | null; err: string; onR
         <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: 'var(--bedrock)' }} />
         Registry 매핑 (SPEC v2 §7 등록 대상) <TierBadge />
         <span className="text-xs text-slate-500 font-normal">저장소 {m?.registryBackend === 'dynamodb' ? 'DynamoDB' : m?.registryBackend === 'memory' ? '인메모리(개발용)' : '…'}</span>
-        {mcpCreated > 0 && <span className="text-xs text-amber-300 font-normal">· §7 MCP 서버 레코드 {mcpCreated}건 시드됨</span>}
-        {m?.bootstrapped && <span className="text-xs text-amber-300 font-normal">· 빈 레지스트리에 기준선 {m.bootstrapped.created}건 시드됨</span>}
+        {mcpCreated > 0 && <span className="text-xs text-amber-700 font-normal">· §7 MCP 서버 레코드 {mcpCreated}건 시드됨</span>}
+        {m?.bootstrapped && <span className="text-xs text-amber-700 font-normal">· 빈 레지스트리에 기준선 {m.bootstrapped.created}건 시드됨</span>}
       </summary>
-      {err && <div className="text-xs text-rose-400 mt-2">{err} <button className="chip ml-2" onClick={onReload}>다시</button></div>}
+      {err && <div className="text-xs text-[#E90061] mt-2">{err} <button className="chip ml-2" onClick={onReload}>다시</button></div>}
       <table className="w-full text-xs mt-3">
-        <thead><tr className="text-slate-500 border-b border-slate-800">
+        <thead><tr className="text-slate-500 border-b border-slate-200">
           <th className="text-left p-2">사내 자산</th><th className="text-left p-2">§7 recordType</th><th className="text-left p-2">원본</th>
           <th className="text-left p-2">현재 구현</th><th className="text-left p-2">Registry 레코드</th></tr></thead>
         <tbody>{rows.map(r => (
-          <tr key={r.key} className="border-b border-slate-900 align-top">
-            <td className="p-2 text-slate-200">{r.asset}</td>
+          <tr key={r.key} className="border-b border-slate-100 align-top">
+            <td className="p-2 text-slate-800">{r.asset}</td>
             <td className="p-2 font-mono">{r.recordType}{r.subtype ? <span className="text-slate-500">/{r.subtype}</span> : ''}</td>
             <td className="p-2 text-slate-400">{r.origin}</td>
-            <td className={`p-2 ${r.deviation ? 'text-amber-300' : 'text-slate-300'}`} title={r.note || ''}>
-              {r.deviation && <span className="chip text-[10px] text-amber-300 border-amber-700 mr-1">명세와 다름</span>}{r.current}
+            <td className={`p-2 ${r.deviation ? 'text-amber-700' : 'text-slate-700'}`} title={r.note || ''}>
+              {r.deviation && <span className="chip text-[10px] text-amber-700 border-amber-400 mr-1">명세와 다름</span>}{r.current}
               {r.note && <div className="text-[10px] text-slate-500 mt-0.5">{r.note}</div>}
             </td>
             <td className="p-2">
-              {r.records.length === 0 && <span className="text-slate-600">{r.key === 'pattern' || r.key === 'screen_spec' ? '발행 레코드 없음 (Portal Publish 로 생성)' : '레코드 없음'}</span>}
+              {r.records.length === 0 && <span className="text-slate-400">{r.key === 'pattern' || r.key === 'screen_spec' ? '발행 레코드 없음 (Portal Publish 로 생성)' : '레코드 없음'}</span>}
               <div className="flex flex-wrap gap-1">{r.records.map(x => (
-                <span key={x.name + x.recordVersion} className={`chip text-[10px] font-mono ${x.found ? statusColor(x.status || '') : 'text-rose-400 border-rose-800'}`}
+                <span key={x.name + x.recordVersion} className={`chip text-[10px] font-mono ${x.found ? statusColor(x.status || '') : 'text-[#E90061] border-rose-800'}`}
                   title={Object.entries(x.payloadFlags || {}).map(([k, v]) => `${k}=${String(v)}`).join(' · ') || ''}>
                   {x.name} {x.recordVersion} <span className="font-sans">{x.found ? (STATUS_KO[x.status || ''] || x.status) : '없음'}</span>
-                  {x.payloadFlags?.deployed === false && <span className="font-sans text-amber-300">미배포</span>}
-                  {x.payloadFlags?.connected === false && <span className="font-sans text-amber-300">미연결</span>}
+                  {x.payloadFlags?.deployed === false && <span className="font-sans text-amber-700">미배포</span>}
+                  {x.payloadFlags?.connected === false && <span className="font-sans text-amber-700">미연결</span>}
                 </span>
               ))}</div>
             </td>
           </tr>
         ))}</tbody>
       </table>
-      {!m && !err && <div className="text-xs text-slate-600 mt-2">불러오는 중…</div>}
+      {!m && !err && <div className="text-xs text-slate-400 mt-2">불러오는 중…</div>}
     </details>
   );
 }
@@ -221,10 +221,10 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
       <div className="panel p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto" style={{ borderTop: '2px solid var(--vpc)' }}>
         <div className="flex items-start gap-2 mb-2">
           <div className="min-w-0">
-            <div className="font-mono text-xs text-slate-400">{d.id} <span className="text-slate-600">· {LABEL_KO[d.label] || d.label}</span></div>
+            <div className="font-mono text-xs text-slate-400">{d.id} <span className="text-slate-400">· {LABEL_KO[d.label] || d.label}</span></div>
             <div className="text-base font-bold leading-snug break-words">{d.name}</div>
           </div>
-          <button className="chip ml-auto hover:border-slate-500 shrink-0" onClick={onClose}>✕</button>
+          <button className="chip ml-auto hover:border-slate-400 shrink-0" onClick={onClose}>✕</button>
         </div>
         <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
           <StatusChip s={d.status} raw={d.rawStatus} />
@@ -237,21 +237,21 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
         <div className="flex flex-wrap gap-2 mb-3">
           {d.impactSupported && (
             <button onClick={onImpact} disabled={!!busy}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/90 hover:bg-amber-400 text-slate-950 disabled:opacity-40">
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/90 hover:bg-amber-400 text-white disabled:opacity-40">
               {busy === 'impact' ? '순회 중…' : IMPACT_TITLE[d.label]}
             </button>
           )}
           <button onClick={onPublish} disabled={!!busy || !d.publishable}
             title={d.publishable ? `Registry 로 발행 — ${d.publishTarget?.recordType}/${d.publishTarget?.subtype} (DRAFT)` : 'Publish 미구현 — §7 등록 대상 매핑에 없는 자산 유형'}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-500/90 hover:bg-teal-400 text-slate-950 disabled:opacity-40">
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#008485] hover:bg-[#0a6b6c] text-white disabled:opacity-40">
             {busy === 'publish' ? '발행 중…' : 'Publish'}
           </button>
           <button onClick={onSync} disabled={!!busy} title="그래프 재순회 + Registry 재조회 (외부 원본 Git · Figma 동기화는 미구현)"
             className="chip text-xs hover:border-amber-500">{busy === 'sync' ? '재순회 중…' : 'Sync (그래프 재순회)'}</button>
         </div>
-        {!d.publishable && <div className="text-[11px] text-slate-500 mb-3">Publish <b className="text-amber-300">미구현</b> — §7 등록 대상 매핑에 없는 자산 유형({LABEL_KO[d.label] || d.label}). Component · Pattern · Screen 만 발행한다.</div>}
+        {!d.publishable && <div className="text-[11px] text-slate-500 mb-3">Publish <b className="text-amber-700">미구현</b> — §7 등록 대상 매핑에 없는 자산 유형({LABEL_KO[d.label] || d.label}). Component · Pattern · Screen 만 발행한다.</div>}
         {syncRes && (
-          <div className={`text-[11px] mb-3 ${syncRes.ok ? 'text-emerald-300' : 'text-rose-400'}`}>
+          <div className={`text-[11px] mb-3 ${syncRes.ok ? 'text-emerald-700' : 'text-[#E90061]'}`}>
             {syncRes.ok ? `${syncRes.syncLabel} 완료 · ${syncRes.backend === 'neptune' ? 'Neptune' : 'Local'} · ${syncRes.elapsedMs}ms` : errOf(syncRes)}
             {syncRes.ok && <div className="text-slate-500">{syncRes.note}</div>}
           </div>
@@ -259,16 +259,16 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
         {publishRes && (
           <section className="rounded-lg border border-teal-900 p-3 mb-3 text-xs" style={{ borderColor: pubErr ? '#9f1239' : undefined }}>
             <div className="flex items-center gap-2 mb-1"><b>Publish 결과</b> <TierBadge /></div>
-            {pubErr ? <div className="text-rose-400">{pubErr}</div> : (
+            {pubErr ? <div className="text-[#E90061]">{pubErr}</div> : (
               <>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono">{publishRes.record?.name} {publishRes.record?.recordVersion}</span>
                   <span className="text-slate-500">{publishRes.record?.recordType}/{publishRes.record?.subtype}</span>
                   <StatusChip s={publishRes.record?.status} />
-                  <span className={`chip text-[10px] ${publishRes.action === 'created' ? 'text-emerald-300 border-emerald-700' : 'text-slate-300'}`}>{publishRes.action === 'created' ? '새로 생성 (DRAFT)' : '기존 레코드'}</span>
+                  <span className={`chip text-[10px] ${publishRes.action === 'created' ? 'text-emerald-700 border-emerald-700' : 'text-slate-700'}`}>{publishRes.action === 'created' ? '새로 생성 (DRAFT)' : '기존 레코드'}</span>
                 </div>
                 <div className="text-slate-500 mt-1">{publishRes.note} · 저장소 {publishRes.registryBackend === 'dynamodb' ? 'DynamoDB' : '인메모리(개발용)'}</div>
-                <a href="#/registry" className="text-teal-300 hover:underline">Agent Registry 화면에서 승인 요청 →</a>
+                <a href="#/registry" className="text-teal-700 hover:underline">Agent Registry 화면에서 승인 요청 →</a>
               </>
             )}
           </section>
@@ -278,12 +278,12 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
         <section className="mb-3">
           <div className="text-xs text-slate-500 mb-1 flex items-center gap-2">Related 분해
             <span className="chip text-[10px]" title="store.related_counts(id) — 양방향 이웃을 라벨별 distinct 로 센 값">그래프 순회 결과</span>
-            <span className="text-slate-600">{d.backend === 'neptune' ? 'Neptune' : 'Local(개발)'}</span></div>
-          {related.length === 0 && <div className="text-xs text-slate-600">이웃 없음</div>}
+            <span className="text-slate-400">{d.backend === 'neptune' ? 'Neptune' : 'Local(개발)'}</span></div>
+          {related.length === 0 && <div className="text-xs text-slate-400">이웃 없음</div>}
           <div className="space-y-1">{related.map(([k, v]) => (
             <div key={k} className="flex items-center gap-2 text-xs">
               <span className="w-24 text-slate-400">{REL_LABEL[k] || k}</span>
-              <div className="flex-1 h-2 rounded bg-slate-900 overflow-hidden"><div className="h-full" style={{ width: `${Math.round(100 * v / maxRel)}%`, background: 'var(--vpc)' }} /></div>
+              <div className="flex-1 h-2 rounded bg-white overflow-hidden"><div className="h-full" style={{ width: `${Math.round(100 * v / maxRel)}%`, background: 'var(--vpc)' }} /></div>
               <span className="w-8 text-right font-mono">{v}</span>
             </div>
           ))}</div>
@@ -291,12 +291,12 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
 
         {/* Version History */}
         <section className="mb-3">
-          <div className="text-xs text-slate-500 mb-1">Version History <span className="text-slate-600">(SUPERSEDED_BY 사슬 · 과거 → 최신)</span></div>
+          <div className="text-xs text-slate-500 mb-1">Version History <span className="text-slate-400">(SUPERSEDED_BY 사슬 · 과거 → 최신)</span></div>
           {d.versionChain.length <= 1
-            ? <div className="text-xs text-slate-600">{d.label === 'Component' ? '단일 버전 — 대체 관계 없음' : '버전 사슬 없음 (이 자산 유형에는 SUPERSEDED_BY 관계가 없다)'}</div>
+            ? <div className="text-xs text-slate-400">{d.label === 'Component' ? '단일 버전 — 대체 관계 없음' : '버전 사슬 없음 (이 자산 유형에는 SUPERSEDED_BY 관계가 없다)'}</div>
             : <div className="flex flex-wrap items-center gap-1">{d.versionChain.map((c, i) => (
               <span key={c.id} className="flex items-center gap-1">
-                {i > 0 && <span className="text-slate-600 text-xs">→</span>}
+                {i > 0 && <span className="text-slate-400 text-xs">→</span>}
                 <button onClick={() => onOpen(c.id)} className={`chip text-[11px] font-mono ${statusColor(c.status)} ${c.current ? 'bg-slate-800' : 'hover:brightness-125'}`}
                   title={`${c.id} · ${c.rawStatus || c.status}`}>v{c.version || '?'} <span className="font-sans">{STATUS_KO[c.status] || c.status}</span></button>
               </span>
@@ -307,25 +307,25 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
         {d.label === 'Component' && (
           <section className="rounded-lg border p-3 mb-3 text-xs" style={{ borderColor: 'rgba(56,189,248,.35)' }}>
             <div className="flex items-center gap-2 mb-1"><b>Registry 레코드</b> <TierBadge /></div>
-            {!reg || !reg.available ? <div className="text-rose-400">{reg?.error || 'Registry 미연결'}</div>
+            {!reg || !reg.available ? <div className="text-[#E90061]">{reg?.error || 'Registry 미연결'}</div>
               : reg.record ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono">{reg.record.name} {reg.record.recordVersion}</span>
                   <span className="text-slate-500">{reg.record.recordType}/{reg.record.subtype}</span>
                   <StatusChip s={reg.record.status} />
                   {reg.record.payload?.supersededBy && <span className="text-slate-500">→ {reg.record.payload.supersededBy}</span>}
-                  <span className="text-slate-600">{reg.backend === 'dynamodb' ? 'DynamoDB' : '인메모리'}</span>
+                  <span className="text-slate-400">{reg.backend === 'dynamodb' ? 'DynamoDB' : '인메모리'}</span>
                 </div>
               ) : <div className="text-slate-400">레코드 없음 — <span className="font-mono">{reg.name} {reg.recordVersion}</span> (Publish 로 DRAFT 생성 가능)</div>}
-            {d.mapping && <div className="text-[10px] text-amber-300 mt-1" title={d.mapping.note || ''}>§7 매핑: {d.mapping.recordType} — 현재 {d.mapping.current} {d.mapping.deviation && '(명세와 다름 — 숨기지 않음)'}</div>}
+            {d.mapping && <div className="text-[10px] text-amber-700 mt-1" title={d.mapping.note || ''}>§7 매핑: {d.mapping.recordType} — 현재 {d.mapping.current} {d.mapping.deviation && '(명세와 다름 — 숨기지 않음)'}</div>}
           </section>
         )}
 
         {/* 화면 메타 */}
         {d.meta && (
           <section className="mb-3 text-xs">
-            <div className="text-slate-500 mb-1">Screen Metadata <span className="font-mono text-slate-600">{d.meta.metaId}</span> (DESCRIBES)</div>
-            <div className="text-slate-300 mb-1">{d.meta.purpose}</div>
+            <div className="text-slate-500 mb-1">Screen Metadata <span className="font-mono text-slate-400">{d.meta.metaId}</span> (DESCRIBES)</div>
+            <div className="text-slate-700 mb-1">{d.meta.purpose}</div>
             <div className="text-slate-400 mb-1">진입 조건: {d.meta.entryCondition || '—'}</div>
             <div className="flex flex-wrap gap-1 items-center">
               <span className="text-slate-500">이전</span>{d.meta.prevScreens.map(s => <button key={s} className="chip text-[10px] font-mono hover:border-emerald-500" onClick={() => onOpen(s)}>{s}</button>)}
@@ -338,14 +338,14 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
         <section className="mb-3">
           <div className="text-xs text-slate-500 mb-1">속성</div>
           <table className="w-full text-xs">{propRows.map(([k, v]) => (
-            <tr key={k} className="border-b border-slate-900 align-top"><td className="text-slate-500 pr-2 py-0.5 whitespace-nowrap">{k}</td>
+            <tr key={k} className="border-b border-slate-100 align-top"><td className="text-slate-500 pr-2 py-0.5 whitespace-nowrap">{k}</td>
               <td className="py-0.5 break-words">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</td></tr>
           ))}</table>
           {jsonRows.map(([k, v]) => (
             <details key={k} className="mt-1"><summary className="cursor-pointer text-xs text-slate-400">{k}{Array.isArray(v) ? ` (${v.length})` : ''}</summary>
               {Array.isArray(v) && v.every(x => typeof x === 'string')
-                ? <ol className="list-decimal ml-5 text-xs text-slate-300 mt-1">{(v as string[]).map((s, i) => <li key={i}>{s}</li>)}</ol>
-                : <pre className="bg-slate-950 rounded p-2 text-[11px] overflow-x-auto max-h-48 mt-1">{JSON.stringify(v, null, 2)}</pre>}
+                ? <ol className="list-decimal ml-5 text-xs text-slate-700 mt-1">{(v as string[]).map((s, i) => <li key={i}>{s}</li>)}</ol>
+                : <pre className="bg-slate-50 rounded p-2 text-[11px] overflow-x-auto max-h-48 mt-1">{JSON.stringify(v, null, 2)}</pre>}
             </details>
           ))}
         </section>
@@ -355,11 +355,11 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
           <div className="text-xs text-slate-500 mb-1">관계 이웃 (표본 · 관계별 최대 8)</div>
           <div className="space-y-1.5">{d.neighbors.map(g => (
             <div key={g.rel + g.direction} className="text-xs">
-              <span className="font-mono text-slate-400">{g.direction === 'out' ? '→' : '←'} {g.rel}</span> <span className="text-slate-600">{g.count}건</span>
+              <span className="font-mono text-slate-400">{g.direction === 'out' ? '→' : '←'} {g.rel}</span> <span className="text-slate-400">{g.count}건</span>
               <div className="flex flex-wrap gap-1 mt-0.5">{g.nodes.map(n => (
                 <button key={n.id} className="chip text-[10px] hover:border-slate-400" onClick={() => onOpen(n.id)} title={`${n.id} · ${LABEL_KO[n.label] || n.label}`}>
                   <span className="font-mono text-slate-500">{n.id}</span> {n.name.length > 18 ? n.name.slice(0, 17) + '…' : n.name}</button>
-              ))}{g.count > g.nodes.length && <span className="text-slate-600 text-[10px]">+{g.count - g.nodes.length}</span>}</div>
+              ))}{g.count > g.nodes.length && <span className="text-slate-400 text-[10px]">+{g.count - g.nodes.length}</span>}</div>
             </div>
           ))}</div>
         </section>
@@ -475,7 +475,7 @@ export default function Portal() {
         <span className="chip text-[10px]" style={{ borderColor: 'var(--vpc)', color: 'var(--vpc)' }}>
           온톨로지 · {listMeta ? (listMeta.backend === 'neptune' ? 'Neptune Serverless (VPC 내부)' : 'Local 인메모리 (개발용)') : '…'}</span>
         <span className="chip text-[10px]" title="§12.8 — Related 카운트·영향 범위는 그래프 순회 결과. 하드코딩된 수치 없음">Related = 그래프 순회 결과</span>
-        <span className="text-slate-600">프리셋</span>
+        <span className="text-slate-400">프리셋</span>
         {PRESETS.map(p => <button key={p} className="chip text-[10px] font-mono hover:border-amber-500" onClick={() => openDetail(p)}>{p}</button>)}
       </div>
 
@@ -484,14 +484,14 @@ export default function Portal() {
         <nav className="w-44 shrink-0 panel p-2 sticky top-20">
           {CATS.map(c => (
             <button key={c.id} onClick={() => { setCat(c.id); setQ(''); }}
-              className={`w-full text-left px-3 py-2 rounded-lg mb-0.5 ${cat === c.id ? 'bg-amber-950/50 text-amber-200' : 'text-slate-400 hover:bg-slate-900'}`}>
+              className={`w-full text-left px-3 py-2 rounded-lg mb-0.5 ${cat === c.id ? 'bg-amber-950/50 text-amber-200' : 'text-slate-400 hover:bg-slate-100'}`}>
               <div className="flex items-center text-sm"><span>{c.label}</span>
                 <span className="ml-auto text-[10px] text-slate-500 font-mono">{counts[c.id] ?? '…'}</span></div>
-              <div className="text-[10px] text-slate-600">{c.sub}</div>
+              <div className="text-[10px] text-slate-400">{c.sub}</div>
             </button>
           ))}
-          <div className="text-[10px] text-slate-600 px-3 pt-2 border-t border-slate-800 mt-1">
-            Foundation 은 <b className="text-amber-300">미구현</b> — 디자인 토큰 노드가 없어 UX Dictionary 공통 용어로 대체 표시.
+          <div className="text-[10px] text-slate-400 px-3 pt-2 border-t border-slate-200 mt-1">
+            Foundation 은 <b className="text-amber-700">미구현</b> — 디자인 토큰 노드가 없어 UX Dictionary 공통 용어로 대체 표시.
           </div>
         </nav>
 
@@ -500,15 +500,15 @@ export default function Portal() {
           <div className="panel p-3 mb-3 flex flex-wrap items-center gap-2">
             <div>
               <div className="text-sm font-semibold">{catInfo.label} <span className="text-slate-500 font-normal text-xs">— {listMeta?.library || catInfo.sub} · 라벨 <span className="font-mono">{listMeta?.label || ''}</span></span></div>
-              {listMeta?.note && <div className="text-[11px] text-amber-300 mt-0.5">{listMeta.note}</div>}
+              {listMeta?.note && <div className="text-[11px] text-amber-700 mt-0.5">{listMeta.note}</div>}
             </div>
-            <input className="ml-auto w-72 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-sm"
+            <input className="ml-auto w-72 px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm"
               placeholder="검색 (ID · 이름 · 소유 · 상태 — 클라이언트 필터)" value={q} onChange={e => setQ(e.target.value)} />
             <span className="text-xs text-slate-500">{loading ? '불러오는 중…' : `${shown.length}/${cards.length}건`}{listMeta && ` · ${listMeta.elapsedMs}ms`}</span>
           </div>
-          {err && <div className="text-rose-400 text-sm mb-3">{err}</div>}
-          {detailErr && <div className="text-rose-400 text-xs mb-3">상세 조회 실패: {detailErr}</div>}
-          {impactErr && <div className="text-rose-400 text-xs mb-3">영향 분석 실패: {impactErr}</div>}
+          {err && <div className="text-[#E90061] text-sm mb-3">{err}</div>}
+          {detailErr && <div className="text-[#E90061] text-xs mb-3">상세 조회 실패: {detailErr}</div>}
+          {impactErr && <div className="text-[#E90061] text-xs mb-3">영향 분석 실패: {impactErr}</div>}
           {impact && <ImpactPanel im={impact} onOpen={openDetail} onClose={() => setImpact(null)} />}
           <div className={`grid gap-3 ${detail ? 'grid-cols-2' : 'grid-cols-3'}`}>
             {shown.map(c => <AssetCard key={c.id} c={c} active={detail?.id === c.id} onOpen={openDetail} />)}
