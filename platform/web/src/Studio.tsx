@@ -257,7 +257,7 @@ function Assets({ assets, canWrite, reload }: { assets: Asset[]; canWrite: boole
               <span className="text-sm font-bold text-slate-800 truncate">{a.name}</span>
               <span className="chip text-[10px] text-teal-700 border-teal-300 ml-auto">{TYPE_LABEL[a.type] || a.type}</span>
             </div>
-            <div className="text-[11px] text-slate-400 mt-1">v{a.version} · {a.actor}</div>
+            <div className="text-[11px] text-slate-400 mt-1">{String(a.version).startsWith('v') ? a.version : `v${a.version}`} · {a.actor}</div>
           </button>
         ))}
       </div>
@@ -267,7 +267,7 @@ function Assets({ assets, canWrite, reload }: { assets: Asset[]; canWrite: boole
             <div className="text-sm font-bold text-slate-800">{sel.name}
               <span className="chip text-[10px] ml-2 text-teal-700 border-teal-300">{TYPE_LABEL[sel.type] || sel.type}</span></div>
             {Array.isArray(sel.history) && sel.history.length > 0 && (
-              <div className="text-xs text-slate-400 mt-1">버전 이력: {sel.history.map((h: any) => `v${h.version}`).join(' → ')}</div>
+              <div className="text-xs text-slate-400 mt-1">버전 이력: {sel.history.map((h: any) => String(h.version).startsWith('v') ? h.version : `v${h.version}`).join(' → ')}</div>
             )}
             {sel.type === 'palette' && <Swatches content={sel.content} />}
             <pre className="text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2 max-h-56 overflow-auto whitespace-pre-wrap text-slate-700">
