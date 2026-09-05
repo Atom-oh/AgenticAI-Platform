@@ -1,0 +1,48 @@
+[
+  {
+    "id": "cl-deposit-base",
+    "title": "수신 가입 프로세스 기본 체크리스트",
+    "appliesTo": {"productType": "수신"},
+    "items": [
+      {"id": "b01", "text": "PRD 의 모든 스텝이 플로우에 존재한다", "method": "rule", "target": "flow", "severity": "critical",
+       "rule": {"fn": "steps_exist", "args": {}}},
+      {"id": "b02", "text": "모든 전이(다음/가입 신청)가 출발 화면의 버튼 문구로 존재한다", "method": "rule", "target": "flow", "severity": "critical",
+       "rule": {"fn": "transitions_match_buttons", "args": {}}},
+      {"id": "b03", "text": "스텝별 필수 요소(상품명·금리·고지·입력 라벨)가 해당 화면에 있다", "method": "rule", "target": "screen", "severity": "critical",
+       "rule": {"fn": "required_present", "args": {}}},
+      {"id": "b04", "text": "예금자보호 문구가 약관 또는 확인 화면에 있다", "method": "rule", "target": "screen", "severity": "critical",
+       "rule": {"fn": "text_present", "args": {"texts": ["예금자보호"], "steps": ["terms", "confirm"], "any": true}}},
+      {"id": "b05", "text": "중도해지 안내가 약관 또는 확인 화면에 있다", "method": "rule", "target": "screen", "severity": "major",
+       "rule": {"fn": "text_present", "args": {"texts": ["중도해지"], "steps": ["terms", "confirm"], "any": true}}},
+      {"id": "b06", "text": "상품명이 안내·확인 화면에 표기된다", "method": "rule", "target": "screen", "severity": "major",
+       "rule": {"fn": "text_present", "args": {"texts": "$spec.productName", "steps": ["intro", "confirm"]}}},
+      {"id": "b07", "text": "기본금리가 안내 화면에 표기된다", "method": "rule", "target": "screen", "severity": "major",
+       "rule": {"fn": "text_present", "args": {"texts": "$spec.baseRate", "steps": ["intro"]}}},
+      {"id": "b08", "text": "완료 화면에 다음 행동(계좌 조회·상담) CTA 가 있다", "method": "rule", "target": "screen", "severity": "minor",
+       "rule": {"fn": "text_present", "args": {"texts": ["조회", "상담"], "steps": ["complete"], "any": true}}},
+      {"id": "b09", "text": "모든 이미지에 alt, 모든 입력 요소에 라벨이 연결된다 (KWCAG)", "method": "rule", "target": "screen", "severity": "major",
+       "rule": {"fn": "a11y_labels", "args": {}}},
+      {"id": "b10", "text": "각 화면에 lang 속성과 h1 이 있다 (KWCAG 구조)", "method": "rule", "target": "screen", "severity": "minor",
+       "rule": {"fn": "a11y_structure", "args": {}}},
+      {"id": "b11", "text": "스텝 순서가 안내→자격→동의→입력→우대→확인→완료의 UX 흐름을 따르고, 분기 스텝은 조건이 화면에 드러난다", "method": "llm", "target": "flow", "severity": "major"},
+      {"id": "b12", "text": "문구가 UX 라이팅 가이드(존댓말·금융 용어 일관·과장 없는 표현)를 따른다", "method": "llm", "target": "screen", "severity": "minor"}
+    ]
+  },
+  {
+    "id": "cl-sports-partner",
+    "title": "스포츠 제휴 상품 추가 체크리스트",
+    "appliesTo": {"partnerType": "sports"},
+    "items": [
+      {"id": "sp01", "text": "제휴사 명칭이 상품 안내에 표기된다", "method": "rule", "target": "screen", "severity": "major",
+       "rule": {"fn": "text_present", "args": {"texts": "$spec.partnerNames", "steps": ["intro", "preferential"], "any": true}}},
+      {"id": "sp02", "text": "이벤트·우대 적용 기간이 안내 또는 우대조건 화면에 표기된다", "method": "rule", "target": "screen", "severity": "major",
+       "rule": {"fn": "text_present", "args": {"texts": ["기간"], "steps": ["intro", "preferential"], "any": true}}},
+      {"id": "sp03", "text": "제휴 종료 시 처리 안내가 있다", "method": "rule", "target": "screen", "severity": "major",
+       "rule": {"fn": "text_present", "args": {"texts": ["제휴 종료"], "steps": ["terms", "preferential", "confirm"], "any": true}}},
+      {"id": "sp04", "text": "금융광고 준법 심의 문구(심의필) 자리가 안내 화면에 있다", "method": "rule", "target": "screen", "severity": "minor",
+       "rule": {"fn": "text_present", "args": {"texts": ["심의필"], "steps": ["intro"]}}},
+      {"id": "sp05", "text": "제휴사 로고·상표를 왜곡·변색 없이 규정된 자리(헤더 우측 또는 조건 카드)에만 쓴다", "method": "llm", "target": "screen", "severity": "major"},
+      {"id": "sp06", "text": "스포츠 팬 대상 톤이 금융 상품 고지 의무(금리·해지·보호 문구)를 가리지 않는다", "method": "llm", "target": "flow", "severity": "major"}
+    ]
+  }
+]
