@@ -22,3 +22,6 @@ platform/infra/plane-outputs.json
 platform/gates/node_modules/
 platform/**/.pytest_cache/
 platform/web/tsconfig.tsbuildinfo
+
+# Claude Code worktrees (local isolation)
+.claude/worktrees/
