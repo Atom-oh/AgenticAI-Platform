@@ -81,6 +81,8 @@ def test_max_rounds_picks_best_round():
     out = loop.run(_job(maxRounds=3, passScore=100), loop.ListEmitter(), spec=SPEC, generate=gen, review_generate=reviewer("fail"), publish=publish)
     assert out["stopReason"] == "max_rounds" and out["rounds"] == 3 and not out["passed"]
     assert out["bestRound"] == 2 and out["url"].endswith("j1-r2.html") and out["html"] == GOOD_HTML
+    assert all("html" not in h and "items" not in h for h in out["history"])
+    assert out["items"] and any(i["verdict"] == "pass" for i in out["items"])
 
 
 def test_time_cap_stops_before_next_round():
@@ -90,7 +92,17 @@ def test_time_cap_stops_before_next_round():
         t[0] += 500.0
         return t[0]
     out = loop.run(_job(maxRounds=10), loop.ListEmitter(), spec=SPEC, generate=gen_seq(BAD_HTML, BAD_HTML, BAD_HTML), review_generate=reviewer("fail"), publish=publish, clock=clock, time_cap_s=780)
-    assert out["stopReason"] == "time_cap" and out["rounds"] < 10
+    assert out["stopReason"] == "time_cap" and out["rounds"] < 10 and out["rounds"] == 1
+
+
+def test_time_cap_already_exceeded_still_completes_one_round():
+    calls = [0]
+
+    def clock():
+        calls[0] += 1
+        return 0.0 if calls[0] == 1 else 100000.0
+    out = loop.run(_job(maxRounds=10), loop.ListEmitter(), spec=SPEC, generate=gen_seq(BAD_HTML, BAD_HTML, BAD_HTML), review_generate=reviewer("fail"), publish=publish, clock=clock, time_cap_s=780)
+    assert out["stopReason"] == "time_cap" and out["rounds"] == 1
 
 
 def test_reviewer_garbage_is_undetermined_not_pass():
@@ -116,7 +128,40 @@ def test_refine_mode_single_round_with_stability_item():
     assert job["maxRounds"] == 1 and out["rounds"] == 1
     assert "제목 크게" in gen.calls[0] and "body > section:nth-of-type(2) > h2" in gen.calls[0]
     rv = next(s for s in em.stages if s["step"] == "review")
-    assert any(i["id"] == "STABLE" and i["verdict"] == "pass" for i in rv["items"])
+    stable = next(i for i in rv["items"] if i["id"] == "STABLE")
+    assert stable["verdict"] == "pass" and stable["weight"] == 1
+
+
+def test_generate_regenerate_round_stable_is_informational():
+    gen = gen_seq(BAD_HTML, GOOD_HTML)
+    em = loop.ListEmitter()
+    out = loop.run(_job(maxRounds=3, passScore=100), em, spec=SPEC, generate=gen, review_generate=reviewer("pass"), publish=publish)
+    reviews = [s for s in em.stages if s["step"] == "review"]
+    round2 = reviews[1]
+    stable = next(i for i in round2["items"] if i["id"] == "STABLE")
+    assert stable["weight"] == 0
+    assert round2["passed"] and round2["score"] == 100
+    assert out["passed"] and out["score"] == 100
+
+
+def test_best_round_prefers_published_html_on_tie():
+    gen = gen_seq(BAD_HTML)
+
+    def boom(system, user, max_tokens):
+        raise RuntimeError("gate refused")
+
+    calls = [0]
+
+    def gen_then_boom(system, user, max_tokens):
+        calls[0] += 1
+        if calls[0] == 1:
+            return gen(system, user, max_tokens)
+        raise RuntimeError("gate refused")
+
+    out = loop.run(_job(maxRounds=3), loop.ListEmitter(), spec=SPEC, generate=gen_then_boom, review_generate=reviewer("fail"), publish=publish)
+    assert out["stopReason"] == "error" and out["bestRound"] == 1
+    assert out["url"].endswith("j1-r1.html")
+    assert out["score"] > 0
 
 
 def test_generate_exception_becomes_error_stop():

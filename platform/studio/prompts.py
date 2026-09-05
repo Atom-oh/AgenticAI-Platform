@@ -90,10 +90,16 @@ def build_user_prompt(brief: str, spec: dict, *, failures: list | None = None, p
     # prev_html is spliced in whole (no truncation): the regenerate/refine contract requires the
     # model to see and return the full previous document, or partial edits would corrupt it.
     if refine:
-        return ("아래 원본 HTML 전체가 주어진다. 사용자가 클릭으로 선택한 요소와 수정 지시에 따라 그 부분만 수정하고, "
+        head = ("아래 원본 HTML 전체가 주어진다. 사용자가 클릭으로 선택한 요소와 수정 지시에 따라 그 부분만 수정하고, "
                 "나머지 마크업·스타일·텍스트·순서는 그대로 보존하라. 완성된 전체 HTML을 다시 출력하라.\n"
                 f"선택 요소 selector: {refine.get('selector', '(전체)')}\n선택 요소 HTML:\n{(refine.get('elementHtml') or '')[:4000]}\n"
-                f"수정 지시: {refine.get('instruction', '')}\n\n원본 HTML:\n```html\n{prev_html}\n```")
+                f"수정 지시: {refine.get('instruction', '')}")
+        if failures:
+            fail_block = ["", "이전 라운드 결과가 검수에서 아래 항목에 실패했다. 수정 지시와 함께 이 항목들도 반영하되, "
+                              "그 외 마크업·순서·텍스트는 그대로 유지하라.", "[실패 항목]"]
+            fail_block += [f"- {f['id']}: {f['text']} — 근거: {f.get('evidence', '')} — 수정: {f.get('fix', '')}" for f in failures]
+            head = head + "\n" + "\n".join(fail_block)
+        return head + f"\n\n원본 HTML:\n```html\n{prev_html}\n```"
     out = [f"브리프: {brief.strip() or spec.get('productName', '')} 화면 시안"]
     if failures:
         out += ["", "이전 라운드 시안이 검수에서 아래 항목에 실패했다. 각 항목의 수정 지시를 모두 반영해 전체 HTML을 다시 출력하라.",

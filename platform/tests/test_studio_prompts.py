@@ -49,6 +49,19 @@ def test_user_prompt_regenerate_and_refine():
     assert "body > section:nth-of-type(2) > h2" in r and "제목을 더 크게" in r and "나머지" in r
 
 
+def test_refine_prompt_round2_includes_failures():
+    r = prompts.build_user_prompt(
+        "", SPEC,
+        failures=[{"id": "LLM-1", "text": "기본금리 표기", "evidence": "없음", "fix": "상단에 연 3.0% 표기"}],
+        prev_html="<html>base</html>",
+        refine={"selector": "body > section:nth-of-type(2) > h2", "instruction": "제목을 더 크게", "elementHtml": "<h2>기간</h2>"},
+    )
+    assert "body > section:nth-of-type(2) > h2" in r
+    assert "LLM-1" in r and "상단에 연 3.0% 표기" in r
+    assert "<html>base</html>" in r
+    assert r.rstrip().endswith("```")
+
+
 def test_review_prompt_lists_only_llm_items_and_requires_json():
     p = prompts.build_review_prompt(SPEC, [i for i in SPEC["items"] if i["check"] == "llm"], "[프레임 1] 상품안내")
     assert "LLM-1" in p and "T-1" not in p and '"verdict"' in p and "[프레임 1]" in p

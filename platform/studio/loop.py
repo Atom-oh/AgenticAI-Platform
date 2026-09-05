@@ -64,12 +64,12 @@ def _items_with_verdicts(items: list, verdicts: dict) -> list:
     return out
 
 
-def _review_round(spec: dict, items: list, html: str, prev_html: str, review_generate, pass_score: int) -> dict:
+def _review_round(spec: dict, items: list, html: str, prev_html: str, review_generate, pass_score: int, stable_weight: int = 0) -> dict:
     doc = review.parse_html(html)
     verdicts = review.deterministic_checks(items, doc)
     items = list(items)
     if prev_html:
-        st_item, st_v = review.stability_item(review.skeleton_diff(prev_html, html))
+        st_item, st_v = review.stability_item(review.skeleton_diff(prev_html, html), weight=stable_weight)
         items.append(st_item)
         verdicts[st_item["id"]] = st_v
     llm_items = [i for i in items if i.get("check") == "llm"]
@@ -127,7 +127,7 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
         except Exception as e:  # noqa: BLE001 — 게이트 거부 등: 라운드 중단, 사실대로 보고
             stop, error = "error", f"{type(e).__name__}: {str(e)[:200]}"
             history.append({"round": rnd, "score": 0, "passed": False, "url": "", "failures": [{"id": "GENERATE", "text": "생성 실패", "evidence": error, "fix": ""}],
-                            "undetermined": [], "reviewerError": None, "elapsedMs": int((clock() - r_t0) * 1000), "html": ""})
+                            "undetermined": [], "reviewerError": None, "elapsedMs": int((clock() - r_t0) * 1000), "html": "", "items": []})
             break
         usage["inputTokens"] += int(u.get("inputTokens", 0) or 0)
         usage["outputTokens"] += int(u.get("outputTokens", 0) or 0)
@@ -137,7 +137,8 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
                   "items": _items_with_verdicts(items, {}), "failures": [{"id": "OUTPUT", "text": "HTML 문서를 찾지 못함", "evidence": "```html 펜스 없음", "fix": "자기완결 HTML 1개를 ```html 펜스 안에 출력"}],
                   "reviewerError": None, "usage": {}, "deterministic": 0, "llm": 0}
         else:
-            rv = _review_round(spec, items, html, prev_html, review_generate, job["passScore"])
+            rv = _review_round(spec, items, html, prev_html, review_generate, job["passScore"],
+                                stable_weight=1 if job["mode"] == "refine" else 0)
             usage["inputTokens"] += int(rv["usage"].get("inputTokens", 0) or 0)
             usage["outputTokens"] += int(rv["usage"].get("outputTokens", 0) or 0)
         emitter.stage("review", round=rnd, score=rv["score"], passed=rv["passed"], items=rv["items"], requiredFailed=rv["requiredFailed"],
@@ -154,7 +155,7 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
             break
         prev_html = html or prev_html
 
-    best = max(history, key=lambda h: (h["score"], h["round"])) if history else None
+    best = max(history, key=lambda h: (h["score"], bool(h["html"]), h["round"])) if history else None
     out = {"jobId": job["jobId"], "mode": job["mode"], "outputType": job["outputType"], "axis": job["axis"],
            "score": best["score"] if best else 0, "passed": bool(best and best["passed"]), "rounds": rnd,
            "maxRounds": job["maxRounds"], "passScore": job["passScore"], "stopReason": stop,

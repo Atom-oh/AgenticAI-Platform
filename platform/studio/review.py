@@ -220,9 +220,9 @@ def skeleton_diff(prev_html: str, html: str) -> float:
     return round(changed / total, 3)
 
 
-def stability_item(ratio: float, threshold: float = 0.35) -> tuple[dict, dict]:
+def stability_item(ratio: float, threshold: float = 0.35, weight: int = 1) -> tuple[dict, dict]:
     item = {"id": "STABLE", "category": "안정성", "text": "수정 범위 밖의 구조가 이전 라운드와 같다 (위치가 흔들리지 않는다)",
-            "required": False, "weight": 1, "check": "dom", "expect": {"skeletonMax": threshold}, "source": None}
+            "required": False, "weight": weight, "check": "dom", "expect": {"skeletonMax": threshold}, "source": None}
     ok = ratio <= threshold
     return item, {"verdict": "pass" if ok else "fail", "evidence": f"구조 변경 비율 {ratio:.0%}",
                   "fix": "" if ok else "지시된 항목만 고치고 나머지 마크업·순서는 그대로 유지"}
