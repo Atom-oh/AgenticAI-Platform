@@ -484,6 +484,7 @@ export class BankPlatformStack extends cdk.Stack {
       memorySize: 2048,
       timeout: cdk.Duration.minutes(15),
       logRetention: logs.RetentionDays.ONE_WEEK,
+      reservedConcurrentExecutions: 3, // 동시 루프 3개 상한 — 15분 슬롯 점유
       environment: {
         STUDIO_TABLE: studioTable.tableName,
         WEB_BUCKET: webBucket.bucketName,
@@ -500,6 +501,9 @@ export class BankPlatformStack extends cdk.Stack {
       },
       description: 'bank-platform design studio agentic loop worker (spec-checklist review, async, pushes to WebSocket)',
     });
+    // 워커가 실패를 자체 기록한다 — Lambda 기본 재시도(최대 2회)를 켜두면 15분짜리 유료 루프가
+    // 그대로 재실행되며 WS 프레임·스토어 기록이 중복된다.
+    studioLoopFn.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: cdk.Duration.minutes(5) });
     studioTable.grantReadWriteData(studioLoopFn);
     traceTable.grantReadWriteData(studioLoopFn);
     webBucket.grantReadWrite(studioLoopFn, 'studio/*');
