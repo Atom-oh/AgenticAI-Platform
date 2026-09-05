@@ -111,6 +111,13 @@ export class BankPlatformStack extends cdk.Stack {
       sortKey: { name: 'updatedAt', type: dynamodb.AttributeType.NUMBER },
     });
 
+    const studioTable = new dynamodb.Table(this, 'StudioTable', {
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ---------- Bedrock Guardrails — 코드로 정의 (§12.4 목 금지, 하드코딩 ID 제거) ----------
     const guardrail = new bedrock.CfnGuardrail(this, 'Guardrail', {
       name: `${id}-guardrail`,
@@ -468,6 +475,45 @@ export class BankPlatformStack extends cdk.Stack {
       throttle: { rateLimit: 20, burstLimit: 40 },
     });
     wsStage.grantManagementApiAccess(fn);
+
+    // ---------- 디자인 스튜디오 워커 — 에이전틱 루프(생성→명세 검수→재생성)를 15분 안에 돌리고 같은 WS 커넥션에 push ----------
+    const studioLoopFn = new lambda.Function(this, 'StudioLoopFn', {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'studio.worker_handler.handler',
+      code: apiCode,
+      memorySize: 2048,
+      timeout: cdk.Duration.minutes(15),
+      logRetention: logs.RetentionDays.ONE_WEEK,
+      environment: {
+        STUDIO_TABLE: studioTable.tableName,
+        WEB_BUCKET: webBucket.bucketName,
+        WEB_URL: `https://${props.domainName ?? 'agent.atomai.click'}`,
+        TRACE_TABLE: traceTable.tableName,
+        GRAPH_BACKEND: props.graphBackend,
+        NEPTUNE_ENDPOINT: neptuneEndpoint,
+        BRIDGE_FN: bridgeFnName,
+        ALLOW_LOCAL_PLANE: props.planeDeployed ? '0' : '1',
+        GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+        GUARDRAIL_ID: guardrail.attrGuardrailId,
+        GUARDRAIL_VERSION: guardrailVersion.attrVersion,
+        LLM_ROUTE: 'claude',
+      },
+      description: 'bank-platform design studio agentic loop worker (spec-checklist review, async, pushes to WebSocket)',
+    });
+    studioTable.grantReadWriteData(studioLoopFn);
+    traceTable.grantReadWriteData(studioLoopFn);
+    webBucket.grantReadWrite(studioLoopFn, 'studio/*');
+    studioLoopFn.addToRolePolicy(bedrockInvoke);
+    studioLoopFn.addToRolePolicy(guardrailApply);
+    wsStage.grantManagementApiAccess(studioLoopFn);
+    if (props.planeDeployed) {
+      studioLoopFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [bridgeFnArn] }));
+    }
+    fn.addEnvironment('STUDIO_LOOP_FN', studioLoopFn.functionName);
+    fn.addEnvironment('STUDIO_TABLE', studioTable.tableName);
+    studioTable.grantReadWriteData(fn);
+    studioLoopFn.grantInvoke(fn);
+    new cdk.CfnOutput(this, 'StudioLoopFnName', { value: studioLoopFn.functionName });
 
     // ---------- 관측성: 알람 + 대시보드 (§10) ----------
     const alarm = (name: string, metric: cloudwatch.Metric, threshold: number, desc: string) =>

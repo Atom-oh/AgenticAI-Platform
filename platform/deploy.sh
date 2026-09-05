@@ -32,7 +32,7 @@ echo "== 1) api-dist 조립 =="
 rm -rf api-dist && mkdir -p api-dist/seed/out
 cp api/*.py api-dist/
 cp -r api/common api/handlers engine graph onprem semantic api-dist/
-for m in registry screengen report agentcore; do [ -d "$m" ] && cp -r "$m" api-dist/; done
+for m in registry screengen report agentcore studio; do [ -d "$m" ] && cp -r "$m" api-dist/; done
 [ -d skills ] && cp -r skills api-dist/
 # Harness·Registry API는 최신 boto3가 필요하다 (Lambda 기본 boto3에는 없음) — 배포 패키지에 동봉
 pip3 install -q --upgrade --target api-dist boto3 botocore >> "$LOG" 2>&1 || { echo "boto3 vendoring failed"; tail -5 "$LOG"; exit 1; }
