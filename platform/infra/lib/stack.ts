@@ -16,6 +16,7 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
@@ -485,8 +486,13 @@ export class BankPlatformStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       logRetention: logs.RetentionDays.ONE_WEEK,
       reservedConcurrentExecutions: 3, // 동시 루프 3개 상한 — 15분 슬롯 점유
+      // 비동기 invoke 가 끝내 실패한 잡(핸들러 진입 전 오류·타임아웃)을 잃지 않는다.
+      deadLetterQueue: new sqs.Queue(this, 'StudioLoopDlq', { retentionPeriod: cdk.Duration.days(7) }),
+      deadLetterQueueEnabled: true,
       environment: {
         STUDIO_TABLE: studioTable.tableName,
+        CACHE_TABLE: cacheTable.tableName,
+        DAILY_TOKEN_CAP: '2000000',
         WEB_BUCKET: webBucket.bucketName,
         WEB_URL: `https://${props.domainName ?? 'agent.atomai.click'}`,
         TRACE_TABLE: traceTable.tableName,
@@ -506,6 +512,7 @@ export class BankPlatformStack extends cdk.Stack {
     studioLoopFn.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: cdk.Duration.minutes(5) });
     studioTable.grantReadWriteData(studioLoopFn);
     traceTable.grantReadWriteData(studioLoopFn);
+    cacheTable.grantReadWriteData(studioLoopFn);
     webBucket.grantReadWrite(studioLoopFn, 'studio/*');
     studioLoopFn.addToRolePolicy(bedrockInvoke);
     studioLoopFn.addToRolePolicy(guardrailApply);
