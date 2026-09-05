@@ -1,0 +1,123 @@
+# platform/api/handlers/studio.py
+"""디자인 스튜디오 액션 — 잡 실행(워커 Lambda 비동기 invoke)·잡/시안 조회·승인·상품/명세 미리보기·자산 프록시.
+
+studio_run 은 요청/응답형 ack(`studio_run`) 1건을 보내고, 이후 이벤트(studio.stage/.token/.done)는 StudioLoopFn 이
+같은 커넥션으로 push 한다 (studio/worker_handler.py). 워커가 미배포면 흉내내지 않고 .done(error) 로 알린다.
+"""
+from __future__ import annotations
+
+import json
+import os
+import uuid
+
+from common import studio_proxy
+from common.ctx import Ctx
+from common.log import log_event
+from studio import loop, spec as specmod
+from studio.store import StudioStore
+
+KIND = "studio"
+_store: StudioStore | None = None
+_graph = None
+
+
+def store() -> StudioStore:
+    global _store
+    if _store is None:
+        _store = StudioStore()
+    return _store
+
+
+def graph():
+    global _graph
+    if _graph is None:
+        from graph.store import get_store
+        _graph = get_store()
+    return _graph
+
+
+def _invoke(fn_name: str, payload: dict) -> None:
+    import boto3  # 지연 import — 테스트 오프라인
+    boto3.client("lambda").invoke(FunctionName=fn_name, InvocationType="Event",
+                                  Payload=json.dumps(payload, ensure_ascii=False).encode())
+
+
+def studio_run(ctx: Ctx, body: dict) -> None:
+    job = loop.clamp_job(body)
+    if not job["productCode"]:
+        ctx.done(KIND, error="productCode 가 필요합니다 — 상품을 선택하세요")
+        return
+    if job["mode"] == "refine" and not job["baseDraftId"]:
+        ctx.done(KIND, error="refine 모드에는 baseDraftId 가 필요합니다")
+        return
+    fn = os.environ.get("STUDIO_LOOP_FN", "")
+    if not fn:
+        ctx.done(KIND, error="미배포: STUDIO_LOOP_FN 미설정 — 워커 Lambda 가 배포되지 않았습니다")
+        return
+    job["jobId"] = uuid.uuid4().hex[:12]
+    store().put_job(job, actor=ctx.email)
+    payload = {"connId": ctx.conn_id, "endpoint": getattr(getattr(ctx.apigw, "meta", None), "endpoint_url", ""),
+               "reqId": ctx.rid, "email": ctx.email, "traceId": ctx.trace_id, "job": job}
+    _invoke(fn, payload)
+    log_event("studio.run", ctx.trace_id, jobId=job["jobId"], productCode=job["productCode"], maxRounds=job["maxRounds"], mode=job["mode"])
+    ctx.post({"type": "studio_run", "jobId": job["jobId"], "maxRounds": job["maxRounds"], "passScore": job["passScore"],
+              "backend": store().backend})
+
+
+def studio_jobs(ctx: Ctx, body: dict) -> None:
+    jid = str(body.get("jobId") or "")
+    if jid:
+        ctx.post({"type": "studio_jobs", "job": store().get_job(jid)})
+    else:
+        ctx.post({"type": "studio_jobs", "jobs": store().list_jobs(int(body.get("limit", 20)))})
+
+
+def studio_drafts(ctx: Ctx, body: dict) -> None:
+    ctx.post({"type": "studio_drafts", "drafts": store().list_drafts(int(body.get("limit", 60))), "backend": store().backend})
+
+
+def studio_feedback(ctx: Ctx, body: dict) -> None:
+    decision = body.get("decision")
+    status = {"approve": "승인됨", "reject": "반려"}.get(decision)
+    if not status:
+        ctx.post({"type": "studio_feedback", "error": f"decision 은 approve|reject 여야 합니다: {decision!r}"})
+        return
+    d = store().set_draft_status(str(body.get("draftId", "")), status, str(body.get("comment", "")), actor=ctx.email)
+    if not d:
+        ctx.post({"type": "studio_feedback", "error": "시안을 찾을 수 없습니다"})
+        return
+    log_event("studio.feedback", ctx.trace_id, draftId=d["draftId"], status=status, actor=ctx.email)
+    ctx.post({"type": "studio_feedback", "draft": d})
+
+
+def studio_products(ctx: Ctx, body: dict) -> None:
+    g = graph()
+    ctx.post({"type": "studio_products", "products": specmod.list_products(g), "graphBackend": getattr(g, "name", "unknown"),
+              "model": loop.MODEL})
+
+
+def studio_spec(ctx: Ctx, body: dict) -> None:
+    try:
+        s = specmod.build_spec(graph(), str(body.get("productCode", "")), str(body.get("outputType", "design")))
+        ctx.post({"type": "studio_spec", "spec": s})
+    except specmod.SpecError as e:
+        ctx.post({"type": "studio_spec", "error": str(e)})
+
+
+def studio_asset(ctx: Ctx, body: dict) -> None:
+    import urllib.parse
+    aid = urllib.parse.quote(str(body.get("assetId", "")))
+    content = studio_proxy.studio_get(f"/api/assets/content?asset_id={aid}")
+    history = studio_proxy.studio_get(f"/api/assets/history?asset_id={aid}")
+    ctx.post({"type": "studio_asset", "content": content, "history": history.get("history", history)})
+
+
+def studio_register(ctx: Ctx, body: dict) -> None:
+    r = studio_proxy.studio("POST", "/api/assets", str(body.get("studioToken", "")),
+                            {"name": str(body.get("name", ""))[:80], "type": str(body.get("assetType", "")),
+                             "content": str(body.get("content", ""))[:20000], "scope": body.get("scope", "shared")})
+    ctx.post({"type": "studio_register", **r})
+
+
+ROUTES = {"studio_run": studio_run, "studio_jobs": studio_jobs, "studio_drafts": studio_drafts, "studio_feedback": studio_feedback,
+          "studio_products": studio_products, "studio_spec": studio_spec, "studio_asset": studio_asset, "studio_register": studio_register}

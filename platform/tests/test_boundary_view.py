@@ -50,7 +50,7 @@ def offline(monkeypatch):
     monkeypatch.setattr(core.tracing, "list_traces", lambda limit=60: list(ITEMS)[:limit])
     monkeypatch.setattr(core, "lazy_store", lambda: _Store())
     monkeypatch.setattr(core, "_control_room", lambda *a, **k: {"agents": [{"status": "APPROVED"}]})
-    monkeypatch.setattr(core, "_studio", lambda *a, **k: {"assets": []})
+    monkeypatch.setattr(core.studio_proxy, "studio_get", lambda *a, **k: {"assets": []})
     monkeypatch.setattr(core, "_agentcore_records", lambda: [])
     monkeypatch.setattr(core, "_registry_counts", lambda: {"total": 5, "approved": 3, "byType": {}})
     monkeypatch.delenv("GEN_MODEL", raising=False)

@@ -2,20 +2,17 @@
 from __future__ import annotations
 
 import collections
-import hashlib
 import json
 import os
-import urllib.parse
 import urllib.request
 
 import boto3
 
-from common import plane, tracing
+from common import plane, studio_proxy, tracing
 from common.ctx import Ctx
 from common.log import log_event
 
 CONTROL_ROOM = os.environ.get("CONTROL_ROOM_URL", "https://d1twhttjtzqewp.cloudfront.net")
-STUDIO = os.environ.get("STUDIO_URL", "https://d4zwmnh2s47e9.cloudfront.net")
 AGENTCORE_REGISTRY_ID = os.environ.get("AGENTCORE_REGISTRY_ID", "b2hOSZL4eOhDXAyk")
 GRAPH_BACKEND = os.environ.get("GRAPH_BACKEND", "local")
 LLM_ROUTE = os.environ.get("LLM_ROUTE", "claude")  # SPEC §4: claude(Tier 0/1) | gemma(Tier 2 데모 대체)
@@ -53,25 +50,6 @@ def _control_room(method: str, path: str, id_token: str, body: dict | None = Non
         return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
     except urllib.error.HTTPError as e:
         return {"error": f"{e.code}: {e.read().decode()[:200]}"}
-    except Exception as e:
-        return {"error": str(e)[:200]}
-
-
-def _studio(method: str, path: str, token: str = "", body: dict | None = None, timeout: int = 60) -> dict:
-    data = json.dumps(body, ensure_ascii=False).encode() if body else None
-    headers = {"Content-Type": "application/json"}
-    if data is not None:  # CloudFront OAC는 본문 있는 요청에 payload hash를 요구한다
-        headers["x-amz-content-sha256"] = hashlib.sha256(data).hexdigest()
-    if token:
-        headers["x-hana-auth"] = token
-    req = urllib.request.Request(STUDIO + path, data=data, headers=headers, method=method)
-    try:
-        return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
-    except urllib.error.HTTPError as e:
-        try:
-            return {"error": json.loads(e.read().decode()).get("error", str(e.code))}
-        except Exception:
-            return {"error": f"HTTP {e.code}"}
     except Exception as e:
         return {"error": str(e)[:200]}
 
@@ -158,7 +136,7 @@ def _block_counts(items: list) -> dict:
 # ---------- 액션 ----------
 def hub(ctx: Ctx, body: dict) -> None:
     agents = _control_room("GET", "/api/agents", body.get("idToken", ""), timeout=8).get("agents", [])
-    assets = _studio("GET", "/api/assets", timeout=8).get("assets", [])
+    assets = studio_proxy.studio_get("/api/assets").get("assets", [])
     surfaces = _agentcore_records()
     st = lazy_store().stats()
     reg = _registry_counts()
@@ -188,7 +166,7 @@ def chat(ctx: Ctx, body: dict) -> None:
 
 
 def assets(ctx: Ctx, body: dict) -> None:
-    r = _studio("GET", "/api/assets")
+    r = studio_proxy.studio_get("/api/assets")
     ctx.post({"type": "assets", "error": r.get("error"), "assets": [
         {k: a.get(k) for k in ("asset_id", "name", "type", "version", "actor", "updated_at", "scope")}
         for a in r.get("assets", [])][:60]})
@@ -201,49 +179,6 @@ def surfaces(ctx: Ctx, body: dict) -> None:
         {"name": r["name"], "type": r.get("descriptorType"), "status": r.get("status"),
          "description": (r.get("description") or "")[:140], "updatedAt": str(r.get("updatedAt", ""))[:19]}
         for r in recs][:60]})
-
-
-def studio_drafts(ctx: Ctx, body: dict) -> None:
-    r = _studio("GET", "/drafts.json")
-    ctx.post({"type": "studio_drafts", "drafts": list(reversed(r.get("drafts", [])))[:30], "error": r.get("error")})
-
-
-def studio_asset(ctx: Ctx, body: dict) -> None:
-    aid = urllib.parse.quote(body.get("assetId", ""))
-    content = _studio("GET", f"/api/assets/content?asset_id={aid}")
-    history = _studio("GET", f"/api/assets/history?asset_id={aid}")
-    ctx.post({"type": "studio_asset", "content": content, "history": history.get("history", history)})
-
-
-def studio_models(ctx: Ctx, body: dict) -> None:
-    r = _studio("GET", "/api/models")
-    ctx.post({"type": "studio_models", "models": r.get("models", [])[:30], "error": r.get("error")})
-
-
-def studio_jobs(ctx: Ctx, body: dict) -> None:
-    jid = body.get("jobId")
-    r = _studio("GET", f"/api/jobs?job_id={jid}" if jid else "/api/jobs")
-    ctx.post({"type": "studio_jobs", **{k: r.get(k) for k in ("job", "jobs", "error")}})
-
-
-def studio_generate(ctx: Ctx, body: dict) -> None:
-    r = _studio("POST", "/api/generate", body.get("studioToken", ""),
-                {"brief": body.get("brief", "")[:1000], "model_id": body.get("modelId", ""),
-                 "asset_ids": body.get("assetIds", []), "output_type": body.get("outputType", "design")})
-    ctx.post({"type": "studio_generate", **r})
-
-
-def studio_feedback(ctx: Ctx, body: dict) -> None:
-    r = _studio("POST", "/api/feedback", body.get("studioToken", ""),
-                {"draft_id": body.get("draftId"), "action": body.get("decision"), "comment": body.get("comment", "")})
-    ctx.post({"type": "studio_feedback", **r})
-
-
-def studio_register(ctx: Ctx, body: dict) -> None:
-    r = _studio("POST", "/api/assets", body.get("studioToken", ""),
-                {"name": body.get("name", ""), "type": body.get("assetType", ""),
-                 "content": body.get("content", ""), "scope": body.get("scope", "shared")})
-    ctx.post({"type": "studio_register", **r})
 
 
 def traces(ctx: Ctx, body: dict) -> None:
@@ -292,7 +227,5 @@ def reset(ctx: Ctx, body: dict) -> None:
 
 ROUTES = {
     "hub": hub, "agents": agents, "chat": chat, "assets": assets, "surfaces": surfaces,
-    "studio_drafts": studio_drafts, "studio_asset": studio_asset, "studio_models": studio_models,
-    "studio_jobs": studio_jobs, "studio_generate": studio_generate, "studio_feedback": studio_feedback,
-    "studio_register": studio_register, "traces": traces, "explore": explore, "reset": reset,
+    "traces": traces, "explore": explore, "reset": reset,
 }
