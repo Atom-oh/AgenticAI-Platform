@@ -487,6 +487,90 @@ def main() -> None:
         for s in dict.fromkeys(picks):
             edge(t, "USED_IN", s)
 
+    # ============================================================
+    # 수신 히어로 상품 2건 — 디자인 스튜디오 DesignSpec 시연용 (별도 난수열 SEED+2).
+    # 위 여신·UX 자산 노드/엣지는 바이트 단위로 그대로 유지된다.
+    # PRD-DEP-001 아톰 축구사랑 적금: 우대 조건(축구클럽 회원 인증) → 가입 흐름에 '축구클럽 인증' 스텝이 하나 더 있다.
+    # PRD-DEP-002 아톰 기본 적금: 같은 흐름에서 조건 스텝만 없다 (대조군).
+    # ============================================================
+    drng = random.Random(SEED + 2)
+
+    def deposit_product(code: str, name: str, steps: list[tuple[str, str]], conds: list[tuple[str, str, str, str, str]],
+                        scr_prefix: str, sm_prefix: str, proc_id: str, proc_name: str) -> list[str]:
+        node(code, "Product", productCode=code, name=name, category="수신",
+             launchDate="2026-03-01", status="ON_SALE")
+        edge(code, "OWNED_BY", "D-DEP")
+        for i, (ctype, cname, op, val, unit) in enumerate(conds, start=1):
+            cid = f"CND-DEP-{code[-3:]}-{i:02d}"
+            node(cid, "Condition", conditionId=cid, type=ctype, name=cname, operator=op, value=val,
+                 unit=unit, priority=1 if ctype == "우대" else drng.randint(2, 4))
+            edge(code, "HAS_CONDITION", cid)
+            edge(cid, "DERIVED_FROM", "REG-CS-003")
+        scr_ids = []
+        for i, (sname, entry) in enumerate(steps, start=1):
+            sid = f"{scr_prefix}{i:02d}"
+            node(sid, "Screen", screenId=sid, name=sname, channel="MBS(모바일)",
+                 route=f"/deposit/{code[-3:]}/{i}", status="LIVE")
+            edge(sid, "OWNED_BY", "D-UXD")
+            edge(code, "SOLD_VIA", sid)
+            for c in drng.sample([c for c in components if idx[c]["props"]["approvalStatus"] == "APPROVED"], k=3):
+                edge(sid, "USES", c)
+            scr_ids.append(sid)
+        for i, sid in enumerate(scr_ids):
+            prev_ids = [scr_ids[i - 1]] if i > 0 else []
+            next_ids = [scr_ids[i + 1]] if i + 1 < len(scr_ids) else []
+            smid = f"{sm_prefix}{i + 1:02d}"
+            node(smid, "ScreenMeta", screenNo=sid,
+                 purpose=f"{steps[i][0]} — 적금 가입 흐름 {i + 1}단계 (MBS(모바일))",
+                 entryCondition=steps[i][1], prevScreens=json.dumps(prev_ids), nextScreens=json.dumps(next_ids))
+            edge(smid, "DESCRIBES", sid)
+        node(proc_id, "Procedure", procedureId=proc_id, name=proc_name,
+             steps=json.dumps([s for s, _ in steps], ensure_ascii=False), status="APPROVED")
+        for sid in scr_ids:
+            edge(proc_id, "INCLUDES", sid)
+        return scr_ids
+
+    football_steps = [("상품안내", "로그인 완료"), ("기간 선택", "상품 선택 완료"), ("금액 입력", "기간 선택 완료"),
+                      ("축구클럽 인증", "금액 입력 완료"), ("납입 방식", "우대 조건 확인 완료"),
+                      ("약관 동의", "납입 방식 선택 완료"), ("가입 완료", "약관 동의 완료")]
+    basic_steps = [s for s in football_steps if s[0] != "축구클럽 인증"]
+    basic_steps[3] = ("납입 방식", "금액 입력 완료")
+    football_conds = [("금리", "기본금리 연 3.0%", "=", "3.0", "percent"),
+                      ("우대", "축구클럽 회원 인증 시 우대금리 +1.0%p", "=", "1.0", "percent"),
+                      ("우대", "자동이체 등록 시 우대금리 +0.2%p", "=", "0.2", "percent"),
+                      ("한도", "월 납입금액 1만원 이상 50만원 이하", "<=", "50", "krw_10k"),
+                      ("자격", "가입기간 6개월 또는 12개월", "IN", "6,12", "month")]
+    basic_conds = [("금리", "기본금리 연 2.8%", "=", "2.8", "percent"),
+                   ("한도", "월 납입금액 1만원 이상 100만원 이하", "<=", "100", "krw_10k"),
+                   ("자격", "가입기간 12개월", "=", "12", "month")]
+    fb = deposit_product("PRD-DEP-001", "아톰 축구사랑 적금", football_steps, football_conds,
+                         "SCR-DEP-0", "SM-DEP-0", "PRC-030", "축구사랑 적금 가입 절차")
+    bs = deposit_product("PRD-DEP-002", "아톰 기본 적금", basic_steps, basic_conds,
+                         "SCR-DEP-1", "SM-DEP-1", "PRC-031", "기본 적금 가입 절차")
+
+    # PolicyRule — 두 도메인 연결점 유지: DERIVED_FROM Regulation, CONSTRAINS Screen
+    dep_rules = [
+        ("POL-DEP-001", "우대 조건·미충족 시 불이익 설명 확인", "동의", "HIGH", "REG-CS-003", [fb[3], fb[5], bs[4]]),
+        ("POL-DEP-002", "기본금리·우대금리 구분 표기", "표기", "MEDIUM", "REG-CS-003", [fb[0], fb[6], bs[0], bs[5]]),
+        ("POL-DEP-003", "월 납입금액 입력 형식 검증(숫자·범위)", "입력검증", "MEDIUM", "REG-GN-012", [fb[2], bs[2]]),
+    ]
+    for rid, title, rtype, sev, reg_id, targets in dep_rules:
+        node(rid, "PolicyRule", ruleId=rid, title=title, ruleType=rtype, severity=sev, status="ACTIVE")
+        edge(rid, "DERIVED_FROM", reg_id)
+        for s in targets:
+            edge(rid, "CONSTRAINS", s)
+
+    # UXTerm — 적금 표준 용어
+    dep_terms = [("적금 우대금리", [fb[0], fb[3], fb[6], bs[0]]), ("월 납입금액", [fb[2], bs[2]]),
+                 ("가입기간", [fb[1], bs[1]]), ("자동이체", [fb[4], bs[3]]), ("만기 예상 이자", [fb[6], bs[5]])]
+    for i, (term, scrs) in enumerate(dep_terms, start=1):
+        tid = f"TRM-DEP-{i:02d}"
+        node(tid, "UXTerm", termId=tid, term=term,
+             definition=f"적금 가입 화면에서 '{term}'을(를) 가리키는 표준 표기. 안내 문구·버튼 명칭은 '{term}'으로 통일한다.",
+             category="수신")
+        for s in scrs:
+            edge(tid, "USED_IN", s)
+
     # ---------------- 출력 ----------------
     OUT.mkdir(parents=True, exist_ok=True)
     with open(OUT / "nodes.jsonl", "w", encoding="utf-8") as f:

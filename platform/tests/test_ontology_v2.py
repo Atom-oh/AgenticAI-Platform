@@ -20,10 +20,11 @@ SEED_DIR = ROOT / "seed" / "out"
 HERO_REGS = ["REG-LN-001", "REG-LN-014", "REG-CS-003"]
 HERO_COMPONENTS = ["CMP-Button-v2", "CMP-Button-v3", "CMP-Input-v3"]
 
+# -DEP- 변형: 수신 히어로 상품 2건(축구사랑 적금·기본 적금, seed/generate.py)이 쓰는 접미 id 스킴을 허용.
 ID_FORMAT = {
     "Pattern": (r"^PAT-\d{3}$", "patternId"), "Procedure": (r"^PRC-\d{3}$", "procedureId"),
-    "PolicyRule": (r"^POL-\d{3}$", "ruleId"), "UXTerm": (r"^TRM-\d{4}$", "termId"),
-    "ScreenMeta": (r"^SM-\d{3}$", None), "Screen": (r"^SCR-\d{3}$", "screenId"),
+    "PolicyRule": (r"^POL-(\d{3}|DEP-\d{3})$", "ruleId"), "UXTerm": (r"^TRM-(\d{4}|DEP-\d{2})$", "termId"),
+    "ScreenMeta": (r"^SM-(\d{3}|DEP-\d{3})$", None), "Screen": (r"^SCR-(\d{3}|DEP-\d{3})$", "screenId"),
 }
 REQUIRED_PROPS = {
     "Pattern": {"patternId", "name", "category", "status"},

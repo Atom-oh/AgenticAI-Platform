@@ -17,11 +17,13 @@ HERO_REGS = ["REG-LN-001", "REG-LN-014", "REG-CS-003"]
 HERO_COMPONENTS = ["CMP-Button-v2", "CMP-Button-v3", "CMP-Input-v3"]
 
 # §5-1 여신 도메인 + §5-2 UX 자산 도메인 목표 건수 (정확히 일치해야 한다 — Registry 시드가 Component 80건을 읽는다)
+# 수신 히어로 상품 2건(축구사랑 적금·기본 적금, seed/generate.py) 추가분만큼 상향:
+# Product +2, Condition +8, Screen +13, ScreenMeta +13, Procedure +2, PolicyRule +3, UXTerm +5.
 LABEL_TARGETS = {
-    "Regulation": 60, "RegulationAmendment": 25, "Product": 120, "Condition": 800,
+    "Regulation": 60, "RegulationAmendment": 25, "Product": 122, "Condition": 808,
     "Department": 20, "Document": 200, "Template": 12, "Customer": 500, "Account": 1200, "Merchant": 150,
-    "Screen": 150, "Component": 80, "Pattern": 40, "Procedure": 30, "PolicyRule": 60, "UXTerm": 200,
-    "ScreenMeta": 150,
+    "Screen": 163, "Component": 80, "Pattern": 40, "Procedure": 32, "PolicyRule": 63, "UXTerm": 205,
+    "ScreenMeta": 163,
 }
 
 
@@ -36,7 +38,7 @@ def test_volume_targets():
     for label, n in LABEL_TARGETS.items():
         assert by.get(label) == n, f"{label}: {by.get(label)} != {n}"
     assert set(by) == set(LABEL_TARGETS), f"예상 밖 라벨: {set(by) ^ set(LABEL_TARGETS)}"
-    assert s["nodes"] == sum(LABEL_TARGETS.values()) == 3797
+    assert s["nodes"] == sum(LABEL_TARGETS.values()) == 3843
     assert 10500 <= s["edges"] <= 11500, f"edges={s['edges']}"
 
 
