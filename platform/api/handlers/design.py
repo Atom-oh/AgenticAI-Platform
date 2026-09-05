@@ -107,6 +107,7 @@ def _spec_summary(s: dict) -> dict:
 
 def catalog(ctx: Ctx, body: dict) -> None:
     a = load_assets()
+    use_runtime = bool(RUNTIME_ARN) and os.environ.get("DESIGN_USE_RUNTIME", "").strip() == "1"
     ctx.post({"type": "design_catalog", "source": a["source"],
               "badge": "정본: Registry APPROVED 자산" if a["source"] == "registry" else "데모 대체: 시드 파일 (Registry 미시드)",
               "productSpecs": [_spec_summary(s) for s in a["productSpecs"]],
@@ -115,8 +116,8 @@ def catalog(ctx: Ctx, body: dict) -> None:
                             "templates": [t.get("id") for t in m.get("templates") or []]} for m in a["smModels"]],
               "checklists": [{"id": c.get("id"), "title": c.get("title"), "appliesTo": c.get("appliesTo") or {},
                               "items": len(c.get("items") or []), "record": c.get("_record")} for c in a["checklists"]],
-              "runtime": "agentcore-runtime/strands" if RUNTIME_ARN else "lambda-local",
-              "runtimeBadge": BADGE_RUNTIME if RUNTIME_ARN else BADGE_LOCAL, "testBadge": BADGE_TEST})
+              "runtime": "agentcore-runtime/strands" if use_runtime else "lambda-local",
+              "runtimeBadge": BADGE_RUNTIME if use_runtime else BADGE_LOCAL, "testBadge": BADGE_TEST})
 
 
 def _resolve(body: dict):
