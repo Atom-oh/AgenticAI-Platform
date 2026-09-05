@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from decimal import Decimal
 from typing import Any, Optional
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
@@ -56,6 +57,7 @@ class StudioStore:
         return _clean(item)
 
     def update_job(self, job_id: str, **fields) -> None:
+        """읽기-수정-쓰기, 조건식 없음 — 잡마다 쓰기자가 하나(해당 워커)라서 안전하다."""
         meta = self._get(f"job#{job_id}", "meta")
         if not meta:
             return
@@ -83,7 +85,9 @@ class StudioStore:
 
     # ---------- 시안 ----------
     def put_draft(self, draft: dict) -> dict:
-        d = {**draft, "status": draft.get("status") or "검토중", "comment": draft.get("comment", ""), "createdAt": draft.get("createdAt") or now_ms()}
+        existing = self.get_draft(draft.get("draftId", ""))
+        created_at = existing["createdAt"] if existing else (draft.get("createdAt") or now_ms())
+        d = {**draft, "status": draft.get("status") or "검토중", "comment": draft.get("comment", ""), "createdAt": created_at}
         self.table().put_item(Item={**d, "pk": f"draft#{d['draftId']}", "sk": "meta"})
         self._put_draft_row(d)
         return d
@@ -110,9 +114,16 @@ class StudioStore:
         return [d for d in self.list_drafts(200) if d.get("status") == "승인됨"][:limit]
 
 
+def _plain(obj: Any) -> Any:
+    """DynamoDB 리소스가 돌려주는 Decimal 을 int/float 로 되돌린다 (재귀)."""
+    if isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    if isinstance(obj, list):
+        return [_plain(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _plain(v) for k, v in obj.items()}
+    return obj
+
+
 def _clean(item: dict) -> dict:
-    out = {k: v for k, v in item.items() if k not in ("pk", "sk")}
-    for k, v in list(out.items()):
-        if type(v).__name__ == "Decimal":
-            out[k] = int(v) if v == int(v) else float(v)
-    return out
+    return {k: v for k, v in _plain(item).items() if k not in ("pk", "sk")}

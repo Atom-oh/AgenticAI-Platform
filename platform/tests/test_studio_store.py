@@ -7,7 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from studio.store import StudioStore  # noqa: E402
+from decimal import Decimal  # noqa: E402
+
+from studio.store import StudioStore, _clean  # noqa: E402
 
 
 def _draft(i, status="검토중", ts=None):
@@ -44,3 +46,26 @@ def test_drafts_list_status_and_approved():
     assert [d["draftId"] for d in st.list_drafts()][1] == "d2" and st.list_drafts()[1]["status"] == "승인됨", "목록 행도 갱신"
     assert [d["draftId"] for d in st.approved_drafts()] == ["d2"]
     assert st.set_draft_status("nope", "승인됨", "", actor="u@x") is None
+
+
+def test_clean_converts_nested_decimals():
+    item = {"pk": "x", "sk": "y", "score": Decimal("91"), "ratio": Decimal("0.5"),
+            "failures": [{"weight": Decimal("3"), "tags": [Decimal("1")]}]}
+    out = _clean(item)
+    assert "pk" not in out and "sk" not in out
+    assert out["score"] == 91 and isinstance(out["score"], int)
+    assert out["ratio"] == 0.5
+    assert out["failures"][0]["weight"] == 3 and isinstance(out["failures"][0]["weight"], int)
+    assert out["failures"][0]["tags"] == [1] and isinstance(out["failures"][0]["tags"][0], int)
+
+
+def test_put_draft_twice_keeps_single_list_row():
+    st = StudioStore()
+    st.put_draft(_draft(1, ts=1001))
+    d1 = _draft(1, ts=5000)
+    d1["score"] = 99
+    st.put_draft(d1)
+    rows = [d for d in st.list_drafts() if d["draftId"] == "d1"]
+    assert len(rows) == 1
+    assert rows[0]["score"] == 99
+    assert rows[0]["createdAt"] == 1001
