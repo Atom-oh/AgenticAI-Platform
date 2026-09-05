@@ -136,7 +136,7 @@ def _block_counts(items: list) -> dict:
 # ---------- 액션 ----------
 def hub(ctx: Ctx, body: dict) -> None:
     agents = _control_room("GET", "/api/agents", body.get("idToken", ""), timeout=8).get("agents", [])
-    assets = studio_proxy.studio_get("/api/assets").get("assets", [])
+    assets = studio_proxy.studio_get("/api/assets", timeout=8).get("assets", [])
     surfaces = _agentcore_records()
     st = lazy_store().stats()
     reg = _registry_counts()

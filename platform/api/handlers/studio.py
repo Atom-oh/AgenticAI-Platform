@@ -58,7 +58,14 @@ def studio_run(ctx: Ctx, body: dict) -> None:
     store().put_job(job, actor=ctx.email)
     payload = {"connId": ctx.conn_id, "endpoint": getattr(getattr(ctx.apigw, "meta", None), "endpoint_url", ""),
                "reqId": ctx.rid, "email": ctx.email, "traceId": ctx.trace_id, "job": job}
-    _invoke(fn, payload)
+    try:
+        _invoke(fn, payload)
+    except Exception as e:
+        err = f"{type(e).__name__}: {str(e)[:120]}"
+        store().update_job(job["jobId"], status="failed", stopReason="error", error=err)
+        log_event("studio.invoke_failed", ctx.trace_id, jobId=job["jobId"], error=err)
+        ctx.done(KIND, jobId=job["jobId"], error="워커 호출 실패: " + err, stopReason="error", rounds=0, score=0, passed=False)
+        return
     log_event("studio.run", ctx.trace_id, jobId=job["jobId"], productCode=job["productCode"], maxRounds=job["maxRounds"], mode=job["mode"])
     ctx.post({"type": "studio_run", "jobId": job["jobId"], "maxRounds": job["maxRounds"], "passScore": job["passScore"],
               "backend": store().backend})
@@ -69,11 +76,11 @@ def studio_jobs(ctx: Ctx, body: dict) -> None:
     if jid:
         ctx.post({"type": "studio_jobs", "job": store().get_job(jid)})
     else:
-        ctx.post({"type": "studio_jobs", "jobs": store().list_jobs(int(body.get("limit", 20)))})
+        ctx.post({"type": "studio_jobs", "jobs": store().list_jobs(loop._int(body.get("limit"), 20, 1, 200))})
 
 
 def studio_drafts(ctx: Ctx, body: dict) -> None:
-    ctx.post({"type": "studio_drafts", "drafts": store().list_drafts(int(body.get("limit", 60))), "backend": store().backend})
+    ctx.post({"type": "studio_drafts", "drafts": store().list_drafts(loop._int(body.get("limit"), 60, 1, 200)), "backend": store().backend})
 
 
 def studio_feedback(ctx: Ctx, body: dict) -> None:

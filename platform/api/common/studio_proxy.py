@@ -32,8 +32,8 @@ def studio(method: str, path: str, token: str = "", body: dict | None = None, ti
         return {"error": str(e)[:200]}
 
 
-def studio_get(path: str) -> dict:
-    return studio("GET", path)
+def studio_get(path: str, timeout: int = 60) -> dict:
+    return studio("GET", path, timeout=timeout)
 
 
 def _content(asset_id: str) -> str:

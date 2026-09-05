@@ -77,6 +77,21 @@ def test_run_invokes_worker_with_clamped_job(monkeypatch):
     assert h._store.get_job(p["job"]["jobId"])["status"] == "running"
 
 
+def test_run_invoke_failure_marks_job_failed(monkeypatch):
+    monkeypatch.setenv("STUDIO_LOOP_FN", "studio-fn")
+
+    def _boom(fn, payload):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(h, "_invoke", _boom)
+    ctx, a = _ctx()
+    h.studio_run(ctx, {"brief": "b", "productCode": "PRD-DEP-001"})
+    job_id = h._store.list_jobs()[0]["jobId"]
+    last = a.sent[-1]
+    assert last["type"] == "studio.done" and "boom" in last["error"]
+    assert h._store.get_job(job_id)["status"] == "failed"
+
+
 def test_run_rejects_missing_product():
     ctx, a = _ctx()
     h.studio_run(ctx, {"brief": "b"})
