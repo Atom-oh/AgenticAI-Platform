@@ -89,6 +89,12 @@ async def main(which):
         if 'portal' in which:
             p = await c.request('portal_list', {'category': 'Components'}); cards = p.get('cards') or p.get('items') or []; res['portal'] = {'cards': len(cards), 'sample': cards[:1]}
             imp = await c.request('portal_impact', {'id': 'CMP-Button-v2'}); res['portal_impact'] = imp.get('counts')
+        if 'design' in which:
+            cat = await c.request('design_catalog', {}); res['design_catalog'] = {'source': cat.get('source'), 'specs': [x['id'] for x in cat.get('productSpecs', [])], 'checklists': [x['id'] for x in cat.get('checklists', [])], 'runtime': cat.get('runtime')}
+            pv = await c.request('design_preview', {'productSpecId': 'ps-soccer-club-savings'}); res['design_preview'] = {'steps': [x['id'] for x in (pv.get('prd') or {}).get('steps', [])], 'branchSteps': (pv.get('prd') or {}).get('branchSteps'), 'counts': pv.get('counts'), 'error': pv.get('error')}
+            r = await c.run('design_flow', {'productSpecId': 'ps-soccer-club-savings'}, timeout=300); d = next((e for e in r['events'] if e['type']=='design.done'), {}); steps = [e.get('step') for e in r['events'] if e['type']=='design.stage']
+            rep = d.get('report') or {}
+            res['design_flow'] = {'elapsed': r['elapsed'], 'firstToken': r['firstToken'], 'stages': steps, 'ok': d.get('ok'), 'attempts': d.get('attempts'), 'regenerated': d.get('regenerated'), 'score': rep.get('score'), 'openItems': rep.get('openItems'), 'flowSteps': [x['id'] for x in d.get('steps', [])], 'evidenceStep': any(x['id']=='evidence-soccer-club' for x in d.get('steps', [])), 'runtime': d.get('runtime'), 'usage': d.get('usage'), 'error': d.get('error'), 'errors': [e.get('message') for e in r['events'] if e['type']=='error']}
         if 'traces' in which:
             t = await c.request('traces', {}); res['traces'] = brief(t, ['requests','piiOutboundTotal','tokensOutTotal','blocked','cached','plane','models','retained'])
     print(json.dumps(res, ensure_ascii=False, indent=1, default=str))
@@ -98,5 +104,5 @@ def _dump(res):
     print(json.dumps(res, ensure_ascii=False, indent=1, default=str), flush=True)
 
 if __name__ == '__main__':
-    which = sys.argv[1:] or ['hub','registry','s1','s2','s5','screengen','report','agents','portal','traces']
+    which = sys.argv[1:] or ['hub','registry','s1','s2','s5','screengen','report','agents','portal','design','traces']
     asyncio.run(main(which))
