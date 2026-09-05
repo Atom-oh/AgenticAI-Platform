@@ -111,15 +111,24 @@ class PlatformSocket {
     });
   }
 
-  /** 스트리밍 실행 — 완료 이벤트가 올 때까지 모든 이벤트를 핸들러로 보낸다. */
-  async run(action: string, payload: Record<string, any>, onEvent: Handler): Promise<void> {
+  /** 스트리밍 실행 — 완료 이벤트가 올 때까지 모든 이벤트를 핸들러로 보낸다.
+   *  timeoutMs > 0 이면 그 시간 동안 이 요청의 이벤트가 하나도 오지 않을 때 구독을 해제하고 거절한다(무한 대기 방지). */
+  async run(action: string, payload: Record<string, any>, onEvent: Handler, timeoutMs = 0): Promise<void> {
     const ws = await this.ensure();
     const reqId = `r${++this.seq}`;
     return new Promise((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const off = () => { this.subs.delete(h); this.subs.delete(done); if (timer) { clearTimeout(timer); timer = null; } };
+      const arm = () => {
+        if (!timeoutMs) return;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { off(); reject(new Error('시간 초과')); }, timeoutMs);
+      };
       const h: Handler = (e) => {
         if (e.reqId && e.reqId !== reqId && e.type !== 'cache.replay') return; // 다른 요청의 이벤트 무시
+        arm(); // 이벤트가 올 때마다 타이머 리셋 — 침묵 구간만 재는 무응답 타임아웃
         onEvent(e);
-        if (e.type === 'error') { this.subs.delete(h); this.subs.delete(done); reject(new Error(e.message)); }
+        if (e.type === 'error') { off(); reject(new Error(e.message)); }
       };
       this.subs.add(h);
       // s1은 vector.done+graph.done 2건, s2는 s2.done 1건에서 종료
@@ -127,11 +136,10 @@ class PlatformSocket {
       const done: Handler = (e) => {
         if (e.reqId && e.reqId !== reqId) return;
         if (e.type === 'cache.replay') { doneNeeded = action === 's1' ? 2 : 1; return; } // 캐시 재생: 종료 카운트 초기화
-        if (e.type.endsWith('.done') && --doneNeeded <= 0) {
-          this.subs.delete(h); this.subs.delete(done); resolve();
-        }
+        if (e.type.endsWith('.done') && --doneNeeded <= 0) { off(); resolve(); }
       };
       this.subs.add(done);
+      arm();
       ws.send(JSON.stringify({ action, reqId, ...payload }));
     });
   }

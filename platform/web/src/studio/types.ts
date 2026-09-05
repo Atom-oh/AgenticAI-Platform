@@ -16,7 +16,8 @@ export type RoundResult = { round: number; score: number; passed: boolean; url: 
   undetermined: string[]; reviewerError?: string | null; elapsedMs: number };
 export type DoneEvent = { type: 'studio.done'; jobId: string; draftId?: string | null; score: number; passed: boolean; rounds: number; maxRounds: number;
   passScore: number; stopReason: 'passed' | 'max_rounds' | 'time_cap' | 'error'; bestRound: number; url: string; items: ReviewItem[];
-  history: RoundResult[]; usage: { inputTokens: number; outputTokens: number }; model: string; elapsedMs: number; error?: string;
+  history: RoundResult[]; usage: { inputTokens: number; outputTokens: number }; model: string; route?: string; elapsedMs: number; error?: string;
+  itemsTruncated?: boolean; recovered?: boolean;
   backend?: string; graphBackend?: string; spec?: { productCode: string; productName: string; hasPreferential: boolean; stepCount: number } };
 export type JobForm = { brief: string; productCode: string; outputType: string; axis: string; assetIds: string[]; agentId: string;
   maxRounds: number; passScore: number };

@@ -51,6 +51,9 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const selectModeRef = useRef(selectMode);
   useEffect(() => { selectModeRef.current = selectMode; }, [selectMode]);
+  const jobIdRef = useRef('');          // studio_run ack 의 jobId — 연결이 끊겼을 때 기록으로 복구하는 열쇠
+  const lastEventAt = useRef(Date.now());
+  const runningRef = useRef(false);
 
   useEffect(() => {
     if (!form.productCode) { setSpec(null); return; }
@@ -102,7 +105,38 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
       setSel({ selector: cssPath(el, doc!), html: clean, label });
     }, true);
   };
+  const finishFromJob = (j: any) => {
+    const rounds = Array.isArray(j.rounds) ? j.rounds : [];
+    const best = rounds.find((r: any) => r.round === j.bestRound) || [...rounds].reverse().find((r: any) => r.url);
+    setDone({ type: 'studio.done', jobId: j.jobId, draftId: j.draftId ?? null, score: j.score ?? 0, passed: !!j.passed,
+      rounds: rounds.length || Number(j.rounds) || 0, maxRounds: j.maxRounds ?? form.maxRounds, passScore: j.passScore ?? form.passScore,
+      stopReason: j.stopReason ?? 'error', bestRound: j.bestRound ?? (best?.round || 0), url: best?.url || '', items: [],
+      history: rounds, usage: { inputTokens: 0, outputTokens: 0 }, model: j.model || '', elapsedMs: 0, error: j.error, recovered: true } as DoneEvent);
+    if (rounds.length) setHistory(rounds);
+    if (best?.url) { setCanvasUrl(best.url); setPickedRound(best.round); }
+    if (j.draftId) setBaseDraftId(j.draftId);
+    setTurns(t => [...t, { role: 'agent', text: '연결이 끊겨 기록에서 복구했습니다' }]);
+    setRunning(false);
+    onDone();
+  };
+
+  // 무응답 감시 — .done 프레임을 못 받아도(커넥션 종료·프레임 유실) 잡 기록으로 결과를 복구한다.
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => {
+      if (Date.now() - lastEventAt.current <= 240_000) return;
+      const jid = jobIdRef.current;
+      if (!jid) return;
+      sock.request('studio_jobs', { jobId: jid })
+        .then(r => { const j = r.job; if (runningRef.current && j && (j.status === 'done' || j.status === 'failed')) finishFromJob(j); })
+        .catch(() => {}); // 다음 주기에 재시도
+    }, 20_000);
+    return () => clearInterval(id);
+  }, [running]);
+
   const onEvent = (e: any) => {
+    lastEventAt.current = Date.now();
+    if (e.type === 'studio_run') { jobIdRef.current = e.jobId || ''; return; }
     if (e.type === 'studio.stage') {
       setStages(s => [...s, e]);
       if (e.step === 'review') setItems(e.items || []);
@@ -120,10 +154,11 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
 
   const run = async (payload: Record<string, any>) => {
     if (!canWrite) return;
+    jobIdRef.current = ''; lastEventAt.current = Date.now(); runningRef.current = true;
     setRunning(true); setStages([]); setTokens(0); setDone(null); setItems([]); setMsg(''); setSel(null);
-    try { await sock.run('studio_run', payload, onEvent); }
+    try { await sock.run('studio_run', payload, onEvent, 300_000); }
     catch (e: any) { setMsg('오류: ' + (e?.message || e)); }
-    finally { setRunning(false); onDone(); }
+    finally { runningRef.current = false; setRunning(false); onDone(); }
   };
   const generate = () => { setTurns(t => [...t, { role: 'user', text: form.brief }]); setHistory([]); run({ ...form, mode: 'generate' }); };
   const refine = () => {
@@ -222,11 +257,13 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
             <span className="ml-auto" />
             <button onClick={() => setMobile(m => !m)} className="chip">{mobile ? '📱 모바일' : '🖥 전체 폭'}</button>
             <button onClick={() => setSelectMode(s => !s)} className={`chip ${selectMode ? 'text-teal-700 border-teal-400 bg-teal-50' : ''}`} disabled={!canvasUrl}>{selectMode ? '요소 선택 중' : '요소 선택'}</button>
-            {canvasUrl && <a href={canvasUrl} target="_blank" rel="noopener" className="chip text-teal-700">새 탭 ↗</a>}
+            {canvasUrl && <a href={canvasUrl} target="_blank" rel="noopener noreferrer" className="chip text-teal-700">새 탭 ↗</a>}
           </div>
           <div className={`mx-auto bg-slate-100 rounded-xl overflow-hidden border border-slate-200 ${mobile ? 'w-[420px]' : 'w-full'}`} style={{ height: 720 }}>
             {canvasUrl
-              ? <iframe ref={iframeRef} key={canvasUrl} src={canvasUrl} title="canvas" className="w-full h-full bg-white" onLoad={wireSelection} />
+              // sandbox: allow-same-origin 만 — 시안 안의 스크립트는 실행하지 않고(allow-scripts 없음),
+              // 같은 출처는 유지되므로 부모에서 contentDocument 로 요소 선택 배선(wireSelection)은 계속 동작한다.
+              ? <iframe ref={iframeRef} key={canvasUrl} src={canvasUrl} title="canvas" sandbox="allow-same-origin" className="w-full h-full bg-white" onLoad={wireSelection} />
               : <div className="h-full flex items-center justify-center text-sm text-slate-400">생성하면 라운드마다 시안이 여기 갱신됩니다</div>}
           </div>
           <div className="mt-2 text-[11px] text-slate-500">{sel ? `선택: ${sel.label}` : '선택된 요소 없음 — 전체 수정으로 적용됩니다'}</div>

@@ -36,6 +36,7 @@ export default function Studio() {
           <div className="flex gap-1.5 mt-2 flex-wrap text-[10px]">
             <span className="chip">모델 호출: 익명화 게이트 경유</span>
             <span className="chip">그래프: {meta.graphBackend || '…'}</span>
+            <span className="chip">생성 모델: {meta.model || '…'}</span>
             <span className="chip">시안 저장: {meta.backend || '…'} + S3</span>
             <span className="chip">자산 원본: uiux-studio 레지스트리(프록시)</span>
             <span className="chip">검수: 구조·문구·흐름 — 픽셀 비교 미구현</span>
