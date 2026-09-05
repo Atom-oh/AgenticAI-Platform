@@ -124,18 +124,26 @@ class _Parser(HTMLParser):
 
 
 def parse_html(html: str) -> dict:
-    """명시 <section data-step> 이 하나라도 있으면 프레임은 그것만이다 — 헤더·푸터 같은 섹션 밖 텍스트는
-    doc["text"] 로만 남고 프레임 수(minSteps/maxSteps)를 부풀리지 않는다. 명시 섹션이 없으면 암시 프레임 1개."""
+    """명시 <section data-step> 이 하나라도 있으면 프레임은 그것만이다 — 헤더·푸터 같은 섹션 밖 콘텐츠는
+    프레임 수(minSteps/maxSteps)를 부풀리지 않되 doc["outside"] 로 남아 리뷰어 다이제스트에 그대로 실린다
+    (그러지 않으면 헤더 제목·하단 고정 CTA 가 리뷰어에게 안 보여 CM-01/CM-02 가 거짓 실패한다).
+    명시 섹션이 없으면 암시 프레임 1개이고 outside 는 비어 있다."""
     p = _Parser()
     p.feed(html or "")
     steps = [s for s in p.steps if not s.get("_implicit")]
-    if not steps:
+    outside = {"text": "", "headings": [], "buttons": [], "inputs": [], "labels": []}
+    if steps:
+        for s in (x for x in p.steps if x.get("_implicit")):
+            outside["text"] = (outside["text"] + " " + " ".join(s["text"])).strip()
+            for k in ("headings", "buttons", "inputs", "labels"):
+                outside[k] = outside[k] + s[k]
+    else:
         steps = p.steps[:1] or [{"index": 1, "screen": "", "text": [], "headings": [], "buttons": [], "inputs": [], "labels": []}]
     for i, s in enumerate(steps, start=1):
         s["index"] = i
         s.pop("_implicit", None)
         s["text"] = " ".join(s["text"])
-    return {"steps": steps, "text": " ".join(p.text), "style": " ".join(p.style),
+    return {"steps": steps, "outside": outside, "text": " ".join(p.text), "style": " ".join(p.style),
             "externalScripts": p.external_scripts, "hasFetch": bool(_FETCH.search(" ".join(p.script_text))),
             "checkboxes": p.checkboxes, "inputs": p.inputs, "_paths": p.paths}
 
@@ -152,7 +160,28 @@ def dom_digest(doc: dict, limit: int = 6000) -> str:
         if s["buttons"]:
             out.append("  버튼: " + ", ".join(x for x in s["buttons"] if x)[:300])
         out.append("  본문: " + s["text"][:700])
-    return "\n".join(out)[:limit]
+    tail = _outside_block(doc.get("outside") or {})
+    body = "\n".join(out)
+    if not tail:
+        return body[:limit]
+    # 프레임 외 블록은 프레임 본문보다 먼저 자리를 확보한다 — limit 에 걸려 사라지면 리뷰어가 헤더·CTA 를 못 본다.
+    return (body[:max(0, limit - len(tail) - 1)] + "\n" + tail)[:limit]
+
+
+def _outside_block(o: dict) -> str:
+    """섹션 밖 콘텐츠 한 블록 — 프레임이 아니라는 것을 라벨로 명시한다."""
+    bits = []
+    if o.get("headings"):
+        bits.append("제목: " + ", ".join(x for x in o["headings"] if x)[:200])
+    if o.get("labels"):
+        bits.append("레이블: " + ", ".join(x for x in o["labels"] if x)[:200])
+    if o.get("inputs"):
+        bits.append("입력: " + ", ".join(f"{i['type']}({i['placeholder']})" if i.get("placeholder") else i["type"] for i in o["inputs"])[:200])
+    if o.get("buttons"):
+        bits.append("버튼: " + ", ".join(x for x in o["buttons"] if x)[:200])
+    if o.get("text"):
+        bits.append("본문: " + o["text"][:400])
+    return "[프레임 외] " + " / ".join(bits) if bits else ""
 
 
 def _fuzzy_in(needle: str, hay: str) -> bool:

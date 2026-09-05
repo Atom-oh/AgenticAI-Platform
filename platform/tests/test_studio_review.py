@@ -50,7 +50,9 @@ def test_parse_html_steps_and_signals():
     assert doc["externalScripts"] == 0 and doc["hasFetch"] is False
     bad = review.parse_html(BAD_HTML)
     assert bad["externalScripts"] == 1 and bad["hasFetch"] is True
-    assert len(review.parse_html("<p>단일</p>")["steps"]) == 1
+    single = review.parse_html("<p>단일</p>")
+    assert len(single["steps"]) == 1
+    assert single["outside"] == {"text": "", "headings": [], "buttons": [], "inputs": [], "labels": []}, "명시 섹션이 없으면 outside 는 빈다"
 
 
 def test_nested_step_sections_restore_outer():
@@ -130,6 +132,11 @@ def test_header_outside_sections_is_not_a_frame():
     ok, ev, _ = review._check_dom({"maxSteps": 6}, doc)
     assert ok, ev
     assert "아톰은행" in doc["text"]
+    # 프레임 수는 늘리지 않지만 리뷰어에게는 보여야 한다 (CM-01/CM-02 거짓 실패 방지)
+    assert doc["outside"]["headings"] == ["아톰은행"]
+    digest = review.dom_digest(doc)
+    assert "아톰은행" in digest and "[프레임 외]" in digest
+    assert len(doc["steps"]) == 6
 
 
 def test_void_tags_do_not_unbalance_skeleton_paths():
