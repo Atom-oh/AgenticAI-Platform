@@ -2,6 +2,7 @@
 // 방향: 큰 시안 프리뷰 갤러리 · 자산(팔레트 스와치) 카드 · 브리프→3축 variant 생성 · 승인=few-shot 학습 루프.
 import { useEffect, useMemo, useState } from 'react';
 import { auth, sock } from './lib';
+import ProcessStudio from './studio/ProcessStudio';
 
 type Draft = { id: string; title: string; axis: string; status: string; url: string; created_at: string };
 type Asset = { name: string; type: string; version: string; actor: string; updated_at: string; scope: string; asset_id?: string };
@@ -38,7 +39,7 @@ function Swatches({ content }: { content: any }) {
 }
 
 export default function Studio() {
-  const [tab, setTab] = useState<'gallery' | 'generate' | 'assets'>('gallery');
+  const [tab, setTab] = useState<'process' | 'gallery' | 'generate' | 'assets'>('process');
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const canWrite = !!auth.studioToken;
@@ -72,7 +73,7 @@ export default function Studio() {
       </div>
 
       <div className="flex items-center gap-2 mb-4">
-        {([['gallery', '🖼 시안 갤러리'], ['generate', '✨ 생성 플레이그라운드'], ['assets', '🎨 디자인 자산']] as const).map(([id, label]) => (
+        {([['process', '🔁 프로세스 생성 (검수 루프)'], ['gallery', '🖼 시안 갤러리'], ['generate', '✨ 생성 플레이그라운드'], ['assets', '🎨 디자인 자산']] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`px-4 py-2 rounded-xl text-sm font-semibold border ${tab === id
               ? 'bg-[#008485] text-white border-[#008485]'
@@ -81,6 +82,7 @@ export default function Studio() {
         {!canWrite && <span className="text-xs text-slate-400 ml-2">이 계정은 조회 전용입니다</span>}
       </div>
 
+      {tab === 'process' && <ProcessStudio />}
       {tab === 'gallery' && <Gallery drafts={drafts} canWrite={canWrite} reload={load} />}
       {tab === 'generate' && <Generate assets={assets} canWrite={canWrite} reload={load} />}
       {tab === 'assets' && <Assets assets={assets} canWrite={canWrite} reload={load} />}
