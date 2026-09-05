@@ -1,0 +1,4 @@
+{"items": [
+  {"id": "FX-01", "category": "명세반영", "text": "적용 환율·우대율과 고시 시각이 표기된다", "required": true, "weight": 3, "check": "llm"},
+  {"id": "FX-02", "category": "UX흐름", "text": "통화 선택 → 금액 입력 → 확인 순서가 지켜진다", "required": false, "weight": 2, "check": "llm"}
+]}

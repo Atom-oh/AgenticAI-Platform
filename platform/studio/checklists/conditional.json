@@ -1,0 +1,6 @@
+{"items": [
+  {"id": "CD-01", "category": "조건형", "text": "우대 조건 입력·인증 화면이 별도 스텝으로 존재한다", "required": true, "weight": 3, "check": "llm"},
+  {"id": "CD-02", "category": "조건형", "text": "조건 충족 여부(인증 결과)가 화면에 표시된다", "required": true, "weight": 2, "check": "llm"},
+  {"id": "CD-03", "category": "조건형", "text": "우대 적용 전/후 금리가 구분되어 표기된다", "required": true, "weight": 2, "check": "llm"},
+  {"id": "CD-04", "category": "조건형", "text": "조건 미충족 시 기본금리로 가입된다는 안내가 있다", "required": false, "weight": 2, "check": "llm"}
+]}

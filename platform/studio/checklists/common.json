@@ -1,0 +1,8 @@
+{"items": [
+  {"id": "CM-01", "category": "정합성", "text": "화면 제목이 상품명을 포함하고 브리프의 목적과 일치한다", "required": true, "weight": 2, "check": "llm"},
+  {"id": "CM-02", "category": "정합성", "text": "주 액션(CTA) 버튼이 하나이며 하단에 고정되어 있다", "required": false, "weight": 2, "check": "llm"},
+  {"id": "CM-03", "category": "정합성", "text": "브랜드 색(Hana Green #008485 계열)이 주 강조색으로 쓰였다", "required": false, "weight": 1, "check": "dom", "expect": {"brandHex": true}},
+  {"id": "CM-04", "category": "정합성", "text": "외부 스크립트·fetch 없이 자기완결 HTML이다", "required": true, "weight": 2, "check": "dom", "expect": {"noExternal": true}},
+  {"id": "CM-05", "category": "정합성", "text": "가짜 기기 크롬(상태바·시계·배터리)이 없다", "required": false, "weight": 1, "check": "llm"},
+  {"id": "CM-06", "category": "정합성", "text": "본문 13px 이상, 터치 타깃 44px 이상으로 보인다", "required": false, "weight": 1, "check": "llm"}
+]}

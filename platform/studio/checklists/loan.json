@@ -1,0 +1,5 @@
+{"items": [
+  {"id": "LN-01", "category": "명세반영", "text": "대출 한도·금리 산정 기준 출처가 표기된다", "required": true, "weight": 3, "check": "llm"},
+  {"id": "LN-02", "category": "명세반영", "text": "상환 방식·중도상환수수료 안내가 있다", "required": false, "weight": 2, "check": "llm"},
+  {"id": "LN-03", "category": "UX흐름", "text": "심사 결과 상태(승인/보류/거절)별 다음 행동이 안내된다", "required": true, "weight": 2, "check": "llm"}
+]}

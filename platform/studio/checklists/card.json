@@ -1,0 +1,4 @@
+{"items": [
+  {"id": "CD-C01", "category": "명세반영", "text": "연회비·실적 조건이 표기된다", "required": true, "weight": 3, "check": "llm"},
+  {"id": "CD-C02", "category": "명세반영", "text": "전월 실적 기준과 혜택 한도가 함께 표기된다", "required": false, "weight": 2, "check": "llm"}
+]}

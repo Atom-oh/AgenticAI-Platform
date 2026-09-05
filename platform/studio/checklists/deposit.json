@@ -1,0 +1,7 @@
+{"items": [
+  {"id": "DEP-01", "category": "명세반영", "text": "기본금리가 연 % 단위로 명확히 표기된다", "required": true, "weight": 3, "check": "llm"},
+  {"id": "DEP-02", "category": "명세반영", "text": "가입기간 선택 요소가 있고 허용 기간만 제시된다", "required": true, "weight": 2, "check": "llm"},
+  {"id": "DEP-03", "category": "명세반영", "text": "월 납입금액 입력이 있고 최소·최대 한도가 안내된다", "required": true, "weight": 2, "check": "llm"},
+  {"id": "DEP-04", "category": "UX흐름", "text": "약관 동의 후에만 가입 완료로 진행되는 순서다", "required": false, "weight": 2, "check": "llm"},
+  {"id": "DEP-05", "category": "명세반영", "text": "만기 예상 이자(세전) 안내가 있다", "required": false, "weight": 1, "check": "llm"}
+]}
