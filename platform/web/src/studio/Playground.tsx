@@ -2,6 +2,7 @@
 // 플레이그라운드 — 브리프·상품·자산·라운드 상한 → studio_run(에이전틱 루프) 스트리밍; 라이브 캔버스, 요소 선택 → refine, 라운드 타임라인, 체크리스트.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { sock } from '../lib';
+import { openExplorer } from './nav';
 import SpecPanel from './SpecPanel';
 import { Checklist, RoundStrip, ScoreBadge, StageList } from './RoundTimeline';
 import { AXES, BRIEF_PRESETS, Asset, DoneEvent, Draft, JobForm, OUTPUT_TYPES, Product, ReviewItem, RoundResult, Spec, StageEvent, TYPE_LABEL, aid } from './types';
@@ -82,6 +83,8 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
     let doc: Document | null = null;
     try { doc = iframe.contentDocument; } catch { return; }
     if (!doc?.body) return;
+    if (doc.body.dataset.wired === '1') return;
+    doc.body.dataset.wired = '1';
     let hovered: HTMLElement | null = null; let outline = '';
     doc.addEventListener('mouseover', (e) => {
       if (!selectModeRef.current) return;
@@ -236,7 +239,7 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
         <div className="panel p-4">
           <div className="flex items-center gap-2 mb-2"><div className="text-sm font-bold text-slate-800">검수 결과</div>
             <span className="chip text-[10px] text-slate-500">구조·문구·흐름 검수 — 픽셀 비교 미구현</span></div>
-          {items.length ? <Checklist items={items} onSource={(id) => window.dispatchEvent(new CustomEvent('explore-node', { detail: id }))} /> : <div className="text-xs text-slate-400">라운드가 끝나면 항목별 판정이 표시됩니다</div>}
+          {items.length ? <Checklist items={items} onSource={openExplorer} /> : <div className="text-xs text-slate-400">라운드가 끝나면 항목별 판정이 표시됩니다</div>}
         </div>
       </div>
     </div>
