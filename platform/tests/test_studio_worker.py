@@ -63,7 +63,7 @@ def _wire(monkeypatch, apigw, s3, store):
 
 def _event(**job):
     return {"connId": "c1", "endpoint": "https://ws/prod", "reqId": "r1", "email": "u@x", "traceId": "t1",
-            "job": {"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001", "outputType": "ux-flow", "maxRounds": 1, **job}}
+            "job": {"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001", "outputType": "ux-flow", "maxRounds": 2, **job}}
 
 
 def test_worker_streams_publishes_and_records(monkeypatch):
@@ -76,12 +76,13 @@ def test_worker_streams_publishes_and_records(monkeypatch):
     assert types[0] == "studio.stage" and types[-1] == "studio.done" and "studio.token" in types
     assert all(e["reqId"] == "r1" and e["traceId"] == "t1" for e in apigw.sent)
     done = apigw.sent[-1]
-    assert done["draftId"] == "job123456789" and "html" not in done and done["url"] == "https://agent.example/studio/drafts/job123456789-r1.html"
-    assert ("web-bkt", "studio/drafts/job123456789-r1.html") in s3.objects
+    # 리뷰어 모의는 항상 미판정을 반환하므로 두 라운드 모두 동일 점수 — loop.run 의 tie-break 는 후행 라운드를 우선한다.
+    assert done["draftId"] == "job123456789" and "html" not in done and done["url"] == "https://agent.example/studio/drafts/job123456789-r2.html"
+    assert ("web-bkt", "studio/drafts/job123456789-r2.html") in s3.objects
     job = store.get_job("job123456789")
-    assert job["status"] == "done" and job["rounds"][0]["round"] == 1 and job["draftId"] == "job123456789"
+    assert job["status"] == "done" and len(job["rounds"]) == 2 and job["draftId"] == "job123456789"
     d = store.get_draft("job123456789")
-    assert d["status"] == "검토중" and d["productName"] == "아톰 축구사랑 적금" and d["bestRound"] == 1 and d["key"].endswith("-r1.html")
+    assert d["status"] == "검토중" and d["productName"] == "아톰 축구사랑 적금" and d["bestRound"] == 2 and d["key"].endswith("-r2.html")
 
 
 def test_worker_survives_gone_connection(monkeypatch):
@@ -89,7 +90,7 @@ def test_worker_survives_gone_connection(monkeypatch):
     _wire(monkeypatch, apigw, s3, store)
     store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
     assert w.handler(_event(), None)["statusCode"] == 200
-    assert store.get_job("job123456789")["status"] == "done" and len(s3.objects) == 1
+    assert store.get_job("job123456789")["status"] == "done" and len(s3.objects) == 2
 
 
 def test_worker_reports_spec_error(monkeypatch):
@@ -114,3 +115,69 @@ def test_refine_loads_base_draft_from_s3(monkeypatch):
     w.handler(_event(mode="refine", baseDraftId="base1", selector="h2", instruction="크게", maxRounds=1), None)
     assert "크게" in seen["user"] and GOOD in seen["user"]
     assert store.get_draft("job123456789")["parentId"] == "base1"
+
+
+def test_ws_transient_error_is_retried(monkeypatch):
+    baseline_apigw, s3b, storeb = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, baseline_apigw, s3b, storeb)
+    storeb.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
+    w.handler(_event(), None)
+    expected = len(baseline_apigw.sent)
+
+    class _Flaky:
+        def __init__(self):
+            self.sent, self._seen = [], set()
+
+        def post_to_connection(self, ConnectionId, Data):
+            if Data not in self._seen:
+                self._seen.add(Data)
+                raise Exception("TooManyRequestsException")
+            self.sent.append(json.loads(Data))
+
+    monkeypatch.setattr(w.time, "sleep", lambda s: None)
+    flaky, s3, store = _Flaky(), _S3(), StudioStore()
+    _wire(monkeypatch, flaky, s3, store)
+    store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
+    w.handler(_event(), None)
+    assert len(flaky.sent) == expected
+
+
+def test_time_cap_derives_from_context():
+    class _Ctx:
+        def __init__(self, ms):
+            self.ms = ms
+
+        def get_remaining_time_in_millis(self):
+            return self.ms
+
+    assert w._time_cap(_Ctx(300_000)) == 180
+    assert w._time_cap(None) == 780
+    assert w._time_cap(_Ctx(900_000)) == 780
+
+
+def test_client_construction_failure_does_not_raise(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(w, "_store", lambda: store)
+
+    def _boom(endpoint):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(w, "_apigw_client", _boom)
+    store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
+    out = w.handler(_event(), None)
+    assert out["statusCode"] == 200
+    assert store.get_job("job123456789")["status"] == "failed"
+
+
+def test_refine_rejects_other_product_base(monkeypatch):
+    apigw, s3, store = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, apigw, s3, store)
+    s3.put_object(Bucket="web-bkt", Key="studio/drafts/base1-r1.html", Body=GOOD.encode(), ContentType="text/html", CacheControl="no-cache")
+    store.put_draft({"draftId": "base1", "jobId": "base1", "title": "t", "axis": "흐름", "outputType": "ux-flow", "productCode": "PRD-DEP-002",
+                     "productName": "다른상품", "score": 90, "passed": True, "rounds": 1, "bestRound": 1, "url": "u", "key": "studio/drafts/base1-r1.html",
+                     "createdAt": 1, "createdBy": "u@x", "model": "m"})
+    store.put_job({"jobId": "job123456789", "brief": "", "productCode": "PRD-DEP-001"}, actor="u@x")
+    w.handler(_event(mode="refine", baseDraftId="base1", selector="h2", instruction="크게", maxRounds=1), None)
+    done = apigw.sent[-1]
+    assert done["type"] == "studio.done" and "다릅니다" in done["error"]
+    assert store.get_job("job123456789")["status"] == "failed"

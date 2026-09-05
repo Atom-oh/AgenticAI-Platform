@@ -6,9 +6,9 @@ STUDIO_TABLE 에 기록한다. 모델 호출은 engine.bedrock(익명화 게이�
 """
 from __future__ import annotations
 
-import json
 import os
 import time
+import uuid
 
 from common import tracing
 from common.ctx import Ctx
@@ -64,18 +64,29 @@ def _agent_preset(agent_id: str) -> str:
 
 # ---------- 도우미 ----------
 class _TolerantApigw:
-    """끊긴 커넥션(GoneException)·스로틀은 무시한다 — 기록이 우선."""
+    """끊긴 커넥션(GoneException)은 조용히 버리고, 그 외 일시 오류(스로틀 등)는 재시도한다 — 기록이 우선이지만
+    마지막 프레임(.done)이 조용히 사라지면 클라이언트가 영원히 매달리므로 무조건 삼키지 않는다."""
 
-    def __init__(self, inner) -> None:
+    _RETRY_DELAYS = (0.2, 0.5)
+
+    def __init__(self, inner, trace_id: str = "") -> None:
         self.inner = inner
+        self.trace_id = trace_id
         self.meta = getattr(inner, "meta", None)
 
     def post_to_connection(self, **kw) -> None:
-        try:
-            self.inner.post_to_connection(**kw)
-        except Exception as e:  # noqa: BLE001
-            if "Gone" not in type(e).__name__ and "Gone" not in str(e):
-                log_event("studio.ws_post_failed", "", error=f"{type(e).__name__}: {str(e)[:120]}")
+        attempts = len(self._RETRY_DELAYS) + 1
+        for i in range(attempts):
+            try:
+                self.inner.post_to_connection(**kw)
+                return
+            except Exception as e:  # noqa: BLE001
+                if "Gone" in type(e).__name__ or "Gone" in str(e):
+                    return
+                if i < len(self._RETRY_DELAYS):
+                    time.sleep(self._RETRY_DELAYS[i])
+                    continue
+                log_event("studio.ws_post_failed", self.trace_id, error=f"{type(e).__name__}: {str(e)[:120]}")
 
 
 class _CtxEmitter:
@@ -107,25 +118,38 @@ def _s3_key(job_id: str, n: int) -> str:
     return f"{PREFIX}/{job_id}-r{n}.html"
 
 
-def _fewshot(store: StudioStore, s3, bucket: str, limit: int = 2) -> list:
+def _time_cap(context) -> int:
+    """Lambda 남은 시간에서 여유(120s)를 빼 루프 시간 캡을 정한다 — 타임아웃 직전에 강제 종료돼 기록을 잃는 것을 막는다."""
+    if context is None or not hasattr(context, "get_remaining_time_in_millis"):
+        return loop.TIME_CAP_S
+    return max(60, min(loop.TIME_CAP_S, int(context.get_remaining_time_in_millis() / 1000) - 120))
+
+
+def _fewshot(store: StudioStore, s3, bucket: str, limit: int = 2, trace_id: str = "") -> list:
     out = []
     for d in store.approved_drafts(limit):
         try:
             body = s3.get_object(Bucket=bucket, Key=d["key"])["Body"].read().decode("utf-8", "ignore")
             out.append(body[:12000])
         except Exception as e:  # noqa: BLE001
-            log_event("studio.fewshot_failed", "", draftId=d.get("draftId"), error=str(e)[:80])
+            log_event("studio.fewshot_failed", trace_id, draftId=d.get("draftId"), error=str(e)[:80])
     return out
 
 
 def handler(event, context):
     t0 = time.time()
-    job = loop.clamp_job(event.get("job") or {})
-    ctx = Ctx(apigw=_TolerantApigw(_apigw_client(event.get("endpoint", ""))), conn_id=event.get("connId", ""),
-              email=event.get("email", ""), rid=event.get("reqId", ""), trace_id=event.get("traceId") or Ctx(None, "", "", "").trace_id)
-    store, s3 = _store(), _s3_client()
-    emitter = _CtxEmitter(ctx, store, job["jobId"])
+    ctx = None
+    store = None
+    job: dict = {}
     try:
+        job = loop.clamp_job(event.get("job") or {})
+        trace_id = event.get("traceId") or uuid.uuid4().hex[:12]
+        # store 를 먼저 만들어 둔다 — WS 클라이언트 구성이 실패해도 잡을 failed 로 남길 수 있도록.
+        store = _store()
+        ctx = Ctx(apigw=_TolerantApigw(_apigw_client(event.get("endpoint", "")), trace_id=trace_id), conn_id=event.get("connId", ""),
+                  email=event.get("email", ""), rid=event.get("reqId", ""), trace_id=trace_id)
+        s3 = _s3_client()
+        emitter = _CtxEmitter(ctx, store, job["jobId"])
         graph = _graph()
         spec = specmod.build_spec(graph, job["productCode"], job["outputType"])
         base_html, parent_id = "", ""
@@ -133,6 +157,8 @@ def handler(event, context):
             base = store.get_draft(job["baseDraftId"])
             if not base:
                 raise specmod.SpecError(f"원본 시안을 찾을 수 없습니다: {job['baseDraftId']}")
+            if base.get("productCode") and base["productCode"] != job["productCode"]:
+                raise specmod.SpecError(f"원본 시안의 상품({base['productCode']})과 선택한 상품({job['productCode']})이 다릅니다")
             base_html = s3.get_object(Bucket=BUCKET, Key=base["key"])["Body"].read().decode("utf-8", "ignore")
             parent_id = base["draftId"]
 
@@ -142,8 +168,8 @@ def handler(event, context):
             return f"{WEB_URL}/studio/drafts/{job_id}-r{n}.html"
 
         out = loop.run(job, emitter, spec=spec, generate=_generate, review_generate=_review_generate, publish=publish,
-                       assets_text=_assets_text(job["assetIds"]), fewshot=_fewshot(store, s3, BUCKET),
-                       agent_preset=_agent_preset(job["agentId"]), base_html=base_html)
+                       assets_text=_assets_text(job["assetIds"]), fewshot=_fewshot(store, s3, BUCKET, trace_id=trace_id),
+                       agent_preset=_agent_preset(job["agentId"]), base_html=base_html, time_cap_s=_time_cap(context))
         draft = None
         if out["url"]:
             title = (job["brief"][:40] or spec["productName"]) + (" (수정)" if job["mode"] == "refine" else "")
@@ -152,8 +178,10 @@ def handler(event, context):
                                      "score": out["score"], "passed": out["passed"], "rounds": out["rounds"], "bestRound": out["bestRound"],
                                      "stopReason": out["stopReason"], "url": out["url"], "key": _s3_key(job["jobId"], out["bestRound"]),
                                      "parentId": parent_id, "createdBy": ctx.email, "model": out["model"]})
-        store.update_job(job["jobId"], status="done" if not out.get("error") else "failed", score=out["score"], passed=out["passed"],
-                         stopReason=out["stopReason"], rounds=out["rounds"], draftId=draft["draftId"] if draft else None, error=out.get("error"))
+        job_fields = {"status": "done" if not out.get("error") else "failed", "score": out["score"], "passed": out["passed"],
+                     "stopReason": out["stopReason"], "rounds": out["rounds"], "draftId": draft["draftId"] if draft else None,
+                     "error": out.get("error")}
+        store.update_job(job["jobId"], **{k: v for k, v in job_fields.items() if v is not None})
         try:
             tracing.record_trace({"traceId": ctx.trace_id, "scenario": "studio", "email": ctx.email, "query": job["brief"],
                                   "tokensIn": out["usage"]["inputTokens"], "tokensOut": out["usage"]["outputTokens"], "plane": "cloud",
@@ -166,10 +194,14 @@ def handler(event, context):
         return {"statusCode": 200}
     except Exception as e:  # noqa: BLE001 — 사용자에게 보여야 하는 실패
         msg = f"{type(e).__name__}: {str(e)[:200]}" if not isinstance(e, specmod.SpecError) else str(e)
-        log_event("studio.worker_failed", ctx.trace_id, jobId=job["jobId"], error=msg)
-        try:
-            store.update_job(job["jobId"], status="failed", error=msg)
-        except Exception:
-            pass
-        ctx.done(KIND, jobId=job["jobId"], error=msg, stopReason="error", rounds=0, score=0, passed=False)
+        job_id = job.get("jobId", "")
+        if store is not None:
+            try:
+                store.update_job(job_id, status="failed", error=msg)
+            except Exception:
+                pass
+        if ctx is not None:
+            ctx.done(KIND, jobId=job_id, error=msg, stopReason="error", rounds=0, score=0, passed=False)
+        else:
+            log_event("studio.worker_failed", event.get("traceId", ""), jobId=job_id, error=msg)
         return {"statusCode": 200}
