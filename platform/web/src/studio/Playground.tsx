@@ -54,6 +54,7 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
   const jobIdRef = useRef('');          // studio_run ack 의 jobId — 연결이 끊겼을 때 기록으로 복구하는 열쇠
   const lastEventAt = useRef(Date.now());
   const runningRef = useRef(false);
+  const recoveredRef = useRef(false);   // 기록 복구로 이미 마감했다 — 뒤늦은 타임아웃 오류·중복 onDone 을 막는다
 
   useEffect(() => {
     if (!form.productCode) { setSpec(null); return; }
@@ -106,6 +107,8 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
     }, true);
   };
   const finishFromJob = (j: any) => {
+    if (recoveredRef.current) return;
+    runningRef.current = false; recoveredRef.current = true;
     const rounds = Array.isArray(j.rounds) ? j.rounds : [];
     const best = rounds.find((r: any) => r.round === j.bestRound) || [...rounds].reverse().find((r: any) => r.url);
     setDone({ type: 'studio.done', jobId: j.jobId, draftId: j.draftId ?? null, score: j.score ?? 0, passed: !!j.passed,
@@ -154,11 +157,11 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
 
   const run = async (payload: Record<string, any>) => {
     if (!canWrite) return;
-    jobIdRef.current = ''; lastEventAt.current = Date.now(); runningRef.current = true;
+    jobIdRef.current = ''; lastEventAt.current = Date.now(); runningRef.current = true; recoveredRef.current = false;
     setRunning(true); setStages([]); setTokens(0); setDone(null); setItems([]); setMsg(''); setSel(null);
     try { await sock.run('studio_run', payload, onEvent, 300_000); }
-    catch (e: any) { setMsg('오류: ' + (e?.message || e)); }
-    finally { runningRef.current = false; setRunning(false); onDone(); }
+    catch (e: any) { if (!recoveredRef.current) setMsg('오류: ' + (e?.message || e)); }
+    finally { runningRef.current = false; setRunning(false); if (!recoveredRef.current) onDone(); }
   };
   const generate = () => { setTurns(t => [...t, { role: 'user', text: form.brief }]); setHistory([]); run({ ...form, mode: 'generate' }); };
   const refine = () => {
@@ -276,7 +279,9 @@ export default function Playground({ assets, products, canWrite, initialDraft, o
         <div className="panel p-4">
           <div className="flex items-center gap-2 mb-2"><div className="text-sm font-bold text-slate-800">검수 결과</div>
             <span className="chip text-[10px] text-slate-500">구조·문구·흐름 검수 — 픽셀 비교 미구현</span></div>
-          {items.length ? <Checklist items={items} onSource={openExplorer} /> : <div className="text-xs text-slate-400">라운드가 끝나면 항목별 판정이 표시됩니다</div>}
+          {items.length ? <Checklist items={items} onSource={openExplorer} />
+            : done?.itemsTruncated ? <span className="chip text-[10px] text-amber-700 border-amber-300 bg-amber-50">항목 목록이 프레임 한도로 생략됨 — 갤러리의 검수 리포트에서 확인</span>
+              : <div className="text-xs text-slate-400">라운드가 끝나면 항목별 판정이 표시됩니다</div>}
         </div>
       </div>
     </div>

@@ -38,7 +38,7 @@ export default function Gallery({ drafts, canWrite, reload, onEdit }: { drafts: 
           <div key={d.draftId} className="panel overflow-hidden group hover:shadow-lg transition-shadow">
             <div className="relative h-72 overflow-hidden bg-slate-50 border-b border-slate-100">
               <iframe src={d.url} title={d.title} sandbox="allow-same-origin" className="pointer-events-none origin-top-left" style={{ width: '200%', height: '200%', transform: 'scale(0.5)' }} />
-              <a href={d.url} target="_blank" rel="noopener" className="absolute inset-0 flex items-end justify-end p-2 opacity-0 group-hover:opacity-100 transition-opacity" style={{ background: 'linear-gradient(transparent 65%, rgba(11,47,43,.45))' }}>
+              <a href={d.url} target="_blank" rel="noopener noreferrer" className="absolute inset-0 flex items-end justify-end p-2 opacity-0 group-hover:opacity-100 transition-opacity" style={{ background: 'linear-gradient(transparent 65%, rgba(11,47,43,.45))' }}>
                 <span className="text-white text-xs bg-[#008485] px-3 py-1.5 rounded-lg">원본 크게 보기 ↗</span></a>
               <div className="absolute top-2 left-2"><ScoreBadge score={d.score} passed={d.passed} /></div>
             </div>
