@@ -32,7 +32,7 @@ echo "== 1) api-dist 조립 =="
 rm -rf api-dist && mkdir -p api-dist/seed/out
 cp api/*.py api-dist/
 cp -r api/common api/handlers engine graph onprem semantic api-dist/
-for m in registry screengen report agentcore; do [ -d "$m" ] && cp -r "$m" api-dist/; done
+for m in registry screengen report agentcore design_loop; do [ -d "$m" ] && cp -r "$m" api-dist/; done
 [ -d skills ] && cp -r skills api-dist/
 # Harness·Registry API는 최신 boto3가 필요하다 (Lambda 기본 boto3에는 없음) — 배포 패키지에 동봉
 pip3 install -q --upgrade --target api-dist boto3 botocore >> "$LOG" 2>&1 || { echo "boto3 vendoring failed"; tail -5 "$LOG"; exit 1; }
@@ -58,6 +58,7 @@ python3 -c "import yaml,json,pathlib; p=pathlib.Path('semantic/metrics.yaml'); \
   pathlib.Path('api-dist/semantic/metrics.json').write_text(json.dumps(yaml.safe_load(p.read_text()),ensure_ascii=False))"
 [ -f seed/out/corpus.embeddings.json ] || python3 -c "from engine.vectorrag import HybridIndex; HybridIndex.load()"
 cp seed/out/nodes.jsonl seed/out/edges.jsonl seed/out/corpus.jsonl seed/out/corpus.embeddings.json api-dist/seed/out/
+mkdir -p api-dist/seed/design && cp seed/design/*.json api-dist/seed/design/   # 디자인 스튜디오 시드(상품명세서·SM 모델·체크리스트)
 find api-dist -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
 rm -rf api-dist/onprem/data
 # 온프렘 컨테이너 데이터 (벡터 인덱스는 플레인 소속 — §3.2)

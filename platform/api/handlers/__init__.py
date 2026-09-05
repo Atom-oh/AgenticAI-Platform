@@ -6,7 +6,8 @@ import importlib
 ROUTES: dict = {}
 MODULES = ["handlers.core", "handlers.s1", "handlers.s2",
            # 아래는 각 기능 모듈이 추가된다 (없으면 건너뜀)
-           "handlers.registry", "handlers.screengen", "handlers.report", "handlers.agents", "handlers.portal"]
+           "handlers.registry", "handlers.screengen", "handlers.report", "handlers.agents", "handlers.portal",
+           "handlers.design"]
 
 for _m in MODULES:
     try:

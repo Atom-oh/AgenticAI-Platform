@@ -194,7 +194,8 @@ def test_seed_baseline_content():
         r = api.get_record(s, "v1")
         assert r["recordType"] == "SKILL" and r["status"] == "APPROVED" and r["payload"]["path"] == f"skills/{s}.md"
     c = api.counts()
-    assert c["total"] == res["total"] and c["byType"]["MCP"] == 1 and c["byType"]["SKILL"] == 2 and c["byType"]["AGENT"] == 6
+    # SKILL = 퍼블리싱 규약 2 + 디자인 체크리스트 2(수신 기본·스포츠 제휴) = 4 (registry/seed.py design_records)
+    assert c["total"] == res["total"] and c["byType"]["MCP"] == 1 and c["byType"]["SKILL"] == 4 and c["byType"]["AGENT"] == 6
 
 
 def test_consumer_api_returns_only_approved():

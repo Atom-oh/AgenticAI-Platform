@@ -61,6 +61,15 @@ export class BankPlatformStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
       },
+      additionalBehaviors: {
+        // 디자인 스튜디오 산출물(스텝 HTML·리포트·목록) — 목록/리포트가 즉시 갱신돼야 하므로 캐시 끔
+        'design-runs/*': {
+          origin: origins.S3BucketOrigin.withOriginAccessControl(webBucket),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
+        },
+      },
       defaultRootObject: 'index.html',
       // 커스텀 도메인 (Route53 존 atomai.click, ACM us-east-1 *.atomai.click) — CDK에 고정해 out-of-band 변경이 되돌려지지 않게 한다
       domainNames: [props.domainName ?? 'agent.atomai.click'],
@@ -366,7 +375,7 @@ export class BankPlatformStack extends cdk.Stack {
       handler: 'ws_handler.handler',
       code: apiCode,
       memorySize: 1536,
-      timeout: cdk.Duration.seconds(150),
+      timeout: cdk.Duration.minutes(15),   // 디자인 스튜디오 프로세스 생성(스텝 N장 × 최대 2회) — API GW 응답과 무관하게 @connections 로 스트리밍
       reservedConcurrentExecutions: 10,
       logRetention: logs.RetentionDays.ONE_WEEK,
       environment: {
@@ -398,9 +407,11 @@ export class BankPlatformStack extends cdk.Stack {
         SKILLS_S3_URI: `s3://${skillsBucket.bucketName}/skills/`,
         AGENTCORE_REGISTRY_REGION: 'us-east-1',
         AGENTS_RUNTIME_ARN: agentsRuntime ? agentsRuntime.attrAgentRuntimeArn : '',
+        WEB_BUCKET: webBucket.bucketName,   // 디자인 스튜디오 산출물 design-runs/* (CloudFront 로 서빙)
       },
       description: 'bank-platform websocket backend (cloud plane)',
     });
+    webBucket.grantReadWrite(fn, 'design-runs/*');
     connTable.grantReadWriteData(fn);
     traceTable.grantReadWriteData(fn);
     cacheTable.grantReadWriteData(fn);
