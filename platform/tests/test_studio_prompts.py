@@ -32,6 +32,16 @@ def test_system_prompt_contains_spec_and_style():
     assert prompts.build_system_prompt(SPEC, "wireframe", "밀도", skills).count("브랜드 컬러 금지") == 1
 
 
+def test_system_prompt_caps_fewshot_and_assets():
+    skills, _ = prompts.load_skills()
+    fewshot = ["x" * 20000 for _ in range(3)]
+    s = prompts.build_system_prompt(SPEC, "design", "밀도", skills, assets_text="a" * 30000, fewshot=fewshot)
+    assert s.count("### 승인 참고 시안") == 2
+    assert "참고 시안 일부 생략" in s
+    assert "자산 내용 일부 생략" in s
+    assert len(s) < 60000
+
+
 def test_user_prompt_regenerate_and_refine():
     u = prompts.build_user_prompt("적금 가입 플로우", SPEC, failures=[{"id": "LLM-1", "text": "기본금리 표기", "evidence": "없음", "fix": "상단에 연 3.0% 표기"}], prev_html="<html>prev</html>")
     assert "이전 라운드" in u and "상단에 연 3.0% 표기" in u and "<html>prev</html>" in u and "필요한 부분만" in u

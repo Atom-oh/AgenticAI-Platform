@@ -22,6 +22,9 @@ OUTPUT_STYLES = {
                 "순서대로 배치하고, 프레임 사이를 화살표(→)와 트리거 레이블(탭/입력/제출)로 연결해 "
                 "하나의 사용자 흐름을 보여줘라. 각 프레임은 390px 폭 모바일 화면이며 <section data-step=\"n\"> 으로 감싼다."),
 }
+FEWSHOT_MAX_CHARS = 12000
+FEWSHOT_MAX_REFS = 2
+ASSETS_MAX_CHARS = 16000
 _FENCE_RE = re.compile(r"```(?:html)?\s*\n(.*?)```", re.DOTALL)
 _DOC_RE = re.compile(r"(<!doctype html>.*?</html>|<html.*?</html>)", re.DOTALL | re.IGNORECASE)
 
@@ -71,13 +74,21 @@ def build_system_prompt(spec: dict, output_type: str, axis: str, skills: dict, a
     if agent_preset:
         parts.append("### 공유 에이전트 프리셋\n" + agent_preset)
     if assets_text:
-        parts.append("### 사용자가 선택한 자산 (기본 토큰보다 우선)\n" + assets_text)
-    for i, ref in enumerate(fewshot or [], start=1):
-        parts.append(f"### 승인 참고 시안 {i} — 구조·품질 기준만 따르고 상품 내용은 복사하지 않는다\n```html\n{ref}\n```")
+        text = assets_text
+        if len(text) > ASSETS_MAX_CHARS:
+            text = text[:ASSETS_MAX_CHARS] + "\n(자산 내용 일부 생략)"
+        parts.append("### 사용자가 선택한 자산 (기본 토큰보다 우선)\n" + text)
+    for i, ref in enumerate((fewshot or [])[:FEWSHOT_MAX_REFS], start=1):
+        body = ref
+        if len(body) > FEWSHOT_MAX_CHARS:
+            body = body[:FEWSHOT_MAX_CHARS] + "\n<!-- 참고 시안 일부 생략 -->"
+        parts.append(f"### 승인 참고 시안 {i} — 구조·품질 기준만 따르고 상품 내용은 복사하지 않는다\n```html\n{body}\n```")
     return "\n\n".join(parts)
 
 
 def build_user_prompt(brief: str, spec: dict, *, failures: list | None = None, prev_html: str = "", refine: dict | None = None) -> str:
+    # prev_html is spliced in whole (no truncation): the regenerate/refine contract requires the
+    # model to see and return the full previous document, or partial edits would corrupt it.
     if refine:
         return ("아래 원본 HTML 전체가 주어진다. 사용자가 클릭으로 선택한 요소와 수정 지시에 따라 그 부분만 수정하고, "
                 "나머지 마크업·스타일·텍스트·순서는 그대로 보존하라. 완성된 전체 HTML을 다시 출력하라.\n"
