@@ -9,6 +9,8 @@ from html.parser import HTMLParser
 
 _WS = re.compile(r"\s+")
 _FETCH = re.compile(r"\bfetch\s*\(|XMLHttpRequest|navigator\.sendBeacon")
+# 닫는 태그가 없는 태그 — _stack 에 쌓으면 이후 경로가 전부 밀려 골격 diff 가 왜곡된다.
+_VOID = {"input", "br", "img", "meta", "link", "hr", "source", "wbr"}
 
 
 def _norm(s: str) -> str:
@@ -37,21 +39,25 @@ class _Parser(HTMLParser):
         self._step_stack: list[dict | None] = []
 
     def _step(self) -> dict:
+        """섹션 밖 콘텐츠를 담을 임시 프레임 — 명시 <section data-step> 이 하나라도 있으면 parse_html 이 버린다."""
         if self.cur is None:
-            self.cur = {"index": len(self.steps) + 1, "screen": "", "text": [], "headings": [], "buttons": [], "inputs": [], "labels": []}
+            self.cur = {"index": len(self.steps) + 1, "screen": "", "text": [], "headings": [], "buttons": [], "inputs": [], "labels": [],
+                        "_implicit": True}
             self.steps.append(self.cur)
         return self.cur
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
-        self._stack.append(tag)
-        self.paths[">".join(self._stack[-3:])] += 1
+        self.paths[">".join((self._stack + [tag])[-3:])] += 1
+        if tag not in _VOID:
+            self._stack.append(tag)
         if tag == "section":
             is_step = "data-step" in a
             self._section_is_step.append(is_step)
             if is_step:
                 self._step_stack.append(self.cur)
-                self.cur = {"index": len(self.steps) + 1, "screen": a.get("data-screen", ""), "text": [], "headings": [], "buttons": [], "inputs": [], "labels": []}
+                self.cur = {"index": len(self.steps) + 1, "screen": a.get("data-screen", ""), "text": [], "headings": [], "buttons": [], "inputs": [],
+                            "labels": [], "_implicit": False}
                 self.steps.append(self.cur)
                 return
         if tag == "style":
@@ -118,10 +124,16 @@ class _Parser(HTMLParser):
 
 
 def parse_html(html: str) -> dict:
+    """명시 <section data-step> 이 하나라도 있으면 프레임은 그것만이다 — 헤더·푸터 같은 섹션 밖 텍스트는
+    doc["text"] 로만 남고 프레임 수(minSteps/maxSteps)를 부풀리지 않는다. 명시 섹션이 없으면 암시 프레임 1개."""
     p = _Parser()
     p.feed(html or "")
-    steps = p.steps or [{"index": 1, "screen": "", "text": [], "headings": [], "buttons": [], "inputs": [], "labels": []}]
-    for s in steps:
+    steps = [s for s in p.steps if not s.get("_implicit")]
+    if not steps:
+        steps = p.steps[:1] or [{"index": 1, "screen": "", "text": [], "headings": [], "buttons": [], "inputs": [], "labels": []}]
+    for i, s in enumerate(steps, start=1):
+        s["index"] = i
+        s.pop("_implicit", None)
         s["text"] = " ".join(s["text"])
     return {"steps": steps, "text": " ".join(p.text), "style": " ".join(p.style),
             "externalScripts": p.external_scripts, "hasFetch": bool(_FETCH.search(" ".join(p.script_text))),

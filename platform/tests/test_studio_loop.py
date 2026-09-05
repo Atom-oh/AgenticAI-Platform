@@ -169,3 +169,44 @@ def test_generate_exception_becomes_error_stop():
         raise RuntimeError("gate refused")
     out = loop.run(_job(maxRounds=3), loop.ListEmitter(), spec=SPEC, generate=boom, review_generate=reviewer(), publish=publish)
     assert out["stopReason"] == "error" and "gate refused" in out["error"] and out["rounds"] == 1
+
+
+def test_done_payload_stays_under_frame_budget():
+    """20라운드 전부 실패 + 긴 근거/수정 문구 — .done 은 WebSocket 프레임(128KB) 안에 들어와야 한다."""
+    import json as _json
+
+    def generate(system, user, max_tokens):
+        return FakeStream(["```html\n", BAD_HTML, "\n```"])
+
+    long_text = "가" * 300
+
+    def review_generate(system, user, max_tokens):
+        return _json.dumps({"items": [{"id": i, "verdict": "fail", "evidence": long_text, "fix": long_text} for i in LLM_IDS]}), {}
+
+    out = loop.run(_job(maxRounds=20, passScore=100), loop.ListEmitter(), spec=SPEC, generate=generate,
+                   review_generate=review_generate, publish=publish)
+    assert out["rounds"] == 20 and out["stopReason"] == "max_rounds"
+    size = len(_json.dumps(out, ensure_ascii=False).encode())
+    assert size < 100_000, size
+    for h in out["history"]:
+        assert len(h["failures"]) <= loop.DONE_FAILURES_PER_ROUND and h["failuresTotal"] >= len(h["failures"])
+        assert all(set(f) == {"id", "text", "verdict"} for f in h["failures"])
+        assert len(h["undetermined"]) <= loop.DONE_UNDETERMINED_MAX
+    assert all(len(i["evidence"]) <= loop.DONE_TEXT_MAX and len(i["fix"]) <= loop.DONE_TEXT_MAX for i in out["items"])
+
+
+def test_reports_measured_model_and_route():
+    class MeasuredStream(FakeStream):
+        model_id = "measured-model"
+        route = "claude"
+
+    def generate(system, user, max_tokens):
+        return MeasuredStream(["```html\n", GOOD_HTML, "\n```"])
+
+    out = loop.run(_job(maxRounds=1), loop.ListEmitter(), spec=SPEC, generate=generate, review_generate=reviewer("pass"), publish=publish)
+    assert out["model"] == "measured-model" and out["route"] == "claude"
+
+
+def test_model_falls_back_to_configured_id_when_unmeasured():
+    out = loop.run(_job(maxRounds=1), loop.ListEmitter(), spec=SPEC, generate=gen_seq(GOOD_HTML), review_generate=reviewer("pass"), publish=publish)
+    assert out["model"] == loop.MODEL and out["route"] == ""

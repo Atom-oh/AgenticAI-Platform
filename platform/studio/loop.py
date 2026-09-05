@@ -18,6 +18,10 @@ TIME_CAP_S = 780
 GEN_MAX_TOKENS = 12000
 REVIEW_MAX_TOKENS = 2500
 MODEL = os.environ.get("GEN_MODEL", "global.anthropic.claude-sonnet-5")
+# .done 프레임 예산 — API Gateway WebSocket 프레임(128KB)을 넘기면 마지막 프레임이 통째로 사라진다.
+DONE_FAILURES_PER_ROUND = 5
+DONE_TEXT_MAX = 160
+DONE_UNDETERMINED_MAX = 20
 
 
 class ListEmitter:
@@ -83,9 +87,30 @@ def _review_round(spec: dict, items: list, html: str, prev_html: str, review_gen
         verdicts.update(llm_v)
     sc = review.score(items, verdicts, pass_score)
     rows = _items_with_verdicts(items, verdicts)
-    failures = [{"id": r["id"], "text": r["text"], "evidence": r["evidence"], "fix": r["fix"]} for r in rows if r["verdict"] != "pass"]
+    failures = [{"id": r["id"], "text": r["text"], "verdict": r["verdict"], "evidence": r["evidence"], "fix": r["fix"]} for r in rows if r["verdict"] != "pass"]
     return {**sc, "items": rows, "failures": failures, "reviewerError": reviewer_error, "usage": usage or {},
             "deterministic": sum(1 for i in items if i.get("check") in ("text", "dom")), "llm": len(llm_items)}
+
+
+def _done_items(items: list) -> list:
+    """항목은 전부 남기고 근거·수정 지시만 자른다 — 판정 수치는 그대로 유지된다."""
+    return [{**it, "evidence": str(it.get("evidence") or "")[:DONE_TEXT_MAX], "fix": str(it.get("fix") or "")[:DONE_TEXT_MAX]}
+            for it in items]
+
+
+def _done_history(history: list) -> list:
+    """라운드 기록 축약 — 실패 항목은 라운드당 상위 5건의 (id, text, verdict) 만. 전체 건수는 failuresTotal 로 사실대로 남긴다."""
+    out = []
+    for h in history:
+        rec = {k: v for k, v in h.items() if k not in ("html", "items", "failures", "undetermined")}
+        fails = h.get("failures") or []
+        rec["failures"] = [{"id": f.get("id"), "text": f.get("text"), "verdict": f.get("verdict")} for f in fails[:DONE_FAILURES_PER_ROUND]]
+        rec["failuresTotal"] = len(fails)
+        und = h.get("undetermined") or []
+        rec["undetermined"] = und[:DONE_UNDETERMINED_MAX]
+        rec["undeterminedTotal"] = len(und)
+        out.append(rec)
+    return out
 
 
 def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, skills=None, assets_text: str = "",
@@ -105,6 +130,7 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
     failures: list = []
     prev_html = base_html if job["mode"] == "refine" else ""
     stop, error = "max_rounds", None
+    model_used, route_used = "", ""  # 실측(engine.bedrock.Stream 이 노출) — 없으면 설정값 MODEL 로 보고한다
     rnd = 0
     while rnd < job["maxRounds"]:
         if rnd > 0 and clock() - t0 > time_cap_s:
@@ -124,6 +150,9 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
                 parts.append(tk)
                 emitter.token(tk)
             u = getattr(stream, "usage", None) or {}
+            if not model_used:
+                model_used = str(getattr(stream, "model_id", None) or "")
+                route_used = str(getattr(stream, "route", None) or "")
         except Exception as e:  # noqa: BLE001 — 게이트 거부 등: 라운드 중단, 사실대로 보고
             stop, error = "error", f"{type(e).__name__}: {str(e)[:200]}"
             history.append({"round": rnd, "score": 0, "passed": False, "url": "", "failures": [{"id": "GENERATE", "text": "생성 실패", "evidence": error, "fix": ""}],
@@ -160,8 +189,8 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
            "score": best["score"] if best else 0, "passed": bool(best and best["passed"]), "rounds": rnd,
            "maxRounds": job["maxRounds"], "passScore": job["passScore"], "stopReason": stop,
            "bestRound": best["round"] if best else 0, "url": best["url"] if best else "", "html": best["html"] if best else "",
-           "items": best.get("items", []) if best else [], "history": [{k: v for k, v in h.items() if k not in ("html", "items")} for h in history],
-           "usage": usage, "model": MODEL, "elapsedMs": int((clock() - t0) * 1000),
+           "items": _done_items(best.get("items", []) if best else []), "history": _done_history(history),
+           "usage": usage, "model": model_used or MODEL, "route": route_used, "elapsedMs": int((clock() - t0) * 1000),
            "spec": {"productCode": spec.get("productCode"), "productName": spec.get("productName"),
                     "hasPreferential": spec.get("hasPreferential"), "stepCount": len(spec.get("steps", []))}}
     if error:

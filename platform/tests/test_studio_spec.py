@@ -72,3 +72,4 @@ def test_list_products_marks_preferential():
     fb = next(r for r in rows if r["code"] == "PRD-DEP-001")
     assert fb["hasPreferential"] and fb["conditionCount"] == 5 and fb["stepCount"] == 7
     assert rows[0]["code"] == "PRD-DEP-001", "히어로 상품이 먼저"
+    assert len(rows) <= 12, "Neptune 왕복 상한 — 기본 12행"

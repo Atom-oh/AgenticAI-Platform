@@ -6,12 +6,12 @@ description: 스튜디오 시안 출력 계약 — 자기완결 HTML 1개, 프�
 # Studio Draft HTML — 출력 계약
 
 출력: **자기완결 HTML 문서 1개**를 ```html 펜스 안에 낸다. 설명은 펜스 밖에 한 문장만.
-- 인라인 `<style>`만. 외부 `<script src>`·`fetch`·외부 CSS 금지. Google Fonts `<link>`(Noto Sans KR)만 허용.
+- 인라인 `<style>`만. 외부 `<script src>`·`fetch`·외부 CSS 금지 — 외부 리소스 없이 시스템 폰트 스택(Noto Sans KR 우선, fallback sans-serif)을 쓴다.
 - 모바일 프레임 폭 390px, 최소 높이 844px. 흰 카드(radius 16px)를 #f4f6f5 바탕 위에 섹션 단위로 배치, 주 CTA 1개를 하단 고정.
 - **프레임 마킹(필수)**: 화면 하나마다 `<section data-step="n" data-screen="SCR-…">`. 단일 화면 시안도 `data-step="1"` 하나를 둔다.
   ux-flow 는 절차 단계 순서대로 n을 매기고 각 프레임 첫 요소는 `<h2>`로 단계 이름을 쓴다.
 - 가짜 기기 크롬 금지(상태바·시계·배터리·가상 키보드).
-- 한국어 카피, 실제 같은 샘플 데이터(김하나, 하나 주거래 통장 …). 상품 조건(금리·기간·한도·우대)은 프롬프트의 DesignSpec 값을 그대로 쓴다.
+- 한국어 카피, 실제 같은 샘플 데이터(김아톰, 아톰 주거래 통장 …). 상품 조건(금리·기간·한도·우대)은 프롬프트의 DesignSpec 값을 그대로 쓴다.
 - 터치 타깃 ≥ 44px, 본문 ≥ 13px.
 
 축(axis) — 요청된 축 하나만 움직인다:

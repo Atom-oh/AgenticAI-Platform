@@ -59,6 +59,7 @@ def _wire(monkeypatch, apigw, s3, store):
     monkeypatch.setattr(w, "_review_generate", lambda system, user, max_tokens: (json.dumps({"items": []}), {}))
     monkeypatch.setattr(w, "_assets_text", lambda ids: "팔레트" if ids else "")
     monkeypatch.setattr(w, "_agent_preset", lambda aid: "")
+    monkeypatch.setattr(w.costguard, "add_usage", lambda tokens: 0)
 
 
 def _event(**job):
@@ -69,6 +70,8 @@ def _event(**job):
 def test_worker_streams_publishes_and_records(monkeypatch):
     apigw, s3, store = _Apigw(), _S3(), StudioStore()
     _wire(monkeypatch, apigw, s3, store)
+    spent = []
+    monkeypatch.setattr(w.costguard, "add_usage", lambda tokens: spent.append(tokens))
     store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
     out = w.handler(_event(), None)
     assert out["statusCode"] == 200
@@ -83,6 +86,8 @@ def test_worker_streams_publishes_and_records(monkeypatch):
     assert job["status"] == "done" and len(job["rounds"]) == 2 and job["draftId"] == "job123456789"
     d = store.get_draft("job123456789")
     assert d["status"] == "검토중" and d["productName"] == "아톰 축구사랑 적금" and d["bestRound"] == 2 and d["key"].endswith("-r2.html")
+    # 일일 토큰 상한(costguard)에 실측 사용량이 등록된다 — 합계는 done 프레임의 usage 와 같다
+    assert spent == [done["usage"]["inputTokens"] + done["usage"]["outputTokens"]] and spent[0] > 0
 
 
 def test_worker_survives_gone_connection(monkeypatch):
@@ -181,3 +186,24 @@ def test_refine_rejects_other_product_base(monkeypatch):
     done = apigw.sent[-1]
     assert done["type"] == "studio.done" and "다릅니다" in done["error"]
     assert store.get_job("job123456789")["status"] == "failed"
+
+
+def test_missing_web_url_fails_the_job_honestly(monkeypatch):
+    apigw, s3, store = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, apigw, s3, store)
+    monkeypatch.setattr(w, "WEB_URL", "")
+    store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
+    w.handler(_event(), None)
+    done = apigw.sent[-1]
+    assert done["type"] == "studio.done" and "WEB_URL/WEB_BUCKET 미설정" in done["error"]
+    assert store.get_job("job123456789")["status"] == "failed"
+
+
+def test_oversized_done_frame_drops_items(monkeypatch):
+    apigw, s3, store = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, apigw, s3, store)
+    monkeypatch.setattr(w, "DONE_FRAME_MAX", 200)
+    store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
+    w.handler(_event(maxRounds=1), None)
+    done = apigw.sent[-1]
+    assert done["items"] == [] and done["itemsTruncated"] is True and done["score"] > 0

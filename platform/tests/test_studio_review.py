@@ -119,3 +119,20 @@ def test_score_math_and_undetermined_not_pass():
     verdicts["LLM-2"] = {"verdict": "fail", "evidence": "", "fix": ""}
     s = review.score(ITEMS, verdicts, pass_score=95)
     assert s["score"] == round(19 / 21 * 100) and not s["passed"], "필수는 다 통과했지만 점수 미달"
+
+
+def test_header_outside_sections_is_not_a_frame():
+    """섹션 밖 헤더는 프레임을 만들지 않는다 — maxSteps 검사가 유령 프레임 때문에 실패하면 안 된다."""
+    html = wrap(["<header><h1>아톰은행</h1></header>"] + SECTIONS[:6])
+    doc = review.parse_html(html)
+    assert len(doc["steps"]) == 6
+    assert [s["index"] for s in doc["steps"]] == [1, 2, 3, 4, 5, 6]
+    ok, ev, _ = review._check_dom({"maxSteps": 6}, doc)
+    assert ok, ev
+    assert "아톰은행" in doc["text"]
+
+
+def test_void_tags_do_not_unbalance_skeleton_paths():
+    a = "<html><body><div><input type='text'><span>x</span></div></body></html>"
+    b = "<html><body><div><span>x</span></div></body></html>"
+    assert "div>span" in " ".join(review.skeleton(a)) and "div>span" in " ".join(review.skeleton(b))

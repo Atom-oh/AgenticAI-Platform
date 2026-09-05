@@ -86,8 +86,8 @@ def test_run_invoke_failure_marks_job_failed(monkeypatch):
     monkeypatch.setattr(h, "_invoke", _boom)
     ctx, a = _ctx()
     h.studio_run(ctx, {"brief": "b", "productCode": "PRD-DEP-001"})
-    job_id = h._store.list_jobs()[0]["jobId"]
     last = a.sent[-1]
+    job_id = last["jobId"]  # list_jobs()[0] 은 같은 ms 에 만들어진 다른 테스트의 잡을 집을 수 있다
     assert last["type"] == "studio.done" and "boom" in last["error"]
     assert h._store.get_job(job_id)["status"] == "failed"
 

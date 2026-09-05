@@ -166,10 +166,16 @@ def build_spec(store, product_code: str, output_type: str = "design") -> dict:
             "steps": steps, "terms": terms, "brandHex": BRAND_HEX, "items": items}
 
 
-def list_products(store) -> list[dict]:
-    """조건이 있고 판매 화면이 있는 상품만. 히어로(PRD-DEP-*) 먼저, 나머지는 조건 수 내림차순."""
+def list_products(store, limit: int = 12, max_scan: int = 40) -> list[dict]:
+    """조건이 있고 판매 화면이 있는 상품만. 히어로(PRD-DEP-*) 먼저, 나머지는 조건 수 내림차순.
+
+    Neptune 왕복 상한: 상품마다 neighbors 2회이므로 스캔을 max_scan 개(=왕복 2·max_scan 회)로 끊고
+    limit 행을 모으면 즉시 멈춘다 — 상품 수가 늘어도 studio_products 응답 시간이 선형으로 늘지 않는다.
+    """
+    products = list(store.find_by_label("Product"))
+    products.sort(key=lambda p: (0 if str(p.id).startswith("PRD-DEP-") else 1, str(p.id)))
     rows = []
-    for p in store.find_by_label("Product"):
+    for p in products[:max_scan]:
         conds = [n for _, n in store.neighbors(p.id, rel="HAS_CONDITION")]
         screens = [n for _, n in store.neighbors(p.id, rel="SOLD_VIA")]
         if not conds or not screens:
@@ -177,5 +183,7 @@ def list_products(store) -> list[dict]:
         rows.append({"code": p.id, "name": p.props.get("name", p.id), "category": p.props.get("category", ""),
                      "conditionCount": len(conds), "stepCount": len(screens),
                      "hasPreferential": any(c.props.get("type") in PREFERENTIAL_TYPES for c in conds)})
+        if len(rows) >= limit:
+            break
     rows.sort(key=lambda r: (0 if r["code"].startswith("PRD-DEP-") else 1, -r["conditionCount"], r["code"]))
-    return rows[:40]
+    return rows

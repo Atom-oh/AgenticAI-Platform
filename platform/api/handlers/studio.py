@@ -93,7 +93,7 @@ def studio_feedback(ctx: Ctx, body: dict) -> None:
     if not d:
         ctx.post({"type": "studio_feedback", "error": "시안을 찾을 수 없습니다"})
         return
-    log_event("studio.feedback", ctx.trace_id, draftId=d["draftId"], status=status, actor=ctx.email)
+    log_event("studio.feedback", ctx.trace_id, draftId=d["draftId"], status=status, email=ctx.email)  # 키 email → common.log 가 해시로 치환
     ctx.post({"type": "studio_feedback", "draft": d})
 
 
@@ -119,10 +119,15 @@ def studio_asset(ctx: Ctx, body: dict) -> None:
     ctx.post({"type": "studio_asset", "content": content, "history": history.get("history", history)})
 
 
+def _scope(v) -> str:
+    """레지스트리 scope 는 허용값만 통과시킨다 — 임의 문자열이 그대로 프록시로 나가지 않게."""
+    return v if v in ("shared", "mine") else "shared"
+
+
 def studio_register(ctx: Ctx, body: dict) -> None:
     r = studio_proxy.studio("POST", "/api/assets", str(body.get("studioToken", "")),
                             {"name": str(body.get("name", ""))[:80], "type": str(body.get("assetType", "")),
-                             "content": str(body.get("content", ""))[:20000], "scope": body.get("scope", "shared")})
+                             "content": str(body.get("content", ""))[:20000], "scope": _scope(body.get("scope"))})
     ctx.post({"type": "studio_register", **r})
 
 

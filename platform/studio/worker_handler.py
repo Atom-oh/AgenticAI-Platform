@@ -6,11 +6,12 @@ STUDIO_TABLE 에 기록한다. 모델 호출은 engine.bedrock(익명화 게이�
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 import uuid
 
-from common import tracing
+from common import costguard, tracing
 from common.ctx import Ctx
 from common.log import log_event
 from studio import loop, spec as specmod
@@ -20,6 +21,8 @@ KIND = "studio"
 BUCKET = os.environ.get("WEB_BUCKET", "")
 WEB_URL = os.environ.get("WEB_URL", "").rstrip("/")
 PREFIX = "studio/drafts"
+# API Gateway WebSocket 프레임 상한(128KB) 아래로 유지 — 넘으면 마지막 프레임이 통째로 버려져 클라이언트가 매달린다.
+DONE_FRAME_MAX = 110_000
 
 
 # ---------- 주입 지점 (테스트가 monkeypatch) ----------
@@ -148,6 +151,9 @@ def handler(event, context):
         store = _store()
         ctx = Ctx(apigw=_TolerantApigw(_apigw_client(event.get("endpoint", "")), trace_id=trace_id), conn_id=event.get("connId", ""),
                   email=event.get("email", ""), rid=event.get("reqId", ""), trace_id=trace_id)
+        if not WEB_URL or not BUCKET:
+            # 게시 위치가 없으면 시안은 어디에도 남지 않는다 — 조용히 빈 URL 로 성공한 척하지 않는다.
+            raise RuntimeError("WEB_URL/WEB_BUCKET 미설정 — 시안을 게시할 수 없습니다")
         s3 = _s3_client()
         emitter = _CtxEmitter(ctx, store, job["jobId"])
         graph = _graph()
@@ -170,6 +176,10 @@ def handler(event, context):
         out = loop.run(job, emitter, spec=spec, generate=_generate, review_generate=_review_generate, publish=publish,
                        assets_text=_assets_text(job["assetIds"]), fewshot=_fewshot(store, s3, BUCKET, trace_id=trace_id),
                        agent_preset=_agent_preset(job["agentId"]), base_html=base_html, time_cap_s=_time_cap(context))
+        try:  # 일일 토큰 상한(costguard)에 이 루프의 실측 사용량을 반영한다 — 실패해도 결과 전달을 막지 않는다
+            costguard.add_usage(int(out["usage"].get("inputTokens", 0) or 0) + int(out["usage"].get("outputTokens", 0) or 0))
+        except Exception as e:  # noqa: BLE001
+            log_event("studio.usage_record_failed", ctx.trace_id, error=str(e)[:80])
         draft = None
         if out["url"]:
             title = (job["brief"][:40] or spec["productName"]) + (" (수정)" if job["mode"] == "refine" else "")
@@ -190,7 +200,15 @@ def handler(event, context):
         except Exception as e:  # noqa: BLE001 — 계측 실패가 결과 전달을 막지 않는다 (TRACE_TABLE 미설정 등)
             log_event("studio.trace_failed", ctx.trace_id, error=str(e)[:80])
         done = {k: v for k, v in out.items() if k != "html"}
-        ctx.done(KIND, **done, draftId=draft["draftId"] if draft else None, backend=store.backend, graphBackend=getattr(graph, "name", "unknown"))
+        done.update(draftId=draft["draftId"] if draft else None, backend=store.backend, graphBackend=getattr(graph, "name", "unknown"))
+        size = len(json.dumps(done, ensure_ascii=False, default=str).encode())
+        if size > DONE_FRAME_MAX:
+            # 프레임을 넘기는 것보다 항목표를 버리는 것이 낫다 — 점수·라운드 기록은 유지되고, 잘랐다는 사실을 프론트에 알린다.
+            done["items"] = []
+            done["itemsTruncated"] = True
+            log_event("studio.done_trimmed", ctx.trace_id, bytes=size,
+                      trimmedBytes=len(json.dumps(done, ensure_ascii=False, default=str).encode()), limit=DONE_FRAME_MAX)
+        ctx.done(KIND, **done)
         return {"statusCode": 200}
     except Exception as e:  # noqa: BLE001 — 사용자에게 보여야 하는 실패
         msg = f"{type(e).__name__}: {str(e)[:200]}" if not isinstance(e, specmod.SpecError) else str(e)
