@@ -556,3 +556,12 @@ AgentCore insights · Evaluations · Policy는 서울에서 global 교차 리전
 - §4-2: us-west-2 표준 카탈로그(`list-foundation-models`)에는 `google.gemma-3-{4b,12b,27b}-it`만 보인다. `google.gemma-4-31b`는 bedrock-mantle 카탈로그에서 런타임에 확인한다(어댑터 헬스체크). 장기 API 키 시크릿은 계정에 없다 → 어댑터는 IAM 자격으로 단기 Bearer 토큰(12h)을 발급해 사용하고, 장기 키가 Secrets Manager에 있으면 그것을 우선한다.
 - §11-2: 데모는 규칙 기반 토큰화(마스킹 게이트)를 **구현했다**. 배지는 사실대로 "합성데이터 가명 생성 + 규칙 기반 토큰화 (ML 가명처리·재식별 볼트 미구현)"로 표기한다.
 - §12.9·부록(데모 접속): 사용자 결정(2026-09-03)으로 데모 계정 비밀번호를 가이드북 `docs/14-demo/index.md` 접속 정보에 적는다(데모 전용 계정, 합성데이터만 접근). 코드·로그·이 문서에는 적지 않으며 원본은 Secrets Manager `bank-platform/demo-user`다.
+- 디자인 스튜디오(2026-09-04, 사용자 결정): 상품 명세 출처 = 온톨로지 Product(Condition·Procedure·ScreenMeta·PolicyRule·UXTerm) —
+  문서 업로드 없음. 에이전틱 루프(생성→체크리스트 검수→수정 재생성)는 플랫폼 워커 Lambda(StudioLoopFn, 15분)에서 돌고 점수 기준으로
+  반복한다(라운드 기본 3, 1~20 조정, 통과 점수 기본 85). 생성물은 HTML 시안(React 변환은 S3 화면 생성으로 분리). 모델 호출은
+  익명화 게이트 경유. 시안·잡·승인은 플랫폼 DynamoDB+S3, 자산은 uiux-studio 레지스트리 프록시. 미판정은 통과로 세지 않고
+  최종 시안은 최고 점수 라운드로 표기한다. 설계: docs/superpowers/specs/2026-09-04-design-studio-agentic-loop-design.md
+  검수 안정성 항목(STABLE, DOM 골격 diff)은 모든 재생성 라운드에 표시되지만 가중치는 refine 모드에서만 1, 생성 모드 재생성
+  라운드에서는 0(정보용) — 라운드 간 점수 비교 가능성을 위해 설계 문서 §3-2의 '가중 1'을 이렇게 확정한다.
+  `studio_models` 프록시 라우트는 두지 않는다 — 생성은 익명화 게이트의 GEN_MODEL 로만 이뤄지며 UI 는 `studio_products`
+  응답의 model 을 읽기 전용으로 표시한다.

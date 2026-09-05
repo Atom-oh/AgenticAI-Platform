@@ -16,6 +16,7 @@
 | `engine/gate.py`, `engine/llm.py`, `engine/bedrock.py` | 게이트 모듈 | 익명화 게이트(유일한 모델 호출 경로)·LLMClient 어댑터(Claude global · Gemma mantle) |
 | `onprem/aoss_index.py` | 플레인 모듈 | OpenSearch Serverless 하이브리드 인덱스 (VPC 엔드포인트) |
 | `infra/lib/*.ts`, `deploy.sh`, `web/src/App.tsx`, `web/src/lib.ts`, `web/src/Views.tsx` | 통합자 | CDK·셸 |
+| `studio/`, `api/handlers/studio.py`, `api/common/studio_proxy.py`, `web/src/studio/`, `skills/studio-*.md`, `tests/test_studio*.py` | 스튜디오 모듈 | 디자인 스튜디오 · 에이전틱 루프(StudioLoopFn) · 명세 체크리스트 |
 
 ## 1. 핸들러 계약 (`api/handlers/<module>.py`)
 
@@ -37,6 +38,7 @@ ROUTES = {"x": handle_x, "x_list": ...}   # 액션 이름은 모듈 접두어로
 - 환경변수는 `os.environ.get("X", default)`; 새 env가 필요하면 통합 스니펫에 명시.
 - Lambda 런타임: Python 3.12, **외부 pip 패키지 없음**(boto3만). PyYAML도 없다 (semantic은 json 변환본 사용).
 - 배포 조립: `deploy.sh`가 `api/*.py`, `api/common`, `api/handlers`, `engine`, `graph`, `onprem`, `semantic`, `seed/out` + **각 모듈 디렉토리**(`registry`, `screengen`, `report`)를 `api-dist/`로 복사한다. 모듈은 `import registry.x` 처럼 최상위 패키지로 import 된다 (`sys.path`에 api-dist 루트).
+- 장기 실행 스트리밍(스튜디오): WsFn 은 ack 1건(`studio_run`)만 보내고 워커 Lambda 가 같은 커넥션에 `studio.stage/.token/.done` 을 push 한다. 워커는 STUDIO_LOOP_FN 미설정 시 `.done(error)` 로 미배포를 알린다.
 
 ## 2. 프론트 계약 (`web/src/views/<View>.tsx`)
 

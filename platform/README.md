@@ -130,4 +130,5 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 | Tier 2 Gemma 경로 (bedrock-mantle) | 코드 완료 · 가용성 런타임 확인 | `engine/llm.py GemmaAdapter` — 모델/키 미확인 시 배지에 "미가용" 표기 |
 | 익명화 변환(ML 가명처리·재식별 볼트) | 미구현 (배지 표기) | §11-2 배지: 규칙 기반 토큰화만 구현 |
 | pgvector | 미사용 (AOSS 확정) | §16 |
+| 디자인 스튜디오 에이전틱 루프 (StudioLoopFn · StudioTable · studio/drafts) | 구현됨 · 배포 대기 | §16 |
 

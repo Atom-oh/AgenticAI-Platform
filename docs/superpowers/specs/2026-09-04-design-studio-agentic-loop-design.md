@@ -109,7 +109,7 @@
 
 1. **generate** — `engine.bedrock.Stream`. 시스템 프롬프트 = 스튜디오 스킬(`platform/skills/studio-*.md`, 원본 hana-design-system·design-draft-html·a11y-finance를 이식) + 출력 유형 스타일(design/mockup/wireframe/ux-flow, 원본 `OUTPUT_STYLES` 이식) + 축(밀도/강조/흐름) + DesignSpec 요약(단계·조건·용어·정책) + 선택 자산 내용(프록시로 로드) + 승인본 few-shot ≤2 + 에이전트 프리셋(자산 type `agent`). 출력 계약: 자기완결 HTML 1개, 프레임은 `<section data-step="n" data-screen="SCR-…">`, 390px 모바일, 외부 리소스 금지.
 2. **review** — 하이브리드.
-   - 결정적 검사(`studio/review.py`, 모델 호출 없음): `check: text`(용어·문구 존재, 정규화 후 부분 일치), `check: dom`(`html.parser`로 프레임 수·`data-step` 순서·입력/동의 컨트롤 존재·브랜드 hex 사용·외부 스크립트/fetch 금지). 라운드 2+와 refine 모드에서는 이전 HTML과 DOM 골격(태그 경로 다중집합) diff → 수정 대상 밖 변동은 **경고 항목 `STABLE`(가중 1)**.
+   - 결정적 검사(`studio/review.py`, 모델 호출 없음): `check: text`(용어·문구 존재, 정규화 후 부분 일치), `check: dom`(`html.parser`로 프레임 수·`data-step` 순서·입력/동의 컨트롤 존재·브랜드 hex 사용·외부 스크립트/fetch 금지). 라운드 2+와 refine 모드에서는 이전 HTML과 DOM 골격(태그 경로 다중집합) diff → 수정 대상 밖 변동은 **경고 항목 `STABLE`**(가중치: refine 모드 1, 생성 모드 재생성 라운드 0·정보용).
    - 리뷰어 모델 호출(`engine.bedrock.generate`, purpose `studio_review`, 별도 "리뷰 에이전트" 역할): `check: llm` 항목 + DOM 다이제스트(프레임별 헤딩·레이블·버튼·입력, ≤6k자) → 엄격 JSON `{items:[{id, verdict: pass|fail, evidence, fix}]}`. 파싱 실패·누락 항목은 **미판정(None)** — pass로 세지 않는다(SPEC §12 흉내 금지).
    - **점수** = Σ가중(pass) / Σ가중 × 100 (정수). **passed** = 필수 항목 전부 pass AND 점수 ≥ passScore(기본 85, 50~100 조정).
 3. **regenerate** — 이전 HTML + 실패 항목(fix 포함)을 넣고 "필요한 부분만 수정, 나머지 마크업·텍스트 보존"을 지시. 라운드 상한(1~20, 기본 3) 또는 벽시계 13분 도달 시 중단(`time_cap`).
@@ -125,7 +125,7 @@
 - **시안 HTML**: 기존 `WebBucket` `studio/drafts/<draftId>.html` — 기존 CloudFront로 서빙(`https://<domain>/studio/drafts/...`).
 - **StudioLoopFn**: Python 3.12, `apiCode` 동일 번들, 2048MB, timeout 15분. 권한: Bedrock invoke + guardrail apply, `execute-api:ManageConnections`, 테이블 RW, 버킷 `studio/*` Put, 그래프(Neptune/브리지 invoke) — WsFn과 동일 env 부분집합 + `STUDIO_TABLE`, `WEB_BUCKET`, `WS_ENDPOINT`.
 - **WsFn**: StudioLoopFn invoke 권한, 테이블 RW.
-- 핸들러 `api/handlers/studio.py` ROUTES: `studio_run`, `studio_jobs`(목록/단건+라운드), `studio_drafts`, `studio_feedback`(status+comment), `studio_products`(Product 목록: 이름·카테고리·조건 수·우대 여부), `studio_spec`(체크리스트 미리보기), `studio_asset`·`studio_models`·`studio_register`(프록시 이관). `core.py`의 `studio_*` 프록시 라우트와 `_studio()`는 `api/common/studio_proxy.py`로 옮기고 `hub`/`assets`만 그대로 쓴다.
+- 핸들러 `api/handlers/studio.py` ROUTES: `studio_run`, `studio_jobs`(목록/단건+라운드), `studio_drafts`, `studio_feedback`(status+comment), `studio_products`(Product 목록: 이름·카테고리·조건 수·우대 여부), `studio_spec`(체크리스트 미리보기), `studio_asset`·`studio_register`(프록시 이관). `core.py`의 `studio_*` 프록시 라우트와 `_studio()`는 `api/common/studio_proxy.py`로 옮기고 `hub`/`assets`만 그대로 쓴다.
 - `handlers/__init__.py`에 `handlers.studio` 등록. `deploy.sh`가 `studio/` 디렉토리를 `api-dist/`에 복사.
 
 ## 5. 프론트엔드 (`platform/web/src/studio/`)
