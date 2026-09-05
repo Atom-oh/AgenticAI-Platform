@@ -116,3 +116,12 @@ e2e(배포 후): 축구클럽 우대 적금 실행 → 플로우에 회원번호
 ## 9. 범위 밖 (이번 주)
 
 refine(클릭 수정), Figma 동기화, 실제 리액트 컴포넌트 매핑(내부망 트랙), GitLab 실제 푸시.
+
+## 10. 구현 상태 (2026-09-05)
+
+- **공유 엔진** `platform/design_loop/` — PRD 도출·명세서 파생 체크리스트·rule 판정·유계 루프(재생성 1회). 오프라인 테스트 13건.
+- **플랫폼(agent.atomai.click)** — 스튜디오에 "프로세스 생성 (검수 루프)" 탭. 기본 실행은 **Lambda 내(engine.gate 경유)** — 생성·판정이 익명화 게이트를 지나 경계 계측·PII 스캔을 받는다(§12.1). `DESIGN_USE_RUNTIME=1` 이면 AgentCore Runtime 의 `design_flow_agent`(Strands 컨테이너, 같은 엔진)로 실행. 산출물은 S3 `design-runs/*` → CloudFront.
+- **자산** — Registry(APPROVED)에 상품명세서 3·SM 모델 1·체크리스트 2를 시드(`registry/seed.py design_records`). 미시드 시 `seed/design/*.json` 폴백(배지 표기). float 금리·우대율은 DynamoDB 쓰기에서 Decimal 로 변환.
+- **자매 스튜디오(d4zwmnh2s47e9)** — 하니스 `mode=flow`가 같은 `design_loop` 를 돌린다(`scripts/deploy_runtime.py` 가 정본을 동기화). 스텝은 기존 갤러리 드래프트로 발행, 리포트는 잡 결과에 포함. **코드 완료 — 배포는 플랫폼 검증 후 별도 실행.**
+- **테스트 에이전트** — 결정론 rule 판정(플로우 맵·DOM·KWCAG 기본)을 실행. 브라우저 렌더링 기반 axe 는 미연동(배지로 표기).
+- **범위 밖(유지)** — refine(클릭 수정), Figma 동기화, 내부망 실 리액트 컴포넌트 매핑, GitLab 실 푸시.
