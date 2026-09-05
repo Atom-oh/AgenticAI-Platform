@@ -53,6 +53,16 @@ def test_parse_html_steps_and_signals():
     assert len(review.parse_html("<p>단일</p>")["steps"]) == 1
 
 
+def test_nested_step_sections_restore_outer():
+    html = ('<section data-step="1"><h1>outer</h1>'
+            '<section data-step="2"><h2>inner</h2></section>'
+            '<p>trailing</p></section>')
+    doc = review.parse_html(html)
+    assert len(doc["steps"]) == 2
+    assert "trailing" in doc["steps"][0]["text"]
+    assert "trailing" not in doc["steps"][1]["text"]
+
+
 def test_deterministic_checks_pass_on_good_flow():
     v = review.deterministic_checks(ITEMS, review.parse_html(FLOW_HTML))
     assert set(v) == {"FLOW-COND", "STEP-ORDER", "STEP-MIN", "POL-1", "CM-03", "CM-04", "TERM-1", "TERM-2"}

@@ -33,6 +33,8 @@ class _Parser(HTMLParser):
         self._label = False
         self.paths: Counter = Counter()
         self.script_text: list[str] = []
+        self._section_is_step: list[bool] = []
+        self._step_stack: list[dict | None] = []
 
     def _step(self) -> dict:
         if self.cur is None:
@@ -44,10 +46,14 @@ class _Parser(HTMLParser):
         a = dict(attrs)
         self._stack.append(tag)
         self.paths[">".join(self._stack[-3:])] += 1
-        if tag == "section" and "data-step" in a:
-            self.cur = {"index": len(self.steps) + 1, "screen": a.get("data-screen", ""), "text": [], "headings": [], "buttons": [], "inputs": [], "labels": []}
-            self.steps.append(self.cur)
-            return
+        if tag == "section":
+            is_step = "data-step" in a
+            self._section_is_step.append(is_step)
+            if is_step:
+                self._step_stack.append(self.cur)
+                self.cur = {"index": len(self.steps) + 1, "screen": a.get("data-screen", ""), "text": [], "headings": [], "buttons": [], "inputs": [], "labels": []}
+                self.steps.append(self.cur)
+                return
         if tag == "style":
             self._in_style = True
         elif tag == "script":
@@ -74,6 +80,10 @@ class _Parser(HTMLParser):
     def handle_endtag(self, tag):
         if self._stack and self._stack[-1] == tag:
             self._stack.pop()
+        if tag == "section" and self._section_is_step:
+            was_step = self._section_is_step.pop()
+            if was_step:
+                self.cur = self._step_stack.pop() if self._step_stack else None
         if tag == "style":
             self._in_style = False
         elif tag == "script":
