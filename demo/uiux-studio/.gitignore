@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 cdk.out/
+
+# 배포 시 platform/ 에서 동기화되는 빌드 산출물 (정본 아님)
+design_loop/
+design_seed/

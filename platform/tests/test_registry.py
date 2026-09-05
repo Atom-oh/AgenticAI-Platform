@@ -416,3 +416,23 @@ def test_handler_does_not_log_reason_or_description_text(capsys):
     assert "registry.transition" in out and secret_reason not in out and "XYZ123" not in out
     assert ACTOR not in out  # 이메일은 해시로만
     assert gw.posted[-1]["ok"]
+
+
+def test_store_write_sanitizes_floats_for_dynamodb():
+    """디자인 상품명세서 payload 의 float(금리·우대율)이 DynamoDB 쓰기에서 Decimal 로 변환되어야 한다 (put_item 은 float 거부)."""
+    from decimal import Decimal
+    from registry import store as store_mod
+    assert store_mod._to_ddb(3.2) == Decimal("3.2")
+    assert store_mod._to_ddb(True) is True and store_mod._to_ddb(5) == 5
+    nested = store_mod._to_ddb({"baseRate": 3.2, "conds": [{"rate": 0.5}], "flag": False})
+    assert isinstance(nested["baseRate"], Decimal) and isinstance(nested["conds"][0]["rate"], Decimal)
+    assert nested["flag"] is False
+    # 시드의 디자인 레코드에 float 가 실제로 들어 있다 (회귀 근거)
+    from registry import seed as rseed
+    specs = [r for r in rseed.design_records() if r["subtype"] == "PRODUCT_SPEC"]
+    assert any(isinstance(r["payload"].get("baseRate"), float) for r in specs)
+    # put_new 가 float 를 삼키지 않고 저장·복원한다
+    api.reset_for_tests()
+    saved = api.create_record(specs[0], "t", status="APPROVED", reason="seed", embed=False)
+    got = api.get_record(saved["name"], "v1")
+    assert got["payload"]["baseRate"] == specs[0]["payload"]["baseRate"]
