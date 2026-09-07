@@ -269,6 +269,29 @@ def stability_item(ratio: float, threshold: float = 0.35, weight: int = 1) -> tu
                   "fix": "" if ok else "지시된 항목만 고치고 나머지 마크업·순서는 그대로 유지"}
 
 
+def _lenient_parse(text: str, item_ids: list[str]) -> dict[str, dict]:
+    """엄격 JSON 파싱이 실패했을 때의 회복 경로 — 항목별로 `"id":"<id>"` 를 앵커로 잡고
+    그 뒤 다음 항목 시작 전까지의 구간에서 verdict/evidence/fix 를 정규식으로 뽑는다.
+    evidence·fix 안의 이스케이프 안 된 큰따옴표(") 한두 개 때문에 json.loads 전체가 죽는
+    사고를 각 항목 단위로 국지화한다. 못 뽑으면 그 항목만 None 으로 남는다."""
+    recovered: dict[str, dict] = {}
+    for iid in item_ids:
+        m = re.search(r'"id"\s*:\s*"%s"' % re.escape(iid), text)
+        if not m:
+            continue
+        rest = text[m.end():]
+        nxt = re.search(r'"id"\s*:\s*"', rest)
+        window = rest[:nxt.start()] if nxt else rest
+        vm = re.search(r'"verdict"\s*:\s*"(pass|fail)"', window)
+        if not vm:
+            continue
+        ev = re.search(r'"evidence"\s*:\s*"(.*?)"\s*,', window, re.DOTALL)
+        fx = re.search(r'"fix"\s*:\s*"(.*?)"\s*[,}]', window, re.DOTALL)
+        recovered[iid] = {"verdict": vm.group(1), "evidence": (ev.group(1) if ev else "")[:300],
+                           "fix": (fx.group(1) if fx else "")[:300]}
+    return recovered
+
+
 def parse_review(text: str, item_ids: list[str]) -> tuple[dict, str | None]:
     verdicts: dict = {i: None for i in item_ids}
     s = text or ""
@@ -277,10 +300,17 @@ def parse_review(text: str, item_ids: list[str]) -> tuple[dict, str | None]:
         return verdicts, "리뷰어 응답에 JSON 없음"
     try:
         data = json.loads(s[start:end + 1])
-    except json.JSONDecodeError as e:
-        return verdicts, f"리뷰어 JSON 파싱 실패: {str(e)[:80]}"
+    except json.JSONDecodeError:
+        recovered = _lenient_parse(s, item_ids)
+        verdicts.update(recovered)
+        return verdicts, f"부분 파싱: {len(recovered)}/{len(item_ids)}건 복구"
+    items = data.get("items", []) if isinstance(data, dict) else []
+    if not items:
+        recovered = _lenient_parse(s, item_ids)
+        verdicts.update(recovered)
+        return verdicts, f"부분 파싱: {len(recovered)}/{len(item_ids)}건 복구"
     err = None
-    for row in data.get("items", []) if isinstance(data, dict) else []:
+    for row in items:
         iid = row.get("id") if isinstance(row, dict) else None
         if iid not in verdicts:
             continue

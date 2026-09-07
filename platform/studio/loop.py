@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import time
 
-from studio import prompts, review
+from studio import prompts, review, sanitize
 
 MAX_ROUNDS = 20
 DEFAULT_ROUNDS = 3
@@ -77,10 +77,11 @@ def _review_round(spec: dict, items: list, html: str, prev_html: str, review_gen
         items.append(st_item)
         verdicts[st_item["id"]] = st_v
     llm_items = [i for i in items if i.get("check") == "llm"]
-    reviewer_error, usage = None, {}
+    reviewer_error, usage, scrubbed = None, {}, 0
     if llm_items:
+        digest_safe, scrubbed = sanitize.scrub_result(review.dom_digest(doc))
         try:
-            text, usage = review_generate(prompts.REVIEW_SYSTEM, prompts.build_review_prompt(spec, llm_items, review.dom_digest(doc)), REVIEW_MAX_TOKENS)
+            text, usage = review_generate(prompts.REVIEW_SYSTEM, prompts.build_review_prompt(spec, llm_items, digest_safe), REVIEW_MAX_TOKENS)
             llm_v, reviewer_error = review.parse_review(text, [i["id"] for i in llm_items])
         except Exception as e:  # noqa: BLE001 — 리뷰어 실패는 미판정으로 남긴다
             llm_v, reviewer_error = {i["id"]: None for i in llm_items}, f"{type(e).__name__}: {str(e)[:120]}"
@@ -89,7 +90,7 @@ def _review_round(spec: dict, items: list, html: str, prev_html: str, review_gen
     rows = _items_with_verdicts(items, verdicts)
     failures = [{"id": r["id"], "text": r["text"], "verdict": r["verdict"], "evidence": r["evidence"], "fix": r["fix"]} for r in rows if r["verdict"] != "pass"]
     return {**sc, "items": rows, "failures": failures, "reviewerError": reviewer_error, "usage": usage or {},
-            "deterministic": sum(1 for i in items if i.get("check") in ("text", "dom")), "llm": len(llm_items)}
+            "deterministic": sum(1 for i in items if i.get("check") in ("text", "dom")), "llm": len(llm_items), "scrubbed": scrubbed}
 
 
 def _done_items(items: list) -> list:
@@ -141,8 +142,13 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
         if rnd > 1:
             emitter.stage("regenerate", round=rnd, failures=failures[:12], plane="cloud")
         refine = {"selector": job["selector"], "elementHtml": job["elementHtml"], "instruction": job["instruction"]} if job["mode"] == "refine" else None
-        user = prompts.build_user_prompt(job["brief"], spec, failures=failures if rnd > 1 else None, prev_html=prev_html, refine=refine)
-        emitter.stage("generate", round=rnd, systemChars=len(system), userChars=len(user), model=MODEL, plane="cloud")
+        prev_html_safe, n_scrub = sanitize.scrub_result(prev_html)
+        if refine:
+            elem_safe, n_elem = sanitize.scrub_result(refine["elementHtml"])
+            refine = {**refine, "elementHtml": elem_safe}
+            n_scrub += n_elem
+        user = prompts.build_user_prompt(job["brief"], spec, failures=failures if rnd > 1 else None, prev_html=prev_html_safe, refine=refine)
+        emitter.stage("generate", round=rnd, systemChars=len(system), userChars=len(user), model=MODEL, plane="cloud", scrubbed=n_scrub)
         try:
             stream = generate(system, user, GEN_MAX_TOKENS)
             parts = []
@@ -171,7 +177,8 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
             usage["inputTokens"] += int(rv["usage"].get("inputTokens", 0) or 0)
             usage["outputTokens"] += int(rv["usage"].get("outputTokens", 0) or 0)
         emitter.stage("review", round=rnd, score=rv["score"], passed=rv["passed"], items=rv["items"], requiredFailed=rv["requiredFailed"],
-                      undetermined=rv["undetermined"], reviewerError=rv["reviewerError"], deterministic=rv["deterministic"], llm=rv["llm"], plane="cloud")
+                      undetermined=rv["undetermined"], reviewerError=rv["reviewerError"], deterministic=rv["deterministic"], llm=rv["llm"],
+                      scrubbed=rv.get("scrubbed", 0), plane="cloud")
         url = publish(job["jobId"], rnd, html) if html else ""
         if url:
             emitter.stage("publish", round=rnd, url=url, score=rv["score"], plane="cloud")

@@ -110,6 +110,21 @@ def test_parse_review_strict_json():
     assert v3["LLM-1"] is None and v3["LLM-2"] is None and err3
 
 
+def test_parse_review_lenient_recovers_items():
+    ids = ["LLM-1", "LLM-2", "LLM-3"]
+    # item 2's evidence contains an unescaped double quote — breaks strict json.loads.
+    broken = ('{"items":['
+              '{"id":"LLM-1","verdict":"pass","evidence":"제목에 상품명 있음","fix":""},'
+              '{"id":"LLM-2","verdict":"fail","evidence":"버튼에 "확인" 문구 없음","fix":"버튼 텍스트 수정"},'
+              '{"id":"LLM-3","verdict":"pass","evidence":"CTA 1개","fix":""}'
+              ']}')
+    v, err = review.parse_review(broken, ids)
+    assert err is not None and err.startswith("부분 파싱")
+    assert v["LLM-1"] is not None and v["LLM-1"]["verdict"] == "pass"
+    assert v["LLM-3"] is not None and v["LLM-3"]["verdict"] == "pass"
+    assert sum(1 for i in ids if v[i] is not None) >= 2
+
+
 def test_score_math_and_undetermined_not_pass():
     verdicts = {i["id"]: {"verdict": "pass", "evidence": "", "fix": ""} for i in ITEMS}
     s = review.score(ITEMS, verdicts, pass_score=85)

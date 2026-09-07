@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "api"))
 sys.path.insert(0, str(ROOT))
 
 from graph.store import LocalGraphStore  # noqa: E402
@@ -210,3 +211,32 @@ def test_reports_measured_model_and_route():
 def test_model_falls_back_to_configured_id_when_unmeasured():
     out = loop.run(_job(maxRounds=1), loop.ListEmitter(), spec=SPEC, generate=gen_seq(GOOD_HTML), review_generate=reviewer("pass"), publish=publish)
     assert out["model"] == loop.MODEL and out["route"] == ""
+
+
+BAD_HTML_WITH_ACCOUNT = ("<html><body><section data-step=\"1\"><h2>적금</h2>"
+                         "<p>계좌 110-234-567890 로 입금하세요</p><button>확인</button></section></body></html>")
+
+
+def test_regenerate_prompt_is_gate_safe():
+    """라운드 1이 합성 계좌번호를 담은 HTML을 냈을 때, 라운드 2 생성 프롬프트는 그 원문 숫자를
+    싣지 않고 마스킹된 형태를 실어야 게이트(GateRefused)를 다시 맞지 않는다."""
+    gen = gen_seq(BAD_HTML_WITH_ACCOUNT, GOOD_HTML)
+    out = loop.run(_job(maxRounds=2), loop.ListEmitter(), spec=SPEC, generate=gen, review_generate=reviewer("fail"), publish=publish)
+    assert out["rounds"] == 2
+    assert "110-234-567890" not in gen.calls[1]
+    assert "***-***-******" in gen.calls[1]
+
+
+def test_review_digest_is_scrubbed():
+    """리뷰어 프롬프트(다이제스트)에도 합성 계좌번호 원문이 실리면 안 된다."""
+    captured = []
+
+    def review_generate(system, user, max_tokens):
+        captured.append(user)
+        import json
+        return json.dumps({"items": [{"id": i, "verdict": "pass", "evidence": "e", "fix": "f"} for i in LLM_IDS]}), {}
+
+    loop.run(_job(maxRounds=1), loop.ListEmitter(), spec=SPEC, generate=gen_seq(BAD_HTML_WITH_ACCOUNT),
+              review_generate=review_generate, publish=publish)
+    assert captured
+    assert "110-234-567890" not in captured[0]
