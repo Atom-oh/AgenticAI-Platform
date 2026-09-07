@@ -132,5 +132,5 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 | Tier 2 Gemma 경로 (bedrock-mantle) | 코드 완료 · 가용성 런타임 확인 | `engine/llm.py GemmaAdapter` — 모델/키 미확인 시 배지에 "미가용" 표기 |
 | 익명화 변환(ML 가명처리·재식별 볼트) | 미구현 (배지 표기) | §11-2 배지: 규칙 기반 토큰화만 구현 |
 | pgvector | 미사용 (AOSS 확정) | §16 |
-| 디자인 스튜디오 에이전틱 루프 (StudioLoopFn · StudioTable · studio/drafts) | 구현됨 · 배포 대기 | §16 |
+| 디자인 스튜디오 에이전틱 루프 (StudioLoopFn · StudioTable · studio/drafts) | 배포 | 온톨로지 Product→체크리스트(31항목/필수16) → 워커 Lambda 루프(1~20라운드). live e2e(2026-09-07, `tests/e2e` 패턴 WebSocket): 축구사랑 적금 ux-flow 1라운드 90점 통과(FLOW-COND·STEP-ORDER 통과, few-shot 1건 주입) · 기본 적금 1라운드 93점 통과(FLOW-NOCOND 통과) · refine 1라운드 85점(STABLE 0% 변화, CD-02/CD-03 미충족 사실대로) · 모델 실측 global.anthropic.claude-sonnet-5 · 게이트 차단 재발 방지(모델行 프롬프트 식별자 마스킹, 44f4937·19a924c) · §16 |
 
