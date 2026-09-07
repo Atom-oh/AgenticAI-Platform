@@ -80,8 +80,10 @@ def _review_round(spec: dict, items: list, html: str, prev_html: str, review_gen
     reviewer_error, usage, scrubbed = None, {}, 0
     if llm_items:
         digest_safe, scrubbed = sanitize.scrub_result(review.dom_digest(doc))
+        review_prompt, n_review = sanitize.scrub_result(prompts.build_review_prompt(spec, llm_items, digest_safe))
+        scrubbed += n_review
         try:
-            text, usage = review_generate(prompts.REVIEW_SYSTEM, prompts.build_review_prompt(spec, llm_items, digest_safe), REVIEW_MAX_TOKENS)
+            text, usage = review_generate(prompts.REVIEW_SYSTEM, review_prompt, REVIEW_MAX_TOKENS)
             llm_v, reviewer_error = review.parse_review(text, [i["id"] for i in llm_items])
         except Exception as e:  # noqa: BLE001 — 리뷰어 실패는 미판정으로 남긴다
             llm_v, reviewer_error = {i["id"]: None for i in llm_items}, f"{type(e).__name__}: {str(e)[:120]}"
@@ -123,8 +125,10 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
                   productName=spec.get("productName"), productCode=spec.get("productCode"),
                   hasPreferential=spec.get("hasPreferential"), steps=[s["name"] for s in spec.get("steps", [])], plane="cloud")
     skills = skills if skills is not None else prompts.load_skills()[0]
-    emitter.stage("assets", chars=len(assets_text), fewshot=len(fewshot or []), skills=list(skills), plane="cloud")
     system = prompts.build_system_prompt(spec, job["outputType"], job["axis"], skills, assets_text, fewshot, agent_preset)
+    system, n_sys = sanitize.scrub_result(system)
+    emitter.stage("assets", chars=len(assets_text), fewshot=len(fewshot or []), skills=list(skills), plane="cloud",
+                  scrubbedSystem=n_sys)
 
     usage = {"inputTokens": 0, "outputTokens": 0}
     history: list = []
@@ -148,6 +152,8 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
             refine = {**refine, "elementHtml": elem_safe}
             n_scrub += n_elem
         user = prompts.build_user_prompt(job["brief"], spec, failures=failures if rnd > 1 else None, prev_html=prev_html_safe, refine=refine)
+        user, n_user = sanitize.scrub_result(user)
+        n_scrub += n_user
         emitter.stage("generate", round=rnd, systemChars=len(system), userChars=len(user), model=MODEL, plane="cloud", scrubbed=n_scrub)
         try:
             stream = generate(system, user, GEN_MAX_TOKENS)

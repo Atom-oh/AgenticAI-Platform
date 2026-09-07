@@ -240,3 +240,23 @@ def test_review_digest_is_scrubbed():
               review_generate=review_generate, publish=publish)
     assert captured
     assert "110-234-567890" not in captured[0]
+
+
+def test_fewshot_reference_is_scrubbed_from_system_prompt():
+    """few-shot 참조 초안(승인된 과거 시안)이 system 프롬프트에 박히면서 원문 식별자가
+    그대로 게이트를 다시 맞는 사고가 있었다 — assets_text 도 마찬가지로 스크럽 대상이어야 한다."""
+    captured = []
+
+    def generate(system, user, max_tokens):
+        captured.append(system)
+        return FakeStream(["```html\n", GOOD_HTML, "\n```"])
+
+    em = loop.ListEmitter()
+    loop.run(_job(maxRounds=1), em, spec=SPEC, generate=generate, review_generate=reviewer("pass"), publish=publish,
+             fewshot=["<html><body>계좌 110-234-567890</body></html>"], assets_text="문의 010-1234-5678")
+    assert captured
+    assert "110-234-567890" not in captured[0]
+    assert "010-1234-5678" not in captured[0]
+    assert "***-***-******" in captured[0]
+    assets_stage = next(s for s in em.stages if s["step"] == "assets")
+    assert assets_stage["scrubbedSystem"] >= 2
