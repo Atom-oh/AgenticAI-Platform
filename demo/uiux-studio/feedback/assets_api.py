@@ -127,10 +127,12 @@ def _load_agent_cfg(agent_id):
 
 def create_job(body, lambda_client, actor=None):
     brief = body.get("brief", "").strip()
-    if not brief:
-        return 400, {"error": "brief required"}
-    actor = actor or body.get("actor", "anonymous")
     mode = body.get("mode", "generate")
+    if not brief and mode != "flow":
+        return 400, {"error": "brief required"}
+    if mode == "flow" and not body.get("product_spec_id"):
+        return 400, {"error": "flow mode requires product_spec_id"}
+    actor = actor or body.get("actor", "anonymous")
     if mode == "refine" and not body.get("base_draft_id"):
         return 400, {"error": "refine mode requires base_draft_id"}
     agent_cfg = _load_agent_cfg(body.get("agent_id", ""))
@@ -140,7 +142,7 @@ def create_job(body, lambda_client, actor=None):
            "brief": brief, "asset_ids": body.get("asset_ids", []),
            "model_id": body.get("model_id", ""), "agent_id": body.get("agent_id", ""),
            "mode": mode, "output_type": body.get("output_type", "design"),
-           "base_draft_id": body.get("base_draft_id", ""),
+           "base_draft_id": body.get("base_draft_id", ""), "product_spec_id": body.get("product_spec_id", ""),
            "actor": actor, "created_at": _now()}
     history.put_item(Item=job)
     lambda_client.invoke(FunctionName=os.environ["DISPATCHER_FN"], InvocationType="Event",
@@ -152,7 +154,8 @@ def create_job(body, lambda_client, actor=None):
                                              "output_type": body.get("output_type", "design"),
                                              "base_draft_id": body.get("base_draft_id", ""),
                                              "selector": body.get("selector", ""),
-                                             "element_html": body.get("element_html", "")[:4000]},
+                                             "element_html": body.get("element_html", "")[:4000],
+                                             "product_spec_id": body.get("product_spec_id", "")},
                                             ensure_ascii=False).encode())
     return 200, {"ok": True, "job_id": job_id}
 

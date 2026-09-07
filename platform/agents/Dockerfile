@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 빌드 컨텍스트(_ctx)에서 명세·스킬을 복사 — prepare_context.sh 가 만든다
 COPY _ctx/agent_specs.py ./agent_specs.py
 COPY _ctx/skills ./skills
-COPY app.py mcp_gateway.py boundary_gate.py ./
+COPY _ctx/design_loop ./design_loop
+COPY app.py mcp_gateway.py boundary_gate.py design_deps.py ./
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin agent \
     && chown -R agent:agent /app

@@ -52,6 +52,7 @@
 | `registry/` | F4 Registry: 상태기계·유일성·감사·Consumer API(APPROVED만)·하이브리드 검색·시드 |
 | `agentcore/` | Harness 래퍼·에이전트 명세·Gateway 도구 Lambda·AgentCore Registry 미러 |
 | `screengen/`, `gates/`, `skills/` | F5 화면 생성 에이전트, 실검증 게이트(Node), 퍼블리싱/접근성 스킬 |
+| `design_loop/`, `seed/design/` | 디자인 스튜디오 검수 루프(상품명세서→PRD→프로세스 화면→리뷰·테스트→재생성 1회→리포트), 합성 상품명세서·SM 모델·체크리스트 |
 | `report/` | F7 Reader/Writer/내부 도구 Lambda 핸들러 |
 | `onprem/` | VPC 내부 컨테이너: 정확 조회(RDS)·계산엔진·마스킹·감사원문·벡터 인덱스 |
 | `bridge/` | 브리지 Lambda |
@@ -126,6 +127,7 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 | S5 Guardrails 실차단 | 배포·실측 | `apply-guardrail` 투자권유 질문 → `GUARDRAIL_INTERVENED` (v2 이후) |
 | F7 Reader/Writer IAM 분리 + 인젝션 | 배포 | ReaderFn(권한 없음, AccessDenied 실측) / WriterFn(격리 서브넷, 인터넷 경로 없음) |
 | UX Asset Portal (Related = 그래프 순회) | 배포 | `handlers/portal.py`, `views/Portal.tsx`, `tests/test_portal.py` 27 통과 |
+| 디자인 스튜디오 프로세스 생성 + 검수 루프 | 배포 | `design_loop/`(오프라인 13 통과)·`handlers/design.py`·`web/src/studio/ProcessStudio.tsx`; live e2e(2026-09-05): 축구클럽 우대 적금 8스텝(증빙 입력 분기 포함)·체크리스트 28(기본18+파생10)·리뷰 후 재생성 1회·리포트 pass23/fail1/미판정4·runtime lambda-local(게이트 경유) |
 | 에이전트 계층 (AgentCore Runtime · Strands · Gateway MCP · Registry 미러 · 빌더) | 배포 | `agents/`, `agentcore/`, `handlers/agents.py`; 로컬 컨테이너 스모크에서 Gateway 도구 호출·스트리밍·경계 계측 확인 |
 | Tier 2 Gemma 경로 (bedrock-mantle) | 코드 완료 · 가용성 런타임 확인 | `engine/llm.py GemmaAdapter` — 모델/키 미확인 시 배지에 "미가용" 표기 |
 | 익명화 변환(ML 가명처리·재식별 볼트) | 미구현 (배지 표기) | §11-2 배지: 규칙 기반 토큰화만 구현 |

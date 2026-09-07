@@ -7,4 +7,5 @@ cd "$(dirname "$0")"
 rm -rf _ctx && mkdir -p _ctx/skills
 cp ../agentcore/agent_specs.py _ctx/agent_specs.py
 cp ../skills/*.md _ctx/skills/
-echo "agents/_ctx prepared: agent_specs.py + $(ls _ctx/skills | wc -l | tr -d ' ') skills"
+cp -r ../design_loop _ctx/design_loop && rm -rf _ctx/design_loop/__pycache__
+echo "agents/_ctx prepared: agent_specs.py + design_loop + $(ls _ctx/skills | wc -l | tr -d ' ') skills"

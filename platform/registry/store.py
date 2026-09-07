@@ -43,6 +43,22 @@ def _plain(obj: Any) -> Any:
     return obj
 
 
+def _to_ddb(obj: Any) -> Any:
+    """DynamoDB 쓰기용 정규화 — float → Decimal (DynamoDB 리소스는 float 를 거부한다). NaN/Inf 는 문자열로.
+    payload 에 금리·우대율 같은 실수가 있어도 저장되게 한다 (재귀)."""
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, float):
+        if obj != obj or obj in (float("inf"), float("-inf")):
+            return str(obj)
+        return Decimal(str(obj))
+    if isinstance(obj, list):
+        return [_to_ddb(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _to_ddb(v) for k, v in obj.items()}
+    return obj
+
+
 def _is_conditional_failure(e: Exception) -> bool:
     resp = getattr(e, "response", None) or {}
     return (resp.get("Error") or {}).get("Code") == "ConditionalCheckFailedException"
@@ -82,6 +98,7 @@ class RegistryStore:
         item = dict(rec)
         item.update({"pk": rec_pk(rec["name"]), "sk": rec["recordVersion"],
                      "createdAt": ts, "updatedAt": ts, "updatedBy": actor})
+        item = _to_ddb(item)
         try:
             self.table().put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
         except Exception as e:  # noqa: BLE001 — 조건 실패만 변환, 나머지는 그대로
@@ -171,7 +188,7 @@ class RegistryStore:
         for i, (k, v) in enumerate(sorted(fields.items())):
             if k not in allowed:
                 continue
-            names[f"#f{i}"], values[f":f{i}"] = k, v
+            names[f"#f{i}"], values[f":f{i}"] = k, _to_ddb(v)
             sets.append(f"#f{i} = :f{i}")
         sets += ["#ua = :ts", "#ub = :by"]
         try:

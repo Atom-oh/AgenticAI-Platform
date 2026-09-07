@@ -173,6 +173,16 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
         meta["elapsedMs"] = int((time.time() - started) * 1000)
         yield meta
         return
+    if spec.get("mode") == "design_loop":
+        # 디자인 스튜디오: Strands 대화 루프 대신 design_loop(유계 루프)를 스레드에서 돌리고 이벤트를 그대로 흘린다
+        if model_id not in ALLOWED_MODELS and model_id != spec.get("model"):
+            yield {"type": "error", "code": 400, "message": f"model not allowed: {model_id}", "allowed": sorted(ALLOWED_MODELS)}
+            meta["stopReason"] = "error"
+            yield meta
+            return
+        async for ev in _run_design(payload, model_id, meta, started):
+            yield ev
+        return
     if not prompt:
         yield {"type": "error", "code": 400, "message": "prompt is required"}
         meta["stopReason"] = "error"
@@ -290,6 +300,60 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
         log.info("done agent=%s stop=%s toolCalls=%d in=%s out=%s ms=%d", name, meta["stopReason"], meta["toolCalls"],
                  meta["usage"]["inputTokens"], meta["usage"]["outputTokens"], meta["elapsedMs"])
         yield meta
+
+
+async def _run_design(payload: dict, model_id: str, meta: dict, started: float) -> AsyncIterator[dict]:
+    """design_flow_agent — payload["design"] = {productSpec, smModel, checklists[], outputType?}.
+    이벤트: {type:'stage', step, ...} · {type:'text', t} · {type:'design_done', result} · 마지막 meta."""
+    design = payload.get("design") if isinstance(payload.get("design"), dict) else None
+    if not design or not design.get("productSpec") or not design.get("smModel"):
+        yield {"type": "error", "code": 400, "message": "design.productSpec / design.smModel 이 필요합니다"}
+        meta["stopReason"] = "error"
+        meta["elapsedMs"] = int((time.time() - started) * 1000)
+        yield meta
+        return
+    from design_loop import run as loop_run
+    import design_deps as _dd
+
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue = asyncio.Queue()
+    DONE = object()
+    deps = _dd.make_deps(model_id)
+
+    def emit(ev: dict) -> None:
+        if ev.get("type") == "token":
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "text", "t": ev.get("text", "")})
+        else:
+            loop.call_soon_threadsafe(q.put_nowait, ev)
+
+    def work() -> None:
+        try:
+            res = loop_run(design["productSpec"], design["smModel"], list(design.get("checklists") or []), deps, emit=emit,
+                           output_type=str(design.get("outputType") or "design"))
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "design_done", "result": res})
+        except Exception as e:  # noqa: BLE001
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "code": 500, "message": _err(e)})
+        finally:
+            loop.call_soon_threadsafe(q.put_nowait, DONE)
+
+    log.info("design_loop start spec=%s model=%s", str(design["productSpec"].get("id")), model_id)
+    fut = loop.run_in_executor(None, work)
+    stop = "end_turn"
+    while True:
+        ev = await q.get()
+        if ev is DONE:
+            break
+        if ev.get("type") == "error":
+            stop = "error"
+        yield ev
+    await fut
+    meta["usage"] = {k: v for k, v in deps["usage"]().items() if k in ("inputTokens", "outputTokens")}
+    meta["llmCalls"] = deps["usage"]().get("calls", 0)
+    meta["stopReason"] = stop
+    meta["elapsedMs"] = int((time.time() - started) * 1000)
+    log.info("design_loop done stop=%s calls=%s in=%s out=%s ms=%d", stop, meta["llmCalls"],
+             meta["usage"]["inputTokens"], meta["usage"]["outputTokens"], meta["elapsedMs"])
+    yield meta
 
 
 @app.entrypoint

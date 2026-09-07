@@ -73,6 +73,19 @@ SCENARIO_AGENTS: list[dict] = [
         "memory": False,
         "scenario": "F7",
     },
+    {
+        "name": "design_flow_agent",
+        "title": "디자인 스튜디오 프로세스 생성 에이전트 (검수 루프)",
+        "description": "상품명세서 → PRD → 가입 프로세스(스텝별 화면) 생성 → 리뷰(체크리스트: 기본 + 명세서 파생)·테스트 → "
+                       "재생성 최대 1회 → 리포트. design_loop 공유 엔진 — Strands 대화 루프 대신 유계 루프를 돈다.",
+        "model": DEFAULT_MODEL,
+        "systemPrompt": "(design_loop.generate.build_prompts 가 PRD·SM 모델에서 매 실행 생성한다)",
+        "allowedTools": [],
+        "skills": [],
+        "memory": False,
+        "scenario": "STUDIO",
+        "mode": "design_loop",
+    },
 ]
 
 

@@ -352,8 +352,44 @@ def platform_records() -> List[dict]:
     ]
 
 
+def _design_seed_dir() -> Path:
+    return Path(os.environ.get("DESIGN_SEED_DIR") or (ROOT / "seed" / "design"))
+
+
+def design_records() -> List[dict]:
+    """디자인 스튜디오 자산 — 상품명세서(CUSTOM/PRODUCT_SPEC)·UX SM 모델(CUSTOM/SM_MODEL)·체크리스트(SKILL/CHECKLIST).
+    정본은 seed/design/*.json (합성). 시드 파일이 없으면 빈 목록 (배포본에는 deploy.sh 가 복사한다)."""
+    d = _design_seed_dir()
+    if not (d / "product_specs.json").is_file():
+        return []
+    load = lambda n: json.loads((d / n).read_text(encoding="utf-8"))  # noqa: E731
+    out: List[dict] = []
+    for sp in load("product_specs.json"):
+        out.append({"name": f"product_spec_{sp['id'].replace('ps-', '').replace('-', '_')}", "recordVersion": "v1",
+                    "recordType": "CUSTOM", "subtype": "PRODUCT_SPEC", "status": "APPROVED", "owner": "상품기획부",
+                    "tags": ["디자인스튜디오", "상품명세서", sp.get("productType", ""), sp.get("category", ""), sp.get("shape", "")],
+                    "description": f"{sp['productName']} 상품명세서({sp.get('shape')}) — 우대조건 {len(sp.get('preferentialConditions') or [])}건, "
+                                   f"필수 고지 {len(sp.get('mandatoryNotices') or [])}건. 합성 데이터.",
+                    "payload": {"kind": "product-spec", **sp}})
+    sm = load("sm_model.json")
+    out.append({"name": "ux_sm_model_deposit_signup", "recordVersion": "v1", "recordType": "CUSTOM", "subtype": "SM_MODEL",
+                "status": "APPROVED", "owner": OWNER_UI, "tags": ["디자인스튜디오", "sm모델", "몰큘", "오가니즘", "템플릿"],
+                "description": f"{sm.get('title')} — 몰큘 {len(sm.get('molecules') or [])}·오가니즘 {len(sm.get('organisms') or [])}·"
+                               f"템플릿 {len(sm.get('templates') or [])}. 합성 샘플.",
+                "payload": {"kind": "sm-model", **sm}})
+    for cl in load("checklists.json"):
+        out.append({"name": f"checklist_{cl['id'].replace('cl-', '').replace('-', '_')}", "recordVersion": "v1",
+                    "recordType": "SKILL", "subtype": "CHECKLIST", "status": "APPROVED", "owner": OWNER_UI,
+                    "tags": ["디자인스튜디오", "체크리스트", "검수"] + [str(v) for v in (cl.get("appliesTo") or {}).values()],
+                    "description": f"{cl.get('title')} — {len(cl.get('items') or [])}항목 "
+                                   f"(rule {sum(1 for i in cl.get('items') or [] if i.get('method') == 'rule')} · "
+                                   f"llm {sum(1 for i in cl.get('items') or [] if i.get('method') == 'llm')}).",
+                    "payload": {"kind": "checklist", **cl}})
+    return out
+
+
 def baseline_records() -> List[dict]:
-    return component_records() + platform_records()
+    return component_records() + platform_records() + design_records()
 
 
 # ---------- SPEC v2 §7 등록 대상 매핑 ----------

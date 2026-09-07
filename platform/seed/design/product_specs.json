@@ -1,0 +1,75 @@
+[
+  {
+    "id": "ps-lumpsum-savings",
+    "productName": "하나 목돈 적금",
+    "productType": "수신",
+    "category": "적금",
+    "shape": "정형",
+    "eligibility": "만 14세 이상 실명의 개인 (1인 1계좌)",
+    "term": "12개월 / 24개월 / 36개월",
+    "baseRate": 3.2,
+    "amount": "월 1만원 이상 100만원 이하",
+    "preferentialConditions": [
+      {"id": "auto-transfer", "condition": "자동이체 등록", "rate": 0.2, "evidence": {"type": "auto"}},
+      {"id": "first-account", "condition": "첫 거래 고객", "rate": 0.1, "evidence": {"type": "auto"}}
+    ],
+    "mandatoryNotices": [
+      "이 예금은 예금자보호법에 따라 예금보험공사가 보호합니다",
+      "중도해지 시 약정금리보다 낮은 중도해지금리가 적용됩니다",
+      "우대금리는 만기 해지 시 적용됩니다"
+    ],
+    "terminationRules": "만기 전 해지 시 중도해지금리 적용. 만기 후 자동 재예치 선택 가능.",
+    "partners": [],
+    "source": "합성 상품명세서 — 실제 상품이 아니다"
+  },
+  {
+    "id": "ps-soccer-club-savings",
+    "productName": "축구클럽 우대 적금",
+    "productType": "수신",
+    "category": "적금",
+    "shape": "반정형",
+    "eligibility": "만 14세 이상 실명의 개인 (1인 1계좌)",
+    "term": "12개월",
+    "baseRate": 3.0,
+    "amount": "월 1만원 이상 50만원 이하",
+    "preferentialConditions": [
+      {"id": "soccer-club", "condition": "축구클럽 회원", "rate": 0.5,
+       "evidence": {"type": "input", "label": "축구클럽 회원번호", "format": "영문 2자 + 숫자 8자 (예: FC00012345)"}},
+      {"id": "match-win", "condition": "응원팀 리그 우승", "rate": 0.3, "evidence": {"type": "auto"}},
+      {"id": "auto-transfer", "condition": "자동이체 등록", "rate": 0.2, "evidence": {"type": "auto"}}
+    ],
+    "mandatoryNotices": [
+      "이 예금은 예금자보호법에 따라 예금보험공사가 보호합니다",
+      "중도해지 시 약정금리보다 낮은 중도해지금리가 적용됩니다",
+      "우대금리는 만기 해지 시 적용됩니다",
+      "제휴 종료 시 제휴 관련 우대조건은 신규 가입에 적용되지 않을 수 있습니다"
+    ],
+    "eventPeriod": "2026-09-01 ~ 2026-12-31",
+    "terminationRules": "만기 전 해지 시 중도해지금리 적용.",
+    "partners": [{"name": "아톰 FC", "type": "sports"}],
+    "source": "합성 상품명세서 — 실제 상품·구단이 아니다"
+  },
+  {
+    "id": "ps-salary-account",
+    "productName": "급여이체 우대 통장",
+    "productType": "수신",
+    "category": "통장",
+    "shape": "반정형",
+    "eligibility": "만 19세 이상 실명의 개인",
+    "term": "제한 없음",
+    "baseRate": 0.1,
+    "amount": "제한 없음",
+    "preferentialConditions": [
+      {"id": "salary", "condition": "급여이체 등록", "rate": 1.0,
+       "evidence": {"type": "input", "label": "급여이체 회사명", "format": "사업자 상호"}},
+      {"id": "card", "condition": "카드 결제계좌 지정", "rate": 0.3, "evidence": {"type": "auto"}}
+    ],
+    "mandatoryNotices": [
+      "이 예금은 예금자보호법에 따라 예금보험공사가 보호합니다",
+      "우대금리는 조건 충족 다음 달부터 적용됩니다"
+    ],
+    "terminationRules": "해지 제한 없음.",
+    "partners": [],
+    "source": "합성 상품명세서 — 실제 상품이 아니다"
+  }
+]

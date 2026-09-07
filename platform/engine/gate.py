@@ -200,6 +200,58 @@ def check(system: str, user: str, purpose: str, trace_id: str = "", route: Optio
     return b
 
 
+def design_deps(route: Optional[str] = None, trace_id: str = "", gen_max_tokens: int = 32000,
+                judge_max_tokens: int = 500) -> dict:
+    """디자인 스튜디오(design_loop)용 deps — 생성·판정 모두 이 게이트를 지난다(경계 계측 + PII 스캔).
+    반환 {generate(system,user,on_token)->str, llm_judge(item,context)->dict, usage()->dict}.
+    boundary 는 각 호출의 Stream.__init__ 에서 측정된다 (원문 로그 없음)."""
+    acc = {"inputTokens": 0, "outputTokens": 0, "calls": 0}
+
+    def _acc(u: dict) -> None:
+        acc["inputTokens"] += int((u or {}).get("inputTokens", 0) or 0)
+        acc["outputTokens"] += int((u or {}).get("outputTokens", 0) or 0)
+        acc["calls"] += 1
+
+    def _run(system: str, user: str, max_tokens: int, purpose: str) -> str:
+        st = stream(system, user, max_tokens=max_tokens, route=route, purpose=purpose, trace_id=trace_id)
+        chunks: List[str] = [ch for ch in st]
+        _acc(st.usage)
+        return "".join(chunks)
+
+    def gen(system: str, user: str, on_token) -> str:
+        st = stream(system, user, max_tokens=gen_max_tokens, route=route, purpose="studio.generate", trace_id=trace_id)
+        chunks: List[str] = []
+        for ch in st:
+            chunks.append(ch)
+            if on_token:
+                on_token(ch)
+        _acc(st.usage)
+        return "".join(chunks)
+
+    def llm_judge(item: dict, context: dict) -> dict:
+        sys_p = ("당신은 은행 UX 디자인 검수자다. 체크리스트 항목 하나를 플로우 텍스트(스텝별 가시 문구)에 대해 판정한다. "
+                 "verdict 는 pass|fail|incomplete 중 하나, evidence 는 한국어 한두 문장(플로우의 실제 문구 인용). "
+                 "출력은 JSON 하나만: {\"verdict\": \"pass|fail|incomplete\", \"evidence\": \"...\"}")
+        prd = context.get("prd") or {}
+        steps = ", ".join(s.get("id", "") for s in prd.get("steps") or [])
+        user_p = ("### 항목\n[" + str(item.get("id")) + "] " + str(item.get("text")) +
+                  " (대상: " + str(item.get("target")) + ")\n\n### PRD 스텝 순서\n" + steps +
+                  "\n\n### 플로우 텍스트\n" + str(context.get("flowText", ""))[:6000])
+        text = _run(sys_p, user_p, judge_max_tokens, "studio.review")
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            return {"verdict": "incomplete", "evidence": f"판정 JSON 없음: {text[:120]}"}
+        try:
+            obj = json.loads(m.group(0))
+        except ValueError:
+            return {"verdict": "incomplete", "evidence": f"판정 JSON 오류: {text[:120]}"}
+        v = str(obj.get("verdict", "")).lower()
+        return {"verdict": v if v in ("pass", "fail", "incomplete") else "incomplete",
+                "evidence": str(obj.get("evidence", ""))[:600]}
+
+    return {"generate": gen, "llm_judge": llm_judge, "usage": lambda: dict(acc)}
+
+
 def infer_purpose(default: str = "generic") -> str:
     """호출자 모듈에서 목적 라벨 추정 (예: handlers/s2.py → 's2', screengen/agent.py → 'screengen.agent'). 로그 라벨용."""
     try:

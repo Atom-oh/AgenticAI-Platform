@@ -29,7 +29,8 @@ def handler(event, context):
                                 "output_type": event.get("output_type", "design"),
                                 "base_draft_id": event.get("base_draft_id", ""),
                                 "selector": event.get("selector", ""),
-                                "element_html": event.get("element_html", "")},
+                                "element_html": event.get("element_html", ""),
+                                "product_spec_id": event.get("product_spec_id", "")},
                                ensure_ascii=False).encode())
         body = resp["response"].read() if hasattr(resp["response"], "read") else resp["response"]
         out = json.loads(body)
@@ -37,7 +38,7 @@ def handler(event, context):
             Key=key, UpdateExpression="SET #s=:s, drafts=:d, summary=:m, #u=:u, model_id=:mid",
             ExpressionAttributeNames={"#s": "status", "#u": "usage"},
             ExpressionAttributeValues={":s": "done", ":d": out.get("drafts", []),
-                                       ":m": out.get("summary", "")[:4000],
+                                       ":m": (out.get("summary") or json.dumps(out.get("report", {}), ensure_ascii=False))[:4000],
                                        ":u": {k: int(v) for k, v in
                                               (out.get("usage") or {}).items()},
                                        ":mid": out.get("model_id", "")})

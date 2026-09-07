@@ -103,7 +103,7 @@ def to_tuples(events: Iterable[dict], session_id: str) -> Iterator[Tuple[str, An
             s = ev.get("t", "")
             if s:
                 yield ("text", str(s))
-        elif t in ("tool_start", "tool_input", "tool_result", "boundary"):
+        elif t in ("tool_start", "tool_input", "tool_result", "boundary", "stage", "design_done"):
             yield (t, {k: v for k, v in ev.items() if k != "type"})
         elif t == "error":
             msg = str(ev.get("message", ""))
@@ -126,14 +126,18 @@ def to_tuples(events: Iterable[dict], session_id: str) -> Iterator[Tuple[str, An
 
 
 def invoke_stream(runtime_arn: str, agent_name: str, text: str, session_id: Optional[str] = None,
-                  model: Optional[str] = None, qualifier: Optional[str] = None) -> Iterator[Tuple[str, Any]]:
-    """AgentCore Runtime 을 호출해 (event_type, payload) 튜플을 yield — harness.invoke_stream 과 같은 계약."""
+                  model: Optional[str] = None, qualifier: Optional[str] = None,
+                  extra: Optional[Dict[str, Any]] = None) -> Iterator[Tuple[str, Any]]:
+    """AgentCore Runtime 을 호출해 (event_type, payload) 튜플을 yield — harness.invoke_stream 과 같은 계약.
+    extra: 페이로드에 병합할 추가 필드 (예: design_flow_agent 의 {"design": {...}})."""
     if not runtime_arn:
         raise ValueError("runtime_arn is required (AGENTS_RUNTIME_ARN)")
     sid = normalize_session_id(session_id)
     body: Dict[str, Any] = {"agent": agent_name, "prompt": text, "sessionId": sid}
     if model:
         body["model"] = model
+    if extra:
+        body.update(extra)
     kw: Dict[str, Any] = {"agentRuntimeArn": runtime_arn, "runtimeSessionId": sid,
                           "payload": json.dumps(body, ensure_ascii=False).encode("utf-8"),
                           "contentType": "application/json", "accept": "text/event-stream"}

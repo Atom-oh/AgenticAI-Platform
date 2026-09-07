@@ -5,10 +5,11 @@ import { auth, sock } from '../lib';
 import Assets from './Assets';
 import Gallery from './Gallery';
 import Playground from './Playground';
+import ProcessStudio from './ProcessStudio';
 import { Asset, Draft, Product } from './types';
 
 export default function Studio() {
-  const [tab, setTab] = useState<'gallery' | 'play' | 'assets'>('gallery');
+  const [tab, setTab] = useState<'gallery' | 'play' | 'process' | 'assets'>('gallery');
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -52,12 +53,13 @@ export default function Studio() {
         </div>
       </div>
       <div className="flex items-center gap-2 mb-4">
-        {([['gallery', '🖼 시안 갤러리'], ['play', '✨ 플레이그라운드'], ['assets', '🎨 디자인 자산']] as const).map(([id, label]) => (
+        {([['gallery', '🖼 시안 갤러리'], ['play', '✨ 플레이그라운드'], ['process', '🧭 프로세스 생성 (명세서→PRD)'], ['assets', '🎨 디자인 자산']] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-xl text-sm font-semibold border ${tab === id ? 'bg-[#008485] text-white border-[#008485]' : 'bg-white text-slate-600 border-slate-200 hover:border-teal-400'}`}>{label}</button>
         ))}
       </div>
       {tab === 'gallery' && <Gallery drafts={drafts} canWrite={canWrite} reload={load} onEdit={openInPlayground} />}
       {tab === 'play' && <Playground assets={assets} products={products} canWrite={canWrite} initialDraft={editDraft} onDone={load} />}
+      {tab === 'process' && <ProcessStudio />}
       {tab === 'assets' && <Assets assets={assets} canRegister={!!auth.studioToken} reload={load} />}
     </div>
   );

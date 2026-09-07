@@ -43,6 +43,15 @@ def main():
     registry = auth["proxyEndpoint"].removeprefix("https://")
     subprocess.run(["docker", "login", "-u", "AWS", "--password-stdin", registry],
                    input=user_pw.split(":", 1)[1].encode(), check=True)
+    # 공유 엔진(정본: platform/design_loop)과 합성 시드를 빌드 컨텍스트로 동기화 — 하니스가 design_loop 를 그대로 쓴다
+    import shutil
+    plat = ROOT.parent.parent / "platform"
+    for name, src in (("design_loop", plat / "design_loop"), ("design_seed", plat / "seed" / "design")):
+        dst = ROOT / name
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__"))
+        print(f"synced {name} from {src}")
     uri = f"{account}.dkr.ecr.{region}.amazonaws.com/{REPO}:latest"
     sh("docker", "buildx", "build", "--platform", "linux/arm64",
        "-f", "harness/Dockerfile", "-t", uri, "--push", ".")

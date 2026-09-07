@@ -96,7 +96,34 @@ def _record_generation(actor: str, brief: str, published: list):
 
 
 @app.entrypoint
+def _run_flow(payload):
+    """공유 엔진(design_loop): 상품명세서 → PRD → 프로세스 화면 → 리뷰·테스트 → 리포트. 스텝을 갤러리 드래프트로 발행."""
+    import design_loop
+    import design_deps as dd
+    specs, sm, checklists = dd.load_seed()
+    spec = next((x for x in specs if x.get("id") == payload.get("product_spec_id")), specs[0] if specs else None)
+    if not spec or not sm:
+        return {"error": "design_seed 자산이 없습니다 (product_specs/sm_model)"}
+    model_id = payload.get("model_id") or os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5")
+    deps = dd.make_deps(model_id)
+    res = design_loop.run(spec, sm, checklists, deps, output_type=payload.get("output_type", "design"))
+    if res.get("error"):
+        return {"error": res["error"], "code": res.get("code"), "missing": res.get("missing")}
+    published = []
+    for st in (res.get("flow") or {}).get("steps") or []:
+        url = publish_draft_s3(f"{spec['productName']} · {st.get('title')}", "스텝", st.get("html", ""))
+        published.append({"id": url.rsplit("/", 1)[1].removesuffix(".html"), "title": st.get("title"), "axis": "스텝", "url": url})
+    rep = res.get("report") or {}
+    return {"drafts": published, "report": {k: rep.get(k) for k in ("score", "openItems", "attempts", "regenerated")},
+            "prd": {"steps": [s2.get("id") for s2 in (res.get("prd") or {}).get("steps") or []],
+                    "branchSteps": (res.get("prd") or {}).get("branchSteps")},
+            "ok": res.get("ok"), "usage": deps["usage"](), "model_id": model_id,
+            "engine": "design_loop (platform 공유 엔진)"}
+
+
 def invoke(payload):
+    if payload.get("mode") == "flow":
+        return _run_flow(payload)
     brief = payload.get("brief", "")
     if not brief:
         return {"error": "payload must include 'brief'"}
