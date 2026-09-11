@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { aborted, messageOf, pollJob, readPrivateBlob, workspaceClient } from './client';
+import { aborted, messageOf, pollJob, readPrivateBlob } from './client';
+import { useWorkspaceClient } from './WorkspaceScope';
 import { stateLabel } from './rules';
 import type { Job } from './types';
 
@@ -9,6 +10,7 @@ export function Notice({ children, error = false }: { children: React.ReactNode;
 export function JobProgress({ job: initial, label, onComplete, onFailure }: {
   job: Job; label: string; onComplete: (job: Job) => void; onFailure?: (job: Job) => void;
 }) {
+  const workspaceClient = useWorkspaceClient();
   const [job, setJob] = useState(initial);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -25,7 +27,7 @@ export function JobProgress({ job: initial, label, onComplete, onFailure }: {
         setError(messageOf(reason)); callbacks.current.onFailure?.(last);
       });
     return () => controller.abort();
-  }, [initial.id, retry]);
+  }, [workspaceClient, initial.id, retry]);
   const percent = typeof job.progress === 'number' ? job.progress : typeof job.progress === 'object' ? job.progress.percent : undefined;
   const detail = typeof job.progress === 'string' ? job.progress : typeof job.progress === 'object' ? job.progress.message : '';
   return <div className="ws-job" aria-live="polite">
@@ -67,6 +69,7 @@ function previewFrameDocument(html: string, executable: boolean): string {
 export function PrivatePreview({ path, title, executable = false, height = 560, width, format }: {
   path: string | null; title: string; executable?: boolean; height?: number; width?: number; format?: string;
 }) {
+  const workspaceClient = useWorkspaceClient();
   const [result, setResult] = useState<{ path: string; url?: string; html?: string; mime: string } | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -89,7 +92,7 @@ export function PrivatePreview({ path, title, executable = false, height = 560, 
       } else setError('이 파일의 미리보기는 지원하지 않습니다. 원본 내려받기를 이용하세요.');
     }).catch(reason => { if (!controller.signal.aborted) setError(messageOf(reason)); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
-  }, [path, retry, format, executable]);
+  }, [workspaceClient, path, retry, format, executable]);
   if (!path) return <div className="ws-empty">미리보기가 없습니다. 원본 보관과 화면 해석은 별도 상태입니다.</div>;
   if (error) return <Notice error>{error} <button onClick={() => setRetry(n => n + 1)}>미리보기 다시 조회</button></Notice>;
   if (!result || result.path !== path) return <div className="ws-empty" role="status">비공개 미리보기를 불러오고 있습니다…</div>;
@@ -102,6 +105,7 @@ export function PrivatePreview({ path, title, executable = false, height = 560, 
 }
 
 export function useDownload() {
+  const workspaceClient = useWorkspaceClient();
   const controllers = useRef(new Set<AbortController>());
   const urls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [busy, setBusy] = useState(false);
@@ -109,7 +113,7 @@ export function useDownload() {
   useEffect(() => () => {
     controllers.current.forEach(controller => controller.abort());
     urls.current.forEach((timer, url) => { clearTimeout(timer); URL.revokeObjectURL(url); }); urls.current.clear();
-  }, []);
+  }, [workspaceClient]);
   const download = useCallback(async (path: string, filename: string) => {
     if (controllers.current.size) return;
     const controller = new AbortController(); controllers.current.add(controller); setBusy(true); setError('');
@@ -122,7 +126,7 @@ export function useDownload() {
       urls.current.set(url, timer);
     } catch (reason) { if (!controller.signal.aborted) setError(messageOf(reason)); }
     finally { controllers.current.delete(controller); if (!controller.signal.aborted) setBusy(false); }
-  }, []);
+  }, [workspaceClient]);
   return { download, busy, error };
 }
 

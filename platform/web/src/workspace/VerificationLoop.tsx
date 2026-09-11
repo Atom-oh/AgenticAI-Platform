@@ -1,7 +1,8 @@
 import { useId } from 'react';
-import type { Round, Run } from './types';
+import type { BuildEvidence, Round, Run } from './types';
+import { buildPassed } from './project';
 
-type State = 'pending' | 'recorded' | 'passed' | 'failed' | 'incomplete' | 'approved';
+type State = 'pending' | 'recorded' | 'passed' | 'failed' | 'incomplete' | 'approved' | 'review';
 type Node = { id: 'rules' | 'artifact' | 'browser' | 'evidence' | 'approval'; title: string; state: State; detail: string };
 type Props = { run?: Run | null; round?: Round; evidence?: Record<string, unknown> };
 const hash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
@@ -14,6 +15,10 @@ export function hasExactApproval(run?: Run | null, round?: Round): boolean {
     run.rounds.some(item => item.number === round.number && item.artifactSha256 === round.artifactSha256) &&
     approval?.round === round.number && approval.artifactSha256 === round.artifactSha256 &&
     approval.contractVersion === run.contractVersion && approval.contractHash === run.contractHash &&
+    (run.outputType !== 'react' || (hash(round.sourceHash) && hash(round.bundleHash) && hash(run.catalogHash) &&
+      approval.sourceHash === round.sourceHash && approval.bundleHash === round.bundleHash &&
+      approval.catalogHash === run.catalogHash && (approval.guidelineId ?? undefined) === (run.guidelineId ?? undefined) &&
+      (round.visualStatus !== 'review-required' || (run.visualPolicy === 'variation-review' && approval.acceptedVariation === true)))) &&
     typeof approval.actor === 'string' && !!approval.actor && typeof approval.at === 'number' && approval.at > 0;
 }
 
@@ -23,7 +28,9 @@ export function deriveVerificationLoop({ run, round, evidence }: Props) {
   const artifact = selected && round?.hasHtml === true && hash(round.artifactSha256);
   const evidenceMatches = fixed && artifact && round?.hasReport === true && evidence !== undefined &&
     evidence.artifactSha256 === round.artifactSha256 && evidence.contractVersion === run?.contractVersion &&
-    evidence.contractHash === run?.contractHash;
+    evidence.contractHash === run?.contractHash &&
+    (run?.outputType !== 'react' || (evidence.sourceHash === round?.sourceHash &&
+      evidence.bundleHash === round?.bundleHash && evidence.catalogHash === run.catalogHash));
   let verification: State = 'pending';
   let verificationLabel = '완료 여부 미확인';
   if (selected && (round?.functionalStatus === 'incomplete' || (round?.checks?.incomplete || 0) > 0)) {
@@ -44,6 +51,9 @@ export function deriveVerificationLoop({ run, round, evidence }: Props) {
     const hasIncomplete = !covered || checks.some(check => !['pass', 'fail'].includes(String(check.status)));
     const accessibility = object(evidence!.accessibility)?.status;
     const visual = object(evidence!.visual)?.status;
+    const comparison = object(evidence!.visual)?.comparisonStatus;
+    const reviewable = visual === 'review-required' && run.outputType === 'react' && run.visualPolicy === 'variation-review' &&
+      evidence!.visualPolicy === 'variation-review' && ['pass', 'fail'].includes(String(comparison));
     const requiredPassed = rules.some(rule => rule.required) && rules.filter(rule => rule.required).every(rule => byId.get(rule.id)?.status === 'pass');
     const visualPassed = visual === 'pass' || (!run.referenceAssetId && visual === 'not-run');
     const blocking = Array.isArray(evidence!.blockingFindings) ? evidence!.blockingFindings.length : null;
@@ -56,12 +66,17 @@ export function deriveVerificationLoop({ run, round, evidence }: Props) {
         evidence!.functionalStatus === 'fail' || accessibility === 'fail' || visual === 'fail') {
       verification = 'failed'; verificationLabel = '검수 미통과';
     } else if (evidence!.passed === true && round.passed === true && round.hasScreenshot === true &&
-        requiredPassed && evidence!.functionalStatus === 'pass' && accessibility === 'pass' && visualPassed && blocking === 0 &&
+        requiredPassed && evidence!.functionalStatus === 'pass' && accessibility === 'pass' && (visualPassed || reviewable) && blocking === 0 &&
         network.length === 0 && consoleErrors.length === 0) {
-      verification = 'passed'; verificationLabel = '필수 검수 통과';
+      verification = reviewable ? 'review' : 'passed';
+      verificationLabel = reviewable ? '필수 동작 통과 · 화면 변형 검토 필요' : '필수 검수 통과';
     } else {
       verification = 'incomplete'; verificationLabel = '검수 근거 확인 필요';
     }
+  }
+  if (run?.outputType === 'react' && selected && (!buildPassed(round, run.catalogHash) ||
+      (evidence !== undefined && (!buildPassed(evidence as BuildEvidence, run.catalogHash) || evidence.engineError)))) {
+    verification = 'incomplete'; verificationLabel = 'React 빌드 근거 확인 필요';
   }
   const approved = hasExactApproval(run, round);
   const nodes: Node[] = [
@@ -75,7 +90,10 @@ export function deriveVerificationLoop({ run, round, evidence }: Props) {
   ];
   return {
     nodes, retry: verification === 'failed' || verification === 'incomplete',
-    complete: fixed && artifact && evidenceMatches && verification === 'passed' && approved,
+    verificationEligible: evidenceMatches && (verification === 'passed' || verification === 'review'),
+    needsVariationReview: verification === 'review',
+    complete: fixed && artifact && evidenceMatches && approved &&
+      (verification === 'passed' || (verification === 'review' && run?.approval?.acceptedVariation === true)),
     contractVersion: run?.contractVersion, contractHash: run?.contractHash,
   };
 }

@@ -156,14 +156,22 @@ def _model_call(system, user, images, model, max_tokens, trace_id, purpose):
 
 
 def _render_call(html, contract, reference, tolerance):
+    event = {"html": html, "contract": contract, "visualTolerance": tolerance}
+    if reference is not None:
+        event["referenceBase64"] = base64.b64encode(reference).decode()
+    return _renderer_invoke(event)
+
+
+def _react_call(event):
+    return _renderer_invoke({**event, "kind": "react"})
+
+
+def _renderer_invoke(event):
     import boto3
     from botocore.config import Config
     name = os.environ.get("WORKSPACE_BROWSER_FN", "")
     if not name:
         raise ValueError("브라우저 검증 실행기가 배포되지 않았습니다.")
-    event = {"html": html, "contract": contract, "visualTolerance": tolerance}
-    if reference is not None:
-        event["referenceBase64"] = base64.b64encode(reference).decode()
     payload = _json_bytes(event)
     if len(payload) > 5_500_000:
         raise ValueError("HTML과 기준 이미지가 검증 실행기의 크기 상한을 넘습니다.")
@@ -178,10 +186,16 @@ def _render_call(html, contract, reference, tolerance):
 
 
 class Worker:
-    def __init__(self, storage=None, model_call=None, render_call=None, extractor=None, ocr=None, clock=None):
+    def __init__(self, storage=None, model_call=None, render_call=None, extractor=None, ocr=None, clock=None, react_call=None,
+                 git_connections=None, git_token_provider=None, git_exporter_factory=None):
         self.storage = storage if storage is not None else Storage()
         self.model_call = model_call or _model_call
         self.render_call = render_call or _render_call
+        self.react_call = react_call or _react_call
+        from workspace.git_service import configured_connections, exporter_factory, secret_token
+        self.git_connections = git_connections or configured_connections
+        self.git_token_provider = git_token_provider or secret_token
+        self.git_exporter_factory = git_exporter_factory or exporter_factory
         self.extractor = extractor or extract_file
         self.ocr = ocr or _ocr
         self.clock = clock or time.monotonic
@@ -218,6 +232,12 @@ class Worker:
                 result = self._propose(owner, job)
             elif task == "run":
                 result = self._run(owner, job, context)
+            elif task == "release":
+                from workspace.releases import process_release
+                result = process_release(self, owner, job)
+            elif task == "git":
+                from workspace.git_service import process_export
+                result = process_export(self, owner, job)
             else:
                 raise ValueError("지원하지 않는 작업입니다.")
             self._update(owner, "job", identifier, status="completed", progress=100, result=result)
@@ -227,6 +247,14 @@ class Worker:
             from engine.gate import GateRefused, GateUnsupported
             message = str(error)[:300] if isinstance(error, (ValueError, GateRefused, GateUnsupported)) else f"작업 처리 실패: {type(error).__name__}"
             self._update(owner, "job", identifier, status="failed", error=message)
+            if job["task"] == "release":
+                release = self.storage.get(owner, "release", job["input"]["releaseId"])
+                if release and release.get("status") != "ready":
+                    self._update(owner, "release", release["id"], status="failed", error=message)
+            if job["task"] == "git":
+                exported = self.storage.get(owner, "gitexport", job["input"]["exportId"])
+                if exported and exported.get("status") != "committed":
+                    self._update(owner, "gitexport", exported["id"], status="failed", error=message)
             if job["task"] == "finalize":
                 asset = self.storage.get(owner, "asset", job["input"]["assetId"])
                 if asset and asset.get("uploadStatus") != "stored":
@@ -390,22 +418,34 @@ class Worker:
         return context, images, resources, texts, list(dict.fromkeys(warnings)), local_files
 
     def _propose(self, owner, job):
+        from workspace.criteria import criteria_fields, notice_coverage_issues, resolve_generation_context
         source = job["input"]
+        ontology = resolve_generation_context(self.storage, owner, source, "edit_rules")
         context, images, resources, texts, warnings, _ = self._context(owner, source["assetSnapshots"])
         if not source.get("brief", "").strip() and not any(texts.values()) and not images:
             raise ValueError("해석 가능한 가이드·이미지 또는 화면 설명을 먼저 준비하세요.")
         self._update(owner, "job", job["id"], progress={"percent": 25, "stage": "rules", "message": "가이드에서 동작 규칙 정리"})
         ids = [asset["id"] for asset in source["assetSnapshots"]]
-        user = f"화면 설명:\n{source.get('brief', '')}\n선택 자산 ID:{json.dumps(ids)}\n\n반입 자료:\n{context}"
-        user, aliases = _metadata_aliases(user, ids + list(resources))
+        user = (f"확정된 상품 온톨로지:\n{ontology['prompt']}\n"
+                f"화면 설명:\n{source.get('brief', '')}\n선택 자산 ID:{json.dumps(ids)}\n\n반입 자료:\n{context}")
+        if source.get("catalogHash"):
+            from workspace.component_catalog import read_catalog
+            catalog = read_catalog()
+            user += ("\n실제 React 코드 컴포넌트 계약:\n" + json.dumps(catalog["components"], ensure_ascii=False)
+                     + "\nInput/Checkbox/Select/Button의 testId는 실제 컨트롤입니다. 지원하지 않는 동작·검사는 미정의로 남기세요."
+                     + "\n필수 안내마다 해당 pageId를 target으로 쓰는 expectText와 실제 접근 경로를 필수 규칙에 넣으세요."
+                     + " 안내문 전체를 value로 확인하고 normalizeWhitespace:true를 사용하세요. 2000자 이상이면 같은 target의 여러 문구 검사로 나누세요.")
+        user, aliases = _metadata_aliases(user, ids + list(resources) + ontology["identifiers"])
         text, usage, info = self.model_call(PROPOSE_SYSTEM, user, images, source["model"], 7000, job["id"], "workspace.propose")
         text = _restore_metadata(text, aliases)
         proposal = _parse_json(text)
         proposal.update(assetIds=ids, brief=source.get("brief", ""))
+        proposal.update(criteria_fields(source))
         for rule in proposal.get("rules", []):
             if isinstance(rule, dict) and (not isinstance(rule.get("source"), dict) or rule["source"].get("kind") == "manual"):
                 rule["source"] = {"kind": "inferred"}
         proposal["unresolved"] = list(proposal.get("unresolved", [])) + warnings
+        proposal["unresolved"] += notice_coverage_issues(proposal, ontology["pages"])
         normalized = validate_contract(proposal, asset_texts=texts)
         record = self.storage.put(owner, "contract", {**normalized, "id": uuid.uuid4().hex, "status": "draft",
                                                       "model": info.get("modelId", source["model"]), "usage": usage})
@@ -417,6 +457,9 @@ class Worker:
         run = self.storage.get(owner, "run", job["input"]["runId"])
         if not run or run["status"] != "queued":
             raise ValueError("생성할 작업이 없습니다.")
+        if run.get("outputType") == "react":
+            from workspace.react_generation import run_react
+            return run_react(self, owner, run, job, lambda_context)
         approved = validate_contract(run["contract"])
         if approved["unresolved"] or contract_hash(approved) != run["contractHash"]:
             raise ValueError("확정된 동작 규칙이 변경되었거나 미정의 항목이 있습니다.")
@@ -454,7 +497,9 @@ class Worker:
             if verifying:
                 output, consumed, info = previous, {}, {"modelId": None}
             else:
-                user, aliases = _metadata_aliases(user, [asset["id"] for asset in run["assetSnapshots"]] + list(resources))
+                from workspace.criteria import criteria_fields
+                user, aliases = _metadata_aliases(user, [asset["id"] for asset in run["assetSnapshots"]] + list(resources)
+                                                  + list(criteria_fields(approved).values()))
                 output, consumed, info = self.model_call(GENERATE_SYSTEM, user, images, run["model"], 14000,
                                                           job["id"], "workspace.generate")
                 output = _restore_metadata(output, aliases)

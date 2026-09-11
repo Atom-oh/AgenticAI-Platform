@@ -33,8 +33,24 @@ window.roundNumber=${number};try{window.parent.document.body.dataset.leaked='yes
     { id: 'fig', version: 5, importRevision: 1, lineageId: 'fig', name: '원본.fig', size: 12, sha256: 'a'.repeat(64), purpose: 'archive',
       uploadStatus: 'stored', parseStatus: 'unsupported', previews: [] },
   ];
-  const contracts = [], runs = [], jobs = new Map(), calls = [];
-  let failedPart = false, failedVariant = false, failedProposal = false, sequence = 0, heldReport = null, holdFirstReport = false;
+  const contracts = [], runs = [], batches = [], jobs = new Map(), calls = [];
+  let failedPart = false, failedBatch = false, failedProposal = false, sequence = 0, heldReport = null, holdFirstReport = false;
+  const makeRun = body => {
+    const id = `run-${++sequence}`;
+    const roundList = [1, 2].map(number => ({ number, passed: number === 2, artifactSha256: sha(generated(number)),
+      ...(body.outputType === 'react' ? { catalogHash: 'c'.repeat(64), sourceHash: 'd'.repeat(64), bundleHash: 'e'.repeat(64),
+        gates: Object.fromEntries(['policy', 'types', 'build', 'components'].map(key => [key, { status: 'pass' }])) } : {}),
+      hasHtml: true, hasReport: true, hasScreenshot: number === 2, hasDiff: false, hasSource: body.outputType === 'react', hasDist: body.outputType === 'react',
+      functionalStatus: number === 2 ? 'pass' : 'fail', visualStatus: body.referenceAssetId ? 'pass' : 'not-run',
+      checks: { pass: number === 2 ? 1 : 0, fail: number === 2 ? 0 : 1, incomplete: 0 },
+      blockingFindings: number === 2 ? [] : ['금액 전달 실패'] }));
+    const run = { ...body, id, jobId: `job-${id}`, version: 1, status: 'completed', contractHash, catalogHash: 'c'.repeat(64),
+      contract: contracts[0], bestRound: 2, rounds: roundList, functionalStatus: 'pass', visualStatus: body.referenceAssetId ? 'pass' : 'not-run', contextWarnings };
+    runs.unshift(run);
+    const job = { id: `job-${id}`, task: 'run', status: 'queued' };
+    jobs.set(job.id, { ...job, result: { runId: id, bestRound: 2, passed: true } });
+    return { job, run };
+  };
   const models = [{ id: 'astra', label: 'GPT-6 Astra', provider: 'OpenAI' }, { id: 'fable', label: 'Claude Fable 5.1', provider: 'Anthropic' }];
   let advertisedModels = models;
   const bundle = await build({
@@ -71,6 +87,21 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
       calls.push({ routePath, method, body });
       if (routePath === '/config') return json({ models: advertisedModels, defaultModel: 'astra', maxFileBytes: 52428800, chunkBytes: 64,
         extensions: ['html', 'htm', 'css', 'png', 'jpg', 'jpeg', 'svg', 'pdf', 'fig', 'md', 'markdown', 'txt', 'json'] });
+      if (routePath === '/projects') return json({ projects: [] });
+      if (routePath === '/git-connections') return json({ connections: [] });
+      if (routePath === '/releases' && method === 'GET') return json({ releases: [] });
+      if (routePath === '/batches') {
+        if (method === 'GET') return json({ batches });
+        assert.equal(body.outputType, 'react');
+        if (!failedBatch) { failedBatch = true; return json({ error: '잠시 후 다시 시도하세요.' }, 503); }
+        const created = Array.from({ length: body.mode === 'guided' ? body.variationCount + 1 : 1 }, (_, index) =>
+          makeRun({ ...body, mode: 'generate', generationMode: body.mode, variant: index === 0 && body.mode === 'guided' ? 'baseline' : 'balanced' }).run);
+        const batch = { id: 'batch', mode: body.mode, runIds: created.map(run => run.id),
+          baselineRunId: body.mode === 'guided' ? created[0].id : undefined, variationCount: body.variationCount, contractHash, catalogHash: 'c'.repeat(64) };
+        batches.push(batch);
+        return json({ batch, runs: created }, 202);
+      }
+      if (routePath === '/batches/batch') return json({ batch: batches[0], runs: runs.filter(run => batches[0].runIds.includes(run.id)) });
       if (routePath === '/assets' && method === 'GET') return json({ assets });
       if (routePath === '/contracts' && method === 'GET') return json({ contracts });
       if (routePath === '/runs' && method === 'GET') return json({ runs });
@@ -134,18 +165,8 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
           const job = { id: 'job-verify', task: 'run', status: 'queued' }; jobs.set(job.id, { ...job, result: { runId: run.id, bestRound: 1, passed: true } });
           return json({ job, run }, 202);
         }
-        if (body.variant === 'dense' && !failedVariant) { failedVariant = true; return json({ error: '잠시 후 다시 시도하세요.' }, 503); }
-        const id = `run-${++sequence}`;
-        const roundList = [1, 2].map(number => ({ number, passed: number === 2, artifactSha256: sha(generated(number)),
-          hasHtml: true, hasReport: true, hasScreenshot: number === 2, hasDiff: false,
-          functionalStatus: number === 2 ? 'pass' : 'fail', visualStatus: body.referenceAssetId ? 'pass' : 'not-run',
-          checks: { pass: number === 2 ? 1 : 0, fail: number === 2 ? 0 : 1, incomplete: 0 },
-          blockingFindings: number === 2 ? [] : ['금액 전달 실패'] }));
-        const run = { ...body, id, version: 1, status: 'completed', contractHash,
-          contract: contracts[0], bestRound: 2, rounds: roundList, functionalStatus: 'pass', visualStatus: body.referenceAssetId ? 'pass' : 'not-run', contextWarnings };
-        runs.unshift(run);
-        const job = { id: `job-${id}`, task: 'run', status: 'queued' }; jobs.set(job.id, { ...job, result: { runId: id, bestRound: 2, passed: true } });
-        return json({ job, run }, 202);
+        assert.equal(body.outputType, 'react');
+        return json(makeRun(body), 202);
       }
       if (routePath.startsWith('/jobs/')) {
         const job = jobs.get(routePath.split('/')[2]); assert(job);
@@ -155,7 +176,10 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
       if (routePath.startsWith('/runs/') && routePath.endsWith('/approve')) {
         const run = runs.find(value => value.id === routePath.split('/')[2]);
         assert.equal(body.round, 2); assert.equal(body.artifactSha256, sha(generated(2))); assert.equal(body.contractVersion, 3);
-        run.approval = { ...body, contractHash: run.contractHash, actor: 'fixture-reviewer', at: Date.now() }; return json({ run });
+        if (run.outputType === 'react') {
+          assert.equal(body.sourceHash, 'd'.repeat(64)); assert.equal(body.bundleHash, 'e'.repeat(64));
+        }
+        run.approval = { ...body, catalogHash: run.catalogHash, contractHash: run.contractHash, actor: 'fixture-reviewer', at: Date.now() }; return json({ run });
       }
       if (routePath.includes('/blob')) {
         const [, kind, id] = routePath.split('/');
@@ -169,6 +193,8 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
         } else if (blobKind === 'html') data = isVerify ? uploaded : generated(number);
         else if (blobKind === 'screenshot') { data = png; mime = 'image/png'; }
         else data = Buffer.from(JSON.stringify({ passed: isVerify || number === 2, functionalStatus: isVerify || number === 2 ? 'pass' : 'fail',
+          ...(sourceRun.outputType === 'react' ? { sourceHash: 'd'.repeat(64), bundleHash: 'e'.repeat(64), catalogHash: 'c'.repeat(64),
+            build: { ...sourceRun.rounds.find(round => round.number === number), ok: true } } : {}),
           artifactSha256: sha(isVerify ? uploaded : generated(number)), contractVersion: sourceRun.contractVersion, contractHash: sourceRun.contractHash,
           model: isVerify ? 'no-inference' : 'fable',
           accessibility: { status: 'pass', violations: [] }, visual: { status: sourceRun.referenceAssetId ? 'pass' : 'not-run' },
@@ -306,9 +332,11 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await page.getByRole('button', { name: '내 작업 새로 조회', exact: true }).click();
     await page.getByRole('button', { name: '내 작업 새로 조회', exact: true }).waitFor();
     assert.equal(await referenceControl.inputValue(), 'image', 'A metadata refresh must preserve the selected visual reference');
-    await page.getByRole('button', { name: '방향이 다른 3개 만들기', exact: true }).click();
-    await page.getByRole('button', { name: '같은 요청 다시 시도', exact: true }).click();
-    await page.getByRole('button', { name: '기본 구성 결과 보기', exact: true }).click();
+    await page.getByLabel('생성 방식', { exact: true }).selectOption('guided');
+    await page.getByRole('button', { name: '기준안 + 변형 2개 만들기', exact: true }).click();
+    await page.getByText('잠시 후 다시 시도하세요.', { exact: false }).waitFor();
+    await page.getByRole('button', { name: '기준안 + 변형 2개 만들기', exact: true }).click();
+    await page.getByRole('button', { name: '엄격 기준안 결과 보기', exact: true }).click();
     await page.getByText('라운드 2의 금액 전달 근거', { exact: true }).waitFor();
     assert.equal(await loop.locator('[data-stage="browser"]').getAttribute('data-state'), 'passed');
     assert.equal(await loop.locator('[data-stage="evidence"]').getAttribute('data-state'), 'recorded');
@@ -317,8 +345,9 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     for (const warning of contextWarnings) await page.locator('.ws-context-warnings').getByText(warning, { exact: true }).waitFor();
     await page.getByText('통과 1 · 실패 0 · 미판정 0', { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '시작 화면 차이 보기', exact: true }).count(), 0);
-    const generationRequests = calls.filter(c => c.routePath === '/runs' && c.method === 'POST');
-    assert.equal(new Set(generationRequests.map(c => c.body.requestId)).size, 3);
+    const generationRequests = calls.filter(c => c.routePath === '/batches' && c.method === 'POST');
+    assert.equal(new Set(generationRequests.map(c => c.body.requestId)).size, 1);
+    assert.equal(runs.length, 3);
     assert(generationRequests.every(c => c.body.contractVersion === 3 && c.body.model === 'fable'));
     assert(generationRequests.every(c => c.body.referenceAssetId === 'image' && c.body.referencePage === 1));
     const generatedFrame = page.locator('iframe[title="생성 시안 라운드 2"]');
@@ -348,6 +377,7 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await page.waitForFunction(() => document.querySelector('.ws-attempts').textContent.includes('라운드 1 수정'));
     const revisionRequest = calls.filter(c => c.routePath === '/runs' && c.body?.baseRunId).at(-1);
     assert.equal(revisionRequest.body.baseRunId, 'run-1'); assert.equal(revisionRequest.body.baseRound, 1);
+    assert.equal(revisionRequest.body.variant, 'baseline'); assert.equal(revisionRequest.body.generationMode, 'guided');
     assert.equal(revisionRequest.body.contractVersion, 3);
     assert.equal(revisionRequest.body.referenceAssetId, 'image');
     await page.getByRole('button', { name: '라운드 2 · 필수 검사 통과 · 최종 선택', exact: true }).click();
@@ -379,8 +409,9 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     }
     holdFirstReport = false;
     advertisedModels = [];
-    await page.getByRole('button', { name: '내 작업 새로 조회', exact: true }).click();
-    await page.getByRole('button', { name: '내 작업 새로 조회', exact: true }).waitFor();
+    await page.getByRole('button', { name: '작업 공간 새로 조회', exact: true }).click();
+    await page.getByLabel('생성 방식', { exact: true }).selectOption('creative');
+    await page.waitForFunction(() => document.querySelector('.ws-runs button.ws-primary')?.disabled);
     const sourceControl = page.getByLabel(/^검사할 반입 HTML/);
     await sourceControl.selectOption('upload');
     assert.equal(await sourceControl.locator('option').count(), 2); // placeholder + selected HTML; no PNG/FIG/CSS.

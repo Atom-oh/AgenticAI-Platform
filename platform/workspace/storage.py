@@ -16,7 +16,8 @@ import re
 import time
 from decimal import Decimal
 
-KINDS = frozenset({"asset", "contract", "job", "run"})
+KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership",
+                   "product", "guideline", "ontology", "comment", "batch", "release", "gitexport"})
 MAX_BLOB_BYTES = 50 * 1024 * 1024
 MAX_RECORD_BYTES = 350_000
 JOB_RETENTION_SECONDS = 30 * 24 * 60 * 60
@@ -117,8 +118,10 @@ class Storage:
         response = self.table().get_item(Key=self._key(owner, kind, id), ConsistentRead=True)
         return _record(response["Item"]) if response.get("Item") else None
 
-    def put(self, owner: str, kind: str, item: dict, expected_version: int | None = None) -> dict:
+    def _prepare(self, owner, kind, item, expected_version, now):
         from boto3.dynamodb.conditions import Attr
+        if not isinstance(item, dict):
+            raise ValueError("Invalid metadata record")
         identifier = item.get("id")
         keys = self._key(owner, kind, identifier)
         if expected_version is not None and (type(expected_version) is not int or expected_version < 1):
@@ -128,24 +131,84 @@ class Storage:
             previous = self.get(owner, kind, identifier)
             if not previous or previous["version"] != expected_version:
                 raise Conflict("The resource has changed")
-        now = self.clock()
         data = {key: copy.deepcopy(value) for key, value in item.items()
                 if key not in ("pk", "sk", "owner", "sub", "ttl")}
         data.update(id=identifier, version=expected_version + 1 if expected_version else 1,
                     createdAt=previous["createdAt"] if previous else now, updatedAt=now)
         if kind == "job":
             data["ttl"] = now // 1000 + JOB_RETENTION_SECONDS
-        data.setdefault("status", {"asset": "uploading", "contract": "draft", "job": "queued", "run": "queued"}[kind])
+        data.setdefault("status", {"asset": "uploading", "contract": "draft", "job": "queued",
+                                  "run": "queued", "product": "draft"}.get(kind, "active"))
         encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, default=str).encode()
         if len(encoded) > MAX_RECORD_BYTES:
             raise ValueError("Metadata exceeds the storage limit; put large evidence in blob storage")
         condition = Attr("version").eq(expected_version) if expected_version else Attr("pk").not_exists()
+        return data, keys, condition
+
+    def put(self, owner: str, kind: str, item: dict, expected_version: int | None = None) -> dict:
+        data, keys, condition = self._prepare(owner, kind, item, expected_version, self.clock())
         table = self.table()
         try:
             table.put_item(Item={**_marshal(data), **keys}, ConditionExpression=condition)
         except table.meta.client.exceptions.ConditionalCheckFailedException as error:
             raise Conflict("The resource has changed") from error
         return _plain(data)
+
+    def put_many(self, writes: list[dict], checks: list[dict] | None = None) -> list[dict]:
+        """Atomically publish conditional metadata across owner partitions.
+
+        The resource client marshals native values. Build each nested condition
+        separately: its placeholders belong to that Put, not the outer request.
+        A transaction failure must never fall back to individual writes.
+        """
+        from boto3.dynamodb.conditions import ConditionExpressionBuilder
+        checks = [] if checks is None else checks
+        if not isinstance(writes, list) or not isinstance(checks, list) or not 1 <= len(writes) + len(checks) <= 100:
+            raise ValueError("A transaction requires between 1 and 100 writes")
+        prepared, seen = [], set()
+        now = self.clock()
+        for write in writes:
+            if not isinstance(write, dict) or set(write) - {"owner", "kind", "item", "expected_version"}:
+                raise ValueError("Invalid transaction write")
+            data, keys, condition = self._prepare(
+                write.get("owner"), write.get("kind"), write.get("item"), write.get("expected_version"), now)
+            identity = keys["pk"], keys["sk"]
+            if identity in seen:
+                raise ValueError("A transaction cannot write the same record twice")
+            seen.add(identity)
+            prepared.append((data, keys, condition))
+        table = self.table()
+        transactions = []
+        for data, keys, condition in prepared:
+            built = ConditionExpressionBuilder().build_expression(condition)
+            put = {"TableName": table.name, "Item": {**_marshal(data), **keys},
+                   "ConditionExpression": built.condition_expression,
+                   "ExpressionAttributeNames": built.attribute_name_placeholders}
+            if built.attribute_value_placeholders:
+                put["ExpressionAttributeValues"] = _marshal(built.attribute_value_placeholders)
+            transactions.append({"Put": put})
+        for check in checks:
+            if (not isinstance(check, dict) or set(check) != {"owner", "kind", "id", "version"}
+                    or type(check["version"]) is not int or check["version"] < 1):
+                raise ValueError("Invalid transactional version check")
+            keys = self._key(check["owner"], check["kind"], check["id"])
+            identity = keys["pk"], keys["sk"]
+            if identity in seen:
+                raise ValueError("A transaction cannot operate on the same record twice")
+            seen.add(identity)
+            transactions.append({"ConditionCheck": {
+                "TableName": table.name, "Key": keys, "ConditionExpression": "#version = :version",
+                "ExpressionAttributeNames": {"#version": "version"},
+                "ExpressionAttributeValues": {":version": check["version"]},
+            }})
+        try:
+            table.meta.client.transact_write_items(TransactItems=transactions)
+        except table.meta.client.exceptions.TransactionCanceledException as error:
+            reasons = error.response.get("CancellationReasons", [])
+            if any(reason.get("Code") in ("ConditionalCheckFailed", "TransactionConflict") for reason in reasons):
+                raise Conflict("The resource has changed") from error
+            raise
+        return [_plain(data) for data, _, _ in prepared]
 
     def list_page(self, owner: str, kind: str, limit: int = 100, cursor: str | None = None) -> dict:
         from boto3.dynamodb.conditions import Key

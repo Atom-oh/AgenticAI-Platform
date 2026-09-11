@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { aborted, messageOf, resource, uploadFile, workspaceClient, type UploadCheckpoint } from './client';
-import { PURPOSES, ocrLabel, stateLabel, suggestedPurpose } from './rules';
+import { aborted, messageOf, resource, uploadFile, type UploadCheckpoint } from './client';
+import { useWorkspaceClient } from './WorkspaceScope';
+import { PURPOSES, manualAssets, ocrLabel, stateLabel, suggestedPurpose } from './rules';
 import { JobProgress, Notice, PrivatePreview, useDownload } from './shared';
 import type { Analysis, Asset, Job, Purpose, WorkspaceConfig } from './types';
 
@@ -11,6 +12,7 @@ type PendingFile = {
 export default function IntakePanel({ config, assets, selected, onSelected, refresh, onContinue }: {
   config: WorkspaceConfig; assets: Asset[]; selected: string[]; onSelected: (ids: string[]) => void; refresh: () => void; onContinue: () => void;
 }) {
+  const workspaceClient = useWorkspaceClient();
   const [purpose, setPurpose] = useState<Purpose | 'auto'>('auto');
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [parent, setParent] = useState<Asset | null>(null);
@@ -35,6 +37,9 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
   const patch = (id: string, value: Partial<PendingFile>) => setFiles(previous => previous.map(file => file.id === id ? { ...file, ...value } : file));
   const start = async (file: PendingFile) => {
     if (control.current) return;
+    if (file.parentId && assets.some(asset => asset.id === file.parentId && asset.system)) {
+      patch(file.id, { state: 'failed', error: '게시 지침은 재반입할 수 없습니다. 기획 초안을 새 버전으로 게시하세요.' }); return;
+    }
     const controller = new AbortController(); control.current = controller; setBusy(true);
     patch(file.id, { state: 'uploading', error: '' });
     try {
@@ -51,11 +56,13 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
     } finally { if (control.current === controller) control.current = null; if (!controller.signal.aborted) setBusy(false); }
   };
   const toggle = (asset: Asset) => {
+    if (asset.system) return;
     if (selected.includes(asset.id)) onSelected(selected.filter(id => id !== asset.id));
     else if (selected.length >= 20) setError('생성에 사용할 파일은 최대 20개까지 선택할 수 있습니다.');
     else { setError(''); onSelected([...selected, asset.id]); }
   };
-  const active = assets.filter(asset => !asset.archived && (!filter || asset.purpose === filter));
+  const active = manualAssets(assets).filter(asset => !filter || asset.purpose === filter);
+  const inspected = inspect && assets.find(asset => asset.id === inspect.id);
   return <div className="ws-intake">
     <section className="ws-section">
       <div className="ws-section-heading"><div><h2>HTML 시안과 이미지로 시작하세요</h2><p>HTML은 화면 시안으로, PNG/JPG는 화면 기준으로, SVG는 아이콘·벡터 자산으로 준비합니다.</p></div>
@@ -104,6 +111,7 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
         <div className="ws-section-heading"><h2>내 파일</h2><label className="ws-field"><span className="ws-sr">파일 용도 필터</span>
           <select value={filter} onChange={event => setFilter(event.target.value)}><option value="">모든 용도</option>
             {Object.entries(PURPOSES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
+        {assets.some(asset => asset.system) && <p className="ws-muted">게시한 상품 지침은 기획 패널의 버전 이력에서 확인합니다. 파일 선택·재반입·사용 제외 대상에 포함되지 않습니다.</p>}
         {!active.length && <div className="ws-empty">보관한 파일이 없습니다. 파일을 추가하고 비공개 보관하기를 눌러 주세요.</div>}
         <div className="ws-assets">{active.map(asset => <article key={asset.id} className={`ws-asset ${selected.includes(asset.id) ? 'is-selected' : ''}`}>
           <label className="ws-select-file"><input type="checkbox" checked={selected.includes(asset.id)} disabled={asset.uploadStatus !== 'stored'}
@@ -120,7 +128,7 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
         </article>)}</div>
       </section>
       <section className="ws-section">
-        {inspect ? <AssetInspector key={inspect.id} asset={assets.find(asset => asset.id === inspect.id) || inspect} refresh={refresh} onArchived={() => {
+        {inspect && !inspected?.system ? <AssetInspector key={inspect.id} asset={inspected || inspect} refresh={refresh} onArchived={() => {
           onSelected(selected.filter(id => id !== inspect.id)); setInspect(null); refresh();
         }} /> : <div className="ws-empty">내 파일에서 ‘파일 확인’을 선택하면 원본과 해석 상태를 확인할 수 있습니다.</div>}
       </section>
@@ -129,6 +137,7 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
 }
 
 function AssetInspector({ asset: initial, refresh, onArchived }: { asset: Asset; refresh: () => void; onArchived: () => void }) {
+  const workspaceClient = useWorkspaceClient();
   const [asset, setAsset] = useState(initial);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [page, setPage] = useState(1);
@@ -146,6 +155,7 @@ function AssetInspector({ asset: initial, refresh, onArchived }: { asset: Asset;
     return () => abort.abort();
   }, [initial.id, initial.uploadStatus, retry]);
   const archive = async () => {
+    if (asset.system || initial.system) return;
     if (!confirm('사용 목록에서 이 파일을 제외할까요? 원본 파일과 생성·검수 이력은 유지됩니다.')) return;
     setArchiving(true);
     try { await workspaceClient.remove(`/assets/${resource(asset.id)}`, controller.current?.signal); if (!controller.current?.signal.aborted) onArchived(); }
@@ -158,7 +168,7 @@ function AssetInspector({ asset: initial, refresh, onArchived }: { asset: Asset;
     <div className="ws-actions"><button disabled={downloading.busy || asset.uploadStatus !== 'stored'} onClick={() =>
       void downloading.download(`/assets/${resource(asset.id)}/blob?kind=original`, asset.name)}>원본 내려받기</button>
       <button onClick={() => { setRetry(n => n + 1); refresh(); }}>상태 새로 확인</button>
-      <button disabled={archiving} onClick={() => void archive()}>사용 목록에서 제외</button></div>
+      {!asset.system && !initial.system && <button disabled={archiving} onClick={() => void archive()}>사용 목록에서 제외</button>}</div>
     {(error || downloading.error) && <Notice error>{error || downloading.error}</Notice>}
     {(asset.previews?.length || 0) > 1 && <label className="ws-field">미리보기 페이지<select value={page} onChange={event => setPage(Number(event.target.value))}>
       {asset.previews!.map(preview => <option key={preview.page} value={preview.page}>{preview.page}페이지</option>)}</select></label>}

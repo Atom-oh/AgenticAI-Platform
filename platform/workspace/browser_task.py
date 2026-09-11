@@ -9,6 +9,11 @@ from workspace.browser import evaluate_html
 
 def main():
     event = json.loads(Path(sys.argv[1]).read_text())
+    if event.get("kind") == "react":
+        from workspace.react_runtime import evaluate_react
+        result = evaluate_react(event)
+        Path(sys.argv[2]).write_text(json.dumps(result, ensure_ascii=False))
+        return
     reference = event.get("referenceBase64")
     result = evaluate_html(event.get("html", ""), event.get("contract", {}),
                            base64.b64decode(reference, validate=True) if reference else None,

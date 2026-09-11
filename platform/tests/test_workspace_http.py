@@ -401,6 +401,16 @@ def test_run_approval_rejects_changed_contract(api):
     assert call(api, "POST", f"/runs/{run['id']}/approve", request)[0] == 409
 
 
+def test_contract_edit_at_the_approval_write_cannot_create_stale_acceptance(api):
+    run, body = _tested_run(api)
+    contract = api.storage.get("alice", "contract", run["contractId"])
+    api.storage.table().before_transaction = lambda: api.storage.put(
+        "alice", "contract", {**contract, "status": "draft", "title": "Concurrent planner edit"}, contract["version"])
+    assert call(api, "POST", f"/runs/{run['id']}/approve", body)[0] == 409
+    assert not api.storage.get("alice", "run", run["id"]).get("approval")
+    assert api.storage.get("alice", "contract", contract["id"])["status"] == "draft"
+
+
 @pytest.mark.parametrize("field,value", [
     ("model", "https://unapproved.invalid/model"), ("maxRounds", 6), ("maxRounds", True),
     ("instruction", "x" * 4001), ("visualTolerance", -0.1), ("visualTolerance", 0.51), ("variant", "arbitrary"),

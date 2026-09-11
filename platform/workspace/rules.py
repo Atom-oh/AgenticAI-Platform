@@ -13,6 +13,8 @@ ACTIONS = TEXT_ACTIONS | BOOL_ACTIONS | {"click", "press"}
 KEYS = {"Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"}
 STYLE_PROPERTIES = {"color", "backgroundColor", "fontSize", "fontWeight", "fontFamily", "borderRadius",
                     "padding", "margin", "gap", "minHeight", "height", "width", "borderColor", "borderWidth", "display"}
+CRITERIA_IDS = ("projectId", "productId", "guidelineId", "guidelineAssetId")
+CRITERIA_HASHES = ("catalogHash", "ontologyHash")
 
 
 def _text(value, label: str, maximum: int, *, empty: bool = False) -> str:
@@ -53,6 +55,22 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
         "unresolved": [],
         "bindings": {},
     }
+    for name in CRITERIA_IDS:
+        if name in data:
+            value = data[name]
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value):
+                raise ValueError(f"{name}: 기준 버전 식별자가 올바르지 않습니다.")
+            normalized[name] = value
+    for name in CRITERIA_HASHES:
+        if name in data:
+            if not isinstance(data[name], str) or not re.fullmatch(r"[a-f0-9]{64}", data[name]):
+                raise ValueError(f"{name}: 기준 코드/온톨로지 해시가 올바르지 않습니다.")
+            normalized[name] = data[name]
+    if any(name in normalized for name in CRITERIA_IDS):
+        if not all(name in normalized for name in (*CRITERIA_IDS, *CRITERIA_HASHES)):
+            raise ValueError("프로젝트·상품·가이드·컴포넌트 기준을 함께 고정해야 합니다.")
+        if normalized["guidelineAssetId"] not in asset_ids:
+            raise ValueError("확정된 기획 가이드가 입력 자산에 포함되어야 합니다.")
     bindings = data.get("bindings", {})
     if not isinstance(bindings, dict) or len(bindings) > 100:
         raise ValueError("원본 요소 연결은 최대 100개까지 지정할 수 있습니다.")
@@ -128,6 +146,10 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
                 if match not in ("contains", "equals"):
                     raise ValueError("문구 비교는 포함 또는 일치만 지원합니다.")
                 clean["match"] = match
+                if "normalizeWhitespace" in step:
+                    if type(step["normalizeWhitespace"]) is not bool:
+                        raise ValueError("공백 정규화 여부는 참/거짓이어야 합니다.")
+                    clean["normalizeWhitespace"] = step["normalizeWhitespace"]
                 if not clean["value"]:
                     raise ValueError("문구 확인의 기대값을 비워둘 수 없습니다.")
             if action == "expectStyle":

@@ -42,7 +42,7 @@ export default function Studio() {
           <div className="text-lg font-bold text-[#0b4f4b]">디자인 스튜디오</div>
           <div className="text-sm text-slate-500 mt-1">
             {workspaceActive
-              ? '외부 HTML·이미지·가이드 파일을 반입하고, 확인·승인한 규칙으로 원본 HTML을 검사하거나 실행 가능한 시안을 만듭니다. 실제 브라우저 검수 근거를 보며 수정합니다.'
+              ? '외부 HTML·이미지·가이드 파일을 반입하고, 확인·승인한 규칙과 고정 React 컴포넌트로 실행 가능한 시안을 만듭니다. 원본 HTML 검사도 유지하며, 프로젝트 참여자와 빌드·브라우저 검수 근거를 확인합니다.'
               : '상품과 디자인 기준을 선택하면 AI가 화면 초안을 만들고, 체크리스트로 검수하며 수정합니다. 승인한 시안은 다음 디자인의 참고 자료가 됩니다.'}
           </div>
           <div className="mt-2 text-xs text-amber-800">{workspaceActive

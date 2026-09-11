@@ -8,6 +8,9 @@ export const messageOf = (reason: unknown) => reason instanceof Error ? reason.m
 export const aborted = (reason: unknown) => reason instanceof Error && reason.name === 'AbortError';
 export const resource = (id: string) => encodeURIComponent(id);
 const API_ERROR_MESSAGES: Record<string, string> = {
+  forbidden: '현재 역할로는 이 작업을 수행할 수 없습니다. 프로젝트 참여 권한을 다시 확인하세요.',
+  'request-changed': '같은 요청에 다른 내용이 전달되었습니다. 현재 입력과 작업 기록을 확인한 뒤 다시 시도하세요.',
+  'guideline-stale': '상품 지침이 변경되었습니다. 최신 지침으로 다시 검증한 뒤 승인하세요.',
   unauthorized: '로그인이 필요하거나 만료되었습니다. 다시 로그인하세요.',
   conflict: '다른 변경으로 저장된 버전이 달라졌습니다. 최신 버전을 다시 불러온 뒤 시도하세요.',
   'too-large': '파일이나 내용이 허용된 크기를 초과했습니다. 파일을 나누거나 크기를 줄여 주세요.',
@@ -23,6 +26,7 @@ function responseMessage(status: number, data: { error?: string; code?: string }
   if (typeof data.error === 'string' && /[가-힣]/.test(data.error)) return data.error;
   if (typeof data.code === 'string' && Object.hasOwn(API_ERROR_MESSAGES, data.code)) return API_ERROR_MESSAGES[data.code];
   if (status === 401) return '로그인이 만료되었습니다. 다시 로그인하세요.';
+  if (status === 403) return '현재 프로젝트에서 이 작업을 할 권한이 없습니다. 작업 공간을 새로 조회해 참여 권한을 확인하세요.';
   if (status === 409) return '저장된 상태나 버전이 변경되었거나 필요한 검증이 끝나지 않았습니다. 새로 조회한 뒤 다시 확인하세요.';
   if (status === 404) return '이 파일이나 작업을 찾을 수 없습니다. 내 작업 목록을 새로 조회하세요.';
   if (status === 413) return '파일이나 내용이 허용된 크기를 초과했습니다.';
@@ -30,9 +34,10 @@ function responseMessage(status: number, data: { error?: string; code?: string }
   return '입력 내용과 파일 형식을 확인한 뒤 다시 시도하세요.';
 }
 
-export function createWorkspaceClient({ token = () => auth.token, fetcher = fetch }: {
-  token?: () => string | null; fetcher?: typeof fetch;
+export function createWorkspaceClient({ token = () => auth.token, fetcher = fetch, projectId }: {
+  token?: () => string | null; fetcher?: typeof fetch; projectId?: string;
 } = {}) {
+  if (projectId !== undefined && !/^[a-zA-Z0-9_-]{1,160}$/.test(projectId)) throw new WorkspaceError('프로젝트를 확인하지 못했습니다.');
   async function request(path: string, method: string, body?: unknown, signal?: AbortSignal, binary = false) {
     if (!/^\/[a-z]/.test(path) || path.includes('://') || path.includes('\\') || path.includes('..')) {
       throw new WorkspaceError('허용되지 않은 요청 경로입니다.');
@@ -45,6 +50,7 @@ export function createWorkspaceClient({ token = () => auth.token, fetcher = fetc
     signal?.addEventListener('abort', cancel, { once: true });
     const timeout = setTimeout(cancel, 120_000);
     const headers = new Headers({ Authorization: `Bearer ${accessToken}` });
+    if (projectId) headers.set('X-Workspace-Project', projectId);
     if (body !== undefined) headers.set('Content-Type', binary ? 'application/octet-stream' : 'application/json');
     try {
       const response = await fetcher('/studio-api' + path, {
@@ -78,7 +84,7 @@ export function createWorkspaceClient({ token = () => auth.token, fetcher = fetc
 export type WorkspaceClient = ReturnType<typeof createWorkspaceClient>;
 export const workspaceClient = createWorkspaceClient();
 
-export async function listAll<T>(client: WorkspaceClient, kind: 'assets' | 'contracts' | 'runs', signal?: AbortSignal): Promise<T[]> {
+export async function listAll<T>(client: WorkspaceClient, kind: 'assets' | 'contracts' | 'runs' | 'projects' | 'products' | 'batches' | 'releases', signal?: AbortSignal): Promise<T[]> {
   const result: T[] = [];
   const seen = new Set<string>();
   let cursor = '';

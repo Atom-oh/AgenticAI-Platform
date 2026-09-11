@@ -20,6 +20,12 @@ class ConditionalFailure(Exception):
     pass
 
 
+class TransactionFailure(ClientError):
+    def __init__(self, code="ConditionalCheckFailed"):
+        super().__init__({"Error": {"Code": "TransactionCanceledException"},
+                          "CancellationReasons": [{"Code": code}]}, "TransactWriteItems")
+
+
 def condition_matches(condition, item):
     expression = condition.get_expression()
     op, values = expression["operator"], expression["values"]
@@ -42,10 +48,46 @@ def condition_matches(condition, item):
 class FakeTable:
     def __init__(self, page_size=100):
         self.items, self.calls = {}, []
+        self.transactions = []
+        self.name = "workspace-test"
+        self.before_transaction = None
         self.lock = threading.RLock()
         self.page_size = page_size
         self.meta = SimpleNamespace(client=SimpleNamespace(
-            exceptions=SimpleNamespace(ConditionalCheckFailedException=ConditionalFailure)))
+            transact_write_items=self.transact_write_items,
+            exceptions=SimpleNamespace(ConditionalCheckFailedException=ConditionalFailure,
+                                       TransactionCanceledException=TransactionFailure)))
+
+    def transact_write_items(self, **kwargs):
+        with self.lock:
+            if self.before_transaction:
+                callback, self.before_transaction = self.before_transaction, None
+                callback()
+            writes = [entry["Put"] for entry in kwargs["TransactItems"] if "Put" in entry]
+            checks = [entry["ConditionCheck"] for entry in kwargs["TransactItems"] if "ConditionCheck" in entry]
+            assert 1 <= len(writes) + len(checks) <= 100
+            keys = [(entry["Item"]["pk"], entry["Item"]["sk"]) for entry in writes]
+            check_keys = [(entry["Key"]["pk"], entry["Key"]["sk"]) for entry in checks]
+            assert len(set(keys + check_keys)) == len(keys + check_keys)
+            for entry, key in zip(writes + checks, keys + check_keys):
+                assert entry["TableName"] == self.name
+                expression = entry["ConditionExpression"]
+                assert isinstance(expression, str)
+                names = entry["ExpressionAttributeNames"]
+                current = self.items.get(key, {})
+                if expression.startswith("attribute_not_exists("):
+                    field = names[expression[len("attribute_not_exists("):-1]]
+                    matches = field not in current
+                else:
+                    name, value = expression.split(" = ")
+                    matches = current.get(names[name]) == entry["ExpressionAttributeValues"][value]
+                if not matches:
+                    raise TransactionFailure()
+            for entry, key in zip(writes, keys):
+                self.items[key] = copy.deepcopy(entry["Item"])
+                self.calls.append(copy.deepcopy(entry["Item"]))
+            self.transactions.append(copy.deepcopy(kwargs))
+            return {}
 
     def get_item(self, **kwargs):
         assert kwargs.get("ConsistentRead") is True
@@ -257,7 +299,7 @@ def test_only_operational_jobs_expire_thirty_days_after_last_write(storage, stat
     assert storage.get("owner", "job", job["id"])["ttl"] == updated["ttl"]
 
 
-@pytest.mark.parametrize("kind", ["asset", "contract", "run"])
+@pytest.mark.parametrize("kind", ["asset", "contract", "run", "batch", "release", "gitexport"])
 def test_user_work_and_approvals_never_receive_ttl(storage, kind):
     approval = {"version": 3, "hash": "a" * 64, "actor": "owner", "at": 1_800_000_000_000}
     record = storage.put("owner", kind, {"id": "retained", "status": "approved", "approval": approval, "ttl": 1})
@@ -267,3 +309,141 @@ def test_user_work_and_approvals_never_receive_ttl(storage, kind):
     assert "ttl" not in updated and updated["approval"] == approval
     assert "ttl" not in storage.get("owner", kind, "retained")
     assert all("ttl" not in item for item in storage.table().items.values())
+
+
+def test_transaction_prepares_cross_scope_records_with_same_cas_rules(storage):
+    first = storage.put("alice", "asset", {"id": "a", "status": "stored"})
+    storage.clock = lambda: first["createdAt"] + 60_000
+    writes = [
+        {"owner": "alice", "kind": "asset", "item": {**first, "name": "updated", "ttl": 1},
+         "expected_version": 1},
+        {"owner": "project:shared", "kind": "job", "item": {"id": "j", "owner": "spoofed",
+          "value": 0.25}, "expected_version": None},
+    ]
+    original = copy.deepcopy(writes)
+    result = storage.put_many(writes)
+    assert writes == original
+    assert [row["version"] for row in result] == [2, 1]
+    assert result[0]["createdAt"] == first["createdAt"]
+    assert result[0]["updatedAt"] == result[1]["createdAt"]
+    assert "ttl" not in result[0] and "owner" not in result[1]
+    assert result[1]["ttl"] == storage.clock() // 1000 + 30 * 24 * 60 * 60
+    assert storage.get("alice", "asset", "a") == result[0]
+    assert storage.get("project:shared", "job", "j") == result[1]
+    assert storage.get("alice", "job", "j") is None
+    assert len(storage.table().transactions) == 1
+
+
+def test_transaction_failure_never_partially_publishes(storage):
+    from workspace.storage import Conflict
+    original = storage.put("alice", "asset", {"id": "a", "name": "original"})
+    # Lose the CAS after put_many's reads, before the transaction commits.
+    def race():
+        storage.put("alice", "asset", {**original, "name": "winner"}, 1)
+    storage.table().before_transaction = race
+    with pytest.raises(Conflict):
+        storage.put_many([
+            {"owner": "project:shared", "kind": "asset", "item": {"id": "new"}, "expected_version": None},
+            {"owner": "alice", "kind": "asset", "item": original, "expected_version": 1},
+        ])
+    assert storage.get("project:shared", "asset", "new") is None
+    assert storage.get("alice", "asset", "a")["name"] == "winner"
+
+
+def test_transaction_validation_and_duplicate_keys_never_write(storage):
+    from workspace.storage import Conflict
+    create = {"owner": "alice", "kind": "asset", "item": {"id": "new"}, "expected_version": None}
+    invalid = [
+        [], [create] * 101, [create, create],
+        [create, {**create, "item": {"id": "other"}, "expected_version": True}],
+        [create, {**create, "item": {"id": "other", "text": "x" * 350_000}}],
+    ]
+    for writes in invalid:
+        with pytest.raises(ValueError):
+            storage.put_many(writes)
+        assert storage.list("alice", "asset") == []
+    storage.put("alice", "asset", {"id": "taken"})
+    with pytest.raises(Conflict):
+        storage.put_many([create, {**create, "item": {"id": "taken"}}])
+    assert storage.get("alice", "asset", "new") is None
+
+
+def test_transaction_service_failure_has_no_sequential_fallback(storage):
+    def unavailable(**kwargs):
+        raise RuntimeError("Transaction service is unavailable")
+    storage.table().meta.client.transact_write_items = unavailable
+    with pytest.raises(RuntimeError):
+        storage.put_many([{"owner": "alice", "kind": "asset", "item": {"id": "new"},
+                           "expected_version": None}])
+    assert storage.list("alice", "asset") == []
+    assert storage.table().calls == []
+
+
+def test_transaction_throttling_is_not_reported_as_version_conflict(storage):
+    def throttled(**kwargs):
+        raise TransactionFailure("ThrottlingError")
+    storage.table().meta.client.transact_write_items = throttled
+    with pytest.raises(TransactionFailure):
+        storage.put_many([{"owner": "alice", "kind": "asset", "item": {"id": "new"},
+                           "expected_version": None}])
+
+
+def test_transaction_boto3_wire_conditions_are_nested_and_values_marshaled_once():
+    """Capture the real SDK's serialized request, intercepted before any IO."""
+    import json
+    import boto3
+    from botocore.stub import Stubber
+    from workspace.storage import Storage
+
+    resource = boto3.resource("dynamodb", region_name="us-east-1",
+                              aws_access_key_id="test-only", aws_secret_access_key="test-only")
+    table = resource.Table("workspace-test")
+    client = table.meta.client
+    captured = []
+    client.meta.events.register_first(
+        "before-call.*.*",
+        lambda params, model, **kwargs: captured.append(json.loads(params["body"]))
+        if model.name == "TransactWriteItems" else None)
+    store = Storage(table=table, clock=lambda: 5000)
+    with Stubber(client) as stub:
+        stub.add_response("get_item", {"Item": {
+            "id": {"S": "old"}, "version": {"N": "1"}, "createdAt": {"N": "100"}}})
+        stub.add_response("transact_write_items", {})
+        result = store.put_many([
+            {"owner": "alice", "kind": "product", "item": {"id": "old", "price": 0.25},
+             "expected_version": 1},
+            {"owner": "project:shared", "kind": "guideline", "item": {"id": "new"},
+             "expected_version": None},
+        ])
+        stub.assert_no_pending_responses()
+    wire = captured[0]
+    assert "ExpressionAttributeNames" not in wire and "ExpressionAttributeValues" not in wire
+    updated, created = [entry["Put"] for entry in wire["TransactItems"]]
+    assert updated["Item"]["version"] == {"N": "2"}
+    assert updated["Item"]["createdAt"] == {"N": "100"}
+    assert updated["Item"]["price"] == {"N": "0.25"}
+    assert list(updated["ExpressionAttributeValues"].values()) == [{"N": "1"}]
+    assert list(updated["ExpressionAttributeNames"].values()) == ["version"]
+    assert created["ConditionExpression"].startswith("attribute_not_exists(")
+    assert result[0]["price"] == 0.25 and result[0]["createdAt"] == 100
+
+
+def test_release_lifecycle_records_support_owner_scoped_transactions_and_keys(storage):
+    kinds = ("batch", "release", "gitexport")
+    created = storage.put_many([
+        {"owner": "project:shared", "kind": kind,
+         "item": {"id": "same", "status": "queued", "ttl": 1}, "expected_version": None}
+        for kind in kinds
+    ])
+    assert all(row["version"] == 1 and "ttl" not in row for row in created)
+    for kind, record in zip(kinds, created):
+        assert storage.get("project:shared", kind, "same") == record
+        assert storage.list("project:shared", kind) == [record]
+        assert storage.get("project:other", kind, "same") is None
+        assert storage.owns_key("project:shared", storage.key_for("project:shared", kind, "same", "manifest.json"))
+    updated = storage.put_many([
+        {"owner": "project:shared", "kind": kind,
+         "item": {**record, "status": "completed"}, "expected_version": 1}
+        for kind, record in zip(kinds, created)
+    ])
+    assert all(row["version"] == 2 and row["status"] == "completed" and "ttl" not in row for row in updated)

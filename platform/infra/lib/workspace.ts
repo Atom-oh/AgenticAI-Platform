@@ -29,6 +29,22 @@ export class StudioWorkspace extends Construct {
   constructor(scope: Construct, id: string, props: StudioWorkspaceProps) {
     super(scope, id);
     const stack = cdk.Stack.of(this);
+    const configuredGit = this.node.tryGetContext('workspaceGitConnections') ?? [];
+    const gitConnections: Record<string, unknown>[] = typeof configuredGit === 'string' ? JSON.parse(configuredGit) : configuredGit;
+    const gitFields = new Set(['id', 'label', 'provider', 'repository', 'baseUrl', 'webUrl', 'baseBranch',
+      'pathPrefix', 'branchPrefix', 'secretArn', 'visibility']);
+    if (!Array.isArray(gitConnections) || gitConnections.length > 20 ||
+        gitConnections.some(connection => !connection || typeof connection !== 'object' ||
+          Object.keys(connection).some(key => !gitFields.has(key)) ||
+          typeof connection.provider !== 'string' || !['github', 'gitlab'].includes(connection.provider) ||
+          typeof connection.baseUrl !== 'string' || !connection.baseUrl.startsWith('https://') ||
+          typeof connection.webUrl !== 'string' || !connection.webUrl.startsWith('https://') ||
+          typeof connection.secretArn !== 'string' ||
+          !/^arn:[a-z0-9-]+:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+$/.test(connection.secretArn))) {
+      throw new Error('Workspace Git connections require registered repositories and Secrets Manager ARNs; inline credentials are not allowed.');
+    }
+    const gitConfiguration = JSON.stringify(gitConnections);
+    if (Buffer.byteLength(gitConfiguration) > 2500) throw new Error('Workspace Git connection configuration exceeds the environment budget.');
     const bucket = new s3.Bucket(this, 'PrivateFiles', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -58,7 +74,7 @@ export class StudioWorkspace extends Construct {
       file: 'workspace/Dockerfile', platform: ecrAssets.Platform.LINUX_ARM64,
       cmd: [handler],
       exclude: ['web', 'infra', 'api-dist', 'agents', 'onprem', 'tests', '.pytest_cache',
-        '**/__pycache__', 'gates/node_modules', 'seed/out/corpus*', 'skills-dist', '.git'],
+        '**/__pycache__', 'gates/node_modules', 'react-kit/node_modules', 'react-kit/test', 'seed/out/corpus*', 'skills-dist', '.git'],
     });
     const browserLogs = new logs.LogGroup(this, 'BrowserLogs', {
       retention: logs.RetentionDays.ONE_WEEK, removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -111,10 +127,11 @@ export class StudioWorkspace extends Construct {
         GUARDRAIL_VERSION: props.guardrailVersion, LLM_ROUTE: 'bedrock',
         GEN_MODEL: 'global.anthropic.claude-sonnet-5',
         BEDROCK_READ_TIMEOUT: '240',
+        WORKSPACE_GIT_CONNECTIONS: gitConfiguration,
       },
       description: 'Private file extraction and frozen-guide generation/verification loop',
     });
-    worker.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: cdk.Duration.minutes(5) });
+    worker.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: cdk.Duration.hours(1) });
     workerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['s3:GetObject', 's3:PutObject', 's3:PutObjectTagging'],
       resources: [bucket.arnForObjects('workspace/*')],
@@ -139,6 +156,10 @@ export class StudioWorkspace extends Construct {
         `arn:${stack.partition}:bedrock:*:${stack.account}:inference-profile/global.${model}`,
       ]),
     }));
+    const gitSecrets = [...new Set<string>(gitConnections.map(connection => connection.secretArn as string))];
+    if (gitSecrets.length) workerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'], resources: gitSecrets,
+    }));
     workerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:ApplyGuardrail'],
       resources: [
@@ -158,7 +179,8 @@ export class StudioWorkspace extends Construct {
       runtime: lambda.Runtime.PYTHON_3_12, handler: 'workspace.http.handler',
       code: props.apiCode, role: apiRole, memorySize: 1024, timeout: cdk.Duration.seconds(28),
       reservedConcurrentExecutions: 10, logGroup: apiLogs,
-      environment: { ...commonEnv, WORKSPACE_WORKER_FN: worker.functionName },
+      environment: { ...commonEnv, WORKSPACE_WORKER_FN: worker.functionName,
+        WORKSPACE_USER_POOL_ID: props.cognitoUserPoolId, WORKSPACE_GIT_CONNECTIONS: gitConfiguration },
       description: 'JWT-owned private file chunks, contracts, runs and approvals',
     });
     apiRole.addToPolicy(new iam.PolicyStatement({
@@ -166,8 +188,13 @@ export class StudioWorkspace extends Construct {
       resources: [bucket.arnForObjects('workspace/*')],
     }));
     apiRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:ConditionCheckItem'],
       resources: [table.tableArn],
+    }));
+    apiRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['cognito-idp:ListUsers'],
+      resources: [stack.formatArn({ service: 'cognito-idp', resource: 'userpool',
+        resourceName: props.cognitoUserPoolId })],
     }));
     worker.grantInvoke(apiRole);
     const jwt = new authorizers.HttpJwtAuthorizer('WorkspaceCognito',

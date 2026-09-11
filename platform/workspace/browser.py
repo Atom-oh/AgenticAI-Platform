@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
+import re
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -164,7 +166,10 @@ def _action(page, step: dict, bindings=None) -> tuple[bool, object]:
                 actual, passed = "대상 요소가 화면에 보이지 않습니다.", False
             elif action == "expectText":
                 actual = target.inner_text(timeout=1500)
-                passed = actual == value if step.get("match") == "equals" else value in actual
+                compared, expected = actual, value
+                if step.get("normalizeWhitespace"):
+                    compared, expected = " ".join(actual.split()), " ".join(value.split())
+                passed = compared == expected if step.get("match") == "equals" else expected in compared
             elif action == "expectValue":
                 actual = target.input_value(timeout=1500)
                 passed = actual == value
@@ -206,8 +211,32 @@ def _action(page, step: dict, bindings=None) -> tuple[bool, object]:
     return True, "조작 완료"
 
 
+def evaluate_bundle(files: dict[str, bytes], contract: dict, reference_png: bytes | None = None,
+                    visual_tolerance: float = 0.15, expected_hash: str | None = None) -> dict:
+    """Render exact local build bytes; never fetch missing files or outside URLs."""
+    if not isinstance(files, dict) or not files or len(files) > 100 or "index.html" not in files:
+        raise ValueError("React 빌드의 index.html과 로컬 파일이 필요합니다.")
+    total = 0
+    for name, data in files.items():
+        if (not isinstance(name, str) or not re.fullmatch(r"(?:index\.html|THIRD_PARTY_NOTICES\.txt|assets/[A-Za-z0-9_.-]+)", name)
+                or not isinstance(data, bytes)):
+            raise ValueError("허용되지 않은 빌드 파일 경로·형식입니다.")
+        total += len(data)
+    if total > 4_000_000:
+        raise ValueError("React 빌드 파일이 검증 전송 한도를 초과했습니다.")
+    manifest = [{"path": name, "sha256": hashlib.sha256(files[name]).hexdigest()} for name in sorted(files)]
+    digest = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if expected_hash is not None and expected_hash != digest:
+        raise ValueError("빌드 파일 해시가 검증 대상과 일치하지 않습니다.")
+    result = evaluate_html(files["index.html"].decode("utf-8"), contract, reference_png,
+                           visual_tolerance, _bundle=files)
+    result["bundleHash"] = digest
+    result["renderer"] = "react-bundle"
+    return result
+
+
 def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
-                  visual_tolerance: float = 0.15) -> dict:
+                  visual_tolerance: float = 0.15, *, _bundle: dict[str, bytes] | None = None) -> dict:
     from playwright.sync_api import sync_playwright
     from studio.artifacts import secure_html
 
@@ -223,7 +252,7 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
     if contract["unresolved"]:
         result["blockingFindings"] = ["미정의 요구사항이 남아 있습니다."]
         return result
-    secured = secure_html(html)
+    secured = html if _bundle is not None else secure_html(html)
     screenshot = None
     axe_path = Path(os.environ.get("AXE_PATH", str(Path(__file__).parent / "axe.min.js")))
     if not axe_path.is_file():
@@ -267,6 +296,14 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                     if request.url == RENDER_URL and request.is_navigation_request() and not initial["used"]:
                         initial["used"] = True
                         return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=secured)
+                    parsed = urlsplit(request.url)
+                    resource = parsed.path.lstrip("/")
+                    if (_bundle is not None and request.method == "GET" and not request.is_navigation_request()
+                            and (parsed.scheme, parsed.netloc) == ("https", "workspace.invalid")
+                            and not parsed.query and resource in _bundle and resource != "index.html"):
+                        content_type = ("text/javascript" if resource.endswith(".js") else "text/css"
+                                        if resource.endswith(".css") else "application/octet-stream")
+                        return route.fulfill(status=200, content_type=content_type, body=_bundle[resource])
                     result["networkRequests"].append(_safe_url(request.url))
                     route.abort()
                 context.route("**/*", route_request)
@@ -296,6 +333,8 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                 try:
                     _phase("load")
                     page.goto(RENDER_URL, wait_until="load", timeout=10000)
+                    if _bundle is not None:
+                        page.locator('[data-studio-component="Screen"]').first.wait_for(state="attached", timeout=5000)
                     page.wait_for_timeout(100)
                     if screenshot is None:
                         screenshot = page.screenshot(type="png", timeout=5000)
@@ -312,7 +351,14 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                             item = {"index": index, "action": step["action"], "target": step["target"],
                                     "targetLabel": step["targetLabel"], "expected": step.get("value"), "property": step.get("property"),
                                     "actual": actual if not isinstance(actual, str) else actual[:2000],
+                                    "actualTruncated": isinstance(actual, str) and len(actual) > 2000,
                                     "status": "pass" if passed else "fail"}
+                            if _bundle is not None and step["action"] == "expectText" and passed:
+                                item["actualComponent"] = _isolated_eval(page, """((input) => {
+                                  const tagged=document.querySelectorAll('[data-testid="'+CSS.escape(input.target)+'"]');
+                                  const nodes=tagged.length===1||!input.selector?tagged:document.querySelectorAll(input.selector);
+                                  return nodes.length===1 ? nodes[0].getAttribute('data-studio-component') : null;
+                                })(""" + json.dumps({"target": step["target"], "selector": contract["bindings"].get(step["target"])}) + ")")
                         except Exception as error:
                             if _engine_failure(error):
                                 result["engineError"] = True

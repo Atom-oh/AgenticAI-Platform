@@ -68,6 +68,8 @@ export function contractProblems(contract: EditableContract): string[] {
       if (BOOLEAN_ACTIONS.includes(step.action) && typeof step.value !== 'boolean') problems.push(`${name}: 여부를 선택하세요.`);
       if (!BOOLEAN_ACTIONS.includes(step.action) && step.action !== 'click' && typeof step.value !== 'string') problems.push(`${name}: 확인할 값을 입력하세요.`);
       if (step.action === 'expectText' && !step.value) problems.push(`${name}: 확인할 문구를 입력하세요.`);
+      if (step.action === 'expectText' && step.normalizeWhitespace !== undefined && typeof step.normalizeWhitespace !== 'boolean')
+        problems.push(`${name}: 공백 정규화 여부는 예 또는 아니요로 선택하세요.`);
       if (step.action === 'expectStyle' && (!step.property || !Object.hasOwn(STYLE_PROPERTIES, step.property) ||
           typeof step.value !== 'string' || !step.value.trim())) problems.push(`${name}: 스타일 속성과 기대값을 입력하세요.`);
       if (step.action === 'press' && !KEYS.includes(String(step.value))) problems.push(`${name}: 지원하는 키를 선택하세요.`);
@@ -87,12 +89,21 @@ export function ocrLabel(status?: string): string {
 }
 export function editable(contract: EditableContract): EditableContract {
   return { schemaVersion: 1, title: contract.title, brief: contract.brief, assetIds: [...contract.assetIds],
+    ...Object.fromEntries(['projectId', 'productId', 'guidelineId', 'guidelineAssetId', 'ontologyHash', 'catalogHash']
+      .filter(key => contract[key as keyof EditableContract] !== undefined).map(key => [key, contract[key as keyof EditableContract]])),
     viewport: { ...contract.viewport }, rules: structuredClone(contract.rules), unresolved: [...(contract.unresolved || [])],
     ...(contract.bindings !== undefined ? { bindings: { ...contract.bindings } } : {}) };
 }
+export const manualAssets = (assets: Asset[]) => assets.filter(asset => !asset.system && !asset.archived);
+export function applyManualAssets(draft: EditableContract, assets: Asset[], selected: string[]): EditableContract {
+  const allowed = new Set(manualAssets(assets).map(asset => asset.id));
+  const fixed = draft.assetIds.filter(id => id === draft.guidelineAssetId || assets.some(asset => asset.id === id && asset.system));
+  if (draft.guidelineAssetId) fixed.push(draft.guidelineAssetId);
+  return { ...draft, assetIds: [...new Set([...selected.filter(id => allowed.has(id)), ...fixed])] };
+}
 export function importedHtmlAssets(assets: Asset[], contract?: Pick<EditableContract, 'assetIds'> | null): Asset[] {
   return assets.filter(asset => contract?.assetIds.includes(asset.id) && asset.uploadStatus === 'stored' &&
-    !asset.archived && /\.html?$/i.test(asset.name));
+    !asset.system && !asset.archived && /\.html?$/i.test(asset.name));
 }
 export const isOriginalHtmlCheck = (run: Pick<Run, 'mode' | 'model'>) => run.mode === 'verify' || run.model === 'no-inference';
 export function blankContract(assetIds: string[] = [], brief = ''): EditableContract {
@@ -100,6 +111,8 @@ export function blankContract(assetIds: string[] = [], brief = ''): EditableCont
 }
 export function stateLabel(state?: string): string {
   return ({ queued: '대기 중', running: '진행 중', completed: '완료', needs_changes: '수정 필요', failed: '실패',
+    'review-required': '화면 변형 검토 필요', committed: '커밋 완료',
+    ready: '준비 완료', rebuilding: '재빌드 중', exporting: '내보내는 중', unavailable: '사용할 수 없음', needs_revalidation: '재검증 필요',
     passed: '통과', pass: '통과', fail: '실패', verified: '검증됨', not_run: '미검증', not_tested: '미검증',
     not_verified: '미검증', unverified: '미검증', pending: '미검증', incomplete: '미판정',
     'not-run': '미검증', not_compared: '비교하지 않음', skipped: '검사 생략', unsupported: '미지원', approved: '승인됨', draft: '작성 중',

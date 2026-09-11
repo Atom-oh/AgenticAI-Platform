@@ -108,6 +108,7 @@
 .ws-loop-nodes [data-state="passed"], .ws-loop-nodes [data-state="approved"] { background: #eef8f1; border-color: #89baa0; }
 .ws-loop-nodes [data-state="failed"] { background: #fff4f4; border-color: #dbabb3; }
 .ws-loop-nodes [data-state="incomplete"] { background: #fff8e8; border-color: #d9c38e; }
+.ws-loop-nodes [data-state="review"] { background: #fff8e8; border-color: #d9c38e; }
 .ws-loop-return { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-left: 3px solid #ad8a3b; padding: 10px 12px; margin-top: 12px; background: #fff9ec; font-size: 12px; color: #73551f; }
 .ws-unresolved { border-top: 1px solid var(--ws-border); padding-top: 20px; margin-top: 24px; }
 .ws-unresolved > button { margin-top: 12px; }
@@ -150,4 +151,41 @@
 @container designer (min-width: 1500px) {
   .ws-result-columns { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; }
   .ws-rule-cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, 660px), 1fr)); align-items: start; }
+}
+.designer-workspace .ws-project-bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 16px; margin: 12px 0 20px; background: #f3f8f5; border: 1px solid var(--ws-border); border-radius: 10px; }
+.designer-workspace .ws-project-bar > * { min-width: 0; max-width: 100%; }
+.designer-workspace .ws-project-bar > .ws-field { flex: 1 1 240px; }
+.designer-workspace .ws-project-bar > span { flex: 1 1 200px; font-size: 12px; color: var(--ws-muted); }
+.ws-collaboration-layout { display: grid; gap: 20px; align-items: start; min-width: 0; }
+.ws-work-area { min-width: 0; container: designer / inline-size; }
+.designer-workspace .ws-sidebar { min-width: 0; border: 1px solid var(--ws-border); border-radius: 12px; padding: 18px; background: #fafcfb; overflow-wrap: anywhere; }
+.ws-sidebar-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 16px 0; }
+.designer-workspace .ws-sidebar-tabs button { flex: 1 1 auto; padding: 9px 10px; font-size: 12px; }
+.designer-workspace button[aria-pressed="true"] { border-color: #008485; background: #edf8f5; color: #00676a; }
+.designer-workspace .ws-sidebar h3 { margin: 16px 0 10px; font-size: 15px; }
+.designer-workspace .ws-sidebar h4 { margin: 18px 0 10px; font-size: 13px; }
+.designer-workspace .ws-sidebar .ws-field { margin-bottom: 12px; }
+.designer-workspace .ws-sidebar button { white-space: normal; max-width: 100%; }
+.designer-workspace .ws-sidebar dl, .designer-workspace .ws-build-gates dl { margin: 8px 0; font-size: 12px; }
+.designer-workspace .ws-sidebar dd, .designer-workspace .ws-build-gates dd { margin: 4px 0 12px; overflow-wrap: anywhere; }
+.designer-workspace .ws-sidebar dt, .designer-workspace .ws-build-gates dt { font-weight: 600; }
+.designer-workspace .ws-sidebar details { margin-top: 16px; }
+.ws-planning-card, .ws-comments li { padding: 12px; margin-bottom: 12px; border: 1px solid var(--ws-border); border-radius: 8px; background: #fff; }
+.ws-comments { list-style: none; padding: 0; max-height: 480px; overflow-y: auto; }
+.ws-comments p { white-space: pre-wrap; }
+.ws-member { display: flex; align-items: center; gap: 8px; }
+.ws-member .ws-field { flex: 1; min-width: 0; }
+.ws-members > button { margin: 5px 8px 5px 0; }
+.ws-build-gates { padding: 14px; border: 1px solid var(--ws-border); border-radius: 8px; margin: 16px 0; min-width: 0; }
+.ws-build-gates > dl { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+.ws-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 10px; margin: 16px 0; }
+.designer-workspace .ws-comparison button { display: flex; flex-direction: column; gap: 8px; text-align: left; min-width: 0; }
+.designer-workspace .ws-comparison small { font-weight: 400; }
+.designer-workspace .ws-baseline { border: 2px solid #008485; background: #edf8f5; }
+.ws-release a { display: block; margin: 10px 0; text-decoration: underline; }
+.ws-step-guide { grid-column: 2 / -1 !important; display: grid; gap: 10px; min-width: 0; }
+.designer-workspace .ws-notice-copy { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ws-guideline-pages { margin-bottom: 20px; }
+@container designer (min-width: 1280px) {
+  .ws-collaboration-layout { grid-template-columns: minmax(0, 1fr) clamp(310px, 24cqw, 390px); }
 }

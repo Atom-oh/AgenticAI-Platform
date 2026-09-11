@@ -16,6 +16,8 @@ import uuid
 from urllib.parse import quote
 
 from workspace.storage import Conflict, Storage, key_for
+from workspace.collaboration import Collaboration, CollaborationError
+from workspace.rules import CRITERIA_HASHES, CRITERIA_IDS
 
 MAX_FILE_BYTES = 50 * 1024 * 1024
 CHUNK_BYTES = 2 * 1024 * 1024
@@ -27,6 +29,8 @@ _SHA = re.compile(r"[a-f0-9]{64}\Z")
 _REQUEST = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 _EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules", "unresolved", "bindings")
 _BASE_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+_JOB_TARGETS = {"finalize": ("asset", "assetId"), "run": ("run", "runId"), "release": ("release", "releaseId"),
+                "git": ("gitexport", "exportId")}
 
 
 class HTTPError(Exception):
@@ -57,7 +61,7 @@ def _public(value):
         visible = {key: _public(item) for key, item in value.items()
                    if key not in ("pk", "sk", "owner", "parts", "key", "requestHash")
                    and not key.endswith("Key")}
-        for kind in ("html", "screenshot", "diff", "report"):
+        for kind in ("html", "screenshot", "diff", "report", "source", "dist", "manifest", "candidate"):
             if kind + "Key" in value:
                 visible["has" + kind.capitalize()] = bool(value[kind + "Key"])
         return visible
@@ -96,11 +100,18 @@ def _body(event, binary=False):
 
 
 class WorkspaceAPI:
-    def __init__(self, storage=None, lambda_client=None, worker_fn=None, rules=None):
+    def __init__(self, storage=None, lambda_client=None, worker_fn=None, rules=None, directory=None, collaboration=None,
+                 git_connections=None):
         self.storage = storage if storage is not None else Storage()
         self.lambda_client = lambda_client
         self.worker_fn = worker_fn if worker_fn is not None else os.environ.get("WORKSPACE_WORKER_FN", "")
         self._rules = rules
+        if directory is None and os.environ.get("WORKSPACE_USER_POOL_ID"):
+            from workspace.directory import CognitoDirectory
+            directory = CognitoDirectory(os.environ["WORKSPACE_USER_POOL_ID"])
+        self.collaboration = collaboration if collaboration is not None else Collaboration(self.storage, directory=directory)
+        from workspace.git_service import configured_connections
+        self.git_connections = git_connections or configured_connections
 
     def rules(self):
         if self._rules is None:
@@ -129,7 +140,33 @@ class WorkspaceAPI:
                 raise HTTPError(404, "not-found", "Resource not found")
             segments = path.strip("/").split("/")
             query = event.get("queryStringParameters") or {}
-            return self._route(owner, method, segments, event, query)
+            headers = event.get("headers") or {}
+            if not isinstance(headers, dict) or not isinstance(query, dict):
+                raise HTTPError(400, "invalid-input", "Invalid request headers or query")
+            project_headers = [value for key, value in headers.items() if key.lower() == "x-workspace-project"]
+            if len(project_headers) > 1:
+                raise HTTPError(400, "invalid-project", "Only one workspace project may be selected")
+            project_id = project_headers[0] if project_headers else None
+            if segments[0] in ("projects", "products", "comments"):
+                response = self.collaboration.handle(method, segments, _body(event) if method in ("POST", "PUT", "PATCH") else {},
+                                                       query, owner, project_id)
+                if response is not None:
+                    return _json(response[0], response[1])
+            scope = self.collaboration.resolve_scope(owner, project_id)
+            action = "read"
+            if method != "GET":
+                if segments[0] == "assets":
+                    action = "upload"
+                elif segments[0] == "contracts":
+                    action = "edit_rules"
+                elif segments[0] in ("runs", "batches"):
+                    action = "approve" if segments[-1] == "approve" else "generate"
+                elif segments[0] == "releases":
+                    action = "export" if segments[-1] == "git" else "release"
+            scope = self.collaboration.require(scope, action)
+            return self._route(scope["owner"], method, segments, event, query, scope=scope)
+        except CollaborationError as error:
+            return _json(error.status, {"error": error.message, "code": error.code})
         except HTTPError as error:
             return _json(error.status, {"error": error.message, "code": error.code})
         except Conflict:
@@ -169,11 +206,47 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Private artifact not found")
         return key
 
-    def _route(self, owner, method, parts, event, query):
+    def _route(self, owner, method, parts, event, query, scope=None):
         from engine import model_catalog
         if method == "GET" and parts == ["config"]:
+            from workspace.component_catalog import read_catalog
+            catalog = read_catalog()
             return _json(200, {"models": model_catalog.options(), "defaultModel": model_catalog.resolve(),
+                               "actorId": scope["actor"] if scope else owner,
+                               "componentCatalog": {key: catalog[key] for key in ("id", "version", "label", "hash")},
+                               "generationModes": ["creative", "guided"], "variationRange": {"min": 2, "max": 5},
                                "maxFileBytes": MAX_FILE_BYTES, "chunkBytes": CHUNK_BYTES, "extensions": list(EXTENSIONS)})
+        if method == "GET" and parts == ["components"]:
+            from workspace.component_catalog import read_catalog
+            return _json(200, {"catalog": read_catalog()})
+        if method == "GET" and parts == ["git-connections"]:
+            from workspace.git_service import public_connections
+            return _json(200, {"connections": public_connections(self.git_connections())})
+        if parts == ["batches"] and method == "POST":
+            from workspace.batches import create_batch
+            return create_batch(self, owner, _body(event), scope)
+        if parts == ["batches"] and method == "GET":
+            page = self.storage.list_page(owner, "batch", limit=100, cursor=query.get("cursor"))
+            return _json(200, {"batches": page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+        if len(parts) == 2 and parts[0] == "batches" and method == "GET":
+            from workspace.batches import batch_view
+            return _json(200, batch_view(self, owner, self._get(owner, "batch", parts[1])))
+        if parts == ["releases"] and method == "POST":
+            from workspace.releases import create_release
+            return create_release(self, owner, _body(event), scope)
+        if parts == ["releases"] and method == "GET":
+            page = self.storage.list_page(owner, "release", limit=100, cursor=query.get("cursor"))
+            return _json(200, {"releases": page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+        if parts[0] == "releases" and len(parts) in (2, 3) and method == "GET":
+            release = self._get(owner, "release", parts[1])
+            if len(parts) == 2:
+                from workspace.git_service import hydrate_release
+                return _json(200, {"release": hydrate_release(self.storage, owner, release)})
+            if parts[2] == "blob":
+                return self._release_download(owner, release, query)
+        if len(parts) == 3 and parts[0] == "releases" and parts[2] == "git" and method == "POST":
+            from workspace.git_service import create_export
+            return create_export(self, owner, self._get(owner, "release", parts[1]), _body(event), scope)
         if len(parts) == 1 and parts[0] in ("assets", "contracts", "runs") and method == "GET":
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
             page = self.storage.list_page(owner, kind, limit=100, cursor=query.get("cursor"))
@@ -181,11 +254,11 @@ class WorkspaceAPI:
         if parts == ["assets"] and method == "POST":
             return self._create_asset(owner, _body(event))
         if parts == ["contracts", "propose"] and method == "POST":
-            return self._propose(owner, _body(event))
+            return self._propose(owner, _body(event), scope=scope)
         if parts == ["contracts"] and method == "POST":
-            return self._contract_create(owner, _body(event))
+            return self._contract_create(owner, _body(event), scope=scope)
         if parts == ["runs"] and method == "POST":
-            return self._run_create(owner, _body(event))
+            return self._run_create(owner, _body(event), scope=scope)
         if len(parts) < 2 or parts[0] not in ("assets", "contracts", "runs", "jobs"):
             raise HTTPError(404, "not-found", "Route not found")
         kind = {"assets": "asset", "contracts": "contract", "runs": "run", "jobs": "job"}[parts[0]]
@@ -209,16 +282,18 @@ class WorkspaceAPI:
                 _body(event)
                 return self._complete(owner, record)
             if len(parts) == 2 and method == "DELETE":
+                if record.get("system"):
+                    raise HTTPError(409, "published-guide-readonly", "확정된 기획 가이드는 파일 목록에서 제외할 수 없습니다. 상품 기준의 새 버전을 작성하세요.")
                 if not record.get("archived"):
                     record = self.storage.put(owner, kind, {**record, "archived": True}, record["version"])
                 return _json(200, {"asset": record})
         if kind == "contract" and len(parts) == 2 and method == "PUT":
-            return self._contract_edit(owner, record, _body(event))
+            return self._contract_edit(owner, record, _body(event), scope=scope)
         if len(parts) == 3 and parts[2] == "approve" and method == "POST":
             if kind == "contract":
-                return self._contract_approve(owner, record, _body(event))
+                return self._contract_approve(owner, record, _body(event), scope=scope)
             if kind == "run":
-                return self._run_approve(owner, record, _body(event))
+                return self._run_approve(owner, record, _body(event), scope=scope)
         if len(parts) == 3 and parts[2] == "blob" and method == "GET" and kind in ("asset", "run"):
             return self._download(owner, kind, record, query)
         raise HTTPError(404, "not-found", "Route not found")
@@ -326,19 +401,43 @@ class WorkspaceAPI:
             current = self.storage.get(owner, "job", job["id"])
             if current and current["status"] == "queued":
                 try:
-                    self.storage.put(owner, "job", {**current, "status": "failed",
-                                     "error": "Worker invocation failed"}, current["version"])
-                    kind = {"finalize": "asset", "run": "run"}.get(current["task"])
-                    target_id = current["input"].get("assetId" if kind == "asset" else "runId")
+                    writes = [{"owner": owner, "kind": "job", "item": {**current, "status": "failed",
+                               "error": "Worker invocation failed", "errorCode": "dispatch-failed"},
+                               "expected_version": current["version"]}]
+                    kind, id_field = _JOB_TARGETS.get(current["task"], (None, None))
+                    target_id = current["input"].get(id_field) if id_field else None
                     target = self.storage.get(owner, kind, target_id) if kind and target_id else None
                     if target and target.get("status") in ("queued", "processing"):
                         update = {"status": "failed", "error": "Worker invocation failed"}
                         if kind == "asset":
                             update["uploadStatus"] = "failed"
-                        self.storage.put(owner, kind, {**target, **update}, target["version"])
+                        writes.append({"owner": owner, "kind": kind, "item": {**target, **update},
+                                       "expected_version": target["version"]})
+                    self.storage.put_many(writes)
                 except Conflict:
                     pass
             raise HTTPError(503, "worker-unavailable", "Worker invocation failed; inspect the job before retrying")
+
+    def _retry_dispatch(self, owner, job):
+        """Only a job that never started may be requeued after a dispatch failure."""
+        if job.get("status") != "failed" or job.get("errorCode") != "dispatch-failed" or job.get("startedAt"):
+            return job
+        writes = [{"owner": owner, "kind": "job", "item": {**job, "status": "queued", "error": None,
+                   "errorCode": None, "progress": 0}, "expected_version": job["version"]}]
+        kind, id_field = _JOB_TARGETS.get(job["task"], (None, None))
+        target_id = job["input"].get(id_field) if id_field else None
+        if kind and target_id:
+            target = self._get(owner, kind, target_id)
+            if target.get("status") != "failed" or target.get("rounds"):
+                return job
+            update = {"status": "processing" if kind == "asset" else "queued", "error": None}
+            if kind == "asset":
+                update["uploadStatus"] = "processing"
+            writes.append({"owner": owner, "kind": kind, "item": {**target, **update}, "expected_version": target["version"]})
+        try:
+            return self.storage.put_many(writes)[0]
+        except Conflict:
+            return self._get(owner, "job", job["id"])
 
     def _new_job(self, owner, identifier, task, data, request_hash=None):
         record = {"id": identifier, "task": task, "input": data, "status": "queued", "progress": 0}
@@ -355,8 +454,13 @@ class WorkspaceAPI:
     def _complete(self, owner, asset):
         if asset.get("archived"):
             raise HTTPError(409, "archived", "Archived files cannot be finalized")
+        if asset.get("system"):
+            raise HTTPError(409, "published-guide-readonly", "확정된 기획 가이드는 다시 반입 처리할 수 없습니다.")
         if asset.get("jobId") and asset["uploadStatus"] in ("processing", "stored", "failed"):
             job = self.storage.get(owner, "job", asset["jobId"])
+            if job and job.get("errorCode") == "dispatch-failed":
+                job = self._retry_dispatch(owner, job)
+                asset = self._get(owner, "asset", asset["id"])
             if asset["uploadStatus"] == "processing":
                 self._worker_ready()
                 job = job or self._new_job(owner, asset["jobId"], "finalize", {"assetId": asset["id"]})
@@ -430,16 +534,58 @@ class WorkspaceAPI:
                   "purpose", "originalKey", "analysisKey", "previews", "parseStatus")
         return [{key: asset[key] for key in fields if key in asset} for asset in assets]
 
-    def _contract_create(self, owner, body):
-        normalized, _ = self._validated_contract(owner, {key: body[key] for key in _EDITABLE if key in body})
+    def _criteria(self, owner, body, scope, previous=None):
+        from workspace.component_catalog import read_catalog
+        catalog = read_catalog()
+        if previous and previous.get("catalogHash") and previous["catalogHash"] != catalog["hash"]:
+            raise HTTPError(409, "criteria-changed", "React 코드 기준이 바뀌었습니다. 새 규칙을 확인·승인하세요.")
+        if body.get("catalogHash") and body["catalogHash"] != catalog["hash"]:
+            raise HTTPError(409, "criteria-changed", "화면에 표시된 React 코드 기준을 새로 조회하세요.")
+        criteria = {"catalogHash": catalog["hash"]}
+        project = scope.get("project") if scope else None
+        product_id = body.get("productId", (previous or {}).get("productId"))
+        if project is None:
+            if product_id:
+                raise HTTPError(400, "project-required", "상품 기준은 프로젝트에서 선택하세요.")
+            return criteria
+        if not product_id:
+            raise HTTPError(409, "guideline-required", "기획에서 확정한 상품 기준을 먼저 선택하세요.")
+        if previous and previous.get("productId") and previous["productId"] != product_id:
+            raise HTTPError(409, "product-changed", "다른 상품은 새 규칙으로 생성하세요.")
+        context = self.collaboration.published_context(scope, product_id)
+        if previous and previous.get("guidelineId") and previous["guidelineId"] != context["guideline"]["id"]:
+            raise HTTPError(409, "criteria-changed", "상품 가이드가 바뀌었습니다. 새 규칙을 확인·승인하세요.")
+        criteria.update(projectId=project["id"], productId=context["product"]["id"],
+                        guidelineId=context["guideline"]["id"], guidelineAssetId=context["assetId"],
+                        ontologyHash=context["ontology"]["hash"])
+        return criteria
+
+    @staticmethod
+    def _with_criteria(data, criteria):
+        result = {**data, **criteria}
+        assets = data.get("assetIds", [])
+        if not isinstance(assets, list):
+            raise HTTPError(400, "invalid-assets", "Select an array of input assets")
+        assets = list(assets)
+        guide = criteria.get("guidelineAssetId")
+        if guide and guide not in assets:
+            assets.append(guide)
+        result["assetIds"] = assets
+        return result
+
+    def _contract_create(self, owner, body, scope=None):
+        data = self._with_criteria({key: body[key] for key in _EDITABLE if key in body},
+                                   self._criteria(owner, body, scope))
+        normalized, _ = self._validated_contract(owner, data)
         record = self.storage.put(owner, "contract", {**normalized, "id": uuid.uuid4().hex, "status": "draft"})
         return _json(201, {"contract": record})
 
-    def _contract_edit(self, owner, record, body):
+    def _contract_edit(self, owner, record, body, scope=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)
         if version != record["version"]:
             raise Conflict("Contract changed")
         editable = {key: body.get(key, record.get(key)) for key in _EDITABLE if key in body or key in record}
+        editable = self._with_criteria(editable, self._criteria(owner, body, scope, record))
         normalized, _ = self._validated_contract(owner, editable)
         revisions = list(record.get("revisions", []))
         if record.get("status") == "approved":
@@ -451,20 +597,43 @@ class WorkspaceAPI:
             **normalized, "id": record["id"], "status": "draft", "revisions": revisions}, version)
         return _json(200, {"contract": result})
 
-    def _contract_approve(self, owner, record, body):
+    def _approval_put(self, owner, kind, record, expected_version, scope, action):
+        writes = [{"owner": owner, "kind": kind, "item": record, "expected_version": expected_version}]
+        if scope and scope.get("project"):
+            fresh = self.collaboration.require(scope, action)
+            project = scope["project"]
+            if fresh["project"]["version"] != project["version"] or fresh["owner"] != owner:
+                raise Conflict("Project authority or planning criteria changed during approval")
+            writes.append({"owner": owner, "kind": "project", "item": project, "expected_version": project["version"]})
+        checks = [{"owner": owner, "kind": "contract", "id": record["contractId"], "version": record["contractVersion"]}] if kind == "run" else []
+        return self.storage.put_many(writes, checks=checks)[0]
+
+    def _contract_approve(self, owner, record, body, scope=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)
         if record["version"] != version:
             raise Conflict("Contract changed")
+        if record.get("catalogHash"):
+            self._criteria(owner, {}, scope, record)
         normalized, _ = self._validated_contract(owner, record)
         if normalized.get("unresolved") or not normalized.get("rules"):
             raise HTTPError(409, "contract-unresolved", "Resolve every requirement before approving")
+        if normalized.get("productId"):
+            from workspace.criteria import notice_coverage_issues, resolve_generation_context
+            try:
+                context = resolve_generation_context(self.storage, owner, {**normalized, "actor": scope["actor"]}, "edit_rules")
+            except ValueError as error:
+                raise HTTPError(409, "criteria-changed", str(error)) from error
+            missing = notice_coverage_issues(normalized, context["pages"])
+            if missing:
+                raise HTTPError(409, "required-guide-tests-missing", missing[0])
         digest = self.rules().contract_hash(normalized)
         if record.get("status") == "approved" and (record.get("approval") or {}).get("hash") == digest:
             return _json(200, {"contract": record})
-        result = self.storage.put(owner, "contract", {
+        result = self._approval_put(owner, "contract", {
             **record, **normalized, "status": "approved",
-            "approval": {"version": version + 1, "hash": digest, "actor": owner, "at": self.storage.clock()},
-        }, version)
+            "approval": {"version": version + 1, "hash": digest, "actor": scope["actor"] if scope else owner,
+                         "at": self.storage.clock()},
+        }, version, scope, "edit_rules")
         return _json(200, {"contract": result})
 
     @staticmethod
@@ -484,13 +653,17 @@ class WorkspaceAPI:
             raise HTTPError(409, "request-changed", "The request ID was already used with different input")
         return job
 
-    def _propose(self, owner, body):
+    def _propose(self, owner, body, scope=None):
         from engine import model_catalog
         identifier = self._request_id(body, "propose")
         data = {"assetIds": body.get("assetIds", []), "brief": _text(body.get("brief", ""), "brief", 4000, empty=True),
                 "model": model_catalog.resolve(body.get("model"))}
+        data = self._with_criteria(data, self._criteria(owner, body, scope))
+        data["actor"] = scope["actor"] if scope else owner
         fingerprint = self._fingerprint(data)
         job = self._existing_job(owner, identifier, fingerprint)
+        if job:
+            job = self._retry_dispatch(owner, job)
         if not job:
             self._worker_ready()
             assets = self._assets(owner, data["assetIds"])
@@ -499,8 +672,24 @@ class WorkspaceAPI:
         self._invoke(owner, job)
         return _json(202, {"job": job})
 
-    def _run_create(self, owner, body):
+    def _run_create(self, owner, body, scope=None, batch_context=None):
         from engine import model_catalog
+        inherited_policy = None
+        if body.get("baseRunId"):
+            base_run = self._get(owner, "run", body["baseRunId"])
+            if (base_run.get("outputType") == "react" and body.get("contractId") == base_run.get("contractId")
+                    and body.get("contractVersion") == base_run.get("contractVersion")):
+                body = dict(body)
+                if body.get("outputType", "react") != "react":
+                    raise HTTPError(409, "refine-criteria-changed", "React 수정은 같은 코드·검증 기준을 유지해야 합니다.")
+                body["outputType"] = "react"
+                for key in ("variant", "generationMode", "referenceAssetId", "referencePage", "visualTolerance"):
+                    previous = base_run.get(key)
+                    if key in body and body[key] != previous:
+                        raise HTTPError(409, "refine-criteria-changed", "다른 생성·화면 비교 기준은 새 비교 요청으로 확인하세요.")
+                    if previous is not None:
+                        body[key] = previous
+                inherited_policy = base_run.get("visualPolicy", "exact")
         identifier = self._request_id(body, "run")
         model = model_catalog.resolve(body.get("model"))
         mode = body.get("mode", "generate")
@@ -509,7 +698,7 @@ class WorkspaceAPI:
         maximum = 1 if mode == "verify" else _integer(body.get("maxRounds", 3), "Rounds", 1, 5)
         version = _integer(body.get("contractVersion"), "Contract version", 1, 2**53 - 1)
         variant = body.get("variant", "balanced")
-        if variant not in ("balanced", "dense", "emphasis", "flow"):
+        if variant not in ("balanced", "baseline", "layout", "dense", "emphasis", "flow", "information"):
             raise HTTPError(400, "invalid-variant", "Choose a supported design variant")
         tolerance = body.get("visualTolerance", 0.15)
         if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)) or not math.isfinite(tolerance) or not 0 <= tolerance <= 0.5:
@@ -517,12 +706,36 @@ class WorkspaceAPI:
         data = {"contractId": body.get("contractId"), "contractVersion": version, "model": model, "mode": mode,
                 "maxRounds": maximum, "variant": variant, "visualTolerance": tolerance,
                 "instruction": _text(body.get("instruction", ""), "instruction", 4000, empty=True)}
+        if "outputType" in body:
+            if body["outputType"] not in ("react", "html"):
+                raise HTTPError(400, "invalid-output", "React 결과 또는 HTML 참고 검사를 선택하세요.")
+            data["outputType"] = body["outputType"]
+        data["actor"] = scope["actor"] if scope else owner
+        generation_mode = body.get("generationMode", "creative")
+        if generation_mode not in ("creative", "guided"):
+            raise HTTPError(400, "invalid-mode", "Choose a supported generation mode")
+        data["generationMode"] = generation_mode
+        data["visualPolicy"] = "exact" if variant == "baseline" or data.get("outputType") == "html" or mode == "verify" else "variation-review"
+        if inherited_policy:
+            data["visualPolicy"] = inherited_policy
+        if body.get("batchId"):
+            if batch_context is None or batch_context.get("id") != body["batchId"]:
+                raise HTTPError(400, "batch-context-required", "비교 생성 API에서 기준안과 변형안을 함께 생성하세요.")
+            batch = self._get(owner, "batch", body["batchId"])
+            if batch["contractId"] != data["contractId"] or batch["contractVersion"] != version:
+                raise HTTPError(409, "batch-criteria-mismatch", "비교 안의 기준 버전이 일치하지 않습니다.")
+            data["batchId"] = batch["id"]
+            data["variationIndex"] = _integer(body.get("variationIndex"), "Variation index", 0, 5)
         for key in ("baseRunId", "baseRound", "referenceAssetId", "referencePage", "sourceAssetId"):
             if key in body:
                 data[key] = body[key]
         fingerprint = self._fingerprint(data)
         job = self._existing_job(owner, identifier, fingerprint)
         if job:
+            existing_run = self._get(owner, "run", job["input"]["runId"])
+            if job.get("errorCode") == "dispatch-failed" and existing_run.get("outputType") == "react":
+                self._criteria(owner, {}, scope, self._get(owner, "contract", existing_run["contractId"]))
+            job = self._retry_dispatch(owner, job)
             run = self._get(owner, "run", job["input"]["runId"])
             self._invoke(owner, job)
             return _json(202, {"job": job, "run": run})
@@ -532,6 +745,11 @@ class WorkspaceAPI:
                             "The operational job expired. Open the stored run or start a new request.")
         self._worker_ready()
         contract = self._get(owner, "contract", data["contractId"])
+        output_type = "html" if mode == "verify" else data.get("outputType", "react" if contract.get("catalogHash") else "html")
+        if output_type == "react":
+            if not contract.get("catalogHash"):
+                raise HTTPError(409, "code-criteria-required", "React 코드 기준을 포함한 새 규칙을 승인하세요.")
+            self._criteria(owner, {}, scope, contract)
         normalized, assets = self._validated_contract(owner, contract)
         digest = self.rules().contract_hash(normalized)
         approval = contract.get("approval") or {}
@@ -567,6 +785,14 @@ class WorkspaceAPI:
                           baseArtifactSha256=selected["artifactSha256"], baseRound=number)
             if self.storage.blob_info(fields["baseHtmlKey"])["sha256"] != fields["baseArtifactSha256"]:
                 raise HTTPError(409, "base-changed", "The selected base artifact changed")
+            if output_type == "react" and base.get("outputType") == "react":
+                source_key = self._blob_key(owner, selected.get("sourceKey"))
+                if not selected.get("sourceHash") or not selected.get("sourceArchiveSha256"):
+                    raise HTTPError(409, "base-unavailable", "검증된 React 원본이 없는 라운드는 기준으로 사용할 수 없습니다.")
+                if self.storage.blob_info(source_key)["sha256"] != selected["sourceArchiveSha256"]:
+                    raise HTTPError(409, "base-changed", "선택한 React 원본 파일이 변경되었습니다.")
+                fields.update(baseSourceKey=source_key, baseSourceHash=selected["sourceHash"],
+                              baseSourceArchiveSha256=selected["sourceArchiveSha256"], baseContractHash=base["contractHash"])
         if "referencePage" in data and not data.get("referenceAssetId"):
             raise HTTPError(400, "invalid-reference", "Select a reference file")
         if data.get("referenceAssetId"):
@@ -581,7 +807,9 @@ class WorkspaceAPI:
                 raise HTTPError(409, "reference-unavailable", "The selected reference has no PNG preview")
             fields.update(referenceKey=self._blob_key(owner, preview["key"]), referencePage=page)
             fields["referenceSha256"] = self.storage.blob_info(fields["referenceKey"])["sha256"]
-        run_data = {**data, **fields, "id": identifier, "status": "queued", "contractHash": digest,
+        criteria = {key: normalized[key] for key in (*CRITERIA_IDS, *CRITERIA_HASHES) if key in normalized}
+        run_data = {**data, **fields, **criteria, "outputType": output_type,
+                    "id": identifier, "status": "queued", "contractHash": digest,
                     "contract": normalized, "assetSnapshots": self._snapshot_assets(assets), "bestRound": 0,
                     "rounds": [], "functionalStatus": "not-run", "visualStatus": "not-run", "jobId": identifier}
         try:
@@ -621,7 +849,7 @@ class WorkspaceAPI:
         return all(rule["id"] in by_id and (not rule.get("required", True)
                    or by_id[rule["id"]]["status"] == "pass") for rule in rules)
 
-    def _run_approve(self, owner, run, body):
+    def _run_approve(self, owner, run, body, scope=None):
         version = _integer(body.get("contractVersion"), "Contract version", 1, 2**53 - 1)
         number = _integer(body.get("round"), "Round", 1, 5)
         selected = next((row for row in run.get("rounds", []) if row.get("number") == number), None)
@@ -640,17 +868,46 @@ class WorkspaceAPI:
         if self.storage.blob_info(html_key)["sha256"] != digest:
             raise HTTPError(409, "artifact-changed", "The tested artifact bytes have changed")
         report = json.loads(self.storage.get_blob(report_key))
-        if (not self._passing_evidence(run, report)
-                or not self.rules().report_passes(run["contract"], report,
-                                                 visual_required=bool(run.get("referenceAssetId")))
-                or report.get("artifactSha256") != digest
+        extra_approval = {}
+        if run.get("outputType") == "react":
+            from workspace.react_artifacts import read_archive
+            from workspace.react_quality import react_report_passes
+            self._criteria(owner, {}, scope, contract)
+            if (body.get("sourceHash") != selected.get("sourceHash") or body.get("bundleHash") != selected.get("bundleHash")
+                    or selected.get("catalogHash") != contract.get("catalogHash")
+                    or report.get("sourceHash") != selected.get("sourceHash") or report.get("bundleHash") != selected.get("bundleHash")
+                    or report.get("catalogHash") != contract.get("catalogHash")):
+                raise HTTPError(409, "react-evidence-mismatch", "선택한 React 소스·배포 파일·코드 기준이 일치해야 합니다.")
+            if report.get("visual", {}).get("status") == "review-required":
+                if body.get("acceptVariation") is not True:
+                    raise HTTPError(409, "variation-review-required", "허용된 화면 변형 범위와 비교 근거를 확인하세요.")
+                extra_approval["acceptedVariation"] = True
+            if not react_report_passes(run["contract"], report, visual_required=bool(run.get("referenceAssetId")),
+                                       visual_policy=run.get("visualPolicy", "exact")):
+                raise HTTPError(409, "react-evidence-required", "React 코드·빌드·필수 동작의 검증 근거가 필요합니다.")
+            for kind in ("source", "dist"):
+                blob_key = self._blob_key(owner, selected.get(kind + "Key"))
+                contents = self.storage.get_blob(blob_key)
+                if hashlib.sha256(contents).hexdigest() != selected.get(kind + "ArchiveSha256"):
+                    raise HTTPError(409, "artifact-changed", "검증된 React 산출물 파일이 변경되었습니다.")
+                try:
+                    read_archive(contents, selected["sourceHash" if kind == "source" else "bundleHash"])
+                except ValueError as error:
+                    raise HTTPError(409, "artifact-changed", "검증된 React 파일 구성과 해시가 일치하지 않습니다.") from error
+            extra_approval.update(sourceHash=selected["sourceHash"], bundleHash=selected["bundleHash"],
+                                  catalogHash=selected["catalogHash"], guidelineId=run.get("guidelineId"))
+        elif (not self._passing_evidence(run, report) or not self.rules().report_passes(
+                run["contract"], report, visual_required=bool(run.get("referenceAssetId")))):
+            raise HTTPError(409, "approval-evidence-required", "The stored verification report did not pass")
+        if (report.get("artifactSha256") != digest
                 or report.get("contractHash") != run["contractHash"]
                 or self.rules().contract_hash(run["contract"]) != run["contractHash"]):
             raise HTTPError(409, "approval-evidence-required", "The stored verification report did not pass")
-        result = self.storage.put(owner, "run", {
+        result = self._approval_put(owner, "run", {
             **run, "approval": {"round": number, "artifactSha256": digest, "contractVersion": version,
-                                "contractHash": run["contractHash"], "actor": owner, "at": self.storage.clock()},
-        }, run["version"])
+                                "contractHash": run["contractHash"], "actor": scope["actor"] if scope else owner,
+                                "at": self.storage.clock(), **extra_approval},
+        }, run["version"], scope, "approve")
         return _json(200, {"run": result})
 
     @staticmethod
@@ -659,6 +916,26 @@ class WorkspaceAPI:
         if not isinstance(value, str) or not re.fullmatch(r"0|[1-9][0-9]{0,9}", value):
             raise HTTPError(400, "invalid-offset", f"Invalid {key}")
         return _integer(int(value), key, minimum, maximum)
+
+    def _release_download(self, owner, release, query):
+        kind = query.get("kind", "source")
+        if kind not in ("source", "dist", "manifest", "report"):
+            raise HTTPError(400, "invalid-kind", "Choose a release artifact")
+        if release.get("status") != "ready" and kind != "report":
+            raise HTTPError(409, "release-not-ready", "승인본 재빌드·검증이 끝난 뒤 내려받을 수 있습니다.")
+        key = self._blob_key(owner, release.get(kind + "Key"))
+        info = self.storage.blob_info(key)
+        offset = self._query_int(query, "offset", 0, MAX_FILE_BYTES)
+        if info["size"] > MAX_FILE_BYTES or offset > info["size"] or (offset == info["size"] and offset != 0):
+            raise HTTPError(416, "invalid-range", "Offset is outside the stored artifact")
+        data = self.storage.get_blob(key, offset=offset, length=CHUNK_BYTES)
+        extension = "zip" if kind in ("source", "dist") else "json"
+        filename = f"{release['id']}-{kind}.{extension}"
+        return {"statusCode": 200, "isBase64Encoded": True, "body": base64.b64encode(data).decode(),
+                "headers": {**_BASE_HEADERS, "Content-Type": "application/octet-stream",
+                            "Content-Disposition": f"attachment; filename=\"{filename}\"",
+                            "X-Content-Type": info["contentType"], "X-Total-Size": str(info["size"]),
+                            "X-Chunk-Size": str(len(data)), "X-SHA256": info["sha256"]}}
 
     def _download(self, owner, kind, record, query):
         offset = self._query_int(query, "offset", 0, MAX_FILE_BYTES)
@@ -678,7 +955,7 @@ class WorkspaceAPI:
             else:
                 raise HTTPError(400, "invalid-kind", "Choose original or preview")
         else:
-            if requested not in ("html", "screenshot", "diff", "report"):
+            if requested not in ("html", "screenshot", "diff", "report", "source", "dist", "candidate"):
                 raise HTTPError(400, "invalid-kind", "Choose a run artifact kind")
             number = self._query_int(query, "round", 1, 5, minimum=1)
             row = next((row for row in record.get("rounds", []) if row.get("number") == number), None)
@@ -686,7 +963,8 @@ class WorkspaceAPI:
                 raise HTTPError(404, "not-found", "Round artifact not available")
             key = row.get(requested + "Key")
             declared_type = "image/png" if requested in ("screenshot", "diff") else "application/octet-stream"
-            filename = f"{record['id']}-r{number}-{requested}"
+            extension = ".zip" if requested in ("source", "dist") else ".json" if requested in ("candidate", "report") else ".html" if requested == "html" else ".png"
+            filename = f"{record['id']}-r{number}-{requested}{extension}"
         key = self._blob_key(owner, key)
         info = self.storage.blob_info(key)
         if info["size"] > MAX_FILE_BYTES or offset > info["size"] or (offset == info["size"] and offset != 0):

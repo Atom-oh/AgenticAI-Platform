@@ -23,12 +23,61 @@ function fixture() {
 }
 const stage = (state, id) => state.nodes.find(node => node.id === id);
 
+test('personal React approval accepts an absent or null product revision without weakening hashes', () => {
+  const { run, round } = fixture();
+  Object.assign(run, { outputType: 'react', catalogHash: 'c'.repeat(64) });
+  Object.assign(round, { sourceHash: 'd'.repeat(64), bundleHash: 'e'.repeat(64) });
+  run.approval = { round: round.number, artifactSha256: round.artifactSha256, contractVersion: run.contractVersion,
+    contractHash: run.contractHash, catalogHash: run.catalogHash, sourceHash: round.sourceHash, bundleHash: round.bundleHash,
+    guidelineId: null, actor: 'designer', at: 1 };
+  assert.equal(load().hasExactApproval(run, round), true);
+  run.approval.sourceHash = 'f'.repeat(64);
+  assert.equal(load().hasExactApproval(run, round), false);
+});
+
 test('loading matching evidence does not imply human approval or loop completion', () => {
   const state = load().deriveVerificationLoop(fixture());
   assert.equal(stage(state, 'browser').state, 'passed');
   assert.equal(stage(state, 'evidence').state, 'recorded');
   assert.equal(stage(state, 'approval').state, 'pending');
   assert.equal(state.complete, false);
+});
+
+test('React loop fails closed when browser pass contradicts missing or failed build evidence', () => {
+  const fixtureData = fixture();
+  fixtureData.run.outputType = 'react'; fixtureData.run.catalogHash = 'c'.repeat(64);
+  assert.equal(stage(load().deriveVerificationLoop(fixtureData), 'browser').state, 'incomplete');
+  Object.assign(fixtureData.round, { sourceHash: 'd'.repeat(64), bundleHash: 'e'.repeat(64), catalogHash: fixtureData.run.catalogHash,
+    gates: Object.fromEntries(['policy', 'types', 'build', 'components'].map(key => [key, { status: 'pass' }])) });
+  Object.assign(fixtureData.evidence, { sourceHash: fixtureData.round.sourceHash, bundleHash: fixtureData.round.bundleHash,
+    catalogHash: fixtureData.round.catalogHash, build: { ...fixtureData.round, ok: true } });
+  assert.equal(stage(load().deriveVerificationLoop(fixtureData), 'browser').state, 'passed');
+  fixtureData.round.gates.types.status = 'fail';
+  assert.equal(stage(load().deriveVerificationLoop(fixtureData), 'browser').state, 'incomplete');
+});
+test('review-required variations need exact source approval and explicit acceptance, without becoming pixel passes', () => {
+  const { deriveVerificationLoop, hasExactApproval } = load();
+  const value = fixture();
+  const hashes = { sourceHash: 'c'.repeat(64), bundleHash: 'd'.repeat(64), catalogHash: 'e'.repeat(64) };
+  const build = { ...hashes, ok: true, gates: Object.fromEntries(['policy', 'types', 'build', 'components'].map(key => [key, { status: 'pass' }])) };
+  Object.assign(value.round, hashes, { build, visualStatus: 'review-required' });
+  Object.assign(value.run, { outputType: 'react', catalogHash: hashes.catalogHash, visualPolicy: 'variation-review', referenceAssetId: 'image' });
+  Object.assign(value.evidence, hashes, { build, visualPolicy: 'variation-review', visual: { status: 'review-required', comparisonStatus: 'fail' } });
+  let state = deriveVerificationLoop(value);
+  assert.equal(stage(state, 'browser').state, 'review');
+  assert.equal(state.complete, false);
+  assert.equal(state.retry, false);
+  const approval = { round: 2, artifactSha256: value.round.artifactSha256, contractVersion: 3, contractHash: value.run.contractHash,
+    actor: 'reviewer', at: 123456, ...hashes };
+  value.run.approval = approval;
+  assert.equal(hasExactApproval(value.run, value.round), false);
+  value.run.approval = { ...approval, acceptedVariation: true };
+  assert.equal(deriveVerificationLoop(value).complete, true);
+  value.run.approval.sourceHash = 'f'.repeat(64);
+  assert.equal(hasExactApproval(value.run, value.round), false);
+  assert.equal(deriveVerificationLoop({ ...value, run: { ...value.run, visualPolicy: 'exact' } }).complete, false);
+  value.evidence.networkRequests = ['https://outside.invalid'];
+  assert.equal(stage(deriveVerificationLoop(value), 'browser').state, 'failed');
 });
 
 test('approval must match the selected round, artifact, contract version and contract hash', () => {

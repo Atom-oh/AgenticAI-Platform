@@ -16,6 +16,10 @@ from workspace.worker import Worker
 
 
 def request(api, method, path, body=None):
+    if method == "POST" and path == "/runs":
+        # This module exercises the preserved HTML prototype path. Real React
+        # generation has its own tests and explicitly requests outputType=react.
+        body = {**(body or {}), "outputType": (body or {}).get("outputType", "html")}
     binary = isinstance(body, bytes)
     response = api.handle({
         "rawPath": "/studio-api" + path,

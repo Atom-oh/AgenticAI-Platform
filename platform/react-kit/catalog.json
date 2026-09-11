@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "id": "studio-ui",
+  "version": "1.0.0",
+  "label": "플랫폼 기본 React 컴포넌트",
+  "components": [
+    {
+      "name": "Screen",
+      "description": "페이지를 나타내는 main 영역. 플랫폼 기본 패키지이며 고객 사내 패키지의 승인을 뜻하지 않는다.",
+      "props": { "pageId": "string, 필수; data-page-id", "children": "ReactNode, 필수", "width": "mobile | content | wide; 기본 content", "title": "string; 선택한 경우 페이지 h1", "id": "string?", "testId": "string?; root data-testid" },
+      "variationAxes": ["width"]
+    },
+    {
+      "name": "Stack",
+      "description": "허용된 간격 토큰으로 세로 배치.",
+      "props": { "children": "ReactNode, 필수", "gap": "1 | 2 | 3 | 4 | 6 | 8; 기본 4; 각 단위 4px", "id": "string?", "testId": "string?" },
+      "variationAxes": ["gap"]
+    },
+    {
+      "name": "Grid",
+      "description": "1~3열 배치. 좁은 화면 또는 패널에서는 1열로 접힌다.",
+      "props": { "children": "ReactNode, 필수", "columns": "1 | 2 | 3; 기본 1", "gap": "1 | 2 | 3 | 4 | 6 | 8; 기본 4", "id": "string?", "testId": "string?" },
+      "variationAxes": ["columns", "gap"]
+    },
+    {
+      "name": "Inline",
+      "description": "자동 줄바꿈을 지원하는 가로 배치.",
+      "props": { "children": "ReactNode, 필수", "gap": "1 | 2 | 3 | 4 | 6; 기본 4", "align": "start | center | end; 기본 center", "justify": "start | between | end; 기본 start", "id": "string?", "testId": "string?" },
+      "variationAxes": ["gap", "align", "justify"]
+    },
+    {
+      "name": "Panel",
+      "description": "관련 내용을 묶는 section과 선택적 h2 제목.",
+      "props": { "children": "ReactNode, 필수", "title": "string?", "tone": "default | subtle | brand; 기본 default", "id": "string?", "testId": "string?" },
+      "variationAxes": ["tone"]
+    },
+    {
+      "name": "Text",
+      "description": "허용된 의미 태그와 텍스트 토큰. as는 런타임에서도 목록 외 태그나 컴포넌트를 받지 않는다.",
+      "props": { "children": "ReactNode, 필수", "as": "span | p | h1 | h2 | h3; 기본 p", "size": "sm | md | lg; 생략 시 의미 태그의 기본 크기", "tone": "default | muted | brand | danger; 기본 default", "id": "string?", "testId": "string?" },
+      "variationAxes": ["as", "size", "tone"]
+    },
+    {
+      "name": "Button",
+      "description": "네이티브 버튼. 기본 type은 button이며 콜백에 DOM 이벤트를 넘기지 않는다.",
+      "props": { "label": "string, 필수", "onClick": "() => void?", "kind": "primary | secondary | danger; 기본 primary", "disabled": "boolean?; 기본 false", "type": "button | submit; 기본 button", "id": "string?", "testId": "string?; button data-testid" },
+      "variationAxes": ["kind"]
+    },
+    {
+      "name": "Input",
+      "description": "명시적 label, 안내/오류 연결을 갖는 제어 입력. id와 testId는 네이티브 input에 적용한다.",
+      "props": { "label": "string, 필수", "value": "string, 필수", "onChange": "(value: string) => void, 필수", "type": "text | number | email | tel; 기본 text", "hint": "string?", "error": "string?; aria-invalid 및 alert", "required": "boolean?", "disabled": "boolean?", "min": "number?; number 입력에 적용", "max": "number?; number 입력에 적용", "placeholder": "string?", "id": "string?", "testId": "string?; input data-testid" },
+      "variationAxes": []
+    },
+    {
+      "name": "Checkbox",
+      "description": "네이티브 체크박스와 연결된 label. 콜백에 체크 여부만 전달한다.",
+      "props": { "label": "string, 필수", "checked": "boolean, 필수", "onChange": "(checked: boolean) => void, 필수", "disabled": "boolean?", "required": "boolean?", "id": "string?", "testId": "string?; input data-testid" },
+      "variationAxes": []
+    },
+    {
+      "name": "Select",
+      "description": "명시적 label이 있는 네이티브 제어 select. 옵션 값은 중복되지 않아야 한다.",
+      "props": { "label": "string, 필수", "value": "string, 필수", "onChange": "(value: string) => void, 필수", "options": "{value:string,label:string}[], 필수", "disabled": "boolean?", "id": "string?", "testId": "string?; select data-testid" },
+      "variationAxes": []
+    },
+    {
+      "name": "RadioGroup",
+      "description": "fieldset/legend와 같은 name의 네이티브 라디오 그룹. 기본 키보드 이동을 유지한다.",
+      "props": { "label": "string, 필수", "value": "string, 필수", "onChange": "(value: string) => void, 필수", "options": "{value:string,label:string}[], 필수", "id": "string?; fieldset id", "testId": "string?; 그룹 data-testid. 개별 radio의 data-testid는 testId-value (예: plan-basic)" },
+      "variationAxes": []
+    },
+    {
+      "name": "Alert",
+      "description": "의미와 대비가 고정된 안내. info/success는 status, warning/danger는 alert.",
+      "props": { "message": "string, 필수", "title": "string?", "tone": "info | success | warning | danger; 기본 info", "id": "string?", "testId": "string?" },
+      "variationAxes": ["tone"]
+    },
+    {
+      "name": "Stepper",
+      "description": "현재 단계를 aria-current로 표시하는 읽기 전용 순서. 과거 단계의 검증 완료를 추정하지 않는다.",
+      "props": { "steps": "{id:string,label:string}[], 필수", "current": "string, 필수", "id": "string?", "testId": "string?" },
+      "variationAxes": []
+    },
+    {
+      "name": "Summary",
+      "description": "label/value를 dt/dd로 표시하는 의미 있는 요약.",
+      "props": { "title": "string?", "items": "{label:string,value:string}[], 필수", "id": "string?", "testId": "string?" },
+      "variationAxes": []
+    },
+    {
+      "name": "AssetImage",
+      "description": "반입한 data:image만 표시. 외부 URL과 상대 URL은 런타임에서 거부한다. 원격 리소스를 조회하지 않는다.",
+      "props": { "src": "string, 필수; data:image/png|jpeg|gif|webp|avif|svg+xml", "alt": "string, 필수; 장식 이미지는 빈 문자열", "width": "number?; 양의 정수", "height": "number?; 양의 정수", "id": "string?", "testId": "string?" },
+      "variationAxes": ["width", "height"]
+    }
+  ]
+}

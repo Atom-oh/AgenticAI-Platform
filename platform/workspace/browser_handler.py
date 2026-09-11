@@ -181,7 +181,7 @@ def _execute(event):
         diagnostics = ",".join(_driver_diagnostics(stderr_path)) or "no-known-signature"
         if timed_out or fatal_driver:
             phase = trace.read_text()[:80] if trace.is_file() else "startup"
-            known = {"cdp-session", "frame-tree", "isolated-world", "isolated-evaluate", "launch", "load", "interaction", "done"}
+            known = {"compile", "cdp-session", "frame-tree", "isolated-world", "isolated-evaluate", "launch", "load", "interaction", "done"}
             reason = "프로토콜 오류로 중단했습니다" if fatal_driver else "제한 시간을 초과했습니다"
             raise ValueError(f"브라우저 드라이버가 {reason}. 단계: {phase if phase in known else 'startup'}; 진단: {diagnostics}")
         if not clean:

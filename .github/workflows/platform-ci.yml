@@ -19,6 +19,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: platform/react-kit/package-lock.json }
+      - run: npm ci --ignore-scripts
+        working-directory: platform/react-kit
       - run: pip install pytest pyyaml pg8000 httpx -r workspace/requirements.txt
       - run: python -m playwright install --with-deps chromium
       - run: python workspace/fetch_axe.py gates/package-lock.json /tmp/studio-axe
@@ -41,6 +45,18 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: node --test test/*.test.cjs
+
+  react:
+    name: React kit — real build, source export and browser tests
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: platform/react-kit } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: platform/react-kit/package-lock.json }
+      - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
       - run: node --test test/*.test.cjs
 
