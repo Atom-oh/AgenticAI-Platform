@@ -1,158 +1,117 @@
-# React Design Workspace Implementation Plan
+# React 공동 디자인 작업실 — 구현·배포 체크리스트
 
-> **For agentic workers:** Use superpowers:subagent-driven-development for the disjoint kit, collaboration and host integration tasks. Each owner must read the shared interface contract.
+기준일: **2026-09-11**, 코드 기준: **`7325c72`**. 체크된 항목은 아래에 명시한 구현·자동 테스트·라이브 확인 범위에서 완료됐다.
+라이브 React 모델·스테이징 UI는 확인했으며, AWS 릴리스 검사와 프런트엔드 게시·게시 UI 확인은 별도 항목으로 남긴다.
+코드 구현 완료만으로 전체 납품 완료를 표시하지 않는다.
 
-**Goal:** Deliver a shared planning/design/development workspace whose approved outputs are actual tested React projects, deployable static bundles and traceable Git feature-branch exports.
+**목표:** 기획·디자인·개발이 같은 상품 기준으로 실제 React 화면을 만들고, 검증한 소스·정적 번들·테스트와 Git 전달 근거를 보존한다.
 
-**Architecture:** Reuse private intake and bounded browser verification. Add a pinned real React kit and trusted compiler, project-scoped guideline ontology, generation batches, immutable release records and a configured Git transport. One sidebar joins planning revisions, UX pages, evidence and actual commits.
+**설계:** `docs/superpowers/specs/2026-09-11-react-design-workspace.md`.
+**인터페이스:** `platform/workspace/REACT_CONTRACT.md`.
+**현재 상태:** `platform/README.md`, `docs/14-demo/studio-implementation-review.md`.
 
-**Tech Stack:** React 18.3.1, TypeScript 5.6.3, esbuild 0.25.12, Playwright 1.62.0, Python, existing JWT HTTP API/private S3/DynamoDB/isolated browser Lambda.
+## 1. 실제 React 컴포넌트와 컴파일러
 
-**Spec:** `docs/superpowers/specs/2026-09-11-react-design-workspace.md`; exact interfaces: `platform/workspace/REACT_CONTRACT.md`.
+대상: `platform/react-kit/`, `workspace/component_catalog.py`, `workspace/react_runtime.py`.
 
-## Global Constraints
+- [x] 실제 코드·타입·토큰을 가진 플랫폼 기본 React 컴포넌트 15종 구현.
+- [x] 카탈로그 설명만이 아니라 실제 컴포넌트 소스 해시를 API·워커·컴파일러에서 고정.
+- [x] 생성 소스의 허용 import·속성·경로를 검사하고, 컴포넌트 변경·임의 CSS/HTML·위험한 실행 경로를 거부.
+- [x] 실제 React 타입 검사와 production build, 동일한 파일 해시를 갖는 소스/dist 아카이브 생성.
+- [x] 소스 ZIP에 실제 kit·의존성 lock·빌드 설정·승인 규칙·테스트를 포함.
+- [x] Node·고정 의존성·kit을 실행기 이미지에 포함하고 컨테이너의 실제 React 경로 검증.
+- [ ] 고객 React 패키지·버전·토큰 제공 후 연결·검증. 현재는 **플랫폼 기본 패키지**이며 고객 패키지로 표시하지 않음.
 
-- Real React code is the component authority; no stub success or MD-as-implementation.
-- Keep personal and shared project scopes separate. Check canonical membership on every project request.
-- Pin component/source/ontology/contract/bundle hashes; changed criteria cannot reuse old release approval.
-- Creative mode preserves hard rules; guided mode contains one baseline plus 2~5 variations.
-- Build settings, dependencies and tests are trusted templates. Never run uploaded package scripts/configuration.
-- Runtime compilation/rendering has no AWS data credentials and no outside network access.
-- Figma/source URLs remain metadata; no direct fetch, external image/font completion or runtime npm downloads.
-- Public platform source publication is explicitly authorized. Customer/design output publication still requires a configured destination and authorized export action.
-- Preserve unrelated user edits, existing data, old prototypes and approval history.
+## 2. 프로젝트·기획·저장된 온톨로지
 
-## Task 1 — actual pinned React component kit (UI worker)
+대상: `workspace/collaboration.py`, `storage.py`, `directory.py`와 관련 테스트.
 
-Files: `platform/react-kit/ui/*`, `catalog.json`, `manifest.cjs`, `test/ui*.test.cjs`.
+- [x] 개인/프로젝트 범위 분리, 요청마다 현재 참여자 확인, 역할과 행동한 사용자 감사 정보 구분.
+- [x] 관리자·기획·디자인·개발 역할과 기존 사용자 조회 구현. 조회는 초대 이메일을 보내지 않음.
+- [x] 상품 초안과 게시 지침 분리, 불변 원문·비공개 guide 자산·typed nodes/edges 저장.
+- [x] 불변 자료를 저장한 뒤 상품 포인터와 관련 메타데이터를 하나의 DynamoDB 트랜잭션으로 게시.
+- [x] 저장된 온톨로지를 다시 읽어 생성 입력으로 사용. 임시 그래프를 영구 저장이나 Neptune 연결로 표시하지 않음.
+- [x] 상품·지침·시안·페이지·라운드에 연결된 의견과 새 지침의 재검증 영향 조회.
+- [x] 두 사용자 이상 권한, 철회된 참여자, 버전 충돌, 원자적 실패, 지침 변경, 중복 의견 테스트.
+- [x] 라이브 프로젝트·상품 지침 조회 확인. 합성 자료의 저장된 온톨로지 **노드 7개·관계 8개** 확인.
 
-- [ ] Implement the exact 15-component typed interface in `REACT_CONTRACT.md`, including controlled inputs, focus/error/disabled behavior and fixed tokens.
-- [ ] Verify real rendering and interactions; prove caller CSS/raw HTML/unsupported props cannot redefine components.
-- [ ] Generate the catalog lock from actual source bytes, not descriptions.
+## 3. 기준 고정·생성·실제 화면 검사
 
-```js
-assert.equal(catalog().version, '1.0.0');
-assert.match(catalog().hash, /^[a-f0-9]{64}$/);
-// Browser fixture: Input onChange updates state; Checkbox controls Button disabled;
-// root markers and computed primary color come from the real kit.
-```
+대상: `workspace/http.py`, `criteria.py`, `batches.py`, `react_generation.py`, `react_quality.py`, `browser*.py`.
 
-Run: `cd platform/react-kit && node --test test/ui*.test.cjs`.
-Commit only after host package setup and cross-check of imports/types.
+- [x] 승인 규칙·선택 자산·컴포넌트 코드·게시 지침·온톨로지의 버전과 해시를 실행마다 고정.
+- [x] Creative 1개, guided 기준안 1개 + 변형 2~5개(총 3~6개) 생성 요청 구현.
+- [x] 기준안/변형안의 독립 상태와 부분 실패, 같은 요청 재시도, 선택한 정확한 라운드 수정 구현·테스트.
+- [x] 같은 kit·규칙으로 소스만 수정하며 필수 안내 페이지·문구를 실제 브라우저에서 검사.
+- [x] 데이터 자격 증명이 없는 제한된 자식 프로세스에서 컴파일·렌더링하고 외부 네트워크를 차단.
+- [x] 실패한 빌드를 HTML·스텁 성공으로 바꾸지 않고, 누락·미판정·오류를 통과로 표시하지 않음.
+- [x] 원본 HTML 검사를 별도 참고 경로로 유지. 선택된 고유한 로컬 CSS·이미지만 연결.
+- [x] 시작 화면 비교와 의도적인 변형 수용을 구분하고 픽셀 미검사를 통과로 만들지 않음.
+- [x] 라이브 Astra guided 기준안 1개+변형 2개와 Fable creative 1개, 모두 **2라운드 통과**.
+- [x] 실제 React 타입·production build·접근성·동작 5개 규칙과 필수 온톨로지 안내 Screen 확인.
+- [x] 첫 기준안의 정적 pageId 정책 실패 후 같은 기준을 유지한 수정·통과 확인.
+- [x] 이 모델 실행들은 원본 이미지 기준이 없어 **visual: not-run**으로 기록. Figma 픽셀 일치 주장 없음.
+- [ ] 라이브 Fable 규칙 제안의 별도 결과 기록.
+- [ ] 기준안+변형 5개 경계의 라이브 실행 확인. 해당 경계의 자동 테스트와 구분.
 
-## Task 2 — trusted React project compiler (host)
+## 4. 사람 승인·동일 소스 릴리스
 
-Files: `platform/react-kit/package.json`, `package-lock.json`, `compile.cjs`, `policy.cjs`,
-`project.cjs`, `test/compiler*.test.cjs`, trusted export scripts/tests.
+대상: `workspace/http.py`, `releases.py`, `react_artifacts.py`와 관련 테스트.
 
-- [ ] Add failing fixtures for component-source mutation, unknown import, raw controls/style/HTML, path traversal, wrong props and invalid TSX.
-- [ ] Implement `buildProject` with AST policy, real TS types, production bundle and deterministic source/dist ZIPs.
-- [ ] Ship an executable test project: actual UI kit, pinned lock, build/check scripts and rule-based browser tests.
-- [ ] Rebuild the exported project and compare bundle hash; source/kit changes must fail.
+- [x] 선택한 React 라운드의 소스·번들·컴포넌트·규칙·검수 근거가 일치할 때만 승인.
+- [x] 개인·공동 작업 모두 관련 규칙 버전 확인과 시안 승인 저장을 같은 트랜잭션에서 수행.
+- [x] 동시 규칙 변경 재현이 HTTP 409로 종료하며 잘못된 승인을 남기지 않는지 독립 확인.
+- [x] 디자인·개발·관리자가 이미 승인된 같은 소스를 AI 재생성 없이 재빌드·브라우저 재검증.
+- [x] 같은 소스·번들 해시와 **승인한 시작 화면의 차이 2% 이내**를 릴리스 조건으로 검사.
+- [x] 비공개 S3에 소스 ZIP·dist ZIP·정적 site 파일·manifest·검수 보고서 보존.
+- [x] 기준 변경·다른 해시·기존 HTML 승인을 새 React 릴리스 승인으로 사용하지 않음.
+- [ ] 승인된 라이브 Astra 기준안·Fable 시안의 AWS 재빌드·릴리스 검사 완료. **현재 실행 중**.
+- [ ] 그 릴리스의 소스·dist 다운로드와 동일 번들 화면 확인 완료.
 
-```js
-const out = await buildProject({ files: goodFiles, assets: {}, expectedCatalogHash: catalog().hash, contract });
-assert.equal(out.ok, true);
-assert.notEqual(out.sourceHash, out.bundleHash);
-assert.equal((await buildProject({ files: wrongProps, assets: {}, expectedCatalogHash: catalog().hash, contract })).ok, false);
-assert.equal((await buildProject({ files: goodFiles, assets: {}, expectedCatalogHash: '0'.repeat(64), contract })).ok, false);
-```
+## 5. 등록된 Git 대상으로 전달
 
-Run: `cd platform/react-kit && npm ci && node --test test/compiler*.test.cjs`.
+대상: `workspace/git_export.py`, `git_service.py`, Git/릴리스 HTTP·워커 연결과 테스트.
 
-## Task 3 — shared project, planning and persistent ontology (backend worker)
+- [x] 등록된 대상·기준 브랜치·경로·비밀 참조로만 GitHub/GitLab 어댑터 구성.
+- [x] 파일 내용과 source hash를 검증하고, 기능 브랜치만 생성하며 main 직접 쓰기·강제 갱신·경로 이탈을 거부.
+- [x] 실제 로컬 bare 저장소의 커밋 내용·중복 요청·기존 브랜치 충돌·기준 SHA 변경 테스트.
+- [x] 주입된 원격 전송기로 GitHub/GitLab 요청·응답과 리다이렉트·비밀 정보 노출 방지 검사.
+- [x] 실제로 반환된 검증된 커밋 기록을 먼저 저장하고 최신 기준의 변경/확인 불가를 별도로 기록.
+- [x] 커밋 뒤 일시적인 읽기 오류가 나도 완료 상태·SHA를 보존하는 문제 수정과 독립 재현 확인 종료.
+- [x] 연결이 없으면 미설정을 표시하고 원격 커밋·URL을 만들지 않음.
+- [ ] 고객 Git 목적지·권한·비밀 참조 제공 및 등록. **현재 고객 원격 대상 미설정**.
+- [ ] 등록 후 허용된 고객 테스트 저장소에서 실제 기능 브랜치 쓰기·조회 확인.
 
-Files: `platform/workspace/collaboration.py`, `storage.py` transaction extension,
-`tests/test_workspace_collaboration.py`, transactional storage tests.
+## 6. 공통 사이드바와 사용자 흐름
 
-- [ ] Add two-user tests: membership, role enforcement, revocation, actor/scope separation and cross-project 404.
-- [ ] Implement `Collaboration` exact interface and atomic `Storage.put_many`.
-- [ ] Publish structured guidelines into immutable typed ontology + private guide asset, then atomically switch the product's published pointer.
-- [ ] Read the saved projection; link discussions and affected runs to exact revisions; retries must be idempotent.
+대상: `platform/web/src/workspace/`와 UI 테스트.
 
-```python
-scope = collaboration.resolve_scope("designer-sub", project_id)
-assert scope["owner"] == "project:" + project_id
-assert scope["actor"] == "designer-sub"
-# Publish v1, create a run pinned to v1, publish v2:
-assert collaboration.is_current(scope, run_v1) is False
-# Stale membership index + removed canonical member must still reject access.
-```
+- [x] 프로젝트별 HTTP 클라이언트·화면 상태 분리, 프로젝트 전환 시 이전 자료·진행 상태 혼합 방지.
+- [x] 기획·지침/의견/개발·내보내기 사이드바와 상품·페이지·라운드 연결.
+- [x] 현재 사용자와 역할, 게시 지침, 필수 안내, 기준안/변형안, 정확한 라운드의 검수·승인 근거 표시.
+- [x] 릴리스 소스·S3 배포용 번들·보고서와 실제 Git 기록 또는 미설정 상태 표시.
+- [x] 공개 범위 확인이 필요한 Git 대상의 확인 절차와 디자인 역할의 릴리스 준비 권한 반영.
+- [x] 최신 UI 자동 테스트 **41개 통과**.
+- [x] 새 UI를 실제 API의 프로젝트·상품과 연결해 FHD/QHD/WQHD에서 확인. 페이지 오류 없음.
+- [ ] 최종 프런트엔드 빌드·게시 및 게시된 UI의 역할별 사용 흐름 재검증. **현재 새 프런트엔드 미게시**.
 
-Run: `cd platform && PYTHONPATH=. python -m pytest tests/test_workspace_collaboration.py tests/test_workspace_storage.py -q`.
+## 7. 통합 검증·배포·PR
 
-## Task 4 — scoped HTTP and actual React runtime (host)
+- [x] 최신 Python 자동 테스트 **784개 통과**.
+- [x] 컨테이너의 실제 React 빌드·브라우저 경로 통과.
+- [x] 승인 경쟁 상태와 Git 커밋 기록 유실 **Major 2건 수정·독립 확인 종료**.
+- [x] 백엔드 AWS 업데이트 **UPDATE_COMPLETE**.
+- [x] 라이브 HTML·CSS·SVG·PNG·JPG 5종 업로드·인증 다운로드·원본 해시 일치.
+- [x] 플랫폼 소스의 공개 PR 게시에 대한 사용자 권한 확인. 고객 원본·산출물 공개 허용과는 별개.
+- [x] README·SPEC·디자이너 가이드·반입 안내·구현 점검을 실제 React 범위와 현재 확인 상태에 맞게 정리.
+- [x] 라이브 모델의 필수 검사 통과, 원본 이미지 비교 미수행, 스테이징 UI 통과를 서로 구분해 기록.
+- [ ] 진행 중인 AWS 릴리스 검사 결과·한계를 문서에 갱신.
+- [ ] 공개 PR 생성. **현재 PR 미생성**.
+- [ ] 최종 PR head의 독립 코드·보안 검토, Critical/Major 수정 후 병합 여부 판단.
+- [ ] 게시된 프런트엔드와 실제 백엔드의 최종 사용 흐름 확인 후 완료 상태 갱신.
 
-Files: `workspace/http.py`, new HTTP route helpers, `react_runtime.py`, `browser.py`, `browser_task.py`,
-`Dockerfile`, `Dockerfile.dockerignore`, `infra/lib/workspace.ts`, tests.
+## 완료 주장에 포함하지 않는 것
 
-- [ ] Wire project context and actor into existing resources without trusting request owner fields.
-- [ ] Package pinned Node dependencies and kit into the image; keep compilation inside the credential-free child.
-- [ ] Add `evaluate_bundle`: serve only exact local build files in memory, use the existing behavioral/a11y/image assertions.
-- [ ] Prove failed build cannot return HTML fallback or functional pass; verify actual React state propagation and blocked network.
-- [ ] Add narrowly scoped transactional/directory permissions required by project routes; synth/check before deployment.
-
-```python
-result = evaluate_react({"files": good_files, "contract": contract, "catalogHash": expected_hash})
-assert result["build"]["gates"]["types"]["status"] == "pass"
-assert result["report"]["functionalStatus"] == "pass"
-bad = evaluate_react({"files": broken_state_files, "contract": contract, "catalogHash": expected_hash})
-assert bad["report"]["passed"] is False
-```
-
-## Task 5 — frozen ontology generation and comparison batches (host)
-
-Files: `workspace/worker.py`, `react_generation.py`, `batches.py`, `rules.py`, run/batch HTTP helpers and tests.
-
-- [ ] Extend snapshots with catalog/product/guideline/ontology hashes; read published ontology as actual generation input.
-- [ ] Generate only allowed React source files; retry against unchanged kit and rules.
-- [ ] Creative creates one proposal; guided validates integer 2..5 and creates exactly one baseline + N variations.
-- [ ] Persist per-run failures independently; support selecting/revising an exact run/round.
-- [ ] Require mandatory notices/pages from ontology and distinguish exact image comparison from allowed variation review.
-
-```python
-assert len(make_batch(mode="guided", variation_count=2).run_ids) == 3
-assert len(make_batch(mode="guided", variation_count=5).run_ids) == 6
-# Reject 0,1,6, booleans and non-integers; preserve all hashes across repairs.
-```
-
-## Task 6 — verified release and Git export (host)
-
-Files: `workspace/releases.py`, `git_export.py`, release HTTP/worker handlers and tests.
-
-- [ ] Only an approved React round can create a release. Rebuild and retest exact approved source and verify source/kit/ontology/dist hashes.
-- [ ] Store private source/dist/manifests/evidence and reject stale criteria or mismatched hashes.
-- [ ] Implement registered Git connection transport, feature-branch-only writes, expected-base conflict handling and idempotent retries.
-- [ ] Use local bare repositories/mock HTTP transports for branch/commit/conflict contract tests; never fabricate an external commit when unconfigured.
-
-```python
-release = prepare_release(approved_run, selected_round)
-assert release["bundleHash"] == selected_round["bundleHash"]
-# Modify source or publish a new product guideline: release/export must reject.
-# Export twice: same commit; occupied unrelated branch: conflict, never force.
-```
-
-## Task 7 — project sidebar, modes and developer handoff (UI worker after kit)
-
-Files: `web/src/workspace/*`, workspace tests.
-
-- [ ] Add an immutable project-bound client context; remount scoped panels on project change and abort old polling/downloads.
-- [ ] Add project/product selection, planner guideline editing/publication, ontology view, discussion threads and role-aware actions.
-- [ ] Add creative/guided controls and 2..5 variation count; keep baseline visible with independent variant statuses.
-- [ ] Show actual kit/build/browser/approval/release/Git states and page source links.
-- [ ] Test two-user permissions, stale product revision, partial batch failure, page discussion anchors and real commit/unconfigured states.
-- [ ] Verify responsive sidebar and preserve private nested preview navigation controls.
-
-Run: `cd platform/web && npm run build && node --test test/*.test.cjs`.
-
-## Task 8 — end-to-end review, release and PR (host)
-
-- [ ] Build a synthetic product guideline, publish/read its ontology, and generate real React with Astra and Fable.
-- [ ] Exercise creative, guided baseline+2 and baseline+5 boundaries; verify normal/broken/repaired flows.
-- [ ] Approve/rebuild/download actual React source and dist, then serve dist locally and verify the same flow.
-- [ ] Verify Git feature-branch export against the configured/test destination and display the actual result.
-- [ ] Test guide change invalidation, project revocation and wrong artifact hashes.
-- [ ] Run complete tests, independent code/security review, fix Critical/Major and check deployment diff.
-- [ ] Deploy platform/backend without deleting existing files/data; verify the published UI with actual authenticated APIs.
-- [ ] Publish PR to the authorized repository, collect AI review on the PR head, fix Critical/Major, and merge when only Minor remains.
-- [ ] Update README/SPEC/designer guide to the actual React deliverable and report configured/unconfigured customer integrations accurately.
+고객의 사내 React 패키지, 미설정 고객 Git 원격 쓰기, 제공 범위 밖 금융 API·인증·거래,
+FIG 내부 해석, 기존 갤러리·초안의 자동 일괄 이관은 완료로 주장하지 않는다.
+시작 화면 비교를 전체 전이 상태의 픽셀 검증으로, 로컬·컨테이너 테스트를 라이브 모델·게시 UI 성공으로 바꾸지 않는다.
