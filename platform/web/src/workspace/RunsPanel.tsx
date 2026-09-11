@@ -55,6 +55,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const liveRun = useRef(runId); liveRun.current = runId;
   const currentContractVersion = contracts.find(item => item.id === contractId)?.version;
   const downloading = useDownload();
+  const currentRunVersion = runs.find(item => item.id === runId)?.version;
   useEffect(() => () => action.current?.abort(), []);
   useEffect(() => {
     const controller = new AbortController();
@@ -92,7 +93,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       })
       .catch(reason => { if (!controller.signal.aborted) setError(messageOf(reason)); });
     return () => controller.abort();
-  }, [workspaceClient, runId, refreshKey]);
+  }, [workspaceClient, runId, refreshKey, currentRunVersion]);
   const selectedRound = run?.rounds?.find(round => round.number === roundNumber);
   const selectedPage = selectedRound?.pageSources?.some(page => page.pageId === pageId) ? pageId : selectedRound?.pageSources?.[0]?.pageId;
   useEffect(() => { onSelection?.(run?.id === runId ? { run, round: selectedRound, pageId: selectedPage } : null); },

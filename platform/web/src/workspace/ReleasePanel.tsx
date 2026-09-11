@@ -54,7 +54,7 @@ export default function ReleasePanel({ selection, product, initialReleaseId, onR
       setReleases(matching); setReleaseId(previous => previous || matching[0]?.id || '');
     }).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
     return () => abort.abort();
-  }, [client, run?.id, run?.outputType, round?.number, retry]);
+  }, [client, run?.id, run?.version, run?.outputType, round?.number, retry]);
   useEffect(() => {
     const abort = new AbortController(); setConnections(null);
     client.get<{ connections: NonNullable<typeof connections> }>('/git-connections', abort.signal)

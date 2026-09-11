@@ -1,5 +1,9 @@
 # Designer Workspace Implementation Plan
 
+Historical intake/HTML foundation plan. The final deliverable was expanded by the
+2026-09-11 customer meeting; follow `2026-09-11-react-design-workspace.md` for the
+actual React component, collaboration, release and Git handoff requirements.
+
 > **For agentic workers:** Use superpowers:subagent-driven-development for disjoint
 > implementation tasks and independent review after integration.
 
@@ -17,6 +21,25 @@ Playwright Chromium, Pillow/PDFium, Bedrock through the existing gate.
 **Spec:** `docs/14-demo/studio-file-intake.md`; implementation interfaces:
 `platform/workspace/CONTRACT.md`.
 
+## Checkpoint — 2026-09-11, release incomplete
+
+Checked implementation items mean source and local/offline evidence exist.
+They do **not** mean the new frontend is published or the AWS browser renderer
+has passed. Live facts below are reported by the integration owner:
+
+- Backend deployed; nine synthetic file formats were imported and their
+  authenticated original downloads matched their hashes.
+- Live Fable proposal succeeded with **8 rules and 7 unresolved items**.
+  This is a draft, not contract approval or a passing executable verification.
+- UI build/offline flow passed; staged new UI with the real API showed no
+  horizontal overflow at FHD, QHD and 3440 width.
+- **AWS browser renderer remains under Carson's repair. No live executable
+  verification pass has been confirmed. NEW FRONTEND NOT PUBLISHED.**
+- **Public GitHub PR payload publication was explicitly authorized by the user
+  on 2026-09-11.** After runtime verification, the parent handles push, AI review,
+  Critical/Major fixes and merge when only Minor findings remain. Publication
+  and merge are not complete. The integration owner updates final release facts.
+
 ## Global constraints
 
 - No Figma connection in network3 or Studio; no external resource completion.
@@ -25,7 +48,8 @@ Playwright Chromium, Pillow/PDFium, Bedrock through the existing gate.
 - Imported skills are reference text, not server commands or agent permissions.
 - Contract changes invalidate approval; incomplete evidence never passes.
 - Preserve all existing drafts, approvals, resource logical IDs and unrelated edits.
-- Public git export was rejected previously; do not bypass that approval boundary.
+- Public PR payload publication is now explicitly authorized; the parent owns
+  push/review/fixes/conditional merge after runtime verification.
 - Deployment is explicitly requested; validate each concrete AWS change before applying.
 
 ## Task 1 — private intake HTTP and storage
@@ -33,62 +57,87 @@ Playwright Chromium, Pillow/PDFium, Bedrock through the existing gate.
 Files: `workspace/storage.py`, `workspace/http.py`, `tests/test_workspace_http.py`,
 `tests/test_workspace_storage.py`. Implement the HTTP/Storage contract verbatim.
 
-- [ ] Failing tests: cross-owner access returns404; absent JWT401; over-limit413;
+- [x] Local regression tests: cross-owner access returns404; absent JWT401; over-limit413;
   missing/mismatched/changed part409; duplicate identical part is idempotent.
-- [ ] Implement conditional metadata, two-MiB binary upload, async finalize jobs,
+- [x] Implement conditional metadata, two-MiB binary upload, async finalize jobs,
   authenticated bounded downloads, revision-preserving archive, contract/run API.
-- [ ] Verify full hash and exact selected artifacts; no active same-origin MIME.
+- [x] Verify full hash and exact selected artifacts locally; no active same-origin MIME.
+  Nine-format live import/hash-download results are tracked separately in Task 5.
 
 ## Task 2 — parser and real browser checks
 
 Files: `workspace/intake.py`, `workspace/browser.py`, `workspace/browser_handler.py`,
 `tests/test_workspace_intake.py`, `tests/test_workspace_browser.py`.
 
-- [ ] Failing fixtures: valid PNG/JPEG/PDF/SVG/HTML/text, corrupted images,
+- [x] Local fixtures: valid PNG/JPEG/PDF/SVG/HTML/text, corrupted images,
   SVG entities/scripts, external HTML resources, FIG archive, image pixel limit.
-- [ ] Implement local previews/text with honest partial/unsupported states.
-- [ ] Browser fixtures: amount propagation, required checkbox blocking, back
+- [x] Implement local previews/text with honest partial/unsupported states.
+- [x] Local actual-browser fixtures: amount propagation, required checkbox blocking, back
   navigation, deliberate broken flow, external fetch, accessibility violation.
-- [ ] Compare actual pixels when a reference is supplied, not an HTML hash.
+- [x] Compare actual pixels of the initial screen when a reference is supplied,
+  not an HTML hash. Do not claim every transition state was compared.
+- [ ] Complete AWS browser renderer repair and rerun deployed success/failure cases.
 
 ## Task 3 — designer UI
 
 Files: `web/src/workspace/*`, `web/src/studio/Studio.tsx`.
 
-- [ ] File select/drop, progress, retry/error, grouped roles, previews, original
+- [x] File select/drop, progress, retry/error, grouped roles, previews, original
   download, version/interpretation state; do not require JSON or plugin setup.
-- [ ] Guide proposal -> editable Korean rule cards -> explicit version approval.
-- [ ] Model selection, generation/three variants, verification graph, round
+- [x] Guide proposal -> editable Korean rule cards -> explicit version approval.
+- [x] Model selection, generation/three variants, round
   evidence, precise corrective instruction, exact-round approval/download.
-- [ ] Mocked UI: partial upload, failure, delayed polling, multiple report jobs,
+- [x] Mocked UI: partial upload, failure, delayed polling, multiple report jobs,
   unsaved contract edits, narrow/FHD/QHD/wide layout.
+- [x] Original HTML inspection without AI rewriting; advanced CSS bindings,
+  `expectStyle`, public artifact flags, OCR/context warnings, one-based pages and
+  import revisions separate from internal database revisions.
+- [x] Native accessible verification-loop graph bound to selected run/round,
+  matching evidence and exact approval; failure/incomplete returns to the same rules.
+  Eight dedicated state tests plus the offline browser flow cover unknown phases,
+  mismatching evidence, unapproved reports, missing/nonempty network or console
+  evidence and narrow/FHD/QHD/wide wrapping. The frontend regression set passes 28/28.
+- [ ] Publish the new frontend after renderer and final release verification.
 
 ## Task 4 — frozen contracts and AI orchestration
 
 Host files: `workspace/rules.py`, `workspace/worker.py`, `engine/gate.py`,
 workspace worker tests and gate tests.
 
-- [ ] Test rejected unknown DSL, empty assertions, invalid targets, unresolved
+- [x] Local tests reject unknown DSL, empty assertions, invalid targets, unresolved
   requirements, source-quote mismatch, edited approved contract.
-- [ ] Build bounded prompts from selected private assets, preserve imported
+- [x] Build bounded prompts from selected private assets, preserve imported
   design reference, apply selected skills as task data, use allowed model IDs.
-- [ ] Freeze hashes/versions; execute real browser checks; repair only artifact;
+- [x] Freeze hashes/versions; execute local actual-browser checks; repair only artifact;
   prioritize passed rounds, persist failure/incomplete evidence.
-- [ ] Test duplicate async invocation, time cap, inference error, stale approval,
+- [x] Local failure-path tests cover duplicate invocation, execution limits,
+  inference errors, stale approval,
   foreign owner references and no invented successful verdicts.
+- [ ] Confirm the same orchestration through the repaired AWS renderer.
 
 ## Task 5 — infrastructure, review and release
 
 Host files: `infra/lib/workspace.ts`, `infra/lib/stack.ts`, workspace container
 packaging/deployment, README and implementation review.
 
-- [ ] Container runtime with pinned tools; browser minimal environment and
+- [x] Container/runtime and infrastructure implementation with pinned tools; browser minimal environment and
   isolated VPC/no egress, no S3 or Bedrock permissions.
-- [ ] Private encrypted retained bucket/table; authorized HTTP route through
+  Local non-root/read-only/network-none checks and the deployed AWS browser passed.
+- [x] Private encrypted retained bucket/table; authorized HTTP route through
   CloudFront; workload-scoped IAM; no new public artifact endpoints.
-- [ ] Synth/diff, security review, unit/integration/browser tests; fix Critical/Major.
-- [ ] Deploy only reviewed resource changes; no seed reset or bucket deletion.
-- [ ] Live synthetic-file upload, private download, rule proposal/edit/approval,
-  Astra/Fable generation and actual good/broken flow verification.
-- [ ] PR AI review and conditional merge when public publication is authorized;
-  report any remaining approval boundary without claiming merge success.
+- [x] Deploy backend intake/proposal resources (integration-owner report).
+- [x] Live nine-format synthetic-file intake and authenticated original-download hash checks.
+- [x] Live Fable rule proposal: 8 rules and 7 unresolved requirements, not approved.
+- [x] Staged new UI connected to the real API: no overflow at FHD/QHD/3440.
+- [x] Close foundation synth/diff and integration review; resolve renderer failures and confirmed Critical/Major findings.
+- [ ] Deploy reviewed renderer fixes and new frontend; preserve existing data and resources.
+- [x] Live proposal edit/approval, Astra/Fable generation and actual good/broken
+  browser verification, exact-round repair and approval.
+- [x] Obtain explicit user authorization for the public GitHub PR payload.
+- [ ] Parent push and PR AI review after runtime verification; resolve
+  Critical/Major findings and merge when only Minor findings remain.
+
+Evidence: `platform/tests/test_workspace_*.py`, `platform/web/test/workspace*.test.cjs`,
+the frontend build, prior local integration/container results and the explicitly
+scoped live results above. Real bank React packages/APIs and FIG interpretation
+remain outside any completion claim.

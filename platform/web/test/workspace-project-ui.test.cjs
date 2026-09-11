@@ -242,6 +242,13 @@ test('project scope, collaboration, guided baselines and real release metadata r
     await page.locator('.ws-run-choice').first().click();
     await page.getByRole('button', { name: '승인 소스 재빌드·릴리스 검사' }).waitFor();
     await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '승인 소스 재빌드·릴리스 검사' && !button.disabled));
+    const savedApproval = runs.b[0].approval;
+    delete runs.b[0].approval; runs.b[0].version += 1;
+    await page.getByRole('button', { name: '내 작업 새로 조회', exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '승인 소스 재빌드·릴리스 검사' && button.disabled));
+    runs.b[0].approval = savedApproval; runs.b[0].version += 1;
+    await page.getByRole('button', { name: '내 작업 새로 조회', exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '승인 소스 재빌드·릴리스 검사' && !button.disabled));
     await page.getByRole('button', { name: '승인 소스 재빌드·릴리스 검사' }).click();
     await page.getByRole('heading', { name: '저장된 릴리스' }).waitFor();
     assert.equal(await page.getByRole('button', { name: '기능 브랜치로 내보내기' }).isDisabled(), true);
