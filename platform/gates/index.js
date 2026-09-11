@@ -88,11 +88,9 @@ if (require.main === module) {
     try {
       const input = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
       const result = await runGates(input);
-      process.stdout.write(JSON.stringify(result));
-      process.exit(0);
+      process.stdout.write(JSON.stringify(result), (error) => process.exit(error ? 1 : 0));
     } catch (e) {
-      process.stderr.write(`gates: ${errMessage(e)}\n`);
-      process.exit(1);
+      process.stderr.write(`gates: ${errMessage(e)}\n`, () => process.exit(1));
     }
   });
 }

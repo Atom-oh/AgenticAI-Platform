@@ -281,7 +281,7 @@ class _PolicyPlacement(HTMLParser):
         self.prolog = False
 
 
-def secure_html(html: str) -> str:
+def secure_html(html: str, *, allow_scripts: bool = True) -> str:
     """Put the offline CSP first in head, creating an early head when necessary.
 
     Inline styles/scripts and data images/fonts remain usable; other resource
@@ -305,13 +305,14 @@ def secure_html(html: str) -> str:
         # before that input anyway; any unparsed old CSP can only restrict it.
         pass
 
+    policy = _CSP_META if allow_scripts else _CSP_META.replace("script-src 'unsafe-inline'", "script-src 'none'")
     removals = placement.own_policies
     if placement.head_end is not None:
         position = placement.head_end
-        insertion = _CSP_META
+        insertion = policy
     else:
         position = placement.prefix_end
-        insertion = "<head>" + _CSP_META + "</head>"
+        insertion = "<head>" + policy + "</head>"
         removals = removals + placement.head_tags
 
     edits = [(start, end, "") for start, end in removals]

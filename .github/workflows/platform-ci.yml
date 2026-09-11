@@ -19,10 +19,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - run: pip install pytest boto3 pyyaml pg8000 httpx
+      - run: pip install pytest pyyaml pg8000 httpx -r workspace/requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python workspace/fetch_axe.py gates/package-lock.json /tmp/studio-axe
       - run: python3 seed/generate.py
       - run: python3 seed/corpus.py   # corpus.jsonl (임베딩 캐시 seed/out/corpus.embeddings.json 은 커밋됨)
       - run: python3 -m pytest tests/ -q
+        env: { AXE_PATH: '/tmp/studio-axe/axe.min.js' }
       - name: 금지 패턴 검사 (비밀번호·실 계정·프롬프트 원문 로그)
         run: |
           ! grep -rn --include='*.py' --include='*.ts' --include='*.tsx' --include='*.md' -E '!234Qwer|AKIA[0-9A-Z]{16}' . || (echo "secret-like string found" && exit 1)
@@ -38,6 +41,8 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: node --test test/*.test.cjs
 
   gates:
     name: Gates — node:test (tsc/eslint/axe runner)
@@ -47,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: test -f package.json && npm ci && npm test || echo "gates not present"
+      - run: npm ci && npm test
 
   infra:
     name: Infra — cdk synth
@@ -61,3 +66,4 @@ jobs:
       - run: mkdir -p ../api-dist && touch ../api-dist/.keep
       - run: npx cdk synth BankPlatform --quiet -c planeDeployed=false
         env: { CDK_DEFAULT_ACCOUNT: '000000000000' }
+      - run: python3 ../workspace/check_infra.py cdk.out/BankPlatform.template.json

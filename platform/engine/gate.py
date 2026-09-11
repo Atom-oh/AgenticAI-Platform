@@ -335,6 +335,49 @@ def generate(system: str, user: str, max_tokens: int = 300, route: Optional[str]
                          "boundary": boundary, "usage": usage, "purpose": purpose}
 
 
+def generate_with_images(system: str, user: str, images: list[dict], *, model_id: str,
+                         max_tokens: int = 8000, purpose: str = "workspace.generate",
+                         trace_id: str = "") -> Tuple[str, dict, dict]:
+    """Bedrock-only vision for locally parsed previews and completed local OCR.
+
+    OCR text is checked unmodified, before any image bytes leave the worker.
+    This is a rule-based text screen, not a claim to detect every visual PII form.
+    Only trusted server extraction calls this function; HTTP clients cannot
+    supply OCR attestations or arbitrary Converse request blocks.
+    """
+    model = model_catalog.resolve(model_id)
+    if len(images) > 5:
+        raise GateUnsupported("한 번에 참조할 이미지는 최대 5개입니다.")
+    contents = [{"text": user}]
+    ocr = []
+    for index, image in enumerate(images):
+        data, kind = image.get("bytes"), image.get("format")
+        if (not isinstance(data, bytes) or not 0 < len(data) <= 3_000_000 or kind not in ("png", "jpeg")
+                or image.get("ocrStatus") != "complete" or not isinstance(image.get("ocrText"), str)):
+            raise GateUnsupported("이미지는 로컬 형식 검사와 OCR을 완료한 PNG/JPEG 미리보기여야 합니다.")
+        if (kind == "png" and not data.startswith(b"\x89PNG\r\n\x1a\n")) or (kind == "jpeg" and not data.startswith(b"\xff\xd8")):
+            raise GateUnsupported("이미지 내용과 지정된 형식이 일치하지 않습니다.")
+        ocr.append(image["ocrText"])
+        contents.extend([{"text": f"참고 이미지 {index + 1}"},
+                         {"image": {"format": kind, "source": {"bytes": data}}}])
+    ad = adapter("bedrock", model_id=model)
+    boundary = check(system, user + "\n" + "\n".join(ocr), purpose, trace_id, "bedrock", model)
+    extra = {}
+    if os.environ.get("GUARDRAIL_ID") and os.environ.get("GUARDRAIL_VERSION"):
+        extra["guardrail_config"] = {"guardrailIdentifier": os.environ["GUARDRAIL_ID"],
+                                      "guardrailVersion": os.environ["GUARDRAIL_VERSION"]}
+    response = ad.converse_with_tools(system, [{"role": "user", "content": contents}], None,
+                                      model=model, max_tokens=max_tokens, **extra)
+    if response.get("stopReason") == "guardrail_intervened":
+        raise GateUnsupported("Bedrock 보호 정책이 이 요청을 차단했습니다. 반입 자료와 요청을 확인하세요.")
+    text = "".join(block.get("text", "") for block in response.get("output", {}).get("message", {}).get("content", []))
+    usage = llm.normalize_usage(response.get("usage", {}))
+    _log("gate.images", trace_id, purpose=purpose, modelId=model, imageCount=len(images),
+         imageBytes=sum(len(image["bytes"]) for image in images), ocrChars=sum(map(len, ocr)))
+    return text, usage, {"modelId": model, "route": "bedrock", "tier": ad.tier,
+                         "boundary": boundary, "usage": usage, "purpose": purpose, "imageCount": len(images)}
+
+
 # ---------------------------------------------------------------------------
 # 도구 루프 (Reader) — Converse 호환 표면
 # ---------------------------------------------------------------------------

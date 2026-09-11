@@ -1,0 +1,7 @@
+awslambdaric==4.0.2
+boto3==1.43.92
+Pillow==12.3.0
+pypdf==6.18.0
+pypdfium2==5.13.0
+defusedxml==0.7.1
+playwright==1.62.0

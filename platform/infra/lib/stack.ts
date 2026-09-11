@@ -29,6 +29,7 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import { PLANE_PARAM_PREFIX } from './plane-stack';
+import { StudioWorkspace } from './workspace';
 
 export interface BankPlatformStackProps extends cdk.StackProps {
   /** 플레인 스택이 배포되어 SSM 파라미터가 존재할 때 true (브리지·Writer 연결) */
@@ -77,8 +78,10 @@ export class BankPlatformStack extends cdk.Stack {
       certificate: acm.Certificate.fromCertificateArn(this, 'WebCert',
         props.certificateArn ?? 'arn:aws:acm:us-east-1:180294183052:certificate/f6b6907a-5747-4039-967a-a8c7c73116a7'),
       errorResponses: [
-        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html' },
-        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' },
+        // Hash-based app routes use "/" and need no SPA error rewrite.
+        // Preserve private API denial/not-found statuses and JSON bodies.
+        { httpStatus: 403, ttl: cdk.Duration.seconds(0) },
+        { httpStatus: 404, ttl: cdk.Duration.seconds(0) },
       ],
       comment: 'Agentic AI Platform - bank demo',
     });
@@ -536,6 +539,12 @@ export class BankPlatformStack extends cdk.Stack {
     studioTable.grantReadWriteData(fn);
     studioLoopFn.grantInvoke(fn);
     new cdk.CfnOutput(this, 'StudioLoopFnName', { value: studioLoopFn.functionName });
+
+    new StudioWorkspace(this, 'DesignerWorkspace', {
+      apiCode, distribution: dist, cognitoUserPoolId: props.cognitoUserPoolId,
+      cognitoClientId: props.cognitoClientId, cacheTable, guardrailId: guardrail.attrGuardrailId,
+      guardrailVersion: guardrailVersion.attrVersion,
+    });
 
     // ---------- 관측성: 알람 + 대시보드 (§10) ----------
     const alarm = (name: string, metric: cloudwatch.Metric, threshold: number, desc: string) =>
