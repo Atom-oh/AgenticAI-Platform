@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { chromium } = require('playwright');
 const { buildProject } = require('../compile.cjs');
 const { catalog } = require('../manifest.cjs');
 const { hashFiles } = require('../project.cjs');
@@ -55,6 +56,29 @@ test('wrong real props and changed component locks are blocking failures', async
   assert.equal(changed.ok, false);
   assert.equal(changed.gates.components.status, 'fail');
   assert.equal(changed.projectZipBase64, undefined);
+});
+
+test('standalone HTML preserves bundled JavaScript replacement tokens and runs offline', { timeout: 30000 }, async () => {
+  const built = await buildProject({ files: { 'src/App.tsx': app }, assets: {}, expectedCatalogHash: catalog().hash, contract });
+  assert.equal(built.ok, true);
+  const browser = await chromium.launch({ executablePath: process.env.WORKSPACE_CHROMIUM, headless: true, args: ['--no-sandbox'] });
+  try {
+    const context = await browser.newContext();
+    const errors = [], external = [];
+    await context.route('**/*', route => {
+      if (route.request().url() !== 'https://kit-preview.invalid/') { external.push(route.request().url()); return route.abort(); }
+      return route.fulfill({ contentType: 'text/html', body: built.previewHtml });
+    });
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto('https://kit-preview.invalid/');
+    assert.deepEqual(errors, [], 'Standalone HTML must preserve the actual React script');
+    await page.getByTestId('amount').fill('20000');
+    await page.getByTestId('agree').check();
+    await page.getByTestId('next').click();
+    assert.equal(await page.getByTestId('summary').innerText(), '20,000원');
+    assert.deepEqual(external, []);
+  } finally { await browser.close(); }
 });
 
 test('exported source rebuilds to the exact tested dist and rejects kit modification', async () => {

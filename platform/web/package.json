@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node ../react-kit/build-samples.cjs",
     "dev": "vite",
+    "prebuild": "node ../react-kit/build-samples.cjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },

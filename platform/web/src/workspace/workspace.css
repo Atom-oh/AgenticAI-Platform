@@ -186,6 +186,28 @@
 .ws-step-guide { grid-column: 2 / -1 !important; display: grid; gap: 10px; min-width: 0; }
 .designer-workspace .ws-notice-copy { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ws-guideline-pages { margin-bottom: 20px; }
+.ws-samples { margin-bottom: 20px; overflow-wrap: anywhere; }
+.designer-workspace .ws-sample-disclosure { margin: 0; }
+.ws-sample-disclosure > summary { padding: 2px 0; }
+.ws-sample-summary-title { font-size: 17px; font-weight: 700; color: #254f45; }
+.ws-sample-summary-note { display: block; margin: 5px 0 0 16px; color: var(--ws-muted); font-size: 12px; }
+.ws-sample-content { margin-top: 18px; min-width: 0; }
+.ws-sample-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 14px; margin: 18px 0 24px; }
+.ws-sample-card { display: flex; flex-direction: column; min-width: 0; padding: 18px; border: 1px solid var(--ws-border); border-radius: 10px; background: #fafcfb; }
+.ws-sample-card.is-selected { border-color: #65a99b; background: #eff8f4; }
+.designer-workspace .ws-sample-card h3 { margin-bottom: 6px; }
+.ws-sample-card ul { padding-left: 18px; margin: 8px 0 16px; font-size: 12px; color: var(--ws-muted); }
+.ws-sample-card button { margin-top: auto; text-align: left; }
+.ws-sample-selected { min-width: 0; padding-top: 18px; border-top: 1px solid var(--ws-border); }
+.ws-sample-preview { max-width: 980px; margin: 14px auto; border: 1px solid var(--ws-border); border-radius: 9px; overflow: hidden; background: white; }
+.ws-sample-preview iframe { display: block; width: 100%; min-width: 0; height: 560px; border: 0; background: white; }
+.ws-sample-downloads { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+.ws-sample-downloads a { max-width: 100%; padding: 9px 12px; border: 1px solid #bed4cc; border-radius: 8px; color: #006a68; text-decoration: underline; text-underline-offset: 3px; font-size: 13px; font-weight: 600; }
+.ws-sample-downloads a:hover { background: #eff7f4; }
+.ws-sample-developer { border-top: 1px solid var(--ws-border); padding-top: 14px; }
+.ws-sample-developer dl { font-size: 12px; margin-bottom: 0; }
+.ws-sample-developer dt { font-weight: 650; }
+.ws-sample-developer dd { margin: 4px 0 12px; overflow-wrap: anywhere; }
 @container designer (min-width: 1280px) {
   .ws-collaboration-layout { grid-template-columns: minmax(0, 1fr) clamp(310px, 24cqw, 390px); }
 }
