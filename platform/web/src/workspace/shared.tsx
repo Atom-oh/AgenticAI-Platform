@@ -41,6 +41,29 @@ export function previewDocument(html: string, executable: boolean): string {
   const policy = `default-src 'none'; script-src ${executable ? "'unsafe-inline'" : "'none'"}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
   return `<meta http-equiv="Content-Security-Policy" content="${policy}">${html}`;
 }
+function previewFrameDocument(html: string, executable: boolean): string {
+  // A document's own CSP does not prevent it from navigating its own frame.
+  // This trusted parent controls navigation of the opaque content frame instead.
+  // srcdoc remains usable with frame-src 'none'; no URL navigation is needed.
+  const shell = document.implementation.createHTMLDocument('비공개 미리보기');
+  const policy = shell.createElement('meta');
+  policy.httpEquiv = 'Content-Security-Policy';
+  policy.content = "frame-src 'none'";
+  shell.head.prepend(policy);
+  const style = shell.createElement('style');
+  style.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}';
+  shell.head.append(style);
+  const content = shell.createElement('iframe');
+  content.title = '시안 내용';
+  content.setAttribute('data-workspace-preview-content', '');
+  content.setAttribute('sandbox', executable ? 'allow-scripts' : '');
+  content.referrerPolicy = 'no-referrer';
+  // DOM serialization escapes the entire untrusted attribute value, including
+  // quotes and closing iframe tags; imported HTML never becomes wrapper markup.
+  content.srcdoc = previewDocument(html, executable);
+  shell.body.append(content);
+  return '<!doctype html>' + shell.documentElement.outerHTML;
+}
 export function PrivatePreview({ path, title, executable = false, height = 560, width, format }: {
   path: string | null; title: string; executable?: boolean; height?: number; width?: number; format?: string;
 }) {
@@ -73,7 +96,7 @@ export function PrivatePreview({ path, title, executable = false, height = 560, 
   return <div className="ws-preview" style={{ minHeight: Math.min(height, 240) }}>
     {result.html !== undefined
       ? <iframe title={title} sandbox={executable ? 'allow-scripts' : ''} referrerPolicy="no-referrer"
-          srcDoc={previewDocument(result.html, executable)} style={{ height, ...(width ? { width } : {}) }} />
+          srcDoc={previewFrameDocument(result.html, executable)} style={{ height, ...(width ? { width } : {}) }} />
       : <img src={result.url} alt={title} />}
   </div>;
 }

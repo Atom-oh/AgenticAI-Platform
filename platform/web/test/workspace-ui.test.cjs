@@ -255,9 +255,10 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     assert(!((await uploadedCard.innerText()).includes('29')));
     await uploadedCard.getByRole('button', { name: '파일 확인', exact: true }).click();
     await page.locator('.ws-inspector').getByText('반입 v1', { exact: true }).waitFor();
-    await page.frameLocator('iframe[title="외부 시안.html 업로드 파일 미리보기"]').getByText('외부 화면').waitFor();
+    const uploadedPreview = page.frameLocator('iframe[title="외부 시안.html 업로드 파일 미리보기"]').frameLocator('iframe[data-workspace-preview-content]');
+    await uploadedPreview.getByText('외부 화면').waitFor();
     assert.equal(await page.locator('iframe[title="외부 시안.html 업로드 파일 미리보기"]').getAttribute('sandbox'), '');
-    assert.equal(await page.frames().find(f => f.parentFrame() && f.url() === 'about:srcdoc').evaluate(() => !!window.uploadScriptRan), false);
+    assert.equal(await uploadedPreview.locator('body').evaluate(() => !!window.uploadScriptRan), false);
     const originalDownload = page.waitForEvent('download');
     await page.getByRole('button', { name: '원본 내려받기', exact: true }).click();
     assert.equal((await originalDownload).suggestedFilename(), '외부 시안.html');
@@ -322,7 +323,7 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     assert(generationRequests.every(c => c.body.referenceAssetId === 'image' && c.body.referencePage === 1));
     const generatedFrame = page.locator('iframe[title="생성 시안 라운드 2"]');
     assert.equal(await generatedFrame.getAttribute('sandbox'), 'allow-scripts');
-    const frame = page.frameLocator('iframe[title="생성 시안 라운드 2"]');
+    const frame = page.frameLocator('iframe[title="생성 시안 라운드 2"]').frameLocator('iframe[data-workspace-preview-content]');
     await frame.getByLabel('금액', { exact: true }).fill('12345');
     await frame.getByRole('button', { name: '확인', exact: true }).click();
     await frame.getByText('12345', { exact: true }).waitFor();
@@ -392,7 +393,7 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     assert.equal(await loop.locator('[data-stage="approval"]').getAttribute('data-state'), 'pending');
     assert.equal(calls.filter(call => call.routePath === '/runs' && call.method === 'POST').length, beforeVerify + 1);
     assert.equal(calls.filter(call => call.routePath === '/runs' && call.body?.mode === 'verify').length, 1);
-    const verifiedFrame = page.frameLocator('iframe[title="원본 HTML 검사 라운드 1"]');
+    const verifiedFrame = page.frameLocator('iframe[title="원본 HTML 검사 라운드 1"]').frameLocator('iframe[data-workspace-preview-content]');
     await verifiedFrame.getByLabel('금액', { exact: true }).fill('23456');
     await verifiedFrame.getByRole('button', { name: '확인', exact: true }).click();
     await verifiedFrame.getByText('23456', { exact: true }).waitFor();
