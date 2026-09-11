@@ -79,6 +79,36 @@ Never weaken a rule, remove a target or fake a test result."""
 INLINE_IMAGE = re.compile(r"data:image/(?:png|jpe?g|svg\+xml);base64,[A-Za-z0-9+/=\r\n]+", re.I)
 
 
+def _metadata_aliases(text: str, identifiers) -> tuple[str, dict]:
+    """Mask only known server-generated IDs, not imported content identifiers.
+
+    Random UUID substrings can resemble KR_RRN to a managed guardrail. Aliases
+    preserve referential identity without weakening the personal-data policy.
+    """
+    aliases = {}
+    for index, identifier in enumerate(sorted(set(identifiers), key=lambda value: (-len(value), value))):
+        if not identifier or identifier not in text:
+            continue
+        number, letters = index, ""
+        while True:
+            letters = chr(97 + number % 26) + letters
+            number = number // 26 - 1
+            if number < 0:
+                break
+        alias = "studioRef_" + letters
+        while alias in text or alias in aliases:
+            alias += "x"
+        text = text.replace(identifier, alias)
+        aliases[alias] = identifier
+    return text, aliases
+
+
+def _restore_metadata(text: str, aliases: dict) -> str:
+    for alias in sorted(aliases, key=len, reverse=True):
+        text = text.replace(alias, aliases[alias])
+    return text
+
+
 def _json_bytes(value) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 
@@ -361,13 +391,15 @@ class Worker:
 
     def _propose(self, owner, job):
         source = job["input"]
-        context, images, _, texts, warnings, _ = self._context(owner, source["assetSnapshots"])
+        context, images, resources, texts, warnings, _ = self._context(owner, source["assetSnapshots"])
         if not source.get("brief", "").strip() and not any(texts.values()) and not images:
             raise ValueError("해석 가능한 가이드·이미지 또는 화면 설명을 먼저 준비하세요.")
         self._update(owner, "job", job["id"], progress={"percent": 25, "stage": "rules", "message": "가이드에서 동작 규칙 정리"})
         ids = [asset["id"] for asset in source["assetSnapshots"]]
         user = f"화면 설명:\n{source.get('brief', '')}\n선택 자산 ID:{json.dumps(ids)}\n\n반입 자료:\n{context}"
+        user, aliases = _metadata_aliases(user, ids + list(resources))
         text, usage, info = self.model_call(PROPOSE_SYSTEM, user, images, source["model"], 7000, job["id"], "workspace.propose")
+        text = _restore_metadata(text, aliases)
         proposal = _parse_json(text)
         proposal.update(assetIds=ids, brief=source.get("brief", ""))
         for rule in proposal.get("rules", []):
@@ -422,8 +454,10 @@ class Worker:
             if verifying:
                 output, consumed, info = previous, {}, {"modelId": None}
             else:
+                user, aliases = _metadata_aliases(user, [asset["id"] for asset in run["assetSnapshots"]] + list(resources))
                 output, consumed, info = self.model_call(GENERATE_SYSTEM, user, images, run["model"], 14000,
                                                           job["id"], "workspace.generate")
+                output = _restore_metadata(output, aliases)
             for name in usage:
                 usage[name] += int(consumed.get(name, 0))
             html = output if verifying else extract_html(output)
@@ -440,7 +474,13 @@ class Worker:
             self._update(owner, "job", job["id"], progress={"percent": 20 + int(75 * (number - 1) / run["maxRounds"]),
                                                            "stage": "verify", "round": number,
                                                            "message": f"{number}라운드 실제 브라우저에서 동작·접근성·화면 비교"})
-            report = self.render_call(html, approved, reference, run.get("visualTolerance", 0.15))
+            try:
+                report = self.render_call(html, approved, reference, run.get("visualTolerance", 0.15))
+            except Exception as error:
+                report = {"passed": False, "engineError": True, "functionalStatus": "incomplete",
+                          "checks": [], "accessibility": {"status": "incomplete"}, "visual": {"status": "not-run"},
+                          "networkRequests": [], "consoleErrors": [],
+                          "blockingFindings": [f"검증 실행기를 사용할 수 없습니다: {type(error).__name__}"]}
             if report.get("passed") is True and not report_passes(approved, report, visual_required=reference is not None):
                 report["passed"] = False
                 report.setdefault("blockingFindings", []).append("확정한 규칙 전체의 실행 증거가 일치하지 않습니다.")
@@ -481,6 +521,8 @@ class Worker:
             self._update(owner, "run", run["id"], rounds=rounds, bestRound=best["number"],
                          functionalStatus=best["functionalStatus"], visualStatus=best["visualStatus"],
                          usage=usage, contextWarnings=warnings)
+            if report.get("engineError"):
+                raise ValueError("검증 실행기 오류로 중단했습니다. 생성한 시안과 미판정 근거는 보존했습니다.")
             if record["passed"]:
                 stop_reason = "passed"
                 break

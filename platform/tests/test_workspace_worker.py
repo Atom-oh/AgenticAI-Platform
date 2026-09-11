@@ -153,3 +153,37 @@ def test_existing_html_can_be_verified_without_ai_rewriting(monkeypatch):
     report = json.loads(storage.get_blob(run["rounds"][0]["reportKey"]))
     assert report["mode"] == "verify" and report["model"] is None
     assert report["sourceArtifactSha256"] == hashlib.sha256(original.encode()).hexdigest()
+
+
+def test_verifier_infrastructure_failure_preserves_html_and_stops_model_loop():
+    calls = []
+    def model(*args):
+        calls.append(1)
+        return HTML, {"inputTokens": 1, "outputTokens": 1}, {"modelId": "global.openai.gpt-6-astra"}
+    def unavailable(*args):
+        raise RuntimeError("private diagnostic must not be returned")
+    storage, api, worker = environment(model, unavailable)
+    _, created = request(api, "POST", "/contracts", browser_contract())
+    current = created["contract"]
+    _, approved = request(api, "POST", f"/contracts/{current['id']}/approve", {"version": current["version"]})
+    current = approved["contract"]
+    _, queued = request(api, "POST", "/runs", {"contractId": current["id"], "contractVersion": current["version"],
+        "requestId": "engine-failure", "maxRounds": 3, "model": "global.openai.gpt-6-astra"})
+    result = worker.handle({"owner": "designer", "jobId": queued["job"]["id"]})
+    run = storage.get("designer", "run", queued["run"]["id"])
+    assert result["status"] == "failed" and run["status"] == "failed" and len(calls) == 1
+    assert len(run["rounds"]) == 1 and storage.get_blob(run["rounds"][0]["htmlKey"])
+    report = json.loads(storage.get_blob(run["rounds"][0]["reportKey"]))
+    assert report["engineError"] and report["passed"] is False
+    assert "private diagnostic" not in json.dumps(run)
+
+
+def test_only_internal_metadata_ids_are_aliased_and_restored():
+    from workspace.worker import _metadata_aliases, _restore_metadata
+    identifier = "e86b988aab184562915757615b7f220c"
+    actual_identifier = "900101-1234567"
+    source = f'assetId={identifier}; imported text={actual_identifier}; existing studioRef_a'
+    masked, mapping = _metadata_aliases(source, [identifier])
+    assert identifier not in masked and actual_identifier in masked
+    assert "existing studioRef_a" in masked
+    assert _restore_metadata(masked, mapping) == source

@@ -14,20 +14,45 @@ from workspace.rules import validate_contract
 RENDER_URL = "https://workspace.invalid/render"
 
 
+class EngineUnavailable(RuntimeError):
+    pass
+
+
+def _engine_failure(error):
+    text = str(error).lower()
+    return isinstance(error, EngineUnavailable) or any(fragment in text for fragment in
+        ("connection closed", "browser has been closed", "target closed", "browser closed", "driver connection"))
+
+
+def _phase(value: str):
+    path = os.environ.get("STUDIO_TRACE_PATH")
+    if path:
+        Path(path).write_text(value)
+
+
 def _isolated_eval(page, expression: str):
     """Trusted instrumentation runs outside the application's JavaScript world."""
-    session = page.context.new_cdp_session(page)
     try:
-        frame_id = session.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
-        world = session.send("Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "studio-verifier"})
+        cached = getattr(page, "_studio_verifier", None)
+        if cached is None:
+            _phase("cdp-session")
+            session = page.context.new_cdp_session(page)
+            _phase("frame-tree")
+            frame_id = session.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
+            _phase("isolated-world")
+            world = session.send("Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "studio-verifier"})
+            cached = (session, world["executionContextId"])
+            page._studio_verifier = cached
+        session, context_id = cached
+        _phase("isolated-evaluate")
         value = session.send("Runtime.evaluate", {"expression": expression,
-                             "contextId": world["executionContextId"], "awaitPromise": True,
+                             "contextId": context_id, "awaitPromise": True,
                              "returnByValue": True, "timeout": 10000})
-        if value.get("exceptionDetails"):
-            raise ValueError("격리된 검증 도구가 실행되지 않았습니다.")
-        return value.get("result", {}).get("value")
-    finally:
-        session.detach()
+    except Exception as error:
+        raise EngineUnavailable("브라우저 검증 도구 연결을 확인하지 못했습니다.") from error
+    if value.get("exceptionDetails"):
+        raise EngineUnavailable("격리된 검증 도구가 실행되지 않았습니다.")
+    return value.get("result", {}).get("value")
 
 
 def _accessibility(page, source: str, result: dict, state: str):
@@ -40,7 +65,7 @@ def _accessibility(page, source: str, result: dict, state: str):
         incomplete:r.incomplete.map(v=>v.id)};
     })()""")
     if not isinstance(current, dict) or "violations" not in current:
-        raise ValueError("접근성 결과를 확인하지 못했습니다.")
+        raise EngineUnavailable("접근성 결과를 확인하지 못했습니다.")
     prior = result["accessibility"]
     prior.setdefault("checkedStates", []).append(state)
     prior["totalViolations"] = prior.get("totalViolations", 0) + len(current["violations"])
@@ -214,6 +239,7 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
     browser = None
     with sync_playwright() as playwright:
         try:
+            _phase("launch")
             browser = playwright.chromium.launch(
                 headless=True, executable_path=executable or None, env=environment,
                 args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-background-networking",
@@ -259,6 +285,7 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                 check = {"caseId": rule["id"], "title": rule["title"], "required": rule["required"],
                          "status": "pass", "steps": []}
                 try:
+                    _phase("load")
                     page.goto(RENDER_URL, wait_until="load", timeout=10000)
                     page.wait_for_timeout(100)
                     if screenshot is None:
@@ -266,6 +293,7 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                     if axe_source and not result["accessibility"].get("checkedStates"):
                         _accessibility(page, axe_source, result, "initial")
                     for index, step in enumerate(rule["steps"]):
+                        _phase("interaction")
                         if time.monotonic() - started > 80:
                             check["status"] = "incomplete"
                             check["reason"] = "실행 시간 상한"
@@ -277,6 +305,8 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                                     "actual": actual if not isinstance(actual, str) else actual[:2000],
                                     "status": "pass" if passed else "fail"}
                         except Exception as error:
+                            if _engine_failure(error):
+                                result["engineError"] = True
                             item = {"index": index, "action": step["action"], "target": step["target"],
                                     "targetLabel": step["targetLabel"], "expected": step.get("value"),
                                     "actual": type(error).__name__, "status": "fail"}
@@ -290,11 +320,14 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                         _accessibility(page, axe_source, result, rule["id"] + ":final")
                     check["visibleText"] = page.locator("body").inner_text(timeout=1000)[:4000]
                 except Exception as error:
+                    if _engine_failure(error):
+                        result["engineError"] = True
                     check.update(status="incomplete", reason=f"브라우저 검증 오류: {type(error).__name__}")
                 finally:
                     result["checks"].append(check)
                     context.close()
         except Exception as error:
+            result["engineError"] = True
             result["blockingFindings"].append(f"브라우저 실행 실패: {type(error).__name__}")
         finally:
             if browser is not None:
@@ -325,4 +358,5 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
         result["blockingFindings"].append("시각 비교 실패 또는 미판정")
     result["passed"] = not result["blockingFindings"]
     result["elapsedMs"] = int((time.monotonic() - started) * 1000)
+    _phase("done")
     return result
