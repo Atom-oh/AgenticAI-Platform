@@ -82,6 +82,17 @@ class StudioStore:
     def put_round(self, job_id: str, rec: dict) -> None:
         item = {k: v for k, v in rec.items() if k not in ("html", "items")}
         self.table().put_item(Item={**item, "pk": f"job#{job_id}", "sk": f"round#{int(rec['round']):02d}", "createdAt": now_ms()})
+        if "items" in rec:
+            self.table().put_item(Item={"pk": f"report#{job_id}", "sk": f"round#{int(rec['round']):02d}",
+                                       "items": rec["items"]})
+
+    def get_round(self, job_id: str, number: int) -> Optional[dict]:
+        key = f"round#{number:02d}"
+        meta = self._get(f"job#{job_id}", key)
+        if meta is None:
+            return None
+        report = self._get(f"report#{job_id}", key)
+        return {**meta, "items": (report or {}).get("items", []), "itemsComplete": report is not None}
 
     # ---------- 시안 ----------
     def put_draft(self, draft: dict) -> dict:
@@ -106,6 +117,8 @@ class StudioStore:
         if not d or status not in STATUSES:
             return None
         d.update({"status": status, "comment": (comment or "")[:500], "reviewedBy": actor, "reviewedAt": now_ms()})
+        if status == "승인됨":
+            d["approvalScope"] = "static-design"
         self.table().put_item(Item={**d, "pk": f"draft#{draft_id}", "sk": "meta"})
         self._put_draft_row(d)
         return d

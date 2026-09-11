@@ -7,6 +7,7 @@
 
 - **[플랫폼 아키텍처 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html)** — Single Boundary VPC·중앙 MCP·거버넌스를 가이드 뷰 3장으로 탐색 (Play story 지원)
 - **[S2 상담 파이프라인 워크플로우 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/s2-workflow.html)** — 정상 상담·S5 차단·계측/감사 경로
+- **[UX Studio 검증 루프 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/ux-validation-loop.html)** — 규칙 검증·피드백·범위 제한 수정·재검증·UX 승인의 목표 흐름. [완료 조건과 구현 대조](./ux-validation-loop)
 
 ## 전체 구성
 

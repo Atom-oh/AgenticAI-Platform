@@ -113,3 +113,156 @@ def test_jobs_drafts_feedback():
     assert a.sent[-1]["type"] == "studio_jobs" and isinstance(a.sent[-1]["jobs"], list)
     h.studio_jobs(ctx, {"jobId": "nope"})
     assert a.sent[-1]["job"] is None
+
+
+def test_approval_rejects_failed_or_undetermined_review(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    store.put_job({"jobId": "unverified"}, actor="u@x")
+    store.put_round("unverified", {"round": 1, "passed": True, "undetermined": ["OPTIONAL"], "url": "https://x/u.html"})
+    store.put_draft({"draftId": "unverified", "jobId": "unverified", "passed": True, "bestRound": 1, "url": "https://x/u.html", "validationScope": "static-design"})
+    ctx, a = _ctx()
+    h.studio_feedback(ctx, {"draftId": "unverified", "decision": "approve"})
+    assert a.sent[-1].get("error")
+    assert store.get_draft("unverified")["status"] == "검토중"
+
+
+def test_approval_requires_report_for_same_artifact_and_records_static_scope(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    store.put_job({"jobId": "verified"}, actor="u@x")
+    store.put_round("verified", {"round": 1, "passed": True, "undetermined": [], "url": "https://x/old.html", "failures": []})
+    store.put_draft({"draftId": "verified", "jobId": "verified", "passed": True, "bestRound": 1, "url": "https://x/current.html", "validationScope": "static-design"})
+    ctx, a = _ctx()
+    h.studio_feedback(ctx, {"draftId": "verified", "decision": "approve"})
+    assert a.sent[-1].get("error")
+    store.put_round("verified", {"round": 1, "passed": True, "undetermined": [], "url": "https://x/current.html", "failures": [],
+                                "items": [{"id": "REQ", "required": True, "weight": 1, "verdict": "pass"}]})
+    h.studio_feedback(ctx, {"draftId": "verified", "decision": "approve"})
+    assert a.sent[-1]["draft"]["status"] == "승인됨"
+    assert a.sent[-1]["approvalScope"] == "static-design"
+
+
+def test_informational_generation_stability_does_not_disagree_with_approval(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    store.put_job({"jobId": "generated"}, actor="u@x")
+    store.put_round("generated", {"round": 2, "passed": True, "undetermined": [], "url": "https://x/g.html",
+                                  "failures": [{"id": "STABLE", "weight": 0, "required": False, "verdict": "fail"}],
+                                  "items": [{"id": "REQ", "weight": 1, "required": True, "verdict": "pass"},
+                                            {"id": "STABLE", "weight": 0, "required": False, "verdict": "fail"}]})
+    store.put_draft({"draftId": "generated", "jobId": "generated", "passed": True, "bestRound": 2, "url": "https://x/g.html", "validationScope": "static-design"})
+    ctx, a = _ctx()
+    h.studio_feedback(ctx, {"draftId": "generated", "decision": "approve"})
+    assert not a.sent[-1].get("error")
+
+
+def test_round_report_is_bound_to_requested_round(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    store.put_job({"jobId": "two_rounds"}, actor="u@x")
+    store.put_round("two_rounds", {"round": 1, "items": [{"id": "rule", "verdict": "fail"}], "url": "r1"})
+    store.put_round("two_rounds", {"round": 2, "items": [{"id": "rule", "verdict": "pass"}], "url": "r2"})
+    assert "studio_round" in h.ROUTES
+    ctx, a = _ctx()
+    h.ROUTES["studio_round"](ctx, {"jobId": "two_rounds", "round": 1})
+    result = a.sent[-1]["round"]
+    assert result["round"] == 1 and result["url"] == "r1"
+    assert result["items"] == [{"id": "rule", "verdict": "fail"}] and result["itemsComplete"] is True
+    assert all("items" not in r for r in store.get_job("two_rounds")["rounds"])
+
+
+def test_historical_score_is_not_new_validation_evidence(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    store.put_job({"jobId": "historical"}, actor="u@x")
+    store.put_round("historical", {"round": 1, "passed": True, "undetermined": [], "url": "historical"})
+    store.put_draft({"draftId": "historical", "jobId": "historical", "passed": True, "bestRound": 1, "url": "historical"})
+    ctx, a = _ctx()
+    h.studio_feedback(ctx, {"draftId": "historical", "decision": "approve"})
+    assert a.sent[-1].get("error")
+    assert store.get_draft("historical")["status"] == "검토중"
+
+
+def test_approval_requires_complete_nonempty_persisted_evidence(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    ctx, a = _ctx()
+    for index, evidence in enumerate(({}, {"items": []}, {"items": [
+        {"id": "REQ", "required": True, "weight": 1, "verdict": None}
+    ]}, {"items": [{"id": "REQ", "required": True, "weight": 1, "verdict": "fail"}]})):
+        jid = f"incomplete-{index}"
+        store.put_job({"jobId": jid}, actor="u@x")
+        store.put_round(jid, {"round": 1, "passed": True, "undetermined": [], "url": "r1", **evidence})
+        store.put_draft({"draftId": jid, "jobId": jid, "passed": True, "bestRound": 1,
+                         "url": "r1", "validationScope": "static-design"})
+        h.studio_feedback(ctx, {"draftId": jid, "decision": "approve"})
+        assert a.sent[-1].get("code") == "static-review-required"
+        assert store.get_draft(jid)["status"] == "검토중"
+
+
+def test_round_report_transfer_is_lossless_and_bounded_in_utf8(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    spec = h.specmod.build_spec(h._graph, "PRD-DEP-001", "ux-flow")
+    # Include Unicode, JSON escaping and an individual row larger than a frame.
+    items = [{**item, "verdict": "fail", "evidence": '근거🔒\n"' * (6000 if i == 0 else 300),
+              "fix": "수정" * 300} for i, item in enumerate(spec["items"])]
+    store.put_round("large", {"round": 1, "items": items, "failures": items, "url": "r1"})
+    ctx, a = _ctx()
+    offset, version, chunks = 0, None, []
+    while True:
+        h.studio_round(ctx, {"jobId": "large", "round": 1, "offset": offset, "reportVersion": version})
+        frame = a.sent[-1]
+        assert not frame.get("error"), frame
+        assert len(json.dumps(frame, ensure_ascii=False, default=str).encode()) <= 28_000
+        assert frame["offset"] == offset
+        assert version is None or frame["reportVersion"] == version
+        version = frame["reportVersion"]
+        chunks.append(frame["chunk"])
+        if frame["nextOffset"] is None:
+            break
+        assert frame["nextOffset"] > offset
+        offset = frame["nextOffset"]
+        assert len(chunks) < 100
+    result = json.loads("".join(chunks))
+    assert result["items"] == items and result["itemsComplete"] is True
+    assert "failures" not in result
+    assert len(chunks) > 1
+    assert store.get_round("large", 1)["items"] == items
+
+
+def test_report_continuations_validate_offsets_and_version(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    store.put_round("offset", {"round": 1, "items": [{"id": "large", "evidence": "a" * 60_000}]})
+    ctx, a = _ctx()
+    for offset in (-1, True, "1", 999_999):
+        h.studio_round(ctx, {"jobId": "offset", "round": 1, "offset": offset})
+        assert a.sent[-1].get("error")
+    h.studio_round(ctx, {"jobId": "offset", "round": 1})
+    first = a.sent[-1]
+    assert first["nextOffset"]
+    h.studio_round(ctx, {"jobId": "offset", "round": 1, "offset": first["nextOffset"]})
+    assert a.sent[-1].get("error"), "Continuation must bind to the first report version"
+    store.put_round("offset", {"round": 1, "items": [{"id": "new", "evidence": "b" * 60_000}]})
+    h.studio_round(ctx, {"jobId": "offset", "round": 1, "offset": first["nextOffset"],
+                         "reportVersion": first["reportVersion"]})
+    assert a.sent[-1].get("code") == "report-changed"
+
+
+def test_compact_job_history_does_not_duplicate_full_reports(monkeypatch):
+    store = StudioStore()
+    monkeypatch.setattr(h, "_store", store)
+    store.put_job({"jobId": "long-history", "brief": "긴 검수"}, actor="u@x")
+    failures = [{"id": str(i), "text": "기준", "verdict": "fail", "evidence": "근거" * 300} for i in range(31)]
+    for number in range(1, 21):
+        store.put_round("long-history", {"round": number, "score": 70, "passed": False, "url": f"r{number}",
+                                         "items": failures, "failures": failures, "undetermined": []})
+    ctx, a = _ctx()
+    h.studio_jobs(ctx, {"jobId": "long-history", "summaryOnly": True})
+    frame = a.sent[-1]
+    assert len(json.dumps(frame, ensure_ascii=False).encode()) <= 28_000
+    assert len(frame["job"]["rounds"]) == 20
+    assert all(r["failuresTotal"] == 31 and r["detailsOmitted"] for r in frame["job"]["rounds"])
+    assert all("failures" not in r and "items" not in r for r in frame["job"]["rounds"])

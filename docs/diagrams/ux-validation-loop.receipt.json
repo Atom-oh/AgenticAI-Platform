@@ -1,0 +1,64 @@
+{
+  "diagram_type": "workflow",
+  "specification": {
+    "path": "docs/diagrams/ux-validation-loop.workflow.json",
+    "sha256": "0a52d5e0a540eb687b268b9ba13416165df3cafdccec92ffa718407c98a35339",
+    "bytes": 7008
+  },
+  "artifact": {
+    "path": "docs/public/ux-validation-loop.html",
+    "sha256": "6f14b4ce39368c253f1e71ddcf55059a3f42b96d97e77cc139cbb41055df13bb",
+    "bytes": 721280
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "profile": "showcase",
+    "errors": 0,
+    "warnings": 0
+  },
+  "visual_review": {
+    "status": "passed",
+    "reviewer": "Codex visual inspection",
+    "correction_rounds": 1,
+    "screenshots": [
+      "ux-validation-loop.visual-check.1440x900.light.png",
+      "ux-validation-loop.visual-check.1440x900.dark.png",
+      "ux-validation-loop.visual-check.2048x1320.light.png",
+      "ux-validation-loop.visual-check.2048x1320.dark.png"
+    ],
+    "automated_receipt": "docs/public/ux-validation-loop.visual-check.json"
+  },
+  "desktop_viewports": [
+    {
+      "width": 1440,
+      "height": 900,
+      "overflowX": false,
+      "overflowY": false
+    },
+    {
+      "width": 1600,
+      "height": 1000,
+      "overflowX": false,
+      "overflowY": false
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "overflowX": false,
+      "overflowY": false
+    },
+    {
+      "width": 2048,
+      "height": 1320,
+      "overflowX": false,
+      "overflowY": false
+    }
+  ],
+  "docs_build": {
+    "command": "NODE_OPTIONS=--max-old-space-size=8192 npm run docs:build",
+    "exitCode": 0
+  },
+  "scope": "Graph and documentation only; no service logic changes or deployment.",
+  "evidence_note": "Meeting page shell retrieved, but transcript unavailable; requirements traced to repository design documents with matching meeting ID."
+}

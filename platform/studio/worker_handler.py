@@ -10,12 +10,14 @@ import json
 import os
 import time
 import uuid
+from functools import partial
 
 from common import costguard, tracing
 from common.ctx import Ctx
 from common.log import log_event
 from studio import loop, spec as specmod
 from studio.store import StudioStore
+from studio.artifacts import secure_html
 
 KIND = "studio"
 BUCKET = os.environ.get("WEB_BUCKET", "")
@@ -45,14 +47,14 @@ def _store() -> StudioStore:
     return StudioStore()
 
 
-def _generate(system: str, user: str, max_tokens: int):
+def _generate(system: str, user: str, max_tokens: int, *, model_id: str):
     from engine import bedrock  # 경계 통과 지점
-    return bedrock.Stream(system, user, max_tokens=max_tokens, purpose="studio.generate")
+    return bedrock.Stream(system, user, max_tokens=max_tokens, purpose="studio.generate", route="bedrock", model_id=model_id)
 
 
-def _review_generate(system: str, user: str, max_tokens: int):
+def _review_generate(system: str, user: str, max_tokens: int, *, model_id: str):
     from engine import bedrock
-    return bedrock.generate(system, user, max_tokens=max_tokens, purpose="studio.review")
+    return bedrock.generate(system, user, max_tokens=max_tokens, purpose="studio.review", route="bedrock", model_id=model_id)
 
 
 def _assets_text(asset_ids: list) -> str:
@@ -109,7 +111,7 @@ class _CtxEmitter:
         if step == "review":
             self._put(int(kw.get("round", 0)), score=kw.get("score"), passed=kw.get("passed"),
                       failures=[i for i in kw.get("items", []) if i.get("verdict") != "pass"][:30],
-                      undetermined=kw.get("undetermined", []), reviewerError=kw.get("reviewerError"))
+                      undetermined=kw.get("undetermined", []), reviewerError=kw.get("reviewerError"), items=kw.get("items", []))
         elif step == "publish":
             self._put(int(kw.get("round", 0)), url=kw.get("url"))
 
@@ -158,22 +160,33 @@ def handler(event, context):
         emitter = _CtxEmitter(ctx, store, job["jobId"])
         graph = _graph()
         spec = specmod.build_spec(graph, job["productCode"], job["outputType"])
-        base_html, parent_id = "", ""
+        base_html, parent_id, parent_round = "", "", 0
         if job["mode"] == "refine":
             base = store.get_draft(job["baseDraftId"])
             if not base:
                 raise specmod.SpecError(f"원본 시안을 찾을 수 없습니다: {job['baseDraftId']}")
             if base.get("productCode") and base["productCode"] != job["productCode"]:
                 raise specmod.SpecError(f"원본 시안의 상품({base['productCode']})과 선택한 상품({job['productCode']})이 다릅니다")
-            base_html = s3.get_object(Bucket=BUCKET, Key=base["key"])["Body"].read().decode("utf-8", "ignore")
+            parent_round = job["baseRound"] or int(base.get("bestRound") or 0)
+            source_key = base["key"]
+            if job["baseRound"] and job["baseRound"] != base.get("bestRound"):
+                original_job = store.get_job(base.get("jobId", base["draftId"])) or {}
+                selected = next((r for r in original_job.get("rounds", [])
+                                 if r.get("round") == job["baseRound"] and r.get("url")), None)
+                if selected is None:
+                    raise specmod.SpecError("선택한 원본 라운드의 저장 기록이 없습니다. 시안을 다시 선택하세요.")
+                source_key = _s3_key(base.get("jobId", base["draftId"]), job["baseRound"])
+            with s3.get_object(Bucket=BUCKET, Key=source_key)["Body"] as body:
+                base_html = body.read().decode("utf-8", "ignore")
             parent_id = base["draftId"]
 
         def publish(job_id: str, n: int, html: str) -> str:
-            s3.put_object(Bucket=BUCKET, Key=_s3_key(job_id, n), Body=html.encode("utf-8"),
+            s3.put_object(Bucket=BUCKET, Key=_s3_key(job_id, n), Body=secure_html(html).encode("utf-8"),
                           ContentType="text/html; charset=utf-8", CacheControl="no-cache")
             return f"{WEB_URL}/studio/drafts/{job_id}-r{n}.html"
 
-        out = loop.run(job, emitter, spec=spec, generate=_generate, review_generate=_review_generate, publish=publish,
+        out = loop.run(job, emitter, spec=spec, generate=partial(_generate, model_id=job["model"]),
+                       review_generate=partial(_review_generate, model_id=job["model"]), publish=publish,
                        assets_text=_assets_text(job["assetIds"]), fewshot=_fewshot(store, s3, BUCKET, trace_id=trace_id),
                        agent_preset=_agent_preset(job["agentId"]), base_html=base_html, time_cap_s=_time_cap(context))
         try:  # 일일 토큰 상한(costguard)에 이 루프의 실측 사용량을 반영한다 — 실패해도 결과 전달을 막지 않는다
@@ -187,15 +200,18 @@ def handler(event, context):
                                      "outputType": job["outputType"], "productCode": spec["productCode"], "productName": spec["productName"],
                                      "score": out["score"], "passed": out["passed"], "rounds": out["rounds"], "bestRound": out["bestRound"],
                                      "stopReason": out["stopReason"], "url": out["url"], "key": _s3_key(job["jobId"], out["bestRound"]),
-                                     "parentId": parent_id, "createdBy": ctx.email, "model": out["model"]})
+                                     "parentId": parent_id, "parentRound": parent_round, "createdBy": ctx.email, "model": out["model"],
+                                     "validationScope": "static-design", "functionalVerification": "not-run"})
         job_fields = {"status": "done" if not out.get("error") else "failed", "score": out["score"], "passed": out["passed"],
                      "stopReason": out["stopReason"], "rounds": out["rounds"], "draftId": draft["draftId"] if draft else None,
-                     "error": out.get("error")}
+                     "error": out.get("error"), "model": out["model"], "bestRound": out["bestRound"],
+                     "validationScope": "static-design", "functionalVerification": "not-run"}
         store.update_job(job["jobId"], **{k: v for k, v in job_fields.items() if v is not None})
         try:
             tracing.record_trace({"traceId": ctx.trace_id, "scenario": "studio", "email": ctx.email, "query": job["brief"],
                                   "tokensIn": out["usage"]["inputTokens"], "tokensOut": out["usage"]["outputTokens"], "plane": "cloud",
                                   "rounds": out["rounds"], "score": out["score"], "passed": out["passed"], "stopReason": out["stopReason"],
+                                  "modelId": out["model"], "route": out["route"],
                                   "elapsedMs": int((time.time() - t0) * 1000)})
         except Exception as e:  # noqa: BLE001 — 계측 실패가 결과 전달을 막지 않는다 (TRACE_TABLE 미설정 등)
             log_event("studio.trace_failed", ctx.trace_id, error=str(e)[:80])

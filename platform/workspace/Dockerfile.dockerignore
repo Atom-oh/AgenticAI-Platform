@@ -1,0 +1,14 @@
+web
+infra
+api-dist
+agents
+onprem
+tests
+.pytest_cache
+**/__pycache__
+gates/node_modules
+react-kit/node_modules
+react-kit/test
+seed/out/corpus*
+skills-dist
+.git

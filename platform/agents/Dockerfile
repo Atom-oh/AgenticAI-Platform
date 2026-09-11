@@ -1,5 +1,5 @@
 # bank-platform 시나리오 에이전트 컨테이너 (Strands Agents on AgentCore Runtime) — linux/arm64
-# 빌드 전 prepare_context.sh 가 ../agentcore/agent_specs.py 와 ../skills/*.md 를 _ctx/ 로 복사한다.
+# 빌드 전 prepare_context.sh 가 에이전트 명세·공유 모델 카탈로그·스킬을 _ctx/ 로 복사한다.
 FROM public.ecr.aws/docker/library/python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -14,8 +14,9 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 빌드 컨텍스트(_ctx)에서 명세·스킬을 복사 — prepare_context.sh 가 만든다
+# 빌드 컨텍스트(_ctx)에서 명세·모델 카탈로그·스킬을 복사 — prepare_context.sh 가 만든다
 COPY _ctx/agent_specs.py ./agent_specs.py
+COPY _ctx/model_catalog.py ./model_catalog.py
 COPY _ctx/skills ./skills
 COPY _ctx/design_loop ./design_loop
 COPY app.py mcp_gateway.py boundary_gate.py design_deps.py ./

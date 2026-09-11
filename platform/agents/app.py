@@ -34,6 +34,7 @@ for cand in (HERE, HERE / "_ctx"):  # 컨테이너: /app/agent_specs.py · 로�
         sys.path.insert(0, str(cand))
 
 import agent_specs  # noqa: E402
+from model_catalog import MODEL_IDS  # noqa: E402
 from boundary_gate import BoundaryGateHook, find_gate_refusal, scan_rules  # noqa: E402
 
 import mcp_gateway  # noqa: E402
@@ -53,7 +54,7 @@ MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "4096"))
 MAX_SESSIONS = 20
 SKILLS_DIR = Path(os.environ.get("SKILLS_DIR") or next(
     (str(p) for p in (HERE / "skills", HERE / "_ctx" / "skills") if p.is_dir()), str(HERE / "skills")))
-ALLOWED_MODELS = {m for m in (agent_specs.DEFAULT_MODEL, agent_specs.QUALITY_MODEL, os.environ.get("GEN_MODEL", "")) if m}
+ALLOWED_MODELS = frozenset(MODEL_IDS)
 
 app = BedrockAgentCoreApp()
 
@@ -175,7 +176,7 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
         return
     if spec.get("mode") == "design_loop":
         # 디자인 스튜디오: Strands 대화 루프 대신 design_loop(유계 루프)를 스레드에서 돌리고 이벤트를 그대로 흘린다
-        if model_id not in ALLOWED_MODELS and model_id != spec.get("model"):
+        if model_id not in ALLOWED_MODELS:
             yield {"type": "error", "code": 400, "message": f"model not allowed: {model_id}", "allowed": sorted(ALLOWED_MODELS)}
             meta["stopReason"] = "error"
             yield meta
@@ -189,7 +190,7 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
         meta["elapsedMs"] = int((time.time() - started) * 1000)
         yield meta
         return
-    if model_id not in ALLOWED_MODELS and model_id != spec.get("model"):
+    if model_id not in ALLOWED_MODELS:
         yield {"type": "error", "code": 400, "message": f"model not allowed: {model_id}", "allowed": sorted(ALLOWED_MODELS)}
         meta["stopReason"] = "error"
         meta["elapsedMs"] = int((time.time() - started) * 1000)

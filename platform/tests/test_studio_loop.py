@@ -86,6 +86,23 @@ def test_max_rounds_picks_best_round():
     assert out["items"] and any(i["verdict"] == "pass" for i in out["items"])
 
 
+def test_passing_round_wins_over_higher_scoring_failed_round(monkeypatch):
+    reports = iter([
+        {"score": 98, "passed": False, "requiredFailed": ["critical"]},
+        {"score": 90, "passed": True, "requiredFailed": []},
+    ])
+
+    def review_round(*args, **kwargs):
+        return {**next(reports), "items": [], "failures": [], "undetermined": [],
+                "reviewerError": None, "usage": {}, "deterministic": 1, "llm": 0}
+
+    monkeypatch.setattr(loop, "_review_round", review_round)
+    out = loop.run(_job(maxRounds=2), loop.ListEmitter(), spec=SPEC,
+                   generate=gen_seq(GOOD_HTML, GOOD_HTML), review_generate=reviewer(), publish=publish)
+    assert out["stopReason"] == "passed" and out["passed"] is True
+    assert out["bestRound"] == 2 and out["score"] == 90
+
+
 def test_time_cap_stops_before_next_round():
     t = [0.0]
 
@@ -114,6 +131,23 @@ def test_reviewer_garbage_is_undetermined_not_pass():
     rv = next(s for s in em.stages if s["step"] == "review")
     assert rv["reviewerError"] and set(rv["undetermined"]) == set(LLM_IDS) and not out["passed"] and out["stopReason"] == "max_rounds"
     assert all(i["verdict"] is None for i in rv["items"] if i["check"] == "llm")
+
+
+def test_refine_stability_failure_blocks_but_generation_information_does_not():
+    result = loop._review_round(SPEC, SPEC["items"], GOOD_HTML, BAD_HTML, reviewer("pass"), 85, stable_weight=1)
+    assert any(i["id"] == "STABLE" and i["verdict"] == "fail" for i in result["items"])
+    assert result["passed"] is False
+    generated = loop._review_round(SPEC, SPEC["items"], GOOD_HTML, BAD_HTML, reviewer("pass"), 85, stable_weight=0)
+    assert generated["passed"] is True
+
+
+def test_reviewer_format_error_is_not_success_even_if_all_items_recovered():
+    item = {"id": "one", "check": "llm", "text": "문구 존재", "required": True, "weight": 1}
+    broken = '{"items":[{"id":"one","verdict":"pass","evidence":"bad "quote"", "fix":""}]}'
+    result = loop._review_round({"steps": [], "conditions": []}, [item], "<p>문구</p>", "",
+                               lambda *args: (broken, {}), 85)
+    assert result["reviewerError"]
+    assert result["passed"] is False
 
 
 def test_no_html_in_output_is_a_failed_round():

@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from engine import llm
+from engine import llm, model_catalog
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 RERANK_REGION = "ap-northeast-1"   # rerank 모델은 서울 미제공 — 도쿄 (합성 문서만 전달)
@@ -33,8 +33,8 @@ GEMMA_MODEL = os.environ.get("GEMMA_MODEL", llm.DEFAULT_GEMMA_MODEL)
 EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 RERANK_MODEL = "cohere.rerank-v3-5:0"
 
-ROUTES = ("claude", "gemma", "idc_vllm")
-ROUTE_ALIASES = {"claude": "claude", "gemma": "gemma",
+ROUTES = ("claude", "bedrock", "gemma", "idc_vllm")
+ROUTE_ALIASES = {"claude": "claude", "bedrock": "bedrock", "gemma": "gemma",
                  "idc_vllm": "idc_vllm", "onprem-vllm": "idc_vllm", "hybrid_vllm": "idc_vllm", "vllm": "idc_vllm"}
 # 게이트가 차단하는 식별자 유형 (common.pii.RULES 의 이름). EMAIL/KR_PASSPORT 는 집계만 한다 (GATE_REFUSE_TYPES 로 조정).
 DEFAULT_REFUSE_TYPES = ("KR_RRN", "CARD", "PHONE", "CUSTOMER_TOKEN", "ACCOUNT_TOKEN", "KR_BANK_ACCOUNT")
@@ -100,19 +100,26 @@ def current_route(route: Optional[str] = None) -> str:
     return ROUTE_ALIASES[raw]
 
 
-def adapter(route: Optional[str] = None):
+def adapter(route: Optional[str] = None, model_id: Optional[str] = None):
     """경로별 어댑터 (프로세스 캐시). 테스트는 set_adapter() 로 페이크를 주입한다."""
     r = current_route(route)
+    if model_id is not None:
+        if r not in ("claude", "bedrock"):
+            raise ValueError("선택 모델은 Bedrock Converse 경로에서만 사용할 수 있습니다.")
+        model_id = model_catalog.resolve(model_id)
+    key = (r, model_id) if model_id is not None else r
     with _lock:
-        ad = _adapters.get(r)
+        ad = _adapters.get(key)
         if ad is None:
-            if r == "claude":
+            if r == "bedrock" or model_id is not None:
+                ad = llm.BedrockConverseAdapter(model_id=model_id or model_catalog.resolve(), region=REGION)
+            elif r == "claude":
                 ad = llm.ClaudeAdapter(model_id=os.environ.get("GEN_MODEL", GEN_MODEL), region=REGION)
             elif r == "gemma":
                 ad = llm.GemmaAdapter(model_id=os.environ.get("GEMMA_MODEL", GEMMA_MODEL))
             else:
                 ad = llm.VllmAdapter()
-            _adapters[r] = ad
+            _adapters[key] = ad
         return ad
 
 
@@ -201,7 +208,7 @@ def check(system: str, user: str, purpose: str, trace_id: str = "", route: Optio
 
 
 def design_deps(route: Optional[str] = None, trace_id: str = "", gen_max_tokens: int = 32000,
-                judge_max_tokens: int = 500) -> dict:
+                judge_max_tokens: int = 500, model_id: Optional[str] = None) -> dict:
     """디자인 스튜디오(design_loop)용 deps — 생성·판정 모두 이 게이트를 지난다(경계 계측 + PII 스캔).
     반환 {generate(system,user,on_token)->str, llm_judge(item,context)->dict, usage()->dict}.
     boundary 는 각 호출의 Stream.__init__ 에서 측정된다 (원문 로그 없음)."""
@@ -213,13 +220,13 @@ def design_deps(route: Optional[str] = None, trace_id: str = "", gen_max_tokens:
         acc["calls"] += 1
 
     def _run(system: str, user: str, max_tokens: int, purpose: str) -> str:
-        st = stream(system, user, max_tokens=max_tokens, route=route, purpose=purpose, trace_id=trace_id)
+        st = stream(system, user, max_tokens=max_tokens, route=route, purpose=purpose, trace_id=trace_id, model_id=model_id)
         chunks: List[str] = [ch for ch in st]
         _acc(st.usage)
         return "".join(chunks)
 
     def gen(system: str, user: str, on_token) -> str:
-        st = stream(system, user, max_tokens=gen_max_tokens, route=route, purpose="studio.generate", trace_id=trace_id)
+        st = stream(system, user, max_tokens=gen_max_tokens, route=route, purpose="studio.generate", trace_id=trace_id, model_id=model_id)
         chunks: List[str] = []
         for ch in st:
             chunks.append(ch)
@@ -276,9 +283,10 @@ class Stream:
     속성: model_id, route, tier, boundary, usage, stop_reason, purpose, trace_id."""
 
     def __init__(self, system: str, user: str, max_tokens: int = 800, route: Optional[str] = None,
-                 purpose: Optional[str] = None, trace_id: str = "", temperature: float = 0.2) -> None:
+                 purpose: Optional[str] = None, trace_id: str = "", temperature: float = 0.2,
+                 model_id: Optional[str] = None) -> None:
         self.route = current_route(route)
-        ad = adapter(self.route)
+        ad = adapter(self.route, model_id=model_id)
         self.model_id = ad.model_id
         self.tier = ad.tier
         self.endpoint = getattr(ad, "endpoint", "")
@@ -310,21 +318,64 @@ class Stream:
 
 
 def stream(system: str, user: str, max_tokens: int = 800, route: Optional[str] = None, purpose: str = "s2",
-           trace_id: str = "", temperature: float = 0.2) -> Stream:
+           trace_id: str = "", temperature: float = 0.2, model_id: Optional[str] = None) -> Stream:
     return Stream(system, user, max_tokens=max_tokens, route=route, purpose=purpose, trace_id=trace_id,
-                  temperature=temperature)
+                  temperature=temperature, model_id=model_id)
 
 
 def generate(system: str, user: str, max_tokens: int = 300, route: Optional[str] = None, purpose: str = "s1.decompose",
-             trace_id: str = "", temperature: float = 0.2) -> Tuple[str, dict, dict]:
+             trace_id: str = "", temperature: float = 0.2, model_id: Optional[str] = None) -> Tuple[str, dict, dict]:
     """단발 생성. 반환 (text, usage, info) — info: modelId/route/tier/endpoint/boundary."""
     r = current_route(route)
-    ad = adapter(r)
+    ad = adapter(r, model_id=model_id)
     boundary = check(system, user, purpose, trace_id, r, ad.model_id)
     text, usage = ad.generate(system, user, max_tokens=max_tokens, temperature=temperature)
     usage = llm.normalize_usage(usage)
     return text, usage, {"modelId": ad.model_id, "route": r, "tier": ad.tier, "endpoint": getattr(ad, "endpoint", ""),
                          "boundary": boundary, "usage": usage, "purpose": purpose}
+
+
+def generate_with_images(system: str, user: str, images: list[dict], *, model_id: str,
+                         max_tokens: int = 8000, purpose: str = "workspace.generate",
+                         trace_id: str = "") -> Tuple[str, dict, dict]:
+    """Bedrock-only vision for locally parsed previews and completed local OCR.
+
+    OCR text is checked unmodified, before any image bytes leave the worker.
+    This is a rule-based text screen, not a claim to detect every visual PII form.
+    Only trusted server extraction calls this function; HTTP clients cannot
+    supply OCR attestations or arbitrary Converse request blocks.
+    """
+    model = model_catalog.resolve(model_id)
+    if len(images) > 5:
+        raise GateUnsupported("한 번에 참조할 이미지는 최대 5개입니다.")
+    contents = [{"text": user}]
+    ocr = []
+    for index, image in enumerate(images):
+        data, kind = image.get("bytes"), image.get("format")
+        if (not isinstance(data, bytes) or not 0 < len(data) <= 3_000_000 or kind not in ("png", "jpeg")
+                or image.get("ocrStatus") != "complete" or not isinstance(image.get("ocrText"), str)):
+            raise GateUnsupported("이미지는 로컬 형식 검사와 OCR을 완료한 PNG/JPEG 미리보기여야 합니다.")
+        if (kind == "png" and not data.startswith(b"\x89PNG\r\n\x1a\n")) or (kind == "jpeg" and not data.startswith(b"\xff\xd8")):
+            raise GateUnsupported("이미지 내용과 지정된 형식이 일치하지 않습니다.")
+        ocr.append(image["ocrText"])
+        contents.extend([{"text": f"참고 이미지 {index + 1}"},
+                         {"image": {"format": kind, "source": {"bytes": data}}}])
+    ad = adapter("bedrock", model_id=model)
+    boundary = check(system, user + "\n" + "\n".join(ocr), purpose, trace_id, "bedrock", model)
+    extra = {}
+    if os.environ.get("GUARDRAIL_ID") and os.environ.get("GUARDRAIL_VERSION"):
+        extra["guardrail_config"] = {"guardrailIdentifier": os.environ["GUARDRAIL_ID"],
+                                      "guardrailVersion": os.environ["GUARDRAIL_VERSION"]}
+    response = ad.converse_with_tools(system, [{"role": "user", "content": contents}], None,
+                                      model=model, max_tokens=max_tokens, **extra)
+    if response.get("stopReason") == "guardrail_intervened":
+        raise GateUnsupported("Bedrock 보호 정책이 이 요청을 차단했습니다. 반입 자료와 요청을 확인하세요.")
+    text = "".join(block.get("text", "") for block in response.get("output", {}).get("message", {}).get("content", []))
+    usage = llm.normalize_usage(response.get("usage", {}))
+    _log("gate.images", trace_id, purpose=purpose, modelId=model, imageCount=len(images),
+         imageBytes=sum(len(image["bytes"]) for image in images), ocrChars=sum(map(len, ocr)))
+    return text, usage, {"modelId": model, "route": "bedrock", "tier": ad.tier,
+                         "boundary": boundary, "usage": usage, "purpose": purpose, "imageCount": len(images)}
 
 
 # ---------------------------------------------------------------------------
@@ -448,11 +499,12 @@ def route_info(route: Optional[str] = None) -> dict:
     ad = adapter(r)
     base = {"route": r, "tier": ad.tier, "modelId": ad.model_id, "endpoint": getattr(ad, "endpoint", ""),
             "region": getattr(ad, "region", ""), "storage": "ap-northeast-2", "storageLabel": "서울 리전"}
-    if r == "claude":
+    if r in ("claude", "bedrock"):
+        model_label = "Bedrock Claude" if r == "claude" else "Amazon Bedrock 허용 모델"
         base.update(inferenceRouting="global", inferenceRoutingLabel="global (전 세계 상용 리전)",
                     badge={"title": "LLM 생성 경로 — Tier 0/1",
-                           "prod": "Bedrock Claude (global 프로파일) · bedrock-runtime Converse · 소스 리전 ap-northeast-2",
-                           "demo": "운영과 동일 — Bedrock Claude (global 프로파일)",
+                           "prod": f"{model_label} (global 프로파일) · bedrock-runtime Converse · 소스 리전 ap-northeast-2",
+                           "demo": f"운영과 동일 — {model_label} (global 프로파일)",
                            "region": "저장: 서울 리전 / 추론: global 라우팅",
                            "substituted": False})
     elif r == "gemma":

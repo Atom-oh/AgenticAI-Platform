@@ -383,7 +383,9 @@ def test_catalog_joins_registry_harness_and_agentcore(fakes, monkeypatch):
     assert {t["name"] for t in ev["tools"]} >= {"lookup_customer_profile", "run_screen_gates", "search_internal_documents"}
     assert {s["name"] for s in ev["skills"]} == {"bank-publishing-conventions", "kwcag-accessibility"}
     assert all(s["status"] == "APPROVED" and s["version"] == "v1" for s in ev["skills"])
-    assert ev["models"] == ["global.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5"]
+    assert ev["models"] == ["global.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5",
+                            "global.openai.gpt-6-astra", "global.anthropic.claude-fable-5-1",
+                            "global.anthropic.claude-fable-5"]
     assert ev["gateway"]["url"].startswith("https://gw1.") and ev["gateway"]["arn"].endswith("gateway/gw1")
     assert "한국어로 답한다" in ev["commonRules"] and ev["harnessError"] is None and ev["agentcoreRegistryError"] is None
     assert "executionRoleArn" not in json.dumps(ev)

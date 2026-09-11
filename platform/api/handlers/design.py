@@ -154,7 +154,8 @@ def _put(key: str, body: bytes, ctype: str) -> None:
 
 def _get_json(key: str, default):
     try:
-        return json.loads(_s3c().get_object(Bucket=WEB_BUCKET, Key=key)["Body"].read().decode("utf-8"))
+        with _s3c().get_object(Bucket=WEB_BUCKET, Key=key)["Body"] as body:
+            return json.loads(body.read().decode("utf-8"))
     except Exception:  # noqa: BLE001 — NoSuchKey 등
         return default
 
@@ -169,13 +170,15 @@ def store_run(run_id: str, result: dict, meta: dict) -> dict:
     """스텝 HTML → design-runs/<runId>/<step>.html, 리포트 → <runId>.json, 목록 → index.json. WEB_BUCKET 없으면 저장 생략."""
     steps_out: List[dict] = []
     flow = result.get("flow") or {}
+    from studio.artifacts import secure_html
     for s in flow.get("steps") or []:
         key = f"{PREFIX}/{run_id}/{s['id']}.html"
         url = f"{WEB_URL}/{key}" if WEB_URL else key
         if WEB_BUCKET:
-            _put(key, s.get("html", "").encode("utf-8"), "text/html; charset=utf-8")
+            _put(key, secure_html(s.get("html", "")).encode("utf-8"), "text/html; charset=utf-8")
         steps_out.append({"id": s["id"], "title": s.get("title"), "url": url, "htmlChars": len(s.get("html", ""))})
     run = {"runId": run_id, **meta, "createdAt": int(time.time() * 1000), "status": "검토중",
+           "validationScope": "static-design", "functionalVerification": "not-run",
            "ok": result.get("ok"), "attempts": result.get("attempts"), "regenerated": result.get("regenerated"),
            "score": (result.get("report") or {}).get("score"), "openItems": (result.get("report") or {}).get("openItems"),
            "steps": steps_out, "branchSteps": (result.get("prd") or {}).get("branchSteps"),
@@ -211,6 +214,13 @@ def review_decision(ctx: Ctx, body: dict) -> None:
         ctx.post({"type": "design_review", "ok": False, "error": "runId/decision(approve|reject) 필요"})
         return
     status = "승인됨" if decision == "approve" else "반려"
+    full = _get_json(f"{PREFIX}/{rid}.json", None)
+    if decision == "approve":
+        items = ((full or {}).get("report") or {}).get("items") or []
+        if (not full or full.get("validationScope") != "static-design" or full.get("ok") is not True
+                or not items or any(item.get("verdict") != "pass" for item in items)):
+            ctx.post({"type": "design_review", "ok": False, "error": "정적 검수의 실패·미판정을 해결한 뒤 시안을 승인하세요."})
+            return
     idx = _get_json(INDEX_KEY, {"runs": []})
     hit = None
     for r in idx.get("runs", []):
@@ -221,13 +231,14 @@ def review_decision(ctx: Ctx, body: dict) -> None:
         ctx.post({"type": "design_review", "ok": False, "error": "없음"})
         return
     _put(INDEX_KEY, json.dumps(idx, ensure_ascii=False).encode("utf-8"), "application/json")
-    full = _get_json(f"{PREFIX}/{rid}.json", None)
     if full:
         full["status"] = status
+        if decision == "approve":
+            full["approvalScope"] = "static-design"
         _put(f"{PREFIX}/{rid}.json", json.dumps(full, ensure_ascii=False).encode("utf-8"), "application/json")
     log_event("design.review", ctx.trace_id, runId=rid, decision=decision, email=ctx.email)
-    ctx.post({"type": "design_review", "ok": True, "run": hit,
-              "badge": "데모: 스튜디오 승인 → S3 목록 상태 / 운영: 마스터 승인 → GitLab 푸시"})
+    ctx.post({"type": "design_review", "ok": True, "run": hit, "approvalScope": "static-design",
+              "badge": "정적 시안 승인 · 실제 동작 및 제품 통합은 별도 검증"})
 
 
 # ---------- 실행 ----------
@@ -262,8 +273,9 @@ def _run_local(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
     from design_loop import run as loop_run
     from engine import gate
     # 게이트가 모델로 나가는 유일한 통과 지점 — 생성·판정 모두 경계 계측·PII 스캔을 지난다 (§3-2, §12.1)
-    route = "claude"
-    deps = gate.design_deps(route=route, trace_id=ctx.trace_id)
+    from engine import model_catalog
+    model = model_catalog.resolve(model)
+    deps = gate.design_deps(route="bedrock", trace_id=ctx.trace_id, model_id=model)
 
     def emit(ev: dict) -> None:
         if ev.get("type") == "stage":
@@ -281,9 +293,14 @@ def _run_local(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
 
 def flow(ctx: Ctx, body: dict) -> None:
     started = time.time()
+    from engine import model_catalog
+    try:
+        model = model_catalog.resolve(body.get("model"))
+    except ValueError as error:
+        ctx.done(KIND, error=str(error))
+        return
     a, spec, sm = _resolve(body)
     output_type = str(body.get("outputType") or "design")
-    model = str(body.get("model") or "").strip() or None
     if spec is None or sm is None:
         ctx.done(KIND, error="상품명세서 또는 SM 모델을 찾을 수 없습니다", source=a["source"])
         return

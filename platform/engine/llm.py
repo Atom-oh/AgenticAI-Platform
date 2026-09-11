@@ -136,7 +136,13 @@ class ClaudeAdapter:
     def _client(self):
         if self._rt is None:
             import boto3
-            self._rt = boto3.client("bedrock-runtime", region_name=self.region)
+            options = {}
+            if os.environ.get("BEDROCK_READ_TIMEOUT"):
+                from botocore.config import Config
+                timeout = max(30, min(600, int(os.environ["BEDROCK_READ_TIMEOUT"])))
+                options["config"] = Config(connect_timeout=10, read_timeout=timeout,
+                                           retries={"total_max_attempts": 1})
+            self._rt = boto3.client("bedrock-runtime", region_name=self.region, **options)
         return self._rt
 
     @staticmethod
@@ -169,7 +175,8 @@ class ClaudeAdapter:
         return ClaudeStream(r["stream"], self.model_id)
 
     def converse_with_tools(self, system: str, messages: List[dict], tool_config: Optional[dict],
-                            model: Optional[str] = None, max_tokens: int = 1800, temperature: float = 0.1) -> dict:
+                            model: Optional[str] = None, max_tokens: int = 1800, temperature: float = 0.1,
+                            guardrail_config: Optional[dict] = None) -> dict:
         """도구 루프용 Converse 원형 응답 (Reader). 게이트(engine.gate.ToolClient)를 통해서만 호출된다."""
         kw = {"modelId": model or self.model_id, "messages": list(messages),
               "inferenceConfig": self._inference_config(max_tokens, temperature)}
@@ -177,7 +184,14 @@ class ClaudeAdapter:
             kw["system"] = [{"text": system}]
         if tool_config:
             kw["toolConfig"] = tool_config
+        if guardrail_config:
+            kw["guardrailConfig"] = dict(guardrail_config)
         return self._client().converse(**kw)
+
+
+class BedrockConverseAdapter(ClaudeAdapter):
+    """허용된 공급자 공통 Converse 경로. 호출마다 고정된 model_id 를 유지한다."""
+    route = "bedrock"
 
 
 # ---------------------------------------------------------------------------

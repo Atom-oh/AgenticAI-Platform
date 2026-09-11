@@ -1,7 +1,8 @@
 // platform/web/src/studio/types.ts
 export type Draft = { draftId: string; jobId: string; title: string; axis: string; outputType: string; productCode: string; productName: string;
   score: number; passed: boolean; rounds: number; bestRound: number; stopReason?: string; status: '검토중' | '승인됨' | '반려'; comment?: string;
-  parentId?: string; url: string; createdAt: number; createdBy: string; model?: string };
+  parentId?: string; parentRound?: number; url: string; createdAt: number; createdBy: string; model?: string;
+  validationScope?: string; functionalVerification?: string; approvalScope?: string };
 export type Asset = { name: string; type: string; version: string; actor: string; updated_at: string; scope: string; asset_id?: string };
 export type Product = { code: string; name: string; category: string; conditionCount: number; stepCount: number; hasPreferential: boolean };
 export type SpecItem = { id: string; category: string; text: string; required: boolean; weight: number; check: 'llm' | 'text' | 'dom';
@@ -20,12 +21,12 @@ export type DoneEvent = { type: 'studio.done'; jobId: string; draftId?: string |
   itemsTruncated?: boolean; recovered?: boolean;
   backend?: string; graphBackend?: string; spec?: { productCode: string; productName: string; hasPreferential: boolean; stepCount: number } };
 export type JobForm = { brief: string; productCode: string; outputType: string; axis: string; assetIds: string[]; agentId: string;
-  maxRounds: number; passScore: number };
+  maxRounds: number; passScore: number; model: string };
 
 export const ASSET_TYPES = ['token', 'palette', 'icon-set', 'component', 'style-guide', 'skill', 'workflow', 'agent'];
 export const TYPE_LABEL: Record<string, string> = { palette: '팔레트', token: '토큰', 'icon-set': '아이콘', component: '컴포넌트',
   'style-guide': '스타일가이드', skill: '스킬', workflow: '워크플로우', agent: '에이전트' };
-export const OUTPUT_TYPES: [string, string][] = [['design', '디자인'], ['mockup', '목업'], ['wireframe', '와이어프레임'], ['ux-flow', 'UX 플로우']];
+export const OUTPUT_TYPES: [string, string][] = [['design', '화면 디자인'], ['mockup', '목업'], ['wireframe', '와이어프레임'], ['ux-flow', '단계별 스토리보드']];
 export const AXES = ['밀도', '강조', '흐름'];
 export const BRIEF_PRESETS: { label: string; brief: string; productCode: string; outputType: string }[] = [
   { label: '축구사랑 적금 가입 플로우', brief: '아톰 축구사랑 적금 모바일 가입 플로우 — 축구클럽 회원 우대금리 인증 단계를 포함한 전체 흐름', productCode: 'PRD-DEP-001', outputType: 'ux-flow' },

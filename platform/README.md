@@ -1,7 +1,14 @@
 # Agentic AI Platform — 은행 데모 (SPEC.md 구현)
 
 루트 `SPEC.md`가 정본 요구사항이다. 이 문서는 **실제 배포 상태**와 운영 절차를 적는다 — 코드에 없는 것을
-"완료"라고 쓰지 않는다. (상태 표는 §"구현 상태" 참조, 배포 시점마다 갱신)
+"완료"라고 쓰지 않는다. 기존 플랫폼의 배포 이력과 아래 React 작업실의 현재 상태를 구분한다.
+
+**2026-09-11 React 작업실 — 코드 `7325c72`:** 백엔드 `UPDATE_COMPLETE`.
+라이브 Astra 기준안+변형 2개와 Fable 새 UX 1개가 모두 2라운드에서 React 코드·빌드·접근성·동작 검사를 통과했다.
+이 실행들은 원본 이미지 기준이 없어 시각 비교를 수행하지 않았다. 선택한 Astra 기준안과 Fable 시안은 실제 트랜잭션으로 승인한 뒤,
+AI 호출 없이 같은 소스의 AWS 재빌드·브라우저 검사·승인 화면 대비 2% 비교를 통과했고 비공개 소스/dist 다운로드 해시도 확인했다.
+실제 API에 연결한 새 UI의 FHD/QHD/WQHD 확인은 통과했다. 프런트엔드를 운영에 게시했으며, 실제 인증 API로 공동 프로젝트·Astra/Fable React 미리보기·릴리스 다운로드 상태와 FHD/QHD/WQHD 배치를 확인했다.
+플랫폼 소스의 공개 PR 게시 권한은 승인됐다.
 
 ## 구조 — Single Boundary — 두 스택, NAT 없음
 
@@ -27,6 +34,11 @@
 - **Guardrails는 코드로 정의**(`infra/lib/stack.ts` CfnGuardrail): 투자권유 토픽 차단, PII 탐지/익명화, 근거 점수(표시용), 비속어.
 - **비용가드/오프라인 폴백**: 일일 Bedrock 토큰 상한(DAILY_TOKEN_CAP) 초과·호출 실패 시 캐시 응답을 재생하고 UI에 "캐시 응답" 배지를 띄운다.
 
+React 공동 디자인 작업실은 같은 출처의 `/studio-api` HTTP 경로를 사용한다. JWT 사용자와 현재 프로젝트
+참여 권한으로 자료를 구분하고, 게시 지침·온톨로지·승인 소스·검수 근거를 비공개 S3/DynamoDB에 보관한다.
+워커는 허용된 Bedrock 경로로 화면 소스를 생성하고, 데이터 자격 증명이 없는 격리 실행기의 Node/React 빌드와
+브라우저 검사로 같은 번들을 검증한다. 새 작업실은 아래 **React 공동 디자인 작업실 — 2026-09-11**을 참조한다.
+
 ## 에이전트 계층 — AgentCore 네이티브
 
 - **에이전트 = AgentCore Harness** (코드 없는 관리형 에이전트 루프): 모델(`global.anthropic.claude-sonnet-5`)·시스템프롬프트·
@@ -51,8 +63,11 @@
 | `graph/store.py` | `GraphStore` 인터페이스, `LocalGraphStore`, `NeptuneGraphStore`(브리지 경유) |
 | `registry/` | F4 Registry: 상태기계·유일성·감사·Consumer API(APPROVED만)·하이브리드 검색·시드 |
 | `agentcore/` | Harness 래퍼·에이전트 명세·Gateway 도구 Lambda·AgentCore Registry 미러 |
-| `screengen/`, `gates/`, `skills/` | F5 화면 생성 에이전트, 실검증 게이트(Node), 퍼블리싱/접근성 스킬 |
+| `screengen/`, `gates/`, `skills/` | 기존 F5 Registry 시연·생성·게이트·지침. 새 React 릴리스는 별도 실제 코드 경로 사용 |
 | `design_loop/`, `seed/design/` | 디자인 스튜디오 검수 루프(상품명세서→PRD→프로세스 화면→리뷰·테스트→재생성 1회→리포트), 합성 상품명세서·SM 모델·체크리스트 |
+| `workspace/`, `web/src/workspace/` | 개인/프로젝트 범위, 상품 지침·온톨로지·의견, React 생성·검수·승인·릴리스·Git 전달 |
+| `react-kit/` | 실제 15종 React 컴포넌트·타입·토큰, 고정 컴파일러와 소스/dist·테스트 패키징 |
+| `infra/lib/workspace.ts` | 작업실 비공개 저장소·인증 HTTP API·워커·격리 브라우저 실행기 구성 |
 | `report/` | F7 Reader/Writer/내부 도구 Lambda 핸들러 |
 | `onprem/` | VPC 내부 컨테이너: 정확 조회(RDS)·계산엔진·마스킹·감사원문·벡터 인덱스 |
 | `bridge/` | 브리지 Lambda |
@@ -65,7 +80,7 @@
 
 ```bash
 cd platform
-python3 -m pytest tests/ -q                       # 오프라인 테스트 (AWS 호출 없음, 344개)
+python3 -m pytest tests/ -q                       # 오프라인 테스트 (실제 브라우저 테스트는 로컬 실행 환경 필요)
 bash deploy.sh --plane                             # 플레인 스택 + 메인 스택 + 시드 + 프론트 (첫 배포 25~35분, 기본 MAIN_STACK=BankPlatformCore)
 GRAPH_BACKEND=neptune bash deploy.sh               # 시연 표준: Neptune 백엔드 (Neptune 재적재 자동)
 bash deploy.sh --no-web --no-seed                  # 백엔드 코드만 재배포 (시드·Neptune 재적재 생략)
@@ -118,6 +133,9 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 
 ## 구현 상태 (2026-09-03 새벽 배포 기준 — 코드·배포·e2e로 확인된 것만)
 
+아래 표는 기존 플랫폼·정적 Studio의 배포 이력이다. 새 React 작업실의 라이브 모델·UI 검증이나
+프런트엔드 게시 완료를 뜻하지 않는다. 현재 작업실 상태는 다음 절을 따른다.
+
 | 항목 | 상태 | 근거 |
 |---|---|---|
 | S1 규정 영향 분석 (GraphRAG vs Vector RAG, PolicyRule 경로) | 배포 | Neptune v2 3,797/11,052 적재, `impact_of_regulation` 실측 카운트; 벡터 인덱스 AOSS(177 docs) VPC 엔드포인트 |
@@ -134,3 +152,96 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 | pgvector | 미사용 (AOSS 확정) | §16 |
 | 디자인 스튜디오 에이전틱 루프 (StudioLoopFn · StudioTable · studio/drafts) | 배포 | 온톨로지 Product→체크리스트(31항목/필수16) → 워커 Lambda 루프(1~20라운드). live e2e(2026-09-07, `tests/e2e` 패턴 WebSocket): 축구사랑 적금 ux-flow 1라운드 90점 통과(FLOW-COND·STEP-ORDER 통과, few-shot 1건 주입) · 기본 적금 1라운드 93점 통과(FLOW-NOCOND 통과) · refine 1라운드 85점(STABLE 0% 변화, CD-02/CD-03 미충족 사실대로) · 모델 실측 global.anthropic.claude-sonnet-5 · 게이트 차단 재발 방지(모델行 프롬프트 식별자 마스킹, 44f4937·19a924c) · §16 |
 
+## React 공동 디자인 작업실 — 2026-09-11
+
+최종 전달 단위는 **실제 React 소스 프로젝트와 그 소스에서 만든 검증된 정적 번들**이다.
+기존 `screengen/gates`의 UI 모사·구조 스냅샷이나 HTML 프로토타입 승인을 React 릴리스 검증으로 사용하지 않는다.
+HTML 원본 검사는 참고 자료의 동작을 확인하는 별도 기능으로 유지한다.
+
+### 구현 구조
+
+| 구성 | 역할 |
+|---|---|
+| `react-kit/ui`, `catalog.json` | `@studio/approved-ui`의 실제 코드·타입·토큰과 소스 해시 |
+| `workspace/collaboration.py`, `storage.py` | 프로젝트 참여자·역할, 상품 초안·불변 게시 지침, 영구 저장된 온톨로지, 의견·영향 조회 |
+| `workspace/http.py`, `criteria.py`, `batches.py` | 사용자/프로젝트 범위, 현재 기준 확인, 창의형·기준안/변형안 요청 |
+| `workspace/react_generation.py`, `react_runtime.py`, `browser*.py` | 허용된 화면 소스 생성, 실제 타입·production build·격리 브라우저 검사 |
+| `workspace/react_quality.py`, `releases.py` | 필수 근거와 동일 해시 승인, 승인 소스 재빌드·재검증·비공개 릴리스 |
+| `workspace/git_service.py`, `git_export.py` | 등록된 Git 대상·비밀 참조, 기능 브랜치 생성, 소스 검증·충돌 거부·실제 커밋 기록 |
+| `web/src/workspace` | 프로젝트 선택, 기획·지침/의견/개발 사이드바, 시안 비교와 정확한 라운드 승인 |
+
+기본 패키지는 **Screen, Stack, Grid, Inline, Panel, Text, Button, Input, Checkbox, Select, RadioGroup,
+Alert, Stepper, Summary, AssetImage 15종**이다. **고객 React 패키지는 미제공**이므로 플랫폼 기본 패키지로 표시한다.
+MD·CSS·스킬 문서는 상품·업무·디자인의 참고 자료이며 컴포넌트 코드의 권위를 대신하지 않는다.
+생성 모델은 승인된 패키지·설정·테스트를 변경하지 않고 화면 구성과 상태 로직만 작성한다.
+
+공동 작업은 `owner/planner/designer/developer` 역할을 사용한다. 모두 읽기·업로드·의견 작성이 가능하며,
+기획/관리자가 상품 지침을 게시하고 디자인/관리자가 시안을 생성·승인한다.
+디자인·개발·관리자는 이미 승인된 소스의 릴리스를 준비할 수 있고 Git 내보내기는 개발·관리자 권한이다.
+개인 파일은 자동 공유하지 않으며, 저장 범위와 행동한 사용자 ID를 분리한다.
+
+게시 지침의 원문·가이드 자산·Product/Condition/PolicyRule/Procedure/ScreenMeta 노드·관계를 비공개로 저장한다.
+생성은 저장된 온톨로지와 지침 revision을 읽는다. 프로젝트의 이 저장 경로를 Neptune 연동으로 표시하지 않는다.
+지침을 새로 게시하면 관련 시안을 재검증 대상으로 표시하고, 과거 승인은 과거 버전의 사실로 보존한다.
+
+### 생성부터 전달까지
+
+1. 조직의 반입 절차를 거친 HTML·CSS·PNG/JPG/SVG와 가이드를 개인 또는 프로젝트 공간에 보관한다.
+   Studio가 Figma·CDN·외부 폰트·누락 리소스를 직접 가져오지 않는다. FIG는 원본 보관만 지원한다.
+2. 상품 게시 지침, 선택한 자산, 실제 컴포넌트 코드와 검증 규칙의 버전·해시를 고정한다.
+3. **Creative:** 새 UX 1개. **Guided:** 기준안 1개 + 변형 2~5개, 총 3~6개.
+   각 안의 상태는 독립이며 필수 업무 규칙과 컴포넌트 기준은 공통이다.
+4. 실제 React 타입·코드 사용 규칙·production build와 브라우저 동작·접근성·오류·외부 요청을 검사한다.
+   실패·미판정은 통과로 바꾸지 않는다. 시작 화면 비교는 전체 전이 상태의 픽셀 검증이 아니다.
+5. 사람의 승인은 선택한 라운드의 소스·번들·기준·보고서에 귀속된다. 의도적인 화면 변형은 별도 검토·수용 대상이다.
+6. 릴리스는 **AI 재생성 없이 같은 승인 소스**를 다시 빌드·검증하고 동일 소스·번들을 확인한다.
+   디자이너가 승인한 시작 화면과의 재비교 허용 차이는 **2%**다.
+7. 비공개 S3에 **소스 ZIP, dist ZIP, 정적 site 파일, manifest, 검수 보고서**를 보관한다.
+   dist는 S3 정적 배포에 사용할 수 있지만 고객 서비스나 공개 웹 버킷으로 자동 게시하지 않는다.
+8. Git은 관리자 등록 대상의 기능 브랜치만 사용한다. 실제 로컬 bare 저장소와 주입된 GitHub/GitLab 전송기 테스트로
+   파일 내용·해시·중복 요청·충돌·허용 경로를 확인했다. **고객 원격 Git 대상은 미설정**이며 원격 성공을 주장하지 않는다.
+
+시안 승인은 규칙 버전을 같은 트랜잭션에서 확인한다. Git 커밋이 실제 완료되면 이후 기준 조회에 실패해도 SHA를 보존하고,
+최신 기준의 변경·확인 불가를 구분한다. 반입 버전 `importRevision`, 내부 수정 번호 `version`, 제작 도구 원본 버전도 구분한다.
+
+### 현재 확인된 배포·검증
+
+| 구분 | 최신 확인 결과 |
+|---|---|
+| 자동 검증 | **Python 784개·UI 41개 통과**, 컨테이너의 실제 React 빌드·브라우저 경로 통과 |
+| 백엔드 | **AWS UPDATE_COMPLETE** |
+| 라이브 공동 지침 | 프로젝트·상품 지침 게시와 저장된 온톨로지 조회 확인. 합성 자료에서 **노드 7개·관계 8개** |
+| 라이브 반입 | **HTML·CSS·SVG·PNG·JPG 5종** 업로드 및 인증 다운로드 후 원본 해시 일치 |
+| 독립 검토 | 승인 경쟁 상태와 Git 커밋 기록 유실 **Major 2건 수정·독립 재현 확인으로 종료** |
+| 라이브 React 모델 | Astra guided **기준안 1개+변형 2개**, Fable creative **1개**, 모두 **2라운드 통과**. 실제 타입·빌드·접근성·동작 5개 규칙과 필수 온톨로지 안내 Screen 확인 |
+| 동일 기준 수정 | 첫 기준안의 정적 pageId 정책 실패 후 같은 기준을 유지한 소스 수정으로 통과 |
+| 모델 실행의 시각 비교 | 원본 이미지 기준을 지정하지 않아 **visual: not-run**. Figma·원본 디자인 픽셀 일치 결과가 아님 |
+| 실제 승인 | 선택한 Astra 기준안과 Fable 시안을 AWS의 실제 트랜잭션으로 승인 |
+| AWS 릴리스 | 두 승인본 모두 **AI 호출 없이 같은 소스 재빌드·실제 브라우저·승인 화면 대비 2% 비교 통과** |
+| 비공개 전달 | 두 릴리스의 source/dist ZIP을 비공개 S3에 저장하고 인증 다운로드 해시 일치 확인 |
+| 사용자 화면 | 실제 프로젝트·상품 API에 연결한 **FHD/QHD/WQHD 스테이징 통과, 페이지 오류 없음** 확인 |
+| 공개 소스 권한 | 플랫폼 소스의 공개 PR 게시 권한 승인. 고객 자료 공개 허용과 별개 |
+
+검증한 릴리스 아카이브의 다운로드 크기는 다음과 같다. 모두 원본 저장 해시와 일치했다.
+
+| 승인 릴리스 | React 소스 ZIP | dist ZIP |
+|---|---:|---:|
+| Astra guided 기준안 | 34,540 B | 53,101 B |
+| Fable creative | 36,664 B | 54,049 B |
+
+이 표는 코드 `7325c72`를 기준으로 한 2026-09-11 통합 점검의 확인 범위다.
+모델 생성 때의 **원본 이미지 비교 미수행**과 릴리스 때의 **승인 화면 재비교 통과**는 다른 결과다.
+이를 Figma 원본 픽셀 일치나 모든 전이 상태의 시각 검증으로 확대하지 않는다.
+
+### 남은 고객 연결과 범위
+
+- 고객 React 패키지와 버전·토큰: 미제공. 현재 플랫폼 기본 패키지의 검증 결과다.
+- 고객 Git 저장소와 연결 권한: 미설정. 연결 전에는 검증한 소스·dist 다운로드를 사용한다.
+- 실제 금융 API·인증·거래와 고객 운영 환경: 제공된 테스트 범위 밖이다.
+- FIG 내부 해석, 임의 패키지의 완전한 파싱, 기존 갤러리·초안의 자동 일괄 이관: 완료 주장 없음.
+- 플랫폼 소스 공개 허용은 고객 원본·산출물의 공개 게시 허용과 별개다.
+
+사용법: [디자이너 가이드](../docs/14-demo/studio-designer-guide.md) ·
+[파일 반입](../docs/14-demo/studio-file-intake.md) · [구현 점검](../docs/14-demo/studio-implementation-review.md).
+개발 계약: `workspace/CONTRACT.md`, `workspace/REACT_CONTRACT.md`.
+완료 체크: `docs/superpowers/plans/2026-09-11-react-design-workspace.md`.

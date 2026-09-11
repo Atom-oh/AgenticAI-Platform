@@ -21,6 +21,9 @@ done
 echo "log: $LOG"; : > "$LOG"
 
 echo "== 0) 사전 점검 =="
+if [ -f react-kit/package-lock.json ]; then
+  (cd react-kit && npm ci --ignore-scripts --no-fund --no-audit >> "$LOG" 2>&1)
+fi
 if [ "${SKIP_TESTS:-0}" != "1" ]; then
   python3 -m pytest tests/ -q 2>&1 | tail -2 | tee -a "$LOG"
 else
@@ -32,7 +35,10 @@ echo "== 1) api-dist 조립 =="
 rm -rf api-dist && mkdir -p api-dist/seed/out
 cp api/*.py api-dist/
 cp -r api/common api/handlers engine graph onprem semantic api-dist/
-for m in registry screengen report agentcore design_loop studio; do [ -d "$m" ] && cp -r "$m" api-dist/; done
+for m in registry screengen report agentcore design_loop studio workspace; do [ -d "$m" ] && cp -r "$m" api-dist/; done
+mkdir -p api-dist/react-kit
+cp react-kit/catalog.json api-dist/react-kit/
+cp -r react-kit/ui api-dist/react-kit/
 [ -d skills ] && cp -r skills api-dist/
 # Harness·Registry API는 최신 boto3가 필요하다 (Lambda 기본 boto3에는 없음) — 배포 패키지에 동봉
 pip3 install -q --upgrade --target api-dist boto3 botocore >> "$LOG" 2>&1 || { echo "boto3 vendoring failed"; tail -5 "$LOG"; exit 1; }
@@ -113,7 +119,9 @@ npm run build >> "$LOG" 2>&1 || { tail -30 "$LOG"; exit 1; }
 cat > dist/config.json <<CFG
 {"wssUrl": "$WSS", "cognitoClientId": "$CLIENT", "region": "$REGION", "graphBackend": "$GRAPH_BACKEND", "planeDeployed": $PLANE_DEPLOYED}
 CFG
-aws s3 sync dist "s3://$BUCKET" --delete >> "$LOG" 2>&1
+# 웹 버킷은 studio/drafts·design-runs 등 사용자가 생성한 산출물도 보관한다.
+# dist 에 없다는 이유로 이 산출물까지 삭제하지 않는다.
+aws s3 sync dist "s3://$BUCKET" >> "$LOG" 2>&1
 aws cloudfront create-invalidation --distribution-id "$DIST" --paths "/*" > /dev/null
 cd ..
 

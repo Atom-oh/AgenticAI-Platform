@@ -4,7 +4,7 @@ import { ReviewItem, RoundResult, StageEvent, STEP_LABEL } from './types';
 export function ScoreBadge({ score, passed, size = 'md' }: { score: number; passed?: boolean; size?: 'sm' | 'md' | 'lg' }) {
   const cls = passed ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : score >= 70 ? 'bg-amber-50 text-amber-700 border-amber-300' : 'bg-rose-50 text-[#E90061] border-rose-300';
   const sz = size === 'lg' ? 'text-2xl px-4 py-1.5' : size === 'sm' ? 'text-[11px] px-2 py-0.5' : 'text-sm px-3 py-1';
-  return <span className={`inline-flex items-center gap-1 rounded-full border font-bold ${cls} ${sz}`}>{score}<span className="font-normal opacity-70">/100</span></span>;
+  return <span title="정적 체크리스트 점수 · 실제 동작은 미검증" className={`inline-flex items-center gap-1 rounded-full border font-bold ${cls} ${sz}`}>{score}<span className="font-normal opacity-70">/100 정적</span></span>;
 }
 
 export function StageList({ stages, running }: { stages: StageEvent[]; running: boolean }) {
@@ -25,15 +25,15 @@ export function StageList({ stages, running }: { stages: StageEvent[]; running: 
   );
 }
 
-export function RoundStrip({ history, best, onPick, picked }: { history: RoundResult[]; best: number; onPick: (r: RoundResult) => void; picked?: number }) {
+export function RoundStrip({ history, best, onPick, picked, disabled = false }: { history: RoundResult[]; best: number; onPick: (r: RoundResult) => void; picked?: number; disabled?: boolean }) {
   if (!history.length) return null;
   return (
     <div className="flex gap-2 flex-wrap">
       {history.map(h => (
-        <button key={h.round} onClick={() => onPick(h)}
+        <button key={h.round} onClick={() => onPick(h)} disabled={disabled}
           className={`chip text-xs flex items-center gap-1.5 ${picked === h.round ? 'border-teal-500 bg-teal-50' : ''}`}>
           R{h.round} <ScoreBadge score={h.score} passed={h.passed} size="sm" />
-          {h.round === best && <span className="text-[10px] text-teal-700 font-bold">최고</span>}
+          {h.round === best && <span className="text-[10px] text-teal-700 font-bold">최종 선택</span>}
         </button>
       ))}
     </div>

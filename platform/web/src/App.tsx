@@ -163,8 +163,8 @@ export default function App() {
           <div className="text-slate-400">합성데이터 · 실계정 미사용</div>
         </div>
       </nav>
-      <main className="flex-1 overflow-y-auto relative">
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-200/70 sticky top-0 backdrop-blur z-10" style={{ background: 'rgba(255,255,255,.88)' }}>
+      <main className="app-main flex-1 overflow-y-auto relative">
+        <div className="app-toolbar flex items-center gap-3 py-4 border-b border-slate-200/70 sticky top-0 backdrop-blur z-10" style={{ background: 'rgba(255,255,255,.88)' }}>
           <h1 className="font-bold">{TITLE[view] || ''}</h1>
           <div className="flex-1" />
           {resetMsg && <span className="text-xs text-slate-400">{resetMsg}</span>}
@@ -176,7 +176,7 @@ export default function App() {
           <button className="chip hover:border-slate-400" onClick={() => { auth.logout(); location.reload(); }}>로그아웃</button>
         </div>
         {legend && <DemoLegend route={route} onClose={() => setLegend(false)} />}
-        <div className="p-6 max-w-[1400px]">
+        <div className="app-content">
           <ViewErrorBoundary viewKey={view}>
           {view === 'home' && <Dashboard go={go} />}
           {view === 's1' && <S1 />}

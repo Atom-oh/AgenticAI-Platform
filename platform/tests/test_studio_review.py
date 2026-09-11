@@ -99,6 +99,22 @@ def test_skeleton_diff_and_stability_item():
     assert review.stability_item(small)[1]["verdict"] == "pass"
 
 
+def test_optional_undetermined_cannot_be_called_static_review_passed():
+    items = [{"id": "required", "required": True, "weight": 9},
+             {"id": "optional", "required": False, "weight": 1}]
+    result = review.score(items, {"required": {"verdict": "pass"}, "optional": None}, 85)
+    assert result["score"] == 90
+    assert result["undetermined"] == ["optional"]
+    assert result["passed"] is False
+
+
+def test_external_image_and_css_import_fail_the_resource_check():
+    html = '<html><head><style>@import "https://outside.example/font.css";</style></head><body><img src="https://outside.example/a.png"></body></html>'
+    item = {"id": "CM-04", "check": "dom", "required": True, "expect": {"noExternal": True}}
+    result = review.deterministic_checks([item], review.parse_html(html))
+    assert result["CM-04"]["verdict"] == "fail"
+
+
 def test_parse_review_strict_json():
     ids = ["LLM-1", "LLM-2"]
     good = 'blah {"items":[{"id":"LLM-1","verdict":"pass","evidence":"제목에 상품명","fix":""},{"id":"LLM-2","verdict":"fail","evidence":"CTA 2개","fix":"하나로"}]} trailing'
