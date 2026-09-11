@@ -25,7 +25,7 @@ jobs:
         working-directory: platform/react-kit
       - run: pip install pytest pyyaml pg8000 httpx -r workspace/requirements.txt
       - run: python -m playwright install --with-deps chromium
-      - run: python workspace/fetch_axe.py gates/package-lock.json /tmp/studio-axe
+      - run: python -m workspace.fetch_axe gates/package-lock.json /tmp/studio-axe
       - run: python3 seed/generate.py
       - run: python3 seed/corpus.py   # corpus.jsonl (임베딩 캐시 seed/out/corpus.embeddings.json 은 커밋됨)
       - run: python3 -m pytest tests/ -q
@@ -80,6 +80,9 @@ jobs:
         with: { node-version: 20 }
       - run: npm ci
       - run: mkdir -p ../api-dist && touch ../api-dist/.keep
+      - name: Supply offline availability-zone context
+        run: |
+          node -e "require('fs').writeFileSync('cdk.context.json', JSON.stringify({'availability-zones:account=000000000000:region=ap-northeast-2':['ap-northeast-2a','ap-northeast-2b']}))"
       - run: npx cdk synth BankPlatform --quiet -c planeDeployed=false
         env: { CDK_DEFAULT_ACCOUNT: '000000000000' }
       - run: python3 ../workspace/check_infra.py cdk.out/BankPlatform.template.json
