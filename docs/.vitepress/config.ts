@@ -202,6 +202,7 @@ export default withMermaid(defineConfig({
           { text: '아키텍처와 설계 결정', link: '/14-demo/architecture' },
           { text: 'UX Studio 검증 루프', link: '/14-demo/ux-validation-loop' },
           { text: 'Design Studio 구현·사용성 점검', link: '/14-demo/studio-implementation-review' },
+          { text: '외부 산출물 파일 반입', link: '/14-demo/studio-file-intake' },
           { text: '시연 리허설 · 체크리스트', link: '/14-demo/rehearsal' },
         ],
       },

@@ -1,8 +1,9 @@
 """Offline inspection and CSP protection for self-contained Studio HTML.
 
 These helpers only process strings: they never resolve URLs or fetch resources.
-Figma/export belongs in network 3; financial-network Studio consumes inline/data
-artifacts. Relative URLs also require a fetch and are therefore reported.
+Figma is unavailable in network 3. External deliverables enter through the
+approved file-import process; Studio never fetches their external originals.
+Relative URLs also require a fetch and are therefore reported.
 
 Static inspection is a review aid, not a complete JavaScript/CSS/HTML security
 analysis. CSP must enforce the resource boundary even for dynamically built URLs.

@@ -312,7 +312,10 @@ dimensions:
 | 레지스트리 · GitLab MCP 서버 | MCP | VPC 내 EKS |
 | Skills (은행 퍼블리싱 규약) | SKILL | Git · 마크다운 |
 | 화면 생성 에이전트 | AGENT | AgentCore Runtime |
-| Figma · draw.io MCP | MCP | 외부 SaaS |
+| draw.io MCP | MCP | 외부 SaaS |
+
+2026-09-11 사용자 정정에 따라 Figma MCP 연결은 등록 대상에서 제외한다.
+디자인 입력은 외부 산출물 파일의 반입에서 시작하며, 원본 보관·해석 지원은 별도로 구현한다.
 
 ---
 
@@ -545,8 +548,10 @@ AgentCore insights · Evaluations · Policy는 서울에서 global 교차 리전
   GPT-6 Astra·Claude Fable 5/5.1을 지원하며, 호출별 선택을 기존 경계 게이트로 전달한다. 전역 기본 모델은 바꾸지 않는다.
 - 화면·검수표·수정 입력은 같은 라운드에 연결한다. 미판정·검수 오류를 성공으로 세지 않으며, 최종 라운드는 통과 여부를 점수보다 우선한다.
   사람 승인은 정적 시안 승인으로 명시한다. 입력값 전달·인증·실제 React 동작·픽셀 일치 검증을 완료했다는 의미는 아니다.
-- Figma 작업·다운로드는 3호망, 금융망 Studio의 입력은 사용자의 파일 반입이다. Studio에 외부 Figma 직접 조회를 추가하지 않는다.
-  현재 추가한 반입 기능은 JSON·Markdown·TXT 텍스트 자산이며 전체 .fig/ZIP/이미지 패키지·사내 컴포넌트 자동 매핑은 별도 구현 대상이다.
+- 2026-09-11 사용자 정정: 3호망에서도 Figma 접속이 불가하다. 외부에서 전달받은 HTML·PNG·JPG·SVG·FIG·PDF 등의
+  산출물을 정해진 반입 절차로 가져오는 것을 입력의 시작점으로 삼는다. Studio에 외부 Figma 조회·다운로드·동기화를 추가하지 않는다.
+  현재 구현은 JSON·Markdown·TXT 텍스트 자산 입력이다. 나열한 일반 파일의 원본 보관·미리보기·해석은 추가 구현 대상이며,
+  파일 보관과 의미·동작 검증 완료를 구분한다. 파일 반입 계약은 `docs/14-demo/studio-file-intake.md`를 따른다.
 - 과거 시안·승인 이력은 보존한다. 이전 기준 점수를 새 검증 결과로 자동 승격하지 않으며 새 승인에는 재검수를 요구한다.
 - 이번 구현·사용성 판단: `docs/14-demo/studio-implementation-review.md`.
 

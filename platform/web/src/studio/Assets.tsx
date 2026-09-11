@@ -144,8 +144,9 @@ export default function Assets({ assets, canRegister, reload }: { assets: Asset[
           </div>
           <label htmlFor={`${formId}-file`} className="block text-xs font-semibold text-slate-700 mb-1">로컬 텍스트 파일 불러오기</label>
           <p id={`${formId}-file-help`} className="text-xs text-slate-500 mb-2">
-            Figma 내보내기·다운로드는 3호망에서 진행하세요. 금융망 Studio는 사용자가 선택한 로컬 파일만 읽으며 외부 Figma에 접속하지 않습니다.
-            텍스트 자산 가져오기를 지원하며, 전체 .fig 파일·ZIP·이미지 패키지는 지원하지 않습니다.
+            3호망에서는 Figma에 접속하지 않습니다. 외부에서 전달받은 산출물을 정해진 반입 절차에 따라 준비하세요.
+            Studio는 외부 Figma에 연결하거나 원본을 자동으로 내려받지 않습니다.
+            현재 이 입력은 텍스트 자산 전용입니다. HTML·PNG·JPG·SVG·FIG·PDF 파일의 반입·미리보기는 아직 지원하지 않습니다.
             파일 선택은 아래 내용을 채웁니다. 등록은 내용을 확인한 뒤 별도로 진행하세요.
           </p>
           <p id={`${formId}-file-limits`} className="text-xs text-slate-500 mb-2">
