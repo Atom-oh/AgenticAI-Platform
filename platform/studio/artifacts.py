@@ -224,7 +224,7 @@ class _PolicyPlacement(HTMLParser):
         self.seen_html = False
         self.prefix_end = 0
         self.head_end: int | None = None
-        self.policies: list[tuple[int, int]] = []
+        self.own_policies: list[tuple[int, int]] = []
         self.head_tags: list[tuple[int, int]] = []
 
     def _offset(self) -> int:
@@ -234,13 +234,8 @@ class _PolicyPlacement(HTMLParser):
     def handle_starttag(self, tag, attrs):
         start = self._offset()
         end = start + len(self.get_starttag_text())
-        if tag == "meta" and any(
-            name == "http-equiv" and (value or "").strip().lower() in {
-                "content-security-policy", "content-security-policy-report-only",
-            }
-            for name, value in attrs
-        ):
-            self.policies.append((start, end))
+        if tag == "meta" and self.source[start:end] == _CSP_META:
+            self.own_policies.append((start, end))
         if tag == "head":
             self.head_tags.append((start, end))
         if self.prolog:
@@ -290,9 +285,10 @@ def secure_html(html: str) -> str:
 
     Inline styles/scripts and data images/fonts remain usable; other resource
     loads, connections, frames, workers, objects, forms and base URLs are denied
-    by policy. Existing parsed CSP meta elements are removed so they cannot
-    disable the intended inline functionality. Inline code and other markup are
-    preserved verbatim; this function does not sanitize them or fetch anything.
+    by policy. Existing CSP policies remain enforced alongside this policy, so
+    stricter input restrictions are never weakened. Only identical copies of
+    our own policy are replaced for idempotency. Inline code and other markup
+    are preserved verbatim; this function does not sanitize or fetch anything.
 
     Malformed late head tags are normalized behind a new leading policy. This
     stdlib parser is not an HTML5 browser parser. A meta CSP is not a sandbox,
@@ -308,7 +304,7 @@ def secure_html(html: str) -> str:
         # before that input anyway; any unparsed old CSP can only restrict it.
         pass
 
-    removals = placement.policies
+    removals = placement.own_policies
     if placement.head_end is not None:
         position = placement.head_end
         insertion = _CSP_META

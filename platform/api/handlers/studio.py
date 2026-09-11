@@ -6,6 +6,7 @@ studio_run 은 요청/응답형 ack(`studio_run`) 1건을 보내고, 이후 이�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -21,6 +22,14 @@ from studio.asset_import import validated_content
 KIND = "studio"
 _store: StudioStore | None = None
 _graph = None
+# Includes Ctx's reqId/traceId and JSON string escaping; below the 32 KiB
+# API Gateway @connections frame limit, with room for future envelope fields.
+REPORT_FRAME_BYTES = 28_000
+
+
+def _frame_bytes(ctx: Ctx, payload: dict) -> int:
+    return len(json.dumps({**payload, "reqId": ctx.rid, "traceId": ctx.trace_id},
+                          ensure_ascii=False, default=str).encode())
 
 
 def store() -> StudioStore:
@@ -85,7 +94,23 @@ def studio_models(ctx: Ctx, body: dict) -> None:
 def studio_jobs(ctx: Ctx, body: dict) -> None:
     jid = str(body.get("jobId") or "")
     if jid:
-        ctx.post({"type": "studio_jobs", "job": store().get_job(jid)})
+        job = store().get_job(jid)
+        if job and body.get("summaryOnly") is True:
+            # Opening a full report must not first transfer every round's
+            # duplicated failure evidence. Details are read via studio_round.
+            fields = ("jobId", "status", "score", "passed", "stopReason", "maxRounds", "passScore",
+                      "draftId", "error", "model", "bestRound", "validationScope", "functionalVerification")
+            rounds = [
+                {**{k: r[k] for k in ("round", "score", "passed", "url", "elapsedMs") if k in r},
+                 "failuresTotal": len(r.get("failures", [])), "undeterminedTotal": len(r.get("undetermined", [])),
+                 "detailsOmitted": True}
+                for r in job.get("rounds", [])
+            ]
+            job = {**{k: job[k] for k in fields if k in job}, "rounds": rounds}
+        payload = {"type": "studio_jobs", "job": job}
+        if body.get("summaryOnly") is True and _frame_bytes(ctx, payload) > REPORT_FRAME_BYTES:
+            payload = {"type": "studio_jobs", "error": "라운드 목록의 크기가 전송 한도를 넘습니다.", "job": None}
+        ctx.post(payload)
     else:
         ctx.post({"type": "studio_jobs", "jobs": store().list_jobs(loop._int(body.get("limit"), 20, 1, 200))})
 
@@ -95,8 +120,48 @@ def studio_round(ctx: Ctx, body: dict) -> None:
     if isinstance(number, bool) or not isinstance(number, int) or not 1 <= number <= loop.MAX_ROUNDS:
         ctx.post({"type": "studio_round", "error": "검수할 라운드를 다시 선택하세요."})
         return
+    offset = body.get("offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        ctx.post({"type": "studio_round", "error": "검수표의 이어 읽기 위치가 올바르지 않습니다."})
+        return
     result = store().get_round(str(body.get("jobId", "")), number)
-    ctx.post({"type": "studio_round", "round": result, "error": None if result else "해당 라운드의 검수 기록이 없습니다."})
+    if not result:
+        ctx.post({"type": "studio_round", "round": None, "error": "해당 라운드의 검수 기록이 없습니다."})
+        return
+    if result.get("itemsComplete"):
+        result = {k: v for k, v in result.items() if k != "failures"}
+    serialized = json.dumps(result, ensure_ascii=False, default=str, sort_keys=True)
+    version = hashlib.sha256(serialized.encode()).hexdigest()
+    if (offset and not body.get("reportVersion")) or (body.get("reportVersion") and body["reportVersion"] != version):
+        ctx.post({"type": "studio_round", "error": "검수표가 변경되었습니다. 해당 라운드를 다시 선택하세요.",
+                  "code": "report-changed"})
+        return
+    if offset >= len(serialized):
+        ctx.post({"type": "studio_round", "error": "검수표의 이어 읽기 위치가 올바르지 않습니다."})
+        return
+    payload = {"type": "studio_round", "round": result, "error": None}
+    if offset == 0 and _frame_bytes(ctx, payload) <= REPORT_FRAME_BYTES:
+        ctx.post(payload)
+        return
+
+    # Chunk serialized JSON, rather than rows, so one long evidence item is
+    # preserved too. Offsets are opaque Python string positions echoed by the
+    # client; it concatenates chunks only after the same version is complete.
+    def chunk(end: int) -> dict:
+        return {"type": "studio_round", "chunk": serialized[offset:end], "offset": offset,
+                "nextOffset": end if end < len(serialized) else None, "reportVersion": version}
+
+    low, high = offset, min(len(serialized), offset + REPORT_FRAME_BYTES)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _frame_bytes(ctx, chunk(middle)) <= REPORT_FRAME_BYTES:
+            low = middle
+        else:
+            high = middle - 1
+    if low == offset:
+        ctx.post({"type": "studio_round", "error": "검수표 전송 요청이 너무 큽니다."})
+        return
+    ctx.post(chunk(low))
 
 
 def studio_drafts(ctx: Ctx, body: dict) -> None:
@@ -112,13 +177,18 @@ def studio_feedback(ctx: Ctx, body: dict) -> None:
     if decision == "approve":
         draft = store().get_draft(str(body.get("draftId", ""))) or {}
         job = store().get_job(draft.get("jobId", "")) or {}
-        result = next((r for r in job.get("rounds", []) if r.get("round") == draft.get("bestRound")), None)
-        if (draft.get("validationScope") != "static-design" or draft.get("passed") is not True
+        number = draft.get("bestRound")
+        result = store().get_round(draft.get("jobId", ""), number) if isinstance(number, int) and not isinstance(number, bool) else None
+        if (not job or draft.get("validationScope") != "static-design" or draft.get("passed") is not True
                 or not result or result.get("passed") is not True
+                or not result.get("itemsComplete") or not result.get("items")
                 or "undetermined" not in result or result["undetermined"] or result.get("reviewerError")
                 or not draft.get("url") or result.get("url") != draft["url"]
+                or any(i.get("verdict") not in ("pass", "fail")
+                       or (i.get("required") and i.get("verdict") != "pass")
+                       for i in result.get("items", []))
                 or any(f.get("id") == "STABLE" and f.get("weight", 0) > 0 and f.get("verdict") != "pass"
-                       for f in result.get("failures", []))):
+                       for f in result.get("items", []))):
             ctx.post({"type": "studio_feedback", "error": "이 시안의 정적 검수가 완료되지 않았습니다. 미판정·실패 항목을 해결하고 다시 검수하세요.",
                       "code": "static-review-required"})
             return

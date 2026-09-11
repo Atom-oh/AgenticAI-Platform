@@ -5,6 +5,7 @@ import { sock } from '../lib';
 import { openExplorer } from './nav';
 import SpecPanel from './SpecPanel';
 import ModelSelect, { ModelOption } from './ModelSelect';
+import { loadRoundReport } from './reports';
 import { Checklist, RoundStrip, ScoreBadge, StageList } from './RoundTimeline';
 import { AXES, BRIEF_PRESETS, Asset, DoneEvent, Draft, JobForm, OUTPUT_TYPES, Product, ReviewItem, RoundResult, Spec, StageEvent, TYPE_LABEL, aid } from './types';
 
@@ -90,7 +91,7 @@ export default function Playground({ assets, products, models, defaultModel, can
       selectedReportKey.current = `${initialDraft.jobId}:${initialDraft.bestRound}`;
       setItems([]); setReportNote('검수표를 불러오는 중입니다.');
       setForm(f => ({ ...f, productCode: initialDraft.productCode, outputType: initialDraft.outputType, model: initialDraft.model || f.model }));
-      sock.request('studio_jobs', { jobId: initialDraft.jobId }).then(response => {
+      sock.request('studio_jobs', { jobId: initialDraft.jobId, summaryOnly: true }).then(response => {
         if (cancelled || jobIdRef.current !== initialDraft.jobId) return;
         const rounds = response.job?.rounds || [];
         setHistory(rounds);
@@ -158,7 +159,7 @@ export default function Playground({ assets, products, models, defaultModel, can
       if (Date.now() - lastEventAt.current <= 240_000) return;
       const jid = jobIdRef.current;
       if (!jid) return;
-      sock.request('studio_jobs', { jobId: jid })
+      sock.request('studio_jobs', { jobId: jid, summaryOnly: true })
         .then(r => { const j = r.job; if (runningRef.current && j && (j.status === 'done' || j.status === 'failed')) finishFromJob(j); })
         .catch(() => {}); // 다음 주기에 재시도
     }, 20_000);
@@ -217,11 +218,9 @@ export default function Playground({ assets, products, models, defaultModel, can
     const cached = roundItems.current.get(r.round);
     if (cached) { setItems(cached); setReportNote(''); return; }
     try {
-      const response = await sock.request('studio_round', { jobId, round: r.round });
+      const report = await loadRoundReport(jobId, r.round);
       if (selectedReportKey.current !== key) return;
-      if (response.error || !response.round) throw new Error('선택한 라운드의 검수 기록을 확인하지 못했습니다.');
-      const report = response.round;
-      setItems(report.itemsComplete ? report.items : report.failures || []);
+      setItems(report.items);
       setReportNote(report.itemsComplete ? '' : '이전 기록에는 미충족·미판정 항목만 저장되어 있습니다. 전체 검수표는 재검수 후 제공됩니다.');
       if (report.itemsComplete) roundItems.current.set(r.round, report.items);
     } catch {

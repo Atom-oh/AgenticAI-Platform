@@ -77,13 +77,13 @@ body {
   .agent-workspace { grid-template-columns: clamp(280px, 22cqw, 420px) minmax(0, 1fr); }
 }
 @container workspace (min-width: 1040px) {
-  .studio-layout { grid-template-columns: minmax(340px, .9fr) minmax(0, 1.35fr); }
+  .studio-layout { grid-template-columns: minmax(340px, .9fr) minmax(0, 1.35fr); grid-template-rows: min-content 1fr; }
   .studio-controls { grid-column: 1; grid-row: 1 / span 2; }
   .studio-canvas { grid-column: 2; grid-row: 1; }
   .studio-review { grid-column: 2; grid-row: 2; }
 }
 @container workspace (min-width: 1480px) {
-  .studio-layout { grid-template-columns: minmax(360px, .9fr) minmax(500px, 1.25fr) minmax(300px, 1fr); }
+  .studio-layout { grid-template-columns: minmax(360px, .9fr) minmax(500px, 1.25fr) minmax(300px, 1fr); grid-template-rows: auto; }
   .studio-controls { grid-column: 1; grid-row: 1; }
   .studio-canvas { grid-column: 2; grid-row: 1; }
   .studio-review { grid-column: 3; grid-row: 1; }

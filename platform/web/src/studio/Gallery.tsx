@@ -4,6 +4,7 @@ import { sock } from '../lib';
 import { openExplorer } from './nav';
 import { Checklist, ScoreBadge } from './RoundTimeline';
 import { Draft, ReviewItem } from './types';
+import { loadRoundReport } from './reports';
 
 const STOP: Record<string, string> = { passed: '정적 검수 통과', max_rounds: '검수 미완료', time_cap: '시간 상한', error: '오류' };
 
@@ -12,7 +13,7 @@ export default function Gallery({ drafts, canWrite, reload, onEdit }: { drafts: 
   const [busy, setBusy] = useState('');
   const [comment, setComment] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
-  const [report, setReport] = useState<{ d: Draft; rounds: any[]; items: ReviewItem[] } | null>(null);
+  const [report, setReport] = useState<{ d: Draft; rounds: any[]; items: ReviewItem[]; itemsComplete: boolean } | null>(null);
   const list = drafts.filter(d => filter === '전체' || d.status === filter);
   const decide = async (d: Draft, decision: 'approve' | 'reject') => {
     setBusy(d.draftId); setError('');
@@ -26,11 +27,12 @@ export default function Gallery({ drafts, canWrite, reload, onEdit }: { drafts: 
   const openReport = async (d: Draft) => {
     setError('');
     try {
-      const j = await sock.request('studio_jobs', { jobId: d.jobId });
+      const j = await sock.request('studio_jobs', { jobId: d.jobId, summaryOnly: true });
       const rounds = (j.job?.rounds || []) as any[];
-      const best = rounds.find(r => r.round === d.bestRound && Array.isArray(r.failures));
+      const best = rounds.find(r => r.round === d.bestRound);
       if (j.error || !best) throw new Error('이 시안의 검수 기록을 확인하지 못했습니다. 검수 완료로 판단할 수 없습니다.');
-      setReport({ d, rounds, items: best.failures as ReviewItem[] });
+      const selected = await loadRoundReport(d.jobId, d.bestRound);
+      setReport({ d, rounds, items: selected.items.filter(item => item.verdict !== 'pass'), itemsComplete: selected.itemsComplete });
     } catch (reason) { setError(reason instanceof Error ? reason.message : '검수 기록을 불러오지 못했습니다.'); }
   };
   const color = (s: string) => s === '승인됨' ? 'text-emerald-600 border-emerald-300 bg-emerald-50' : s === '반려' ? 'text-[#E90061] border-rose-300 bg-rose-50' : 'text-amber-700 border-amber-300 bg-amber-50';
@@ -88,8 +90,9 @@ export default function Gallery({ drafts, canWrite, reload, onEdit }: { drafts: 
               <button className="chip ml-auto" onClick={() => setReport(null)}>닫기</button></div>
             <div className="text-xs text-slate-500 mb-3">라운드별 점수: {report.rounds.filter(r => r.score !== undefined).map(r => `R${r.round}=${r.score}`).join(' · ') || '기록 없음'}</div>
             <div className="mb-3 text-xs text-amber-800">정적 구조·문구·순서 검수입니다. 실제 입력값 전달·인증·버튼 동작·픽셀 비교는 미검증입니다.</div>
+            {!report.itemsComplete && <div className="mb-3 text-xs text-amber-800">전체 검수표가 없는 이전 기록입니다. 저장된 미충족·미판정 항목만 표시합니다.</div>}
             <div className="text-xs font-bold text-slate-700 mb-1">선택된 라운드의 미충족·미판정 항목</div>
-            {report.items.length ? <Checklist items={report.items} onSource={openExplorer} /> : <div className="text-xs text-emerald-700">미충족 항목 없음</div>}
+            {report.items.length ? <Checklist items={report.items} onSource={openExplorer} /> : <div className="text-xs text-slate-600">{report.itemsComplete ? '미충족 항목 없음' : '저장된 미충족 항목 없음 — 전체 검수 완료 여부는 확인할 수 없습니다.'}</div>}
           </div>
         </div>
       )}

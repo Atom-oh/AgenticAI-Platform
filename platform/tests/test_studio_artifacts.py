@@ -229,7 +229,7 @@ class SecureHtmlTests(unittest.TestCase):
         self.assertIn('<meta charset="utf-8">', secured)
         self.assertIn("<body>화면</body>", secured)
 
-    def test_old_policies_are_removed_including_duplicates_and_report_only(self):
+    def test_existing_policies_are_preserved_and_cannot_be_weakened(self):
         html = """<HTML><HEAD>
         <META HTTP-EQUIV="Content-Security-Policy" CONTENT="default-src *">
         <meta content="script-src 'none'" http-equiv="content-security-policy" />
@@ -242,9 +242,18 @@ class SecureHtmlTests(unittest.TestCase):
             attrs for tag, attrs in _Markup(secured).tags
             if tag == "meta" and attrs.get("http-equiv", "").lower().startswith("content-security-policy")
         ]
-        self.assertEqual(len(policies), 1)
-        self.assertNotIn("default-src *", secured)
-        self.assertNotIn("report-uri /log", secured)
+        self.assertEqual(len(policies), 5)
+        self.assertIn("script-src 'none'", secured)
+        self.assertIn("default-src *", secured)
+        self.assertIn("report-uri /log", secured)
+        self.assertEqual(secure_html(secured), secured)
+
+    def test_original_script_prohibition_survives_navigation_script(self):
+        policy = '<meta http-equiv="Content-Security-Policy" content="script-src \'none\'">'
+        script = '<script>location.replace("https://review.invalid/marker")</script>'
+        secured = secure_html(f"<html><head>{policy}</head><body>{script}</body></html>")
+        self.assertIn(policy, secured)
+        self.assertLess(secured.index(policy), secured.index(script))
 
     def test_creates_head_for_fragments_and_documents_without_head(self):
         for html in (
