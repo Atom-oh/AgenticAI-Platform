@@ -109,3 +109,16 @@ def test_delayed_targets_are_waited_for_before_asserting():
                        {"action": "expectText", "target": "summary", "value": "준비 완료"}]}]}
     result = evaluate_html(html, rules)
     assert result["functionalStatus"] == "pass" and result["passed"], result
+
+
+def test_each_rule_starts_with_fresh_browser_state():
+    rules = {"title": "독립된 검증 상태", "rules": [
+        {"id": "R1", "title": "입력값 변경", "steps": [
+            {"action": "fill", "target": "amount", "value": "10000"},
+            {"action": "expectValue", "target": "amount", "value": "10000"}]},
+        {"id": "R2", "title": "다음 규칙은 원래 상태에서 시작", "steps": [
+            {"action": "expectValue", "target": "amount", "value": "300000"}]},
+    ]}
+    result = evaluate_html(HTML, rules)
+    assert result["passed"] and len(result["checks"]) == 2, result
+    assert not result.get("engineError")

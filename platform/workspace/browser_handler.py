@@ -9,10 +9,32 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 BROWSER_TIMEOUT_SECONDS = 100
 _lock = threading.Lock()
+
+
+def _driver_diagnostics(path):
+    """Return fixed failure labels only, never captured logs or environment."""
+    try:
+        with path.open("rb") as stream:
+            stream.seek(max(0, path.stat().st_size - 65_536))
+            text = stream.read(65_536).decode("utf-8", "replace")
+    except OSError:
+        return []
+    signatures = (
+        ("protocol-assertion", "_CRSession._onMessage"),
+        ("crashpad-database", "--database is required"),
+        ("read-only-filesystem", "Read-only file system"),
+        ("operation-not-permitted", "Operation not permitted"),
+        ("permission-denied", "Permission denied"),
+        ("native-sigtrap", "SIGTRAP"),
+        ("native-sigsegv", "SIGSEGV"),
+        ("driver-disconnected", "Connection closed while reading from the driver"),
+    )
+    return [label for label, signature in signatures if signature in text]
 
 
 def _processes():
@@ -39,7 +61,7 @@ def _subreaper(enabled=None):
     return bool(old.value)
 
 
-def _track(root_pid, baseline, known):
+def _track(root_pid, baseline, known, marker):
     snapshot = _processes()
     parent = os.getpid()
     root = snapshot.get(root_pid)
@@ -50,27 +72,35 @@ def _track(root_pid, baseline, known):
     while changed:
         changed = False
         for pid, (ppid, start, _) in snapshot.items():
-            # The subreaper adopts detached grandchildren even when their
-            # original parent exits before the next polling interval.
-            if pid not in owned and (ppid in owned or (ppid == parent and (pid, start) not in baseline)):
+            if pid not in owned and ppid in owned:
                 owned.add(pid)
                 known[pid] = start
                 changed = True
+    # Some Lambda sandboxes do not permit prctl subreapers. An invocation-only
+    # marker follows Node, Chromium and detached renderers through reparenting.
+    # Read only new processes, and never decode or log their environment.
+    needle = ("STUDIO_BROWSER_RUN=" + marker).encode()
+    for pid, (_, start, state) in snapshot.items():
+        if pid in known or (pid, start) in baseline or state == "Z":
+            continue
+        try:
+            entries = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
+            if needle in entries:
+                known[pid] = start
+        except OSError:
+            pass
     return snapshot
 
 
-def _cleanup(process, baseline, known):
+def _cleanup(process, baseline, known, marker):
     deadline = time.monotonic() + 2
-    remaining = True
-    while remaining and time.monotonic() < deadline:
-        snapshot = _track(process.pid, baseline, known)
-        remaining = False
+    while True:
+        snapshot = _track(process.pid, baseline, known, marker)
         for pid, start in list(known.items()):
             current = snapshot.get(pid)
             if not current or current[1] != start:
                 continue
             if current[2] != "Z":
-                remaining = True
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -79,14 +109,22 @@ def _cleanup(process, baseline, known):
                 os.waitpid(pid, os.WNOHANG)
             except ChildProcessError:
                 pass
-        if remaining:
-            time.sleep(0.02)
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        return False
-    final = _processes()
-    return not any(pid in final and final[pid][1] == start and final[pid][2] != "Z" for pid, start in known.items())
+        root_stopped = True
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            root_stopped = False
+        # Waiting/reparenting can reveal a detached child absent from the
+        # previous scan. Discover ownership again before declaring success.
+        final = _track(process.pid, baseline, known, marker)
+        remaining = any(pid in final and final[pid][1] == start and final[pid][2] != "Z"
+                        for pid, start in known.items())
+        if root_stopped and not remaining:
+            return True
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(0.02, left))
 
 
 def _execute(event):
@@ -98,23 +136,33 @@ def _execute(event):
         environment = {key: os.environ[key] for key in
                        ("PATH", "HOME", "LANG", "LD_LIBRARY_PATH", "PLAYWRIGHT_BROWSERS_PATH", "AXE_PATH", "WORKSPACE_CHROMIUM_PATH")
                        if key in os.environ}
-        environment.update(PYTHONUNBUFFERED="1", PYTHONDONTWRITEBYTECODE="1", TMPDIR="/tmp", STUDIO_TRACE_PATH=str(trace))
+        environment.update(PYTHONUNBUFFERED="1", PYTHONDONTWRITEBYTECODE="1", TMPDIR=directory,
+                           STUDIO_TRACE_PATH=str(trace), DEBUG="pw:browser")
+        marker = uuid.uuid4().hex
+        environment["STUDIO_BROWSER_RUN"] = marker
         # Lambda runs one invocation at a time. Serialize local calls too, so
         # subreaper adoption is scoped to this invocation's new child tree.
         with _lock:
-            old_reaper = _subreaper(True)
+            try:
+                old_reaper = _subreaper(True)
+            except RuntimeError:
+                old_reaper = None
             baseline = {(pid, row[1]) for pid, row in _processes().items()}
-            known, timed_out = {}, False
+            known, timed_out, fatal_driver = {}, False, False
             process = None
             clean = True
             try:
                 # Files cannot leave communicate() waiting on inherited pipes.
-                with (Path(directory) / "stdout.log").open("wb") as stdout, (Path(directory) / "stderr.log").open("wb") as stderr:
+                stderr_path = Path(directory) / "stderr.log"
+                with (Path(directory) / "stdout.log").open("wb") as stdout, stderr_path.open("wb") as stderr:
                     process = subprocess.Popen([sys.executable, "-m", "workspace.browser_task", str(request), str(output)],
                                                stdout=stdout, stderr=stderr, env=environment, start_new_session=True)
                     deadline = time.monotonic() + BROWSER_TIMEOUT_SECONDS
                     while process.poll() is None:
-                        _track(process.pid, baseline, known)
+                        _track(process.pid, baseline, known, marker)
+                        if "protocol-assertion" in _driver_diagnostics(stderr_path):
+                            fatal_driver = True
+                            break
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             timed_out = True
@@ -124,19 +172,22 @@ def _execute(event):
                         except subprocess.TimeoutExpired:
                             pass
                     code = process.returncode
-                    clean = _cleanup(process, baseline, known)
+                    clean = _cleanup(process, baseline, known, marker)
             finally:
                 if process is not None and process.poll() is None:
-                    clean = _cleanup(process, baseline, known)
-                _subreaper(old_reaper)
-        if timed_out:
+                    clean = _cleanup(process, baseline, known, marker)
+                if old_reaper is not None:
+                    _subreaper(old_reaper)
+        diagnostics = ",".join(_driver_diagnostics(stderr_path)) or "no-known-signature"
+        if timed_out or fatal_driver:
             phase = trace.read_text()[:80] if trace.is_file() else "startup"
             known = {"cdp-session", "frame-tree", "isolated-world", "isolated-evaluate", "launch", "load", "interaction", "done"}
-            raise ValueError(f"브라우저 드라이버 제한 시간을 초과했습니다. 단계: {phase if phase in known else 'startup'}")
+            reason = "프로토콜 오류로 중단했습니다" if fatal_driver else "제한 시간을 초과했습니다"
+            raise ValueError(f"브라우저 드라이버가 {reason}. 단계: {phase if phase in known else 'startup'}; 진단: {diagnostics}")
         if not clean:
             raise ValueError("브라우저 프로세스 종료를 확인하지 못했습니다.")
         if code != 0 or not output.is_file():
-            raise ValueError("브라우저 드라이버가 정상 종료되지 않았습니다.")
+            raise ValueError(f"브라우저 드라이버가 정상 종료되지 않았습니다. 진단: {diagnostics}")
         if output.stat().st_size > 8_000_000:
             raise ValueError("브라우저 응답 크기가 너무 큽니다.")
         return json.loads(output.read_text())

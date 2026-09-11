@@ -231,27 +231,36 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
         if local_axe.is_file():
             axe_path = local_axe
     axe_source = axe_path.read_text() if axe_path.is_file() else ""
-    environment = {key: os.environ[key] for key in ("PATH", "LD_LIBRARY_PATH", "LANG", "PLAYWRIGHT_BROWSERS_PATH")
+    environment = {key: os.environ[key] for key in ("PATH", "LD_LIBRARY_PATH", "LANG", "PLAYWRIGHT_BROWSERS_PATH", "STUDIO_BROWSER_RUN")
                    if key in os.environ}
-    environment.update({"TMPDIR": "/tmp", "XDG_CACHE_HOME": "/tmp/studio-browser-cache",
-                        "XDG_CONFIG_HOME": "/tmp/studio-browser-config", "XDG_DATA_HOME": "/tmp/studio-browser-data"})
+    execution_tmp = Path(os.environ.get("TMPDIR") or "/tmp")
+    environment.update({"TMPDIR": str(execution_tmp),
+                        "XDG_CACHE_HOME": str(execution_tmp / "studio-browser-cache"),
+                        "XDG_CONFIG_HOME": str(execution_tmp / "studio-browser-config"),
+                        "XDG_DATA_HOME": str(execution_tmp / "studio-browser-data")})
     executable = os.environ.get("WORKSPACE_CHROMIUM_PATH")
-    browser = None
+    context = None
     with sync_playwright() as playwright:
         try:
-            _phase("launch")
-            browser = playwright.chromium.launch(
-                headless=True, executable_path=executable or None, env=environment,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-background-networking",
-                      "--host-resolver-rules=MAP * ~NOTFOUND",
-                      "--disable-features=WebRtcHideLocalIpsWithMdns", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
             for rule in contract["rules"]:
                 if time.monotonic() - started > 75:
                     result["checks"].append({"caseId": rule["id"], "title": rule["title"], "required": rule["required"],
                                               "status": "incomplete", "steps": [], "reason": "실행 시간 상한"})
                     continue
-                context = browser.new_context(viewport=contract["viewport"], device_scale_factor=1,
-                                              service_workers="block", accept_downloads=False, offline=True)
+                # Lambda restricts the renderer process's no-new-privileges call.
+                # Single-process Chromium cannot reliably close/reuse an
+                # incognito context. An empty profile path creates a fresh
+                # temporary default context and browser for every rule.
+                _phase("launch")
+                context = playwright.chromium.launch_persistent_context(
+                    "",
+                    headless=True, executable_path=executable or None, env=environment,
+                    viewport=contract["viewport"], device_scale_factor=1,
+                    service_workers="block", accept_downloads=False, offline=True,
+                    args=["--no-sandbox", "--no-zygote", "--single-process",
+                          "--disable-dev-shm-usage", "--disable-background-networking",
+                          "--host-resolver-rules=MAP * ~NOTFOUND",
+                          "--disable-features=WebRtcHideLocalIpsWithMdns", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
                 initial = {"used": False}
                 def route_request(route):
                     request = route.request
@@ -326,12 +335,13 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                 finally:
                     result["checks"].append(check)
                     context.close()
+                    context = None
         except Exception as error:
             result["engineError"] = True
             result["blockingFindings"].append(f"브라우저 실행 실패: {type(error).__name__}")
         finally:
-            if browser is not None:
-                browser.close()
+            if context is not None:
+                context.close()
     result["networkRequests"] = list(dict.fromkeys(result["networkRequests"]))[:30]
     result["consoleErrors"] = list(dict.fromkeys(result["consoleErrors"]))[:30]
     required = [check for check in result["checks"] if check["required"]]
