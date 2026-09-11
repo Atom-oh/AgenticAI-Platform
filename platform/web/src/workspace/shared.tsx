@@ -43,7 +43,7 @@ export function previewDocument(html: string, executable: boolean): string {
   const policy = `default-src 'none'; script-src ${executable ? "'unsafe-inline'" : "'none'"}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
   return `<meta http-equiv="Content-Security-Policy" content="${policy}">${html}`;
 }
-function previewFrameDocument(html: string, executable: boolean): string {
+export function previewFrameDocument(html: string, executable: boolean): string {
   // A document's own CSP does not prevent it from navigating its own frame.
   // This trusted parent controls navigation of the opaque content frame instead.
   // srcdoc remains usable with frame-src 'none'; no URL navigation is needed.

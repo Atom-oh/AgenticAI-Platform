@@ -74,8 +74,10 @@ function preview(files) {
   html = html.replace(`<meta http-equiv="Content-Security-Policy" content="${escapeHtml(HTML_POLICY)}">`, '');
   const style = files['assets/app.css']?.toString() || '';
   const script = files['assets/app.js'].toString().replace(/<\/script/gi, '<\\/script');
-  return html.replace('<link rel="stylesheet" href="./assets/app.css">', `<style>${style}</style>`)
-    .replace('<script src="./assets/app.js" defer></script>', `<script>${script}</script>`);
+  // A replacement string interprets JS/CSS text such as $&, $` and $'.
+  // Callback replacements preserve the tested bundle's bytes as literal content.
+  return html.replace('<link rel="stylesheet" href="./assets/app.css">', () => `<style>${style}</style>`)
+    .replace('<script src="./assets/app.js" defer></script>', () => `<script>${script}</script>`);
 }
 async function buildProject(input, options = {}) {
   const gates = Object.fromEntries(['policy', 'types', 'build', 'components'].map(name => [name, { status: 'not-run' }]));

@@ -3,6 +3,7 @@ import { createWorkspaceClient, listAll, messageOf, resource, workspaceClient } 
 import { WorkspaceScope, useWorkspaceScope } from './WorkspaceScope';
 import { ROLE_LABELS, roleFor } from './project';
 import IntakePanel from './IntakePanel';
+import SampleGallery from './SampleGallery';
 import RulesPanel from './RulesPanel';
 import RunsPanel from './RunsPanel';
 import CollaborationSidebar from './CollaborationSidebar';
@@ -128,7 +129,8 @@ function ProjectWorkspace({ config, onProjectRefresh }: { config: WorkspaceConfi
     </nav><button onClick={() => void refresh()} disabled={loading}>{loading ? '조회 중…' : '내 작업 새로 조회'}</button></div>
     {error && <Notice error>{error}</Notice>}
     <div className="ws-collaboration-layout"><div className="ws-work-area">
-      <div hidden={step !== 'files'}><IntakePanel config={config} assets={assets} selected={selected} onSelected={setSelected}
+      <div hidden={step !== 'files'}><SampleGallery catalog={config.componentCatalog} active={step === 'files'} />
+        <IntakePanel config={config} assets={assets} selected={selected} onSelected={setSelected}
         refresh={() => void refresh()} onContinue={() => setStep('rules')} /></div>
       <div hidden={step !== 'rules'}><RulesPanel key={productId || 'unbound'} config={config} assets={assets} selected={selected}
         contracts={contracts.filter(item => !productId || item.productId === productId)} product={product}
