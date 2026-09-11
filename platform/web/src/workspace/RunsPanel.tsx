@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { messageOf, readPrivateBlob, resource, workspaceClient } from './client';
 import { contractProblems, importedHtmlAssets, isOriginalHtmlCheck, roundApprovable, stateLabel } from './rules';
 import { JobProgress, ModelPicker, Notice, PrivatePreview, useDownload } from './shared';
+import VerificationLoop, { hasExactApproval } from './VerificationLoop';
 import type { Asset, Contract, Job, Round, Run, WorkspaceConfig } from './types';
 
 type Attempt = { id: string; label: string; payload: Record<string, unknown>; job?: Job; run?: Run; error?: string };
@@ -190,6 +191,8 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       <section className="ws-section ws-result">
         {error && <Notice error>{error} <button onClick={() => setRefreshKey(value => value + 1)}>결과 다시 조회</button></Notice>}
         {downloading.error && <Notice error>{downloading.error}</Notice>}
+        <VerificationLoop run={run?.id === runId ? run : null} round={run?.id === runId ? selectedRound : undefined}
+          evidence={run?.id === runId ? currentEvidence : undefined} />
         {!run ? <div className="ws-empty">{runId ? '시안 기록을 불러오고 있습니다…' : '확인할 시안을 선택하세요.'}</div> : <>
           <div className="ws-section-heading"><div><h2>{inspectingOriginal ? '원본 HTML 검사' : '라운드별 결과 확인'}</h2><p>규칙 버전 {run.contractVersion} · {stateLabel(run.status)}</p></div>
             <button onClick={() => setRefreshKey(value => value + 1)}>진행 새로 조회</button></div>
@@ -202,8 +205,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
             <div className="ws-verification" aria-label="검증과 승인 상태">
               <Verification label="동작 검증" status={roundStatus(selectedRound, run, 'functionalStatus', currentEvidence)} />
               <Verification label="시작 화면 기준 비교" status={roundStatus(selectedRound, run, 'visualStatus', currentEvidence)} />
-              <div><strong>사람의 승인</strong><span>{run.approval?.round === selectedRound.number &&
-                run.approval.artifactSha256 === selectedRound.artifactSha256 ? '이 라운드 승인됨' : '미승인'}</span></div>
+              <div><strong>사람의 승인</strong><span>{hasExactApproval(run, selectedRound) ? '이 라운드 승인됨' : '미승인'}</span></div>
             </div>
             <div className="ws-check-summary" aria-label="선택한 라운드 검수 집계">
               통과 {checkCount(selectedRound.checks?.pass)} · 실패 {checkCount(selectedRound.checks?.fail)} · 미판정 {checkCount(selectedRound.checks?.incomplete)}

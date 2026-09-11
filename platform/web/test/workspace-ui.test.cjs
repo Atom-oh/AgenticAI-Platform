@@ -11,6 +11,7 @@ const { chromium } = require('playwright');
 test('designer workflow, private previews, exact rounds and responsive state', { timeout: 120_000 }, async t => {
   const root = path.resolve(__dirname, '..');
   const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+  const contractHash = sha(Buffer.from('approved-contract-fixture'));
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64');
   const generated = number => Buffer.from(`<html lang="ko"><body><label>금액<input data-testid="amount"></label><button id="next" data-testid="next" style="background-color:#008485">확인</button><p data-testid="summary"></p><script>
 document.getElementById('next').onclick=()=>document.querySelector('[data-testid=summary]').textContent=document.querySelector('input').value;
@@ -124,10 +125,10 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
           assert.equal(body.sourceAssetId, 'upload'); assert.equal(body.maxRounds, 1); assert.equal(body.contractVersion, 3);
           assert.equal(body.model, undefined); assert.equal(body.variant, undefined);
           const run = { ...body, id: 'verify-run', version: 1, mode: 'verify', model: 'no-inference', status: 'completed',
-            contractHash: 'contract-hash', contract: contracts[0], assetSnapshots: [{ id: 'upload', name: '외부 시안.html', sha256: sha(uploaded) }],
-            bestRound: 1, functionalStatus: 'pass', visualStatus: 'not-run', contextWarnings: [], rounds: [{
+            contractHash, contract: contracts[0], assetSnapshots: [{ id: 'upload', name: '외부 시안.html', sha256: sha(uploaded) }],
+            bestRound: 1, functionalStatus: 'pass', visualStatus: body.referenceAssetId ? 'pass' : 'not-run', contextWarnings: [], rounds: [{
               number: 1, passed: true, artifactSha256: sha(uploaded), hasHtml: true, hasScreenshot: true, hasReport: true, hasDiff: false,
-              functionalStatus: 'pass', visualStatus: 'not-run', checks: { pass: 1, fail: 0, incomplete: 0 }, blockingFindings: [],
+              functionalStatus: 'pass', visualStatus: body.referenceAssetId ? 'pass' : 'not-run', checks: { pass: 1, fail: 0, incomplete: 0 }, blockingFindings: [],
             }] };
           runs.unshift(run);
           const job = { id: 'job-verify', task: 'run', status: 'queued' }; jobs.set(job.id, { ...job, result: { runId: run.id, bestRound: 1, passed: true } });
@@ -137,11 +138,11 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
         const id = `run-${++sequence}`;
         const roundList = [1, 2].map(number => ({ number, passed: number === 2, artifactSha256: sha(generated(number)),
           hasHtml: true, hasReport: true, hasScreenshot: number === 2, hasDiff: false,
-          functionalStatus: number === 2 ? 'pass' : 'fail', visualStatus: 'not-run',
+          functionalStatus: number === 2 ? 'pass' : 'fail', visualStatus: body.referenceAssetId ? 'pass' : 'not-run',
           checks: { pass: number === 2 ? 1 : 0, fail: number === 2 ? 0 : 1, incomplete: 0 },
           blockingFindings: number === 2 ? [] : ['금액 전달 실패'] }));
-        const run = { ...body, id, version: 1, status: 'completed', contractHash: 'contract-hash',
-          contract: contracts[0], bestRound: 2, rounds: roundList, functionalStatus: 'pass', visualStatus: 'not-run', contextWarnings };
+        const run = { ...body, id, version: 1, status: 'completed', contractHash,
+          contract: contracts[0], bestRound: 2, rounds: roundList, functionalStatus: 'pass', visualStatus: body.referenceAssetId ? 'pass' : 'not-run', contextWarnings };
         runs.unshift(run);
         const job = { id: `job-${id}`, task: 'run', status: 'queued' }; jobs.set(job.id, { ...job, result: { runId: id, bestRound: 2, passed: true } });
         return json({ job, run }, 202);
@@ -154,12 +155,13 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
       if (routePath.startsWith('/runs/') && routePath.endsWith('/approve')) {
         const run = runs.find(value => value.id === routePath.split('/')[2]);
         assert.equal(body.round, 2); assert.equal(body.artifactSha256, sha(generated(2))); assert.equal(body.contractVersion, 3);
-        run.approval = body; return json({ run });
+        run.approval = { ...body, contractHash: run.contractHash, actor: 'fixture-reviewer', at: Date.now() }; return json({ run });
       }
       if (routePath.includes('/blob')) {
         const [, kind, id] = routePath.split('/');
         const blobKind = url.searchParams.get('kind'), number = Number(url.searchParams.get('round'));
-        const isVerify = kind === 'runs' && runs.find(run => run.id === id)?.mode === 'verify';
+        const sourceRun = kind === 'runs' ? runs.find(run => run.id === id) : null;
+        const isVerify = sourceRun?.mode === 'verify';
         let data, mime = 'application/octet-stream';
         if (kind === 'assets') {
           data = blobs.get(`${id}:${blobKind}${blobKind === 'preview' ? ':' + url.searchParams.get('page') : ''}`);
@@ -167,9 +169,13 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
         } else if (blobKind === 'html') data = isVerify ? uploaded : generated(number);
         else if (blobKind === 'screenshot') { data = png; mime = 'image/png'; }
         else data = Buffer.from(JSON.stringify({ passed: isVerify || number === 2, functionalStatus: isVerify || number === 2 ? 'pass' : 'fail',
+          artifactSha256: sha(isVerify ? uploaded : generated(number)), contractVersion: sourceRun.contractVersion, contractHash: sourceRun.contractHash,
           model: isVerify ? 'no-inference' : 'fable',
-          accessibility: { status: 'pass', violations: [] }, visual: { status: 'not-run' },
-          checks: [{ title: isVerify ? '원본 HTML 검사 근거' : `라운드 ${number}의 금액 전달 근거`, status: isVerify || number === 2 ? 'pass' : 'fail', evidence: '한글 근거 '.repeat(80) }] }));
+          accessibility: { status: 'pass', violations: [] }, visual: { status: sourceRun.referenceAssetId ? 'pass' : 'not-run' },
+          networkRequests: [], consoleErrors: [],
+          blockingFindings: isVerify || number === 2 ? [] : ['금액 전달 실패'],
+          checks: [{ caseId: 'R1', required: true, title: isVerify ? '원본 HTML 검사 근거' : `라운드 ${number}의 금액 전달 근거`,
+            status: isVerify || number === 2 ? 'pass' : 'fail', evidence: '한글 근거 '.repeat(80) }] }));
         assert(data, `Missing fixture ${routePath}`);
         const offset = Number(url.searchParams.get('offset')), part = data.subarray(offset, offset + 400);
         const respond = () => route.fulfill({ body: part, headers: { 'Content-Type': 'application/octet-stream',
@@ -279,6 +285,11 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await capture('rules');
     await page.getByLabel('규칙 1', { exact: true }).fill('미저장 변경');
     await page.getByRole('button', { name: '3 생성·검수·수정', exact: true }).click();
+    const loop = page.locator('.ws-loop');
+    assert.equal(await loop.isVisible(), true);
+    assert.equal(await loop.locator('[data-stage]').count(), 5);
+    assert.equal(await loop.locator('[aria-current]').count(), 0);
+    assert.equal(await loop.locator('[data-stage="browser"]').getAttribute('data-state'), 'pending');
     assert.equal(await page.getByRole('button', { name: '시안 1개 만들기', exact: true }).isDisabled(), true);
     await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).isDisabled(), true);
@@ -298,6 +309,10 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await page.getByRole('button', { name: '같은 요청 다시 시도', exact: true }).click();
     await page.getByRole('button', { name: '기본 구성 결과 보기', exact: true }).click();
     await page.getByText('라운드 2의 금액 전달 근거', { exact: true }).waitFor();
+    assert.equal(await loop.locator('[data-stage="browser"]').getAttribute('data-state'), 'passed');
+    assert.equal(await loop.locator('[data-stage="evidence"]').getAttribute('data-state'), 'recorded');
+    assert.equal(await loop.locator('[data-stage="approval"]').getAttribute('data-state'), 'pending');
+    assert.equal(await loop.getAttribute('data-complete'), 'false');
     for (const warning of contextWarnings) await page.locator('.ws-context-warnings').getByText(warning, { exact: true }).waitFor();
     await page.getByText('통과 1 · 실패 0 · 미판정 0', { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '시작 화면 차이 보기', exact: true }).count(), 0);
@@ -314,6 +329,9 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     assert.equal(await page.evaluate(() => document.body.dataset.leaked), undefined);
     await page.getByRole('button', { name: '라운드 1 · 확인 필요', exact: true }).click();
     await page.getByText('통과 0 · 실패 1 · 미판정 0', { exact: true }).waitFor();
+    assert.equal(await loop.locator('[data-stage="browser"]').getAttribute('data-state'), 'failed');
+    assert.equal(await loop.locator('.ws-loop-return').getAttribute('data-contract-version'), '3');
+    assert.equal(await loop.locator('.ws-loop-return').getAttribute('data-contract-hash'), contractHash);
     assert.equal(await page.getByRole('button', { name: '검수 시작 화면', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '라운드 1 시안 승인', exact: true }).isDisabled(), true);
     await page.getByLabel('라운드 1 수정 지시', { exact: true }).fill('입력한 금액을 보존하세요.');
@@ -321,6 +339,9 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
       await page.setViewportSize({ width, height: 1080 });
       assert.equal(await page.getByLabel('라운드 1 수정 지시', { exact: true }).inputValue(), '입력한 금액을 보존하세요.');
       assert.equal(await page.locator('main').evaluate(e => e.scrollWidth > e.clientWidth), false);
+      assert.equal(await loop.evaluate(e => e.scrollWidth > e.clientWidth), false);
+      assert.equal(await loop.locator('[data-stage]').evaluateAll(nodes => nodes.some(node => node.scrollWidth > node.clientWidth)), false);
+      if (process.env.WORKSPACE_QA_DIR) await loop.screenshot({ path: path.join(process.env.WORKSPACE_QA_DIR, `loop-failed-${width}.png`) });
     }
     await page.getByRole('button', { name: '보고 있는 라운드 1 수정·재검수', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.ws-attempts').textContent.includes('라운드 1 수정'));
@@ -330,11 +351,17 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     assert.equal(revisionRequest.body.referenceAssetId, 'image');
     await page.getByRole('button', { name: '라운드 2 · 필수 검사 통과 · 최종 선택', exact: true }).click();
     await page.getByLabel('이 라운드의 동작·시작 화면 비교 범위와 근거를 확인했습니다', { exact: true }).check();
+    assert.equal(await loop.locator('[data-stage="approval"]').getAttribute('data-state'), 'pending');
     await page.getByRole('button', { name: '라운드 2 시안 승인', exact: true }).click();
     await page.getByText('이 라운드 승인됨', { exact: true }).waitFor();
+    assert.equal(await loop.locator('[data-stage="approval"]').getAttribute('data-state'), 'approved');
+    assert.equal(await loop.getAttribute('data-complete'), 'true');
+    if (process.env.WORKSPACE_QA_DIR) await loop.screenshot({ path: path.join(process.env.WORKSPACE_QA_DIR, 'loop-approved.png') });
     // Hold an old report after selecting a newer round.
     holdFirstReport = true;
     await page.getByRole('button', { name: '라운드 1 · 확인 필요', exact: true }).click();
+    assert.equal(await loop.locator('[data-stage="approval"]').getAttribute('data-state'), 'pending');
+    assert.equal(await loop.getAttribute('data-complete'), 'false');
     await page.waitForTimeout(100);
     await page.getByRole('button', { name: '라운드 2 · 필수 검사 통과 · 최종 선택', exact: true }).click();
     if (heldReport) await heldReport();
@@ -361,6 +388,8 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).click();
     await page.getByRole('heading', { name: '원본 HTML 검사', exact: true }).waitFor();
     await page.getByText('원본 HTML 검사 근거', { exact: true }).waitFor();
+    assert.match(await loop.locator('[data-stage="artifact"]').innerText(), /반입 HTML/);
+    assert.equal(await loop.locator('[data-stage="approval"]').getAttribute('data-state'), 'pending');
     assert.equal(calls.filter(call => call.routePath === '/runs' && call.method === 'POST').length, beforeVerify + 1);
     assert.equal(calls.filter(call => call.routePath === '/runs' && call.body?.mode === 'verify').length, 1);
     const verifiedFrame = page.frameLocator('iframe[title="원본 HTML 검사 라운드 1"]');

@@ -96,6 +96,19 @@
 .designer-workspace .ws-step-style-help { grid-column: 2 / -1 !important; font-size: 12px; margin: 0; }
 .designer-workspace .ws-step-match { grid-column: 2 / -1 !important; max-width: 320px; }
 .ws-check-summary { color: var(--ws-muted); font-size: 13px; margin: 0 0 12px; }
+.ws-loop { border: 1px solid var(--ws-border); border-radius: 9px; padding: 16px; margin-bottom: 20px; min-width: 0; }
+.ws-loop-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.ws-loop-heading span { color: var(--ws-muted); font-size: 12px; }
+.ws-loop-nodes { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 10px; }
+.ws-loop-nodes li { flex: 1 1 150px; min-width: 0; padding: 11px; border: 1px solid var(--ws-border); border-radius: 8px; background: #f7faf8; }
+.ws-loop-nodes li > div { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.ws-loop-number { font-size: 11px; color: var(--ws-muted); }
+.ws-loop-arrow { margin-left: auto; color: #66867a; }
+.designer-workspace .ws-loop-nodes p { font-size: 12px; margin: 7px 0 0; overflow-wrap: anywhere; }
+.ws-loop-nodes [data-state="passed"], .ws-loop-nodes [data-state="approved"] { background: #eef8f1; border-color: #89baa0; }
+.ws-loop-nodes [data-state="failed"] { background: #fff4f4; border-color: #dbabb3; }
+.ws-loop-nodes [data-state="incomplete"] { background: #fff8e8; border-color: #d9c38e; }
+.ws-loop-return { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-left: 3px solid #ad8a3b; padding: 10px 12px; margin-top: 12px; background: #fff9ec; font-size: 12px; color: #73551f; }
 .ws-unresolved { border-top: 1px solid var(--ws-border); padding-top: 20px; margin-top: 24px; }
 .ws-unresolved > button { margin-top: 12px; }
 .ws-approval { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 20px; margin-top: 22px; border: 1px solid #c5dacd; border-radius: 10px; background: #f5f9f5; }
