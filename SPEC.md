@@ -620,7 +620,7 @@ React 공동 디자인 작업실의 완료 여부는 구현·로컬/컨테이너
 사용법은 `docs/14-demo/studio-designer-guide.md`, 입력 범위는 `studio-file-intake.md`,
 구현 점검은 `studio-implementation-review.md`, 완료 체크리스트는
 `docs/superpowers/plans/2026-09-11-react-design-workspace.md`를 따른다.
-프런트엔드는 최종 릴리스 결과 화면 확인 후 게시 예정이며, 게시 후 상태를 갱신한다.
+프런트엔드를 운영에 게시했고 실제 공동 프로젝트·React 미리보기·릴리스 상태를 확인했다.
 
 ### §14 확정 답변 (2026-09-02, 발주자)
 
