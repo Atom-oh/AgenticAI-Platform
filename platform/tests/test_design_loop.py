@@ -124,14 +124,23 @@ def test_parse_flow_rejects_missing_blocks():
 def test_loop_passes_first_attempt_with_faithful_generator():
     prd = derive_prd(SOCCER, SM)
     events = []
-    res = run(SOCCER, SM, CHECKLISTS, {"generate": faithful_generator(SOCCER, prd)}, emit=events.append)
+    res = run(SOCCER, SM, CHECKLISTS, {"generate": faithful_generator(SOCCER, prd),
+                                    "llm_judge": lambda item, context: {"verdict": "pass", "evidence": "검사 완료"}}, emit=events.append)
     assert res["ok"] is True and res["attempts"] == 1 and res["regenerated"] is False
     rep = res["report"]
     assert rep["score"]["fail"] == 0 and rep["openItems"] == []
-    # llm 항목은 판정기 미연결 → 미판정으로 정직하게 남는다
-    assert rep["score"]["incomplete"] == sum(1 for i in res["checklist"] if i["method"] == "llm")
+    assert rep["score"]["incomplete"] == 0
     assert [e["step"] for e in events if e["type"] == "stage"] == ["prd", "prd", "checklist", "generate", "generate", "review", "review", "report"]
     assert any(e["type"] == "token" for e in events)
+
+
+def test_process_loop_cannot_pass_with_unjudged_items():
+    prd = derive_prd(SOCCER, SM)
+    result = run(SOCCER, SM, CHECKLISTS, {"generate": faithful_generator(SOCCER, prd)})
+    assert result["ok"] is False
+    assert result["attempts"] == 2
+    assert result["report"]["score"]["incomplete"] > 0
+    assert result["report"]["openItems"]
 
 
 def test_loop_regenerates_once_then_stops_with_open_items():
@@ -164,7 +173,8 @@ def test_loop_fixed_on_second_attempt():
         calls["n"] += 1
         return (bad if calls["n"] == 1 else good)(system, user, on_token)
 
-    res = run(SOCCER, SM, CHECKLISTS, {"generate": gen})
+    res = run(SOCCER, SM, CHECKLISTS, {"generate": gen,
+                                    "llm_judge": lambda item, context: {"verdict": "pass", "evidence": "검사 완료"}})
     assert res["ok"] is True and res["attempts"] == 2 and res["report"]["history"][0]["failed"]
 
 

@@ -113,7 +113,9 @@ npm run build >> "$LOG" 2>&1 || { tail -30 "$LOG"; exit 1; }
 cat > dist/config.json <<CFG
 {"wssUrl": "$WSS", "cognitoClientId": "$CLIENT", "region": "$REGION", "graphBackend": "$GRAPH_BACKEND", "planeDeployed": $PLANE_DEPLOYED}
 CFG
-aws s3 sync dist "s3://$BUCKET" --delete >> "$LOG" 2>&1
+# 웹 버킷은 studio/drafts·design-runs 등 사용자가 생성한 산출물도 보관한다.
+# dist 에 없다는 이유로 이 산출물까지 삭제하지 않는다.
+aws s3 sync dist "s3://$BUCKET" >> "$LOG" 2>&1
 aws cloudfront create-invalidation --distribution-id "$DIST" --paths "/*" > /dev/null
 cd ..
 

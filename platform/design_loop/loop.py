@@ -107,7 +107,7 @@ def run(spec: Dict[str, Any], sm: Dict[str, Any], checklists: List[Dict[str, Any
                                "total": len(report["items"])}
             report["failures"] = [r for r in report["items"] if r["verdict"] == "fail"]
             _emit(emit, {"type": "stage", "step": "test", "attempt": attempts, "status": "done", "added": len(extra)})
-        failures = report["failures"]
+        failures = [item for item in report["items"] if item.get("verdict") != "pass"]
         history.append({"attempt": attempts, "score": report["score"], "failed": [f["id"] for f in failures]})
         _emit(emit, {"type": "stage", "step": "review", "attempt": attempts, "status": "done", **report["score"],
                      "failed": [f["id"] for f in failures]})

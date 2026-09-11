@@ -6,6 +6,7 @@ import json
 import re
 from collections import Counter
 from html.parser import HTMLParser
+from studio.artifacts import external_references
 
 _WS = re.compile(r"\s+")
 _FETCH = re.compile(r"\bfetch\s*\(|XMLHttpRequest|navigator\.sendBeacon")
@@ -145,6 +146,7 @@ def parse_html(html: str) -> dict:
         s["text"] = " ".join(s["text"])
     return {"steps": steps, "outside": outside, "text": " ".join(p.text), "style": " ".join(p.style),
             "externalScripts": p.external_scripts, "hasFetch": bool(_FETCH.search(" ".join(p.script_text))),
+            "externalReferences": external_references(html or ""),
             "checkboxes": p.checkboxes, "inputs": p.inputs, "_paths": p.paths}
 
 
@@ -229,8 +231,9 @@ def _check_dom(expect: dict, doc: dict) -> tuple[bool, str, str]:
         used = [h for h in hexes if h.lower() in css]
         return bool(used), f"브랜드 색 사용: {used}" if used else "브랜드 색 미사용", "" if used else "주 강조색을 #008485 로"
     if "noExternal" in expect:
-        ok = doc["externalScripts"] == 0 and not doc["hasFetch"]
-        return ok, f"외부 스크립트 {doc['externalScripts']}, fetch {'있음' if doc['hasFetch'] else '없음'}", "" if ok else "외부 <script src>·fetch 제거, 인라인만"
+        references = doc.get("externalReferences", [])
+        ok = not references and doc["externalScripts"] == 0 and not doc["hasFetch"]
+        return ok, "외부 리소스: " + (", ".join(references) if references else "없음"), "" if ok else "외부 이미지·CSS·스크립트·네트워크 호출을 제거하고 반입한 인라인 리소스만 사용"
     return False, f"알 수 없는 expect: {list(expect)}", ""
 
 
@@ -262,7 +265,7 @@ def skeleton_diff(prev_html: str, html: str) -> float:
 
 
 def stability_item(ratio: float, threshold: float = 0.35, weight: int = 1) -> tuple[dict, dict]:
-    item = {"id": "STABLE", "category": "안정성", "text": "수정 범위 밖의 구조가 이전 라운드와 같다 (위치가 흔들리지 않는다)",
+    item = {"id": "STABLE", "category": "안정성", "text": "전체 DOM 구조 변경 비율이 허용 범위 안에 있다 (화면 배치 비교는 미검증)",
             "required": False, "weight": weight, "check": "dom", "expect": {"skeletonMax": threshold}, "source": None}
     ok = ratio <= threshold
     return item, {"verdict": "pass" if ok else "fail", "evidence": f"구조 변경 비율 {ratio:.0%}",
@@ -331,5 +334,5 @@ def score(items: list[dict], verdicts: dict, pass_score: int = 85) -> dict:
     required_failed = [i["id"] for i in items if i.get("required") and (verdicts.get(i["id"]) or {}).get("verdict") != "pass"]
     undetermined = [i["id"] for i in items if verdicts.get(i["id"]) is None]
     sc = round(got / total * 100) if total else 0
-    return {"score": sc, "passed": not required_failed and sc >= pass_score, "requiredFailed": required_failed,
+    return {"score": sc, "passed": not required_failed and not undetermined and sc >= pass_score, "requiredFailed": required_failed,
             "undetermined": undetermined, "weights": {"total": total, "passed": got}}

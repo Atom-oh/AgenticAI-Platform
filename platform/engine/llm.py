@@ -180,6 +180,11 @@ class ClaudeAdapter:
         return self._client().converse(**kw)
 
 
+class BedrockConverseAdapter(ClaudeAdapter):
+    """허용된 공급자 공통 Converse 경로. 호출마다 고정된 model_id 를 유지한다."""
+    route = "bedrock"
+
+
 # ---------------------------------------------------------------------------
 # Gemma — bedrock-mantle OpenAI 호환 (Tier 2 데모 대체)
 # ---------------------------------------------------------------------------

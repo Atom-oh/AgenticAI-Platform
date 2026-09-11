@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Md from '../Md';
 import { sock, WsEvent } from '../lib';
+import type { ModelOption } from '../studio/ModelSelect';
 
 type Agent = {
   name: string; version: string; title: string; description: string; status: string; allowedTargets?: string[];
@@ -15,7 +16,7 @@ type SkillRec = { name: string; version: string; status: string };
 type Catalog = {
   agents: Agent[]; tools: Tool[]; skills: SkillRec[]; models: string[]; gateway: { arn: string; url: string };
   commonRules?: string; defaultModel?: string; harnessError?: string | null; agentcoreRegistryError?: string | null;
-  registryBackend?: string;
+  registryBackend?: string; modelOptions?: ModelOption[];
 };
 type ToolCall = { name: string; toolUseId?: string; input?: string };
 type Msg = {
@@ -200,7 +201,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
             <label className="text-xs text-slate-400">모델 <span className="text-slate-400">(Bedrock · global 교차 리전 추론)</span>
               <select className="mt-1 w-full px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-mono"
                 value={model} onChange={e => setModel(e.target.value)}>
-                {(cat?.models || [model]).filter(Boolean).map(m => <option key={m} value={m}>{m}</option>)}
+                {(cat?.models || [model]).filter(Boolean).map(m => <option key={m} value={m}>{cat?.modelOptions?.find(option => option.id === m)?.label || m}</option>)}
               </select>
             </label>
             <label className="text-xs text-slate-400 flex flex-col">메모리 <span className="text-slate-400">(AgentCore managed memory · SEMANTIC · 30일)</span>
@@ -423,7 +424,7 @@ function Chat({ sel, onApprove, onRefresh }: {
   const preset = sel ? PRESETS[sel.scenario] : undefined;
   const hz = cfg?.harness;
   return (
-    <div className="panel p-3 flex flex-col min-h-0" style={{ borderTop: '2px solid var(--bedrock)' }}>
+    <div className="agent-chat panel p-3 flex flex-col min-h-0" style={{ borderTop: '2px solid var(--bedrock)' }}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--bedrock)' }} />
         <b className="text-sm">{sel ? sel.title : '채팅'}</b>
@@ -528,6 +529,10 @@ export default function AgentBuilder() {
 
   return (
     <div>
+      <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
+        <span>화면 디자인·시안 검수는 Design Studio에서 바로 시작할 수 있습니다. 에이전트를 먼저 만들 필요는 없습니다.</span>
+        <a href="#/studio" className="font-semibold underline whitespace-nowrap">Design Studio 열기</a>
+      </div>
       <div className="panel p-3 mb-3 text-xs flex items-center gap-3" style={{ borderColor: 'var(--bedrock)' }}>
         <span className="text-lg">🧩</span>
         <div className="flex-1">
@@ -538,9 +543,9 @@ export default function AgentBuilder() {
         <a href="#/registry" className="chip hover:border-teal-500 text-teal-700 whitespace-nowrap">Registry 열기 →</a>
       </div>
       {err && <div className="text-[#E90061] text-sm mb-3">{err} <button className="chip text-[10px] ml-2" onClick={load}>다시 시도</button></div>}
-      <div className="grid grid-cols-[360px_1fr] gap-4 items-start">
+      <div className="agent-workspace">
         <CatalogList cat={cat} sel={sel} onSelect={a => setSelKey(`${a.name}@${a.version}`)} onRefresh={load} loading={loading} />
-        <div className="min-w-0">
+        <div className="agent-workspace-main">
           <CreateForm cat={cat} onApprove={approve}
             onCreated={rec => { load(); setSelKey(`${rec.name}@${rec.recordVersion}`); }} />
           <Chat sel={sel} onApprove={approve} onRefresh={load} />

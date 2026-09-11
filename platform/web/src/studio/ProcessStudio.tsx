@@ -2,6 +2,7 @@
 // 백엔드: handlers/design.py (design_catalog·design_preview·design_flow·design_runs·design_run·design_review).
 import { useEffect, useMemo, useState } from 'react';
 import { auth, sock } from '../lib';
+import ModelSelect, { ModelOption } from './ModelSelect';
 
 type SpecSummary = {
   id: string; productName: string; productType: string; category: string; shape: string; baseRate: number;
@@ -29,8 +30,10 @@ const STEP_LABEL: Record<string, string> = {
   review: '검수(리뷰)', test: '테스트 게이트', regenerate: '재생성', report: '리포트',
 };
 
-export default function ProcessStudio() {
-  const canWrite = !!auth.studioToken;
+export default function ProcessStudio({ models, defaultModel }: { models: ModelOption[]; defaultModel: string }) {
+  const canWrite = !!auth.token;
+  const [model, setModel] = useState(defaultModel);
+  useEffect(() => { if (!model && defaultModel) setModel(defaultModel); }, [model, defaultModel]);
   const [specs, setSpecs] = useState<SpecSummary[]>([]);
   const [checklists, setChecklists] = useState<ChecklistSummary[]>([]);
   const [source, setSource] = useState('');
@@ -69,10 +72,10 @@ export default function ProcessStudio() {
   }, [specId]);
 
   const run = async () => {
-    if (!canWrite || running || !specId) return;
+    if (!canWrite || running || !specId || !models.some(option => option.id === model)) return;
     setRunning(true); setErr(''); setStages([]); setResult(null); setViewStep(null);
     try {
-      await sock.run('design_flow', { studioToken: auth.studioToken, productSpecId: specId, outputType }, (e: any) => {
+      await sock.run('design_flow', { productSpecId: specId, outputType, model }, (e: any) => {
         if (e.type === 'design.stage') {
           setStages(prev => [...prev, { step: e.step, ...e }]);
         } else if (e.type === 'design.done') {
@@ -88,8 +91,11 @@ export default function ProcessStudio() {
   };
 
   const decide = async (runId: string, decision: 'approve' | 'reject') => {
-    await sock.request('design_review', { studioToken: auth.studioToken, runId, decision }).catch(() => {});
-    loadRuns();
+    try {
+      const response = await sock.request('design_review', { runId, decision });
+      if (response.error || response.ok === false) throw new Error(response.error || '검토 결과를 저장하지 못했습니다.');
+      setErr(''); loadRuns();
+    } catch (reason) { setErr(reason instanceof Error ? reason.message : '검토 결과를 저장하지 못했습니다.'); }
   };
 
   return (
@@ -101,6 +107,7 @@ export default function ProcessStudio() {
           <b className="text-amber-700"> 리뷰·테스트 에이전트</b>가 체크리스트(기본 + 명세서 파생)로 검수합니다.
           실패 시 <b>최대 1회</b> 재생성합니다.
         </div>
+        <p className="text-xs text-amber-800 mt-2">단계별 정적 시안과 검수 결과입니다. 화면 사이의 값 전달·인증·버튼 동작은 아직 검증하지 않습니다.</p>
         <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
           {source && <span className="chip text-slate-500">자산 출처: {source === 'registry' ? 'Registry(APPROVED)' : '시드 폴백'}</span>}
           {runtimeBadge && <span className="chip text-teal-700 border-teal-300">{runtimeBadge}</span>}
@@ -108,7 +115,7 @@ export default function ProcessStudio() {
         </div>
       </div>
 
-      <div className="grid grid-cols-[1fr_1.2fr] gap-5">
+      <div className="studio-process-layout">
         {/* 좌: 입력 + PRD 미리보기 */}
         <div className="panel p-5">
           <div className="text-sm font-bold text-slate-800 mb-2">① 상품명세서</div>
@@ -130,6 +137,7 @@ export default function ProcessStudio() {
           </div>
 
           <div className="text-sm font-bold text-slate-800 mb-2">② 출력 유형</div>
+          <ModelSelect id="process-model" value={model} models={models} onChange={setModel} disabled={running} />
           <div className="flex gap-2 mb-3">
             {OUTPUT_TYPES.map(([id, label]) => (
               <button key={id} onClick={() => setOutputType(id)}
@@ -164,7 +172,7 @@ export default function ProcessStudio() {
             </div>
           )}
 
-          <button onClick={run} disabled={!canWrite || running || !specId}
+          <button onClick={run} disabled={!canWrite || running || !specId || !models.some(option => option.id === model)}
             className="w-full py-2.5 rounded-xl bg-[#008485] hover:bg-[#0a6b6c] text-white font-bold text-sm disabled:opacity-40">
             {running ? '실행 중… (생성 → 검수 → 재생성)' : '▶ 프로세스 생성 + 검수 실행'}
           </button>
@@ -213,7 +221,7 @@ export default function ProcessStudio() {
       <div className="panel p-5 mt-4">
         <div className="text-sm font-bold text-slate-800 mb-2">최근 실행</div>
         {runs.length === 0 && <div className="text-slate-400 text-sm">아직 실행 기록이 없습니다.</div>}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="adaptive-gallery">
           {runs.map(r => (
             <div key={r.runId} className="panel p-3">
               <div className="flex items-center gap-2">
@@ -249,7 +257,7 @@ function stageDetail(s: Stage): string {
   if (s.step === 'generate' && s.status === 'start') return '생성 중…';
   if (s.step === 'review' && s.status === 'done') return `통과 ${s.pass} · 실패 ${s.fail} · 미판정 ${s.incomplete}`;
   if (s.step === 'regenerate') return `실패 ${(s.reasons || []).length}건 반영해 재생성`;
-  if (s.step === 'report') return s.ok ? '검수 통과' : `잔여 ${(s.open || []).length}건`;
+  if (s.step === 'report') return s.ok ? '정적 검수 통과 · 동작 미검증' : `잔여 ${(s.open || []).length}건`;
   if (s.step === 'gate') return '경계 계측 · PII 스캔 통과';
   return s.status || '';
 }
@@ -261,18 +269,18 @@ function ReviewReport({ result, viewStep, setViewStep, canWrite, onDecide }: {
   const { report } = result;
   const [tab, setTab] = useState<'all' | 'fail' | 'derived'>('fail');
   const items = report.items.filter(i =>
-    tab === 'all' ? true : tab === 'fail' ? i.verdict === 'fail' : i.source === 'derived');
+    tab === 'all' ? true : tab === 'fail' ? i.verdict !== 'pass' : i.source === 'derived');
   return (
     <div>
       <div className="flex items-center gap-2 mb-2">
         <span className={`chip text-xs ${result.ok ? 'text-emerald-600 border-emerald-300 bg-emerald-50' : 'text-[#E90061] border-rose-300 bg-rose-50'}`}>
-          {result.ok ? '검수 통과' : `잔여 ${report.openItems.length}건`}
+          {result.ok ? '정적 검수 통과 · 동작 미검증' : `잔여 ${report.openItems.length}건`}
         </span>
         <span className="chip text-xs text-slate-500">시도 {result.attempts}회{result.attempts > 1 ? ' (재생성)' : ''}</span>
         <span className="text-[12px] text-slate-500">✓{report.score.pass} ✗{report.score.fail} ?{report.score.incomplete} / {report.score.total}</span>
       </div>
       <div className="flex gap-2 mb-2">
-        {([['fail', '실패만'], ['derived', '명세서 파생'], ['all', '전체']] as const).map(([id, label]) => (
+        {([['fail', '미해결 항목'], ['derived', '명세서 파생'], ['all', '전체']] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`chip text-[11px] ${tab === id ? 'text-teal-700 border-teal-400 bg-teal-50' : 'text-slate-500'}`}>{label}</button>
         ))}
@@ -299,7 +307,7 @@ function ReviewReport({ result, viewStep, setViewStep, canWrite, onDecide }: {
       </div>
       {canWrite && (
         <div className="flex gap-2 mt-3">
-          <button onClick={() => onDecide(result.runId, 'approve')} className="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-[#008485] text-white hover:bg-[#0a6b6c]">✓ 승인 (마스터)</button>
+          <button disabled={!result.ok || report.score.incomplete > 0} onClick={() => onDecide(result.runId, 'approve')} className="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-[#008485] text-white hover:bg-[#0a6b6c] disabled:opacity-40">정적 시안 승인</button>
           <button onClick={() => onDecide(result.runId, 'reject')} className="flex-1 py-1.5 rounded-lg text-xs font-semibold border border-rose-300 text-[#E90061] hover:bg-rose-50">반려</button>
         </div>
       )}

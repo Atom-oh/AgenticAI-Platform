@@ -10,6 +10,7 @@ import os
 import time
 
 from studio import prompts, review, sanitize
+from engine import model_catalog
 
 MAX_ROUNDS = 20
 DEFAULT_ROUNDS = 3
@@ -46,6 +47,11 @@ def _int(v, default: int, lo: int, hi: int) -> int:
 
 def clamp_job(job: dict) -> dict:
     j = dict(job or {})
+    j["model"] = model_catalog.resolve(j.get("model"))
+    base_round = j.get("baseRound", 0)
+    if isinstance(base_round, bool) or not isinstance(base_round, int) or not 0 <= base_round <= MAX_ROUNDS:
+        raise ValueError("수정할 원본 라운드를 다시 선택하세요.")
+    j["baseRound"] = base_round
     j["brief"] = str(j.get("brief", ""))[:1000]
     j["mode"] = "refine" if j.get("mode") == "refine" else "generate"
     j["maxRounds"] = _int(j.get("maxRounds"), 1 if j["mode"] == "refine" else DEFAULT_ROUNDS, 1, MAX_ROUNDS)
@@ -74,6 +80,7 @@ def _review_round(spec: dict, items: list, html: str, prev_html: str, review_gen
     items = list(items)
     if prev_html:
         st_item, st_v = review.stability_item(review.skeleton_diff(prev_html, html), weight=stable_weight)
+        st_item["required"] = stable_weight > 0
         items.append(st_item)
         verdicts[st_item["id"]] = st_v
     llm_items = [i for i in items if i.get("check") == "llm"]
@@ -89,6 +96,8 @@ def _review_round(spec: dict, items: list, html: str, prev_html: str, review_gen
             llm_v, reviewer_error = {i["id"]: None for i in llm_items}, f"{type(e).__name__}: {str(e)[:120]}"
         verdicts.update(llm_v)
     sc = review.score(items, verdicts, pass_score)
+    if reviewer_error:
+        sc["passed"] = False
     rows = _items_with_verdicts(items, verdicts)
     failures = [{"id": r["id"], "text": r["text"], "verdict": r["verdict"], "evidence": r["evidence"], "fix": r["fix"]} for r in rows if r["verdict"] != "pass"]
     return {**sc, "items": rows, "failures": failures, "reviewerError": reviewer_error, "usage": usage or {},
@@ -154,7 +163,7 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
         user = prompts.build_user_prompt(job["brief"], spec, failures=failures if rnd > 1 else None, prev_html=prev_html_safe, refine=refine)
         user, n_user = sanitize.scrub_result(user)
         n_scrub += n_user
-        emitter.stage("generate", round=rnd, systemChars=len(system), userChars=len(user), model=MODEL, plane="cloud", scrubbed=n_scrub)
+        emitter.stage("generate", round=rnd, systemChars=len(system), userChars=len(user), model=job["model"], plane="cloud", scrubbed=n_scrub)
         try:
             stream = generate(system, user, GEN_MAX_TOKENS)
             parts = []
@@ -197,13 +206,15 @@ def run(job: dict, emitter, *, spec: dict, generate, review_generate, publish, s
             break
         prev_html = html or prev_html
 
-    best = max(history, key=lambda h: (h["score"], bool(h["html"]), h["round"])) if history else None
+    best = max(history, key=lambda h: (h["passed"], h["score"], bool(h["html"]), h["round"])) if history else None
     out = {"jobId": job["jobId"], "mode": job["mode"], "outputType": job["outputType"], "axis": job["axis"],
            "score": best["score"] if best else 0, "passed": bool(best and best["passed"]), "rounds": rnd,
            "maxRounds": job["maxRounds"], "passScore": job["passScore"], "stopReason": stop,
            "bestRound": best["round"] if best else 0, "url": best["url"] if best else "", "html": best["html"] if best else "",
            "items": _done_items(best.get("items", []) if best else []), "history": _done_history(history),
-           "usage": usage, "model": model_used or MODEL, "route": route_used, "elapsedMs": int((clock() - t0) * 1000),
+           "usage": usage, "model": model_used or job["model"], "requestedModel": job["model"], "route": route_used,
+           "validationScope": "static-design", "functionalVerification": "not-run",
+           "elapsedMs": int((clock() - t0) * 1000),
            "spec": {"productCode": spec.get("productCode"), "productName": spec.get("productName"),
                     "hasPreferential": spec.get("hasPreferential"), "stepCount": len(spec.get("steps", []))}}
     if error:

@@ -55,8 +55,8 @@ def _wire(monkeypatch, apigw, s3, store):
     monkeypatch.setattr(w, "_s3_client", lambda: s3)
     monkeypatch.setattr(w, "_graph", lambda: GRAPH)
     monkeypatch.setattr(w, "_store", lambda: store)
-    monkeypatch.setattr(w, "_generate", lambda system, user, max_tokens: FakeStream(["```html\n", GOOD, "\n```"]))
-    monkeypatch.setattr(w, "_review_generate", lambda system, user, max_tokens: (json.dumps({"items": []}), {}))
+    monkeypatch.setattr(w, "_generate", lambda system, user, max_tokens, **kw: FakeStream(["```html\n", GOOD, "\n```"]))
+    monkeypatch.setattr(w, "_review_generate", lambda system, user, max_tokens, **kw: (json.dumps({"items": []}), {}))
     monkeypatch.setattr(w, "_assets_text", lambda ids: "팔레트" if ids else "")
     monkeypatch.setattr(w, "_agent_preset", lambda aid: "")
     monkeypatch.setattr(w.costguard, "add_usage", lambda tokens: 0)
@@ -116,7 +116,7 @@ def test_refine_loads_base_draft_from_s3(monkeypatch):
                      "createdAt": 1, "createdBy": "u@x", "model": "m"})
     store.put_job({"jobId": "job123456789", "brief": "", "productCode": "PRD-DEP-001"}, actor="u@x")
     seen = {}
-    monkeypatch.setattr(w, "_generate", lambda system, user, max_tokens: seen.setdefault("user", user) and FakeStream(["```html\n", GOOD, "\n```"]))
+    monkeypatch.setattr(w, "_generate", lambda system, user, max_tokens, **kw: seen.setdefault("user", user) and FakeStream(["```html\n", GOOD, "\n```"]))
     w.handler(_event(mode="refine", baseDraftId="base1", selector="h2", instruction="크게", maxRounds=1), None)
     assert "크게" in seen["user"] and GOOD in seen["user"]
     assert store.get_draft("job123456789")["parentId"] == "base1"
@@ -158,6 +158,66 @@ def test_time_cap_derives_from_context():
     assert w._time_cap(_Ctx(300_000)) == 180
     assert w._time_cap(None) == 780
     assert w._time_cap(_Ctx(900_000)) == 780
+
+
+def test_worker_uses_selected_model_for_generation_review_and_saved_draft(monkeypatch):
+    model = "global.openai.gpt-6-astra"
+    apigw, s3, store = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, apigw, s3, store)
+    calls = []
+
+    def generate(system, user, max_tokens, *, model_id):
+        calls.append(("generate", model_id))
+        result = FakeStream(["```html\n", GOOD, "\n```"])
+        result.model_id = model_id
+        return result
+
+    def review_generate(system, user, max_tokens, *, model_id):
+        calls.append(("review", model_id))
+        return json.dumps({"items": []}), {}
+
+    monkeypatch.setattr(w, "_generate", generate)
+    monkeypatch.setattr(w, "_review_generate", review_generate)
+    store.put_job({"jobId": "job123456789", "model": model}, actor="u@x")
+    w.handler(_event(model=model, maxRounds=1), None)
+    assert calls == [("generate", model), ("review", model)]
+    assert apigw.sent[-1]["model"] == model
+    assert store.get_draft("job123456789")["model"] == model
+    assert store.get_job("job123456789")["model"] == model
+
+
+def test_refine_loads_the_round_the_designer_is_viewing(monkeypatch):
+    apigw, s3, store = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, apigw, s3, store)
+    first = GOOD.replace("<body>", '<body data-version="visible-round">')
+    best = GOOD.replace("<body>", '<body data-version="best-round">')
+    store.put_job({"jobId": "base1"}, actor="u@x")
+    for n, html in [(1, first), (2, best)]:
+        s3.objects[("web-bkt", f"studio/drafts/base1-r{n}.html")] = html.encode()
+        store.put_round("base1", {"round": n, "url": f"https://agent.example/studio/drafts/base1-r{n}.html"})
+    store.put_draft({"draftId": "base1", "jobId": "base1", "productCode": "PRD-DEP-001", "bestRound": 2,
+                     "key": "studio/drafts/base1-r2.html"})
+    store.put_job({"jobId": "job123456789"}, actor="u@x")
+    seen = []
+
+    def generate(system, user, max_tokens, **kw):
+        seen.append(user)
+        return FakeStream(["```html\n", first, "\n```"])
+
+    monkeypatch.setattr(w, "_generate", generate)
+    w.handler(_event(mode="refine", baseDraftId="base1", baseRound=1, maxRounds=1), None)
+    assert "visible-round" in seen[0] and "best-round" not in seen[0]
+    assert store.get_draft("job123456789")["parentRound"] == 1
+
+
+def test_worker_publishes_previews_with_offline_policy(monkeypatch):
+    apigw, s3, store = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, apigw, s3, store)
+    store.put_job({"jobId": "job123456789"}, actor="u@x")
+    w.handler(_event(maxRounds=1), None)
+    html = s3.objects[("web-bkt", "studio/drafts/job123456789-r1.html")].decode()
+    assert 'http-equiv="Content-Security-Policy"' in html
+    assert "connect-src 'none'" in html
 
 
 def test_client_construction_failure_does_not_raise(monkeypatch):

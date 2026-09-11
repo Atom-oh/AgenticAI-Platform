@@ -28,9 +28,10 @@ from common.ctx import Ctx
 from common.log import log_event
 from registry import api as registry_api
 from registry.model import RegistryError
+from engine import model_catalog
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
-MODELS = ["global.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5"]
+MODELS = list(model_catalog.MODEL_IDS)
 RUNTIME = "AgentCore Harness"
 SCENARIOS = ("S1", "S2", "S3", "F7")
 MAX_PROMPT = 6000
@@ -215,6 +216,7 @@ def agents_catalog(ctx: Ctx, body: dict) -> None:
     log_event("agents.catalog", ctx.trace_id, agents=len(agents), tools=len(tools), skills=len(skills),
               harnessListed=harness_index is not None, agentcoreRegistry=mirror_err is None)
     ctx.post({"type": "agents_catalog", "agents": agents, "tools": tools, "skills": skills, "models": MODELS,
+              "modelOptions": model_catalog.options(),
               "gateway": {"arn": os.environ.get("GATEWAY_ARN", ""), "url": os.environ.get("GATEWAY_URL", "")},
               "commonRules": specs.COMMON_RULES, "defaultModel": specs.DEFAULT_MODEL,
               "harnessError": harness_err, "agentcoreRegistryError": mirror_err,

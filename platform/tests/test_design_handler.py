@@ -40,6 +40,29 @@ def test_routes_registered():
     assert {"design_catalog", "design_preview", "design_flow", "design_runs", "design_run", "design_review"} <= set(handlers.ROUTES)
 
 
+def test_process_step_previews_have_offline_policy(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(design, "WEB_BUCKET", "web")
+    monkeypatch.setattr(design, "_put", lambda key, data, content_type: saved.update({key: data}))
+    monkeypatch.setattr(design, "_get_json", lambda key, default: default)
+    design.store_run("offline", {"flow": {"steps": [{"id": "intro", "html": "<html><body>시안</body></html>"}]}}, {})
+    html = next(data.decode() for key, data in saved.items() if key.endswith(".html"))
+    assert 'http-equiv="Content-Security-Policy"' in html and "connect-src 'none'" in html
+
+
+def test_process_approval_rejects_undetermined_items_without_writing(monkeypatch):
+    monkeypatch.setattr(design, "WEB_BUCKET", "web")
+    writes = []
+    monkeypatch.setattr(design, "_put", lambda *args: writes.append(args))
+    full = {"runId": "pending", "ok": True, "validationScope": "static-design", "report": {"items": [{"id": "a", "verdict": "incomplete"}],
+                                                     "score": {"incomplete": 1, "fail": 0}}}
+    monkeypatch.setattr(design, "_get_json", lambda key, default: {"runs": [{"runId": "pending"}]} if key == design.INDEX_KEY else full)
+    a, ctx = _ctx()
+    design.review_decision(ctx, {"runId": "pending", "decision": "approve"})
+    assert a.sent[-1]["ok"] is False and a.sent[-1]["error"]
+    assert writes == []
+
+
 def test_catalog_falls_back_to_seed(monkeypatch):
     monkeypatch.setattr(design, "_registry_assets", lambda: {"productSpecs": [], "smModels": [], "checklists": []})
     a, c = _ctx()
@@ -93,7 +116,8 @@ def test_flow_local_emits_stage_token_done(monkeypatch):
     types = {e["type"] for e in a.sent}
     assert types <= {"design.stage", "design.token", "design.done"}, types
     done = a.sent[-1]
-    assert done["type"] == "design.done" and done["ok"] is True and done["attempts"] == 1
+    assert done["type"] == "design.done" and done["ok"] is False and done["attempts"] == 2
+    assert done["report"]["score"]["incomplete"] > 0
     assert done["runtime"] == "lambda-local" and "데모 대체" in done["runtimeBadge"]
     assert [s["id"] for s in done["steps"]] == [s["id"] for s in prd["steps"]]
     assert done["report"]["score"]["fail"] == 0
