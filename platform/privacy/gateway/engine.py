@@ -35,6 +35,7 @@ _UNITS = r"(?:[십백천만억조]\s*)+"
 _KOREAN_MONEY = r"(?:[영공일이삼사오육칠팔구]\s*)?(?:[십백천만억조]\s*(?:[영공일이삼사오육칠팔구]\s*)?)+원"
 _RATE_UNIT = r"(?:%\s*(?:p|포인트)?|퍼센트(?:\s*포인트)?|프로(?:\s*포인트)?|percent(?:age)?(?:\s+points?)?|basis\s+points?|bps?|pp)"
 _CURRENCY = r"(?:KRW|USD|EUR|JPY|GBP|CNY|CHF|AUD|CAD|SGD|HKD|NZD|원화|미화|달러|유로|엔화|위안)"
+_FINANCIAL_LABEL = r"(?:금액|수수료|금리|이자|한도|잔액|원금|보증금|연소득|대출금|납입액|실적|\b(?:amount|fee|balance|rate|limit)\b)"
 # Protect entire spans, including a sign, compound units and rate periods.
 # Short year counts are terms; four-digit birth/calendar years remain eligible
 # for DOB removal rather than being mistaken for loan durations.
@@ -42,8 +43,9 @@ FACTS = re.compile(
     rf"(?<![\d.,])(?:"
     rf"(?:연|월|일)?\s*{_SIGN}{_NUMBER}\s*{_RATE_UNIT}"
     rf"|{_SIGN}[영공일이삼사오육칠팔구십백천만억조점]+\s*{_RATE_UNIT}"
-    rf"|{_SIGN}(?:[₩$€£¥]\s*|{_CURRENCY}\s+){_SIGN}{_NUMBER}"
-    rf"|{_SIGN}{_NUMBER}\s+{_CURRENCY}"
+    rf"|{_SIGN}(?:[₩$€£¥]\s*|{_CURRENCY}\s*){_SIGN}{_NUMBER}"
+    rf"|{_SIGN}{_NUMBER}\s*{_CURRENCY}"
+    rf"|{_FINANCIAL_LABEL}\s*(?:은|는|이|가|:|=)?\s*{_SIGN}{_NUMBER}"
     rf"|{_SIGN}(?:{_NUMBER}\s*{_UNITS})+(?:{_NUMBER}\s*)?원?"
     rf"|{_SIGN}{_KOREAN_MONEY}"
     rf"|{_SIGN}{_NUMBER}\s*원"
@@ -59,8 +61,18 @@ def _plausible_numeric_identifier(kind, value):
         return True
     digits = "".join(char for char in value if char.isdigit())
     compact = re.sub(r"[\s().+\-]", "", value)
+    if kind == "EMAIL":
+        return re.fullmatch(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", value) is not None
     if kind == "PHONE":
-        return compact.isdigit() and 8 <= len(digits) <= 15
+        if not compact.isdigit() or not 8 <= len(digits) <= 15:
+            return False
+        # A decimal fraction is not a phone merely because removing "." leaves
+        # enough digits. Dotted numbers need actual telephone group structure.
+        if "." in value:
+            return re.fullmatch(r"(?:\+\d{1,3}[ .])?0?\d{1,4}\.\d{3,4}\.\d{4}", value) is not None
+        return (value.startswith("+") or compact.startswith("0")
+                or re.fullmatch(r"1[5-8]\d{2}-?\d{4}", value) is not None
+                or re.fullmatch(r"\d{3,4}-\d{4}", value) is not None)
     if kind == "RRN":
         return re.fullmatch(r"\d{6}[- ]?[1-8\d*][\d*]{6}", value) is not None
     if kind == "CARD":
@@ -84,6 +96,13 @@ def _nonce():
     # validators could mistake for card numbers or generated amounts.
     alphabet = "abcdefghijklmnop"
     return "".join(alphabet[value >> 4] + alphabet[value & 15] for value in secrets.token_bytes(16))
+
+
+def _financial_spans(text):
+    emails = [(match.start(), match.end()) for kind, pattern in RULES if kind == "EMAIL"
+              for match in pattern.finditer(text)]
+    return [match for match in FACTS.finditer(text)
+            if not any(start <= match.start() and match.end() <= end for start, end in emails)]
 
 
 def _entities(response: dict, model: Model, text: str) -> list[tuple[int, int, str]]:
@@ -161,7 +180,7 @@ def deidentify(text: str, model: Model, *, infer=invoke_model, allow_tokens: boo
             raise PrivacyFailure("overlapping-entities")
         chosen.append((start, end, kind))
     pieces, counts, tokens = [], Counter(), {}
-    protected = [(match.start(), match.end()) for match in FACTS.finditer(text)]
+    protected = [(match.start(), match.end()) for match in _financial_spans(text)]
     if any(start < fact_end and end > fact_start
            for start, end, _ in chosen for fact_start, fact_end in protected):
         raise PrivacyFailure("financial-facts-changed")
@@ -181,7 +200,7 @@ def deidentify(text: str, model: Model, *, infer=invoke_model, allow_tokens: boo
         offset = end
     pieces.append(text[offset:])
     cleaned = "".join(pieces)
-    if FACTS.findall(text) != FACTS.findall(cleaned):
+    if [match.group() for match in _financial_spans(text)] != [match.group() for match in _financial_spans(cleaned)]:
         raise PrivacyFailure("financial-facts-changed")
     residual_view = detector_view(cleaned)
     residual = sum(len(list(pattern.finditer(residual_view))) for pattern in RESIDUALS)

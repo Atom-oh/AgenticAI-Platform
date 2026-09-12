@@ -123,6 +123,8 @@ def test_financial_fact_misclassification_blocks_instead_of_changing_the_answer(
     ("우대 차이는 0.2 퍼센트 포인트입니다.", "포인트"),
     ("수수료는 USD 20.00입니다.", "20.00"),
     ("금리는 삼점오퍼센트입니다.", "삼점오"),
+    ("대출금액은 KRW5000000000입니다.", "5000000000"),
+    ("수수료는 123456.78입니다.", "123456.78"),
 ])
 def test_entire_financial_spans_are_protected(text, original):
     with pytest.raises(PrivacyFailure) as raised:
@@ -148,6 +150,19 @@ def test_numeric_financial_value_cannot_be_disguised_as_an_account_entity():
     with pytest.raises(PrivacyFailure):
         deidentify("확인 값: 5,000,000", MODEL,
                    infer=lambda *_: reply([{"type": "ACCOUNT", "original": "5,000,000"}]))
+
+
+@pytest.mark.parametrize("email", ["kim1@example.invalid", "kim@example2.invalid", "kim1@example2.invalid", "usd123@example.invalid"])
+def test_email_digits_are_valid_personal_identifiers(email):
+    result = deidentify(f"이메일: {email}", MODEL, infer=lambda *_: reply([]))
+    assert email not in result["text"]
+    assert result["evidence"]["entityCounts"] == [{"type": "EMAIL", "count": 1}]
+
+
+def test_decimal_value_is_not_a_phone_number():
+    with pytest.raises(PrivacyFailure):
+        deidentify("확인 값: 123456.78", MODEL,
+                   infer=lambda *_: reply([{"type": "PHONE", "original": "123456.78"}]))
 
 
 def test_same_entity_gets_request_local_tokens_not_a_hash_of_the_original():
