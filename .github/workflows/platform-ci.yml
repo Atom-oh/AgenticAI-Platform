@@ -89,3 +89,5 @@ jobs:
       - run: npx cdk synth BankPlatform --quiet -c planeDeployed=false
         env: { CDK_DEFAULT_ACCOUNT: '000000000000' }
       - run: python3 ../workspace/check_infra.py cdk.out/BankPlatform.template.json
+      - name: Verify private MyData stack and API permission boundary
+        run: git show HEAD:platform/infra/lib/stack.ts | node ../privacy/deploy/check-infra.cjs

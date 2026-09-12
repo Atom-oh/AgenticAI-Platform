@@ -16,6 +16,18 @@ import boto3
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
 GUARDRAIL_VER = os.environ.get("GUARDRAIL_VERSION", "DRAFT")
+TOKEN_RE = re.compile(r"⟨[A-Z][A-Z0-9_]{0,39}:(?:[0-9a-f]{8}|[0-9a-f]{32}|[a-p]{32})⟩")
+
+
+def tokens_in(text: str) -> set[str]:
+    return set(TOKEN_RE.findall(text))
+
+
+def guardrail_view(text: str, trusted_tokens=None) -> str:
+    known = set(trusted_tokens or ())
+    # Keep positions/character count stable. This excludes only exact markers
+    # already produced by trusted stages; arbitrary raw text is still inspected.
+    return TOKEN_RE.sub(lambda match: " " * len(match.group()) if match.group() in known else match.group(), text)
 
 RULES: list[tuple[str, re.Pattern]] = [
     ("KR_RRN", re.compile(r"(?<!\d)\d{6}-?[1-8]\d{6}(?!\d)")),          # 주민/외국인등록번호
@@ -53,35 +65,93 @@ def scan_rules(text: str) -> list[dict]:
     return hits
 
 
-def scan_guardrail(text: str) -> list[dict]:
+class PiiVerificationUnavailable(Exception):
+    pass
+
+
+def guardrail_hits(response: dict, *, strict: bool = False) -> list[dict]:
+    """Detection is distinct from policy enforcement (action NONE can detect)."""
+    assessments = response.get("assessments")
+    if not isinstance(assessments, list):
+        if strict:
+            raise PiiVerificationUnavailable("Missing PII assessments")
+        return []
+    hits = []
+    for assessment in assessments:
+        if not isinstance(assessment, dict):
+            raise PiiVerificationUnavailable("Invalid PII assessment")
+        policy = assessment.get("sensitiveInformationPolicy", {})
+        if not isinstance(policy, dict):
+            raise PiiVerificationUnavailable("Invalid PII assessment")
+        for collection in ("piiEntities", "regexes"):
+            entities = policy.get(collection, [])
+            if not isinstance(entities, list):
+                raise PiiVerificationUnavailable("Invalid PII entities")
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    raise PiiVerificationUnavailable("Invalid PII entity")
+                action, detected = entity.get("action"), entity.get("detected")
+                if strict and (action not in ("NONE", "ANONYMIZED", "BLOCKED")
+                               or (detected is not None and type(detected) is not bool)):
+                    raise PiiVerificationUnavailable("Invalid detection status")
+                found = detected is True or (detected is None and (
+                    action in ("ANONYMIZED", "BLOCKED") or bool(entity.get("match"))))
+                if strict and detected is None and action == "NONE" and not entity.get("match"):
+                    raise PiiVerificationUnavailable("Ambiguous detection status")
+                if found:
+                    kind = entity.get("type") if collection == "piiEntities" else "REGEX"
+                    if not isinstance(kind, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,99}", kind):
+                        raise PiiVerificationUnavailable("Missing detection type")
+                    hits.append({"type": kind, "detector": "guardrail", "sample": "", "action": action})
+    return hits
+
+
+def verify_guardrail_coverage(response: dict, text: str, *, context_chars: int = 0):
+    if not isinstance(response, dict) or response.get("action") not in ("NONE", "GUARDRAIL_INTERVENED"):
+        raise PiiVerificationUnavailable("Invalid PII verification response")
+    usage = response.get("usage")
+    units = usage.get("sensitiveInformationPolicyUnits") if isinstance(usage, dict) else None
+    coverage = response.get("guardrailCoverage")
+    chars = coverage.get("textCharacters") if isinstance(coverage, dict) else None
+    if (type(units) is not int or units <= 0 or not isinstance(chars, dict)
+            or type(chars.get("total")) is not int or type(chars.get("guarded")) is not int
+            or chars["total"] < len(text) + context_chars or chars["guarded"] < len(text)
+            or chars["guarded"] > chars["total"]
+            or (context_chars == 0 and chars["guarded"] != chars["total"])):
+        raise PiiVerificationUnavailable("PII verification did not cover the input")
+
+
+def scan_guardrail(text: str, *, strict: bool = False) -> list[dict]:
     """Bedrock Guardrails PII 평가 — 마스킹 규칙과 독립된 ML 탐지기. 실패 시 빈 목록(로그)."""
     if not GUARDRAIL_ID or not text:
+        if strict:
+            raise PiiVerificationUnavailable("PII verification is not configured")
         return []
+    if strict and len(text) > 4000:
+        raise PiiVerificationUnavailable("PII verification input exceeds checked length")
     try:
         rt = boto3.client("bedrock-runtime", region_name=REGION)
         r = rt.apply_guardrail(guardrailIdentifier=GUARDRAIL_ID, guardrailVersion=GUARDRAIL_VER,
                                source="INPUT", content=[{"text": {"text": text[:4000]}}])
-        hits = []
-        for a in r.get("assessments", []):
-            sip = a.get("sensitiveInformationPolicy", {})
-            for e in sip.get("piiEntities", []):
-                if e.get("detected", True) and e.get("action") in ("ANONYMIZED", "BLOCKED"):
-                    hits.append({"type": e.get("type"), "detector": "guardrail", "sample": ""})
-            for e in sip.get("regexes", []):
-                if e.get("action") in ("ANONYMIZED", "BLOCKED"):
-                    hits.append({"type": f"REGEX:{e.get('name')}", "detector": "guardrail", "sample": ""})
-        return hits
+        if strict:
+            verify_guardrail_coverage(r, text)
+        return guardrail_hits(r, strict=strict)
     except Exception as ex:  # 계측 실패는 요청을 막지 않되 기록한다
         from common.log import log_event
-        log_event("pii.guardrail_scan_failed", error=str(ex)[:200])
+        log_event("pii.guardrail_scan_failed", errorType=type(ex).__name__)
+        if strict:
+            raise PiiVerificationUnavailable("PII verification failed") from None
         return []
 
 
-def scan_outbound(text: str, use_guardrail: bool = True) -> dict:
+def scan_outbound(text: str, use_guardrail: bool = True, *, strict: bool = False, trusted_tokens=None) -> dict:
     """반환: {"count": n, "hits": [...], "detectors": ["rules","guardrail"]}"""
-    hits = scan_rules(text)
+    checked_text = guardrail_view(text, trusted_tokens)
+    hits = scan_rules(checked_text)
     detectors = ["rules"]
+    if strict and hits:
+        return {"count": len(hits), "hits": hits[:20], "detectors": detectors}
     if use_guardrail:
-        hits += scan_guardrail(text)
+        hits += scan_guardrail(checked_text, strict=strict)
         detectors.append("guardrail")
     return {"count": len(hits), "hits": hits[:20], "detectors": detectors}

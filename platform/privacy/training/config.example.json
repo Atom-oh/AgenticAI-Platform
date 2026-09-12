@@ -1,0 +1,23 @@
+{
+  "training_job_name": "mydata-offline-preparation",
+  "region": null,
+  "role_arn": null,
+  "training_image": null,
+  "trainer_contract_version": "mydata-entities-jsonl-v1",
+  "trainer_contract_approved": false,
+  "model_family": "qwen",
+  "base_model_s3_uri": null,
+  "base_model_sha256": null,
+  "train_s3_uri": null,
+  "eval_s3_uri": null,
+  "output_s3_uri": null,
+  "output_kms_key_arn": null,
+  "volume_kms_key_arn": null,
+  "vpc_id": null,
+  "private_subnet_ids": [],
+  "security_group_ids": [],
+  "private_network_approved": false,
+  "instance_type": null,
+  "volume_size_gb": 100,
+  "max_runtime_seconds": 3600
+}

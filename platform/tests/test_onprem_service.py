@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from onprem import personal_store, service, vector_index  # noqa: E402
 
-TOKEN_RE = re.compile(r"⟨[A-Z_]+:[0-9a-f]{8}⟩")
+TOKEN_RE = re.compile(r"⟨[A-Z_]+:(?:[0-9a-f]{8}|[a-p]{32})⟩")
 DEMO = "demo@atomai.click"
 
 

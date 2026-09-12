@@ -148,7 +148,11 @@ def _s2_prepare(body: dict) -> tuple[int, dict]:
     모델이 스스로 계산하게 한다 (SPEC v2 §6 데모 포인트 — 조용히 틀리는 숫자). body.refDate: 기준일 고정(테스트·리허설).
     재식별 매핑과 프롬프트 원문은 반환하지 않고 감사 저장소에만 보관한다."""
     email = str(body.get("email", ""))
-    query = str(body.get("query", ""))[:500]
+    query = body.get("query", "")
+    # The public question is <=500 characters, but replacing names with opaque
+    # tokens can expand it. Reject excess; never clip a validated question.
+    if not isinstance(query, str) or len(query) > 4000:
+        return 400, {"error": "invalid-query"}
     trace_id = str(body.get("traceId", ""))[:64]
     semantic_on = _truthy(body.get("semanticLayer"), default=True)
     ref_date = _parse_ref_date(body.get("refDate"))

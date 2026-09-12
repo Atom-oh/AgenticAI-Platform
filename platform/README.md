@@ -67,6 +67,7 @@ React 공동 디자인 작업실은 같은 출처의 `/studio-api` HTTP 경로�
 | `design_loop/`, `seed/design/` | 디자인 스튜디오 검수 루프(상품명세서→PRD→프로세스 화면→리뷰·테스트→재생성 1회→리포트), 합성 상품명세서·SM 모델·체크리스트 |
 | `workspace/`, `web/src/workspace/` | 개인/프로젝트 범위, 상품 지침·온톨로지·의견, React 생성·검수·승인·릴리스·Git 전달 |
 | `react-kit/` | 실제 15종 React 컴포넌트·타입·토큰, 고정 컴파일러와 소스/dist·테스트 패키징 |
+| `privacy/`, `web/src/mydata/` | EKS sLLM 자유문장 비식별 처리, 고정 필드 토큰화·독립 검수, IAM 중계와 선택적 SageMaker 요청 준비 |
 | `infra/lib/workspace.ts` | 작업실 비공개 저장소·인증 HTTP API·워커·격리 브라우저 실행기 구성 |
 | `report/` | F7 Reader/Writer/내부 도구 Lambda 핸들러 |
 | `onprem/` | VPC 내부 컨테이너: 정확 조회(RDS)·계산엔진·마스킹·감사원문·벡터 인덱스 |
@@ -148,7 +149,7 @@ bash teardown.sh --all                            # 메인 스택까지 삭제
 | 디자인 스튜디오 프로세스 생성 + 검수 루프 | 배포 | `design_loop/`(오프라인 13 통과)·`handlers/design.py`·`web/src/studio/ProcessStudio.tsx`; live e2e(2026-09-05): 축구클럽 우대 적금 8스텝(증빙 입력 분기 포함)·체크리스트 28(기본18+파생10)·리뷰 후 재생성 1회·리포트 pass23/fail1/미판정4·runtime lambda-local(게이트 경유) |
 | 에이전트 계층 (AgentCore Runtime · Strands · Gateway MCP · Registry 미러 · 빌더) | 배포 | `agents/`, `agentcore/`, `handlers/agents.py`; 로컬 컨테이너 스모크에서 Gateway 도구 호출·스트리밍·경계 계측 확인 |
 | Tier 2 Gemma 경로 (bedrock-mantle) | 코드 완료 · 가용성 런타임 확인 | `engine/llm.py GemmaAdapter` — 모델/키 미확인 시 배지에 "미가용" 표기 |
-| 익명화 변환(ML 가명처리·재식별 볼트) | 미구현 (배지 표기) | §11-2 배지: 규칙 기반 토큰화만 구현 |
+| 마이데이터 EKS 개인정보 처리 추가 | 구현·합성 검증, 운영 연결 준비 | `privacy/`와 `api/common/privacy.py` — 실제 Qwen 자유문장 탐지, 요청별 임의 토큰, 고정 정형 필드 처리·독립 잔여 검사. 공유 EKS의 선행조건 확인 전 운영 완료로 표시하지 않음 |
 | pgvector | 미사용 (AOSS 확정) | §16 |
 | 디자인 스튜디오 에이전틱 루프 (StudioLoopFn · StudioTable · studio/drafts) | 배포 | 온톨로지 Product→체크리스트(31항목/필수16) → 워커 Lambda 루프(1~20라운드). live e2e(2026-09-07, `tests/e2e` 패턴 WebSocket): 축구사랑 적금 ux-flow 1라운드 90점 통과(FLOW-COND·STEP-ORDER 통과, few-shot 1건 주입) · 기본 적금 1라운드 93점 통과(FLOW-NOCOND 통과) · refine 1라운드 85점(STABLE 0% 변화, CD-02/CD-03 미충족 사실대로) · 모델 실측 global.anthropic.claude-sonnet-5 · 게이트 차단 재발 방지(모델行 프롬프트 식별자 마스킹, 44f4937·19a924c) · §16 |
 

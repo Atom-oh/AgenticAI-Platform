@@ -18,7 +18,7 @@ import re
 
 import boto3
 
-from common import costguard, pii, plane, tracing
+from common import costguard, pii, plane, privacy, tracing
 from common.ctx import Ctx
 from common.log import log_event
 
@@ -29,11 +29,13 @@ GUARDRAIL_VER = os.environ.get("GUARDRAIL_VERSION", "DRAFT")
 SYSTEM = ("당신은 아톰은행 상담 도우미입니다. 제공된 계산엔진 확정값만 사용해 우대금리 충족 여부와 "
           "가능 금액을 한국어로 친절히 설명하세요. 어떤 숫자도 새로 만들지 마세요. "
           "전월실적을 포함한 모든 수치는 계산엔진 확정값을 그대로 인용하세요. "
+          "이름·주소·연락처·계좌번호·식별 토큰은 인용하거나 새로 만들지 말고 고객님으로 호칭하세요. "
           "확정 신청은 영업점/앱에서 진행하도록 안내하세요.")
 # Semantic Layer OFF — 안티패턴 시연 전용 (§6 데모 포인트). 운영 프롬프트가 아니다.
 SYSTEM_NO_SEMANTIC = ("당신은 아톰은행 상담 도우미입니다. 제공된 계산엔진 확정값을 사용해 우대금리 충족 여부와 "
                       "가능 금액을 한국어로 친절히 설명하세요. 다만 고객의 '전월실적'은 정의가 제공되지 않으므로 "
                       "제공된 카드 거래내역 원본에서 직접 계산해 '전월실적 N원' 형태로 금액을 반드시 명시하세요. "
+                      "이름·주소·연락처·계좌번호·식별 토큰은 인용하거나 새로 만들지 말고 고객님으로 호칭하세요. "
                       "확정 신청은 영업점/앱에서 진행하도록 안내하세요.")
 
 PREV_MONTH_METRIC = "전월실적"
@@ -49,31 +51,46 @@ def apply_guardrail(text: str, source: str, grounding: str = "", query: str = ""
     평가되는데, 이때 ApplyGuardrail 은 grounding_source · query · guard_content 세 블록을 모두 요구한다
     (query 가 없으면 ValidationException — 2026-09-02 라이브 확인). query 는 이미 INPUT 가드레일을 통과한 질문 원문."""
     rt = boto3.client("bedrock-runtime", region_name=REGION)
-    content = [{"text": {"text": text[:4000]}}]
+    content = [{"text": {"text": text}}]
     if grounding and source == "OUTPUT":
-        content = [{"text": {"text": grounding[:4000], "qualifiers": ["grounding_source"]}},
-                   {"text": {"text": (query or " ")[:4000], "qualifiers": ["query"]}},
-                   {"text": {"text": text[:4000], "qualifiers": ["guard_content"]}}]
+        content = [{"text": {"text": grounding, "qualifiers": ["grounding_source"]}},
+                   {"text": {"text": query or " ", "qualifiers": ["query"]}},
+                   {"text": {"text": text, "qualifiers": ["guard_content"]}}]
     r = rt.apply_guardrail(guardrailIdentifier=GUARDRAIL_ID, guardrailVersion=GUARDRAIL_VER,
                            source=source, content=content)
+    # Grounding/query qualifiers are context, not guard_content. AWS reports
+    # their characters in total but not guarded (verified against the live API).
+    context_chars = len(grounding) + len(query or " ") if grounding and source == "OUTPUT" else 0
+    pii.verify_guardrail_coverage(r, text, context_chars=context_chars)
     topics = [t["name"] for a in r.get("assessments", []) for t in a.get("topicPolicy", {}).get("topics", [])]
     grounding_scores = [{"type": f["type"], "score": round(f.get("score", 0), 3), "action": f.get("action")}
                         for a in r.get("assessments", [])
                         for f in a.get("contextualGroundingPolicy", {}).get("filters", [])]
-    pii_hits = [{"type": e.get("type") or e.get("name"), "action": e.get("action")}
-                for a in r.get("assessments", [])
-                for e in (a.get("sensitiveInformationPolicy", {}).get("piiEntities", [])
-                          + a.get("sensitiveInformationPolicy", {}).get("regexes", []))
-                if e.get("action") in ("ANONYMIZED", "BLOCKED")]
-    words = [w.get("match") for a in r.get("assessments", [])
-             for w in a.get("wordPolicy", {}).get("managedWordLists", [])]
+    pii_hits = [{"type": item["type"], "action": item["action"]} for item in pii.guardrail_hits(r, strict=True)]
+    words = [kind for a in r.get("assessments", [])
+             for collection, kind in (("managedWordLists", "MANAGED_WORD_LIST"), ("customWords", "CUSTOM_WORD"))
+             for word in a.get("wordPolicy", {}).get(collection, []) if word.get("action") == "BLOCKED"]
+    def blocked(value):
+        if isinstance(value, dict):
+            return value.get("action") == "BLOCKED" or any(blocked(item) for item in value.values())
+        return isinstance(value, list) and any(blocked(item) for item in value)
+    other_blocked = any(blocked(value) for assessment in r.get("assessments", [])
+                        for key, value in assessment.items() if key != "sensitiveInformationPolicy")
     action = r["action"]
     # 토픽/단어/차단 없이 PII 익명화만 일어난 경우: 차단이 아니라 '익명화 적용'으로 구분한다
-    if action == "GUARDRAIL_INTERVENED" and not topics and not words and pii_hits \
+    if action == "GUARDRAIL_INTERVENED" and not other_blocked and pii_hits \
             and all(h["action"] == "ANONYMIZED" for h in pii_hits):
         action = "ANONYMIZED"
     return {"action": action, "topics": topics, "grounding": grounding_scores, "pii": pii_hits,
             "words": words, "message": (r.get("outputs") or [{}])[0].get("text", "")}
+
+
+def checked_guardrail(text: str, source: str, grounding: str = "", query: str = "", *, trusted_tokens=None) -> dict:
+    if any(not isinstance(value, str) or len(value) > 4000 for value in (text, grounding, query)):
+        raise privacy.PrivacyUnavailable("PRIVACY_VERIFICATION_SIZE_LIMIT")
+    return apply_guardrail(pii.guardrail_view(text, trusted_tokens), source,
+                           grounding=pii.guardrail_view(grounding, trusted_tokens),
+                           query=pii.guardrail_view(query, trusted_tokens))
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +194,12 @@ def route_stage(route: str | None) -> dict:
     from engine import gate
     ri = gate.route_info(route)
     b = ri.get("badge") or {}
+    if ri["route"] == "gemma":
+        # In S2 this adapter writes the explanation. It is not the EKS PII
+        # processor, which is reported independently by privacy_input/payload.
+        b = {**b, "prod": "Bedrock Gemma 4 31B · 상담 설명 모델",
+             "demo": "bedrock-mantle · us-west-2 직접 호출 (개인정보 전처리는 별도 EKS 모델)",
+             "substituted": False}
     return {"route": ri["route"], "tier": ri["tier"], "modelId": ri["modelId"], "endpoint": ri.get("endpoint", ""),
             "region": ri.get("region", ""), "inferenceRouting": ri.get("inferenceRouting", ""),
             "inferenceRoutingLabel": ri.get("inferenceRoutingLabel", ""),
@@ -219,10 +242,11 @@ def _finalize_local(trace_id: str, answer: str, allowed: list[str]) -> dict:
 
 
 def handle(ctx: Ctx, body: dict) -> None:
-    query = str(body.get("query", ""))[:500].strip()
-    if not query:
-        ctx.error("질문이 비어 있습니다.")
+    value = body.get("query", "")
+    if not isinstance(value, str) or not value.strip() or len(value) > 500:
+        ctx.error("질문은 비어 있지 않은 500자 이하의 텍스트여야 합니다.")
         return
+    query = value.strip()
     route = body.get("route") or None
     if route is not None:
         route = str(route).strip().lower()[:32]
@@ -233,6 +257,7 @@ def handle(ctx: Ctx, body: dict) -> None:
             ctx.error(str(e))
             return
     semantic_on = _truthy(body.get("semanticLayer"), default=True)
+    privacy_model = body.get("privacyModel", "qwen")
     ref_date = str(body.get("refDate") or "")[:10] or None   # 리허설·테스트용 기준일 고정 (선택)
     state: dict = {"blocked": False, "usage": {}, "pii": {"count": 0}, "maskedFields": [], "gOut": None,
                    "plane": plane.mode(), "boundary": None, "modelId": None, "route": None, "tier": None,
@@ -245,19 +270,35 @@ def handle(ctx: Ctx, body: dict) -> None:
         state.update(route=ri["route"], modelId=ri["modelId"], tier=ri["tier"])
         c.stage("s2", "route", plane="cloud", semanticLayer=semantic_on, **ri)
 
+        # The raw question reaches only the private EKS processor. Guardrails
+        # and both explanation/grounding requests use its validated output.
+        state["privacyPhase"] = "input"
+        safe_query = privacy.process(query, privacy_model, "query", c.trace_id)
+        state["safeQuery"] = safe_query["text"]
+        state["privacy"] = {"status": "pass", "input": safe_query["evidence"]}
+        c.stage("s2", "privacy_input", plane="onprem", sanitizedPreview=safe_query["text"], **safe_query["evidence"])
         # ① 입력 가드레일 (실물 Bedrock Guardrails)
-        g_in = apply_guardrail(query, "INPUT")
+        input_tokens = pii.tokens_in(safe_query["text"])
+        g_in = checked_guardrail(safe_query["text"], "INPUT", trusted_tokens=input_tokens)
         c.stage("s2", "guardrail_in", result=g_in, plane="cloud")
         if g_in["action"] == "GUARDRAIL_INTERVENED":
             state.update(blocked=True, topics=g_in["topics"] or [h["type"] for h in g_in["pii"]] or g_in["words"])
             c.done("s2", blocked=True, message=g_in["message"], topics=g_in["topics"],
                    route=ri["route"], modelId=ri["modelId"], tier=ri["tier"], semanticLayer=semantic_on)
             return
+        if g_in["action"] == "ANONYMIZED":
+            if not isinstance(g_in.get("message"), str) or not g_in["message"].strip():
+                raise privacy.PrivacyUnavailable("PRIVACY_VERIFICATION_UNAVAILABLE")
+            safe_query["text"] = g_in["message"]
+            state["safeQuery"] = safe_query["text"]
+        elif g_in.get("pii"):
+            state["privacyDetectedTypes"] = sorted({item["type"] for item in g_in["pii"]})
+            raise privacy.PrivacyUnavailable("PRIVACY_RESIDUAL_PII")
 
         # ② Semantic Layer — 지표 정의는 이 계층만 신뢰 (해석 실패는 실패로 보인다)
         from semantic.loader import SemanticLayer
         layer = SemanticLayer()
-        metric = layer.resolve(query)
+        metric = layer.resolve(safe_query["text"])
         prev_def = layer.resolve(PREV_MONTH_METRIC)
         prev_metric = ({"name": prev_def.name, "description": prev_def.description, "unit": prev_def.unit,
                         "ownerDept": prev_def.owner_dept, "sql": prev_def.sql_template.strip()} if prev_def else None)
@@ -274,15 +315,16 @@ def handle(ctx: Ctx, body: dict) -> None:
                     "ownerDept": metric.owner_dept, "sql": metric.sql_template.strip()}, **sem_extra)
 
         # ③④⑤ 정확 조회 → 계산 → 마스킹 : VPC 내부 플레인
+        state["privacyPhase"] = "payload"
         mode = plane.mode()
-        prep_body = {"email": c.email, "query": query, "traceId": c.trace_id, "semanticLayer": semantic_on}
+        prep_body = {"email": c.email, "query": safe_query["text"], "traceId": c.trace_id, "semanticLayer": semantic_on}
         if ref_date:
             prep_body["refDate"] = ref_date
         if mode in ("bridge", "direct"):
             prep = plane.call("/s2/prepare", prep_body)
             source = f"{plane.label()} · {prep.get('dataSource', '')}"
         elif mode == "local":
-            prep = _prepare_local(c.email, query, {k: v for k, v in prep_body.items() if k not in ("email", "query")})
+            prep = _prepare_local(c.email, safe_query["text"], {k: v for k, v in prep_body.items() if k not in ("email", "query")})
             source = prep["dataSource"]
         else:
             raise plane.PlaneUnavailable(plane.label())
@@ -291,19 +333,37 @@ def handle(ctx: Ctx, body: dict) -> None:
                 txnSample=prep.get("txnSample"), metricByEngine=metric_by_engine, metricPeriod=prep.get("metricPeriod"))
         c.stage("s2", "calc", rate=prep["rate"], limit=prep["limit"], plane="onprem",
                 metricByEngine=metric_by_engine, metricDefinitions=prep.get("metricDefinitions"))
+        # The internal producer knows the structured customer fields and fixes
+        # their tokenization in code. Do not ask a generative detector to
+        # reinterpret approved product rules or calculated financial values.
         masked_payload = prep["maskedPayload"]
         state["maskedFields"] = [f["field"] for f in prep["maskedFields"]]
         # F6: 마스킹과 독립된 탐지기로 경계 페이로드를 스캔한다
-        scan = pii.scan_outbound(masked_payload)
+        payload_tokens = pii.tokens_in(masked_payload)
+        scan = pii.scan_outbound(masked_payload, strict=True, trusted_tokens=payload_tokens)
         state["pii"] = scan
+        if scan["count"]:
+            state["privacyDetectedTypes"] = sorted({item["type"] for item in scan["hits"]})
+            raise privacy.PrivacyUnavailable("PRIVACY_RESIDUAL_PII")
+        payload_evidence = {
+            "status": "pass", "processor": "schema-and-independent-scan",
+            "method": "structured-tokenization", "sourceChars": len(masked_payload),
+            "outputChars": len(masked_payload), "ruleResidualCount": 0,
+            "detectors": scan["detectors"], "modelInvoked": False,
+        }
+        state["privacy"]["payload"] = payload_evidence
+        c.stage("s2", "privacy_payload", plane="boundary", **payload_evidence)
         c.stage("s2", "mask", maskedFields=prep["maskedFields"], maskedPayload=masked_payload,
                 piiOutbound=scan["count"], piiHits=scan["hits"], piiDetectors=scan["detectors"], plane="boundary",
-                badge=gate_badge(), systemPromptChars=len(SYSTEM if semantic_on else SYSTEM_NO_SEMANTIC))
+                badge={**gate_badge(), "demo": "EKS sLLM 식별자 제거 + VPC 내부 토큰화 + 독립 잔여 검사",
+                       "privacyProcessor": "eks-sllm"},
+                systemPromptChars=len(SYSTEM if semantic_on else SYSTEM_NO_SEMANTIC))
 
         # ⑥ 익명화 게이트 → Bedrock 설명 생성 (스트리밍). 식별자가 남아 있으면 GateRefused — 페이로드는 모델에 가지 않는다
         system = SYSTEM if semantic_on else SYSTEM_NO_SEMANTIC
         try:
             st = gate.stream(system, masked_payload, max_tokens=800, route=route, purpose="s2", trace_id=c.trace_id)
+            state["explanationInvoked"] = True
         except gate.GateRefused as e:
             by_type = ((e.boundary or {}).get("piiRules") or {}).get("byType", {})
             hits = [{"type": t, "count": int(by_type.get(t, 0))} for t in e.types]
@@ -315,16 +375,26 @@ def handle(ctx: Ctx, body: dict) -> None:
         full = []
         for tk in st:
             full.append(tk)
-            c.token("s2", tk)
         answer = "".join(full)
         state.update(usage=st.usage, boundary=st.boundary, modelId=st.model_id, route=st.route, tier=st.tier)
 
         # ⑦ 출력 가드레일(근거=마스킹 페이로드) → VPC 내부 수치 검증 + 재식별
-        g_out = apply_guardrail(answer, "OUTPUT", grounding=masked_payload, query=query)
+        state["privacyPhase"] = "output"
+        if pii.tokens_in(answer) - payload_tokens:
+            raise privacy.PrivacyUnavailable("PRIVACY_UNRECOGNIZED_TOKEN")
+        g_out = checked_guardrail(answer, "OUTPUT", grounding=masked_payload, query=safe_query["text"],
+                                 trusted_tokens=payload_tokens | input_tokens)
         state["gOut"] = g_out
         final_answer = answer
-        if g_out["action"] in ("ANONYMIZED", "GUARDRAIL_INTERVENED") and g_out["message"]:
+        if g_out["action"] in ("ANONYMIZED", "GUARDRAIL_INTERVENED"):
+            if not isinstance(g_out.get("message"), str) or not g_out["message"].strip():
+                raise privacy.PrivacyUnavailable("PRIVACY_VERIFICATION_UNAVAILABLE")
             final_answer = g_out["message"]  # 가드레일이 익명화/차단한 텍스트를 최종 회신으로 사용한다
+        elif g_out.get("pii"):
+            state["privacyDetectedTypes"] = sorted({item["type"] for item in g_out["pii"]})
+            raise privacy.PrivacyUnavailable("PRIVACY_RESIDUAL_PII")
+        # Publish only after the output guardrail has produced the deliverable.
+        c.token("s2", final_answer)
         if mode in ("bridge", "direct"):
             fin = plane.call("/s2/finalize", {"traceId": c.trace_id, "answer": final_answer,
                                               "allowedNumbers": prep["allowedNumbers"]})
@@ -345,14 +415,26 @@ def handle(ctx: Ctx, body: dict) -> None:
                boundary=st.boundary, modelId=st.model_id, route=st.route, tier=st.tier,
                inferenceRouting=ri["inferenceRouting"], inferenceRoutingLabel=ri["inferenceRoutingLabel"],
                storageLabel=ri["storageLabel"], regionBadge=ri["badge"]["region"], nonStream=bool(st.non_stream),
-               semanticLayer=semantic_on, semanticCheck=chk)
+               semanticLayer=semantic_on, semanticCheck=chk, privacy=state["privacy"])
 
-    res = costguard.guarded(ctx, "s2", query, run)
+    try:
+        # Personal lookup values, redacted receipts and reidentified answers must
+        # never enter the global scenario/query event cache.
+        res = costguard.guarded(ctx, "s2", query, run, cache=False)
+    except (privacy.PrivacyUnavailable, pii.PiiVerificationUnavailable) as error:
+        state["blocked"] = True
+        state["privacy"] = {"status": "blocked", "code": getattr(error, "code", "PRIVACY_VERIFICATION_UNAVAILABLE"),
+                            "stage": state.get("privacyPhase", "input"),
+                            "detectedTypes": state.get("privacyDetectedTypes", [])}
+        ctx.done("s2", blocked=True, blockedBy="privacy",
+                 message="개인정보 처리를 검증하지 못해 상담을 중단했습니다. 이전 응답으로 대체하지 않습니다.",
+                 privacy=state["privacy"], semanticLayer=semantic_on)
+        res = {"cached": False, "reason": "privacy"}
     u = state["usage"]
     costguard.add_usage(int(u.get("inputTokens", 0)) + int(u.get("outputTokens", 0)))
     b = state["boundary"] or {}
     chk = state["semantic"] or {}
-    rec = {"traceId": ctx.trace_id, "scenario": "S2", "email": ctx.email, "query": query,
+    rec = {"traceId": ctx.trace_id, "scenario": "S2", "email": ctx.email, "query": state.get("safeQuery", ""),
            "blocked": state["blocked"], "topics": state.get("topics", []),
            "maskedFields": state["maskedFields"],
            "piiOutbound": state["pii"]["count"], "piiDetectors": state["pii"].get("detectors", []),
@@ -363,9 +445,10 @@ def handle(ctx: Ctx, body: dict) -> None:
            "modelId": state["modelId"], "route": state["route"], "tier": state["tier"],
            "boundaryFields": list(b.get("fieldsPassed") or []),
            "boundaryChars": int(b.get("chars", 0) or 0), "boundaryEstTokens": int(b.get("estTokens", 0) or 0),
-           "crossings": 0 if (state["gateRefused"] or state["blocked"]) else (1 if state["modelId"] else 0),
+           "crossings": 1 if state.get("explanationInvoked") else 0,
            "semanticLayer": semantic_on, "semanticMismatch": bool(chk.get("mismatch", False)),
-           "semanticStated": chk.get("modelValue") is not None}
+           "semanticStated": chk.get("modelValue") is not None,
+           "privacyStatus": state.get("privacy", {}).get("status", "not-run")}
     if state["gateRefused"]:
         rec.update(blockedBy="gate", gateRejected=True, reason="gate", gateTypes=state["gateTypes"],
                    piiOutbound=int((b.get("piiRules") or {}).get("count", 0) or 0), piiDetectors=["rules(gate)"])
@@ -376,4 +459,13 @@ def handle(ctx: Ctx, body: dict) -> None:
               semanticLayer=semantic_on, semanticMismatch=bool(chk.get("mismatch", False)))
 
 
-ROUTES = {"s2": handle}
+def privacy_models(ctx: Ctx, body: dict) -> None:
+    try:
+        result = privacy.models()
+        ctx.done("s2_privacy_models", **{key: value for key, value in result.items() if key != "ok"})
+    except privacy.PrivacyUnavailable:
+        ctx.done("s2_privacy_models", processor="eks-sllm", models=[], defaultModel="qwen", available=False,
+                 message="EKS 개인정보 처리 모델을 확인할 수 없습니다. 연결 확인 전에는 상담을 실행하지 않습니다.")
+
+
+ROUTES = {"s2": handle, "s2_privacy_models": privacy_models}

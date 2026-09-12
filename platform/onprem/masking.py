@@ -9,8 +9,8 @@
 """
 from __future__ import annotations
 
-import hashlib
 import re
+import secrets
 from dataclasses import dataclass, field
 
 
@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 class MaskResult:
     text: str
     masked_fields: list[dict] = field(default_factory=list)  # {field, token}
-    mapping: dict = field(default_factory=dict)  # token -> original (온프렘에만 보관)
+    mapping: dict = field(default_factory=dict, repr=False)  # token -> original (온프렘에만 보관)
+    _tokens: dict = field(default_factory=dict, repr=False)
 
 
 # 합성데이터도 방어적으로 처리하는 규칙 (실서비스 규칙의 구조 모사). 순서 = 우선순위.
@@ -44,12 +45,13 @@ RULES = [
 _LATIN_WORD = "A-Za-z0-9_"
 
 # 이 모듈이 만드는 토큰의 형태 — 수치 검증기 등이 토큰 안의 해시 숫자를 '생성된 수치'로 오인하지 않게 걷어낼 때 쓴다
-TOKEN_RE = re.compile(r"⟨[^⟨⟩\s]+:[0-9a-f]{8}⟩")
+TOKEN_RE = re.compile(r"⟨[A-Z][A-Z0-9_]{0,39}:(?:[0-9a-f]{8}|[0-9a-f]{32}|[a-p]{32})⟩")
 
 
 def _token(kind: str, value: str) -> str:
-    h = hashlib.sha256(value.encode()).hexdigest()[:8]
-    return f"⟨{kind.upper()}:{h}⟩"
+    alphabet = "abcdefghijklmnop"
+    nonce = "".join(alphabet[byte >> 4] + alphabet[byte & 15] for byte in secrets.token_bytes(16))
+    return f"⟨{kind.upper()}:{nonce}⟩"
 
 
 def _value_pattern(value: str) -> re.Pattern:
@@ -62,8 +64,13 @@ def _value_pattern(value: str) -> re.Pattern:
 def _apply(r: MaskResult, kind: str, pattern: re.Pattern) -> None:
     def repl(m: re.Match) -> str:
         v = m.group(0)
-        t = _token(kind, v)
-        if t not in r.mapping:
+        key = (kind, v)
+        t = r._tokens.get(key)
+        if t is None:
+            t = _token(kind, v)
+            while t in r.text or t in r.mapping:
+                t = _token(kind, v)
+            r._tokens[key] = t
             r.masked_fields.append({"field": kind, "token": t})
             r.mapping[t] = v
         return t

@@ -18,7 +18,7 @@ GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 
 | 순서 | 화면 (좌측 레일) | 보여주는 것 | 시간 |
 |---|---|---|---|
 | S1 | 규정 영향 분석 | 동일 질문을 Vector RAG / GraphRAG에 동시에 — 벡터는 청크만, 그래프는 영향 상품 12·화면 39·부서 7·문서 7건을 노드 ID·순회 경로와 함께 | 4분 |
-| S2 | 마이데이터 상담 | 숫자는 LLM이 만들지 않는다 — 정확 조회 → 결정론적 계산엔진(수식) → 마스킹 → 설명 생성 → 수치 검증 | 4분 |
+| S2 | 마이데이터 상담 | EKS 개인정보 처리 → 정확 조회·결정론적 계산 → 설명 자료 재검사 → 설명 생성·수치 검증 | 4분 |
 | S3 | Agent Registry | 전 서피스 자산의 승인 수명주기 (AgentCore Agent Registry 실물, CloudTrail 감사) | 3분 |
 | S4 | Single Boundary 뷰 | 요청별 실측 — VPC 잔류 항목·경계 통과 토큰·사용 모델 ID·차단 여부 (§8-3) | 2분 |
 | S5 | Guardrails 로그 | "어떤 상품이 제일 돈 많이 벌어요?" → 실물 Bedrock Guardrails가 차단 | 2분 |
@@ -38,6 +38,7 @@ GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 
 ## 설계 문서
 
 - [아키텍처와 설계 결정](./architecture) — 구성도, SPEC 매핑, 정직한 미완 사항
-- [플랫폼 아키텍처 인터랙티브 다이어그램](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html) · [S2 워크플로우](https://www.atomai.click/AgenticAI-Platform/s2-workflow.html)
+- [마이데이터 개인정보 처리 시나리오](./mydata-privacy)
+- [플랫폼 아키텍처 인터랙티브 다이어그램](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html) · [기존 S2 워크플로우](https://www.atomai.click/AgenticAI-Platform/s2-workflow.html) — 새 EKS 개인정보 처리 단계는 위 시나리오 문서를 따른다.
 - 요구사항 명세 원문: 저장소 루트 `SPEC.md`
 - 보안·거버넌스: 저장소 `demo/SECURITY-GOVERNANCE.md`

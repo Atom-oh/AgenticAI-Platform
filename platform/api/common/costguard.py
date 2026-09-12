@@ -82,19 +82,21 @@ def replay(ctx, events: list[dict], reason: str) -> None:
         ctx.post(ev)
 
 
-def guarded(ctx, scenario: str, query: str, run) -> dict:
+def guarded(ctx, scenario: str, query: str, run, *, cache: bool = True) -> dict:
     """run(ctx)를 실행하되, 예산 초과·실패 시 캐시 재생. 반환: {"cached": bool, "reason": str}."""
-    cached = get_cached(scenario, query)
+    cached = get_cached(scenario, query) if cache else None
     if not budget_ok():
         if cached:
             log_event("costguard.budget_exceeded", ctx.trace_id, scenario=scenario, replay=True)
             replay(ctx, cached, "일일 Bedrock 토큰 상한 초과")
             return {"cached": True, "reason": "budget"}
-        raise BudgetExceeded("일일 Bedrock 토큰 상한을 초과했고 캐시된 응답이 없습니다.")
-    ctx.recording = []
+        raise BudgetExceeded("일일 Bedrock 토큰 상한을 초과했고 캐시된 응답이 없습니다." if cache else
+                             "일일 Bedrock 토큰 상한을 초과했습니다. 이 요청은 과거 응답으로 대체하지 않습니다.")
+    ctx.recording = [] if cache else None
     try:
         run(ctx)
-        put_cached(scenario, query, ctx.recording)
+        if cache:
+            put_cached(scenario, query, ctx.recording)
         return {"cached": False, "reason": ""}
     except Exception as e:
         log_event("costguard.run_failed", ctx.trace_id, scenario=scenario, error=str(e)[:200],
