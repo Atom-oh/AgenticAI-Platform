@@ -1,0 +1,3 @@
+{"id":"synthetic-train-001","text":"김테스트의 월 납입액은 300,000원, 금리는 3.5%, 기간은 12개월입니다. 김테스트에게 알려주세요.","entities":[{"type":"PERSON","original":"김테스트"}]}
+{"id":"synthetic-train-002","text":"안내 메일은 train@example.invalid로 보내주세요. 연 납입액은 1,200,000원입니다.","entities":[{"type":"EMAIL","original":"train@example.invalid"}]}
+{"id":"synthetic-train-003","text":"전월실적 500,000원일 때 우대금리 0.2%와 24개월 납입 조건을 비교해주세요.","entities":[]}

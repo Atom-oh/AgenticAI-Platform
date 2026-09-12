@@ -130,6 +130,14 @@ def test_prepare_semantic_on_prompt_has_definition_and_engine_value_not_raw_rows
     assert "전월실적" in gate.parse_fields(mp)
 
 
+def test_prepare_preserves_a_question_expanded_by_privacy_tokens():
+    query = "⟨PERSON:0123456789abcdef0123456789abcdef⟩ " * 15 + "전월실적과 우대금리를 알려주세요."
+    assert 500 < len(query) < 4000
+    assert _prepare(query=query)["maskedPayload"].endswith(query)
+    code, result = service.handle("/s2/prepare", {"query": "가" * 4001})
+    assert code == 400 and result == {"error": "invalid-query"}
+
+
 def test_prepare_semantic_off_prompt_has_raw_rows_and_no_definition():
     out = _prepare(semanticLayer=False)
     mp = out["maskedPayload"]
@@ -242,6 +250,15 @@ class _FakeStream:
 def harness(monkeypatch):
     """AWS 없는 S2: 가드레일 NONE, 플레인 local(VPC 내부 라우터 직접 호출), 게이트 route_info/stream 페이크, 트레이스 캡처."""
     calls = {"stream": [], "traces": [], "route_info": []}
+    def fake_privacy(text, model, purpose, request_id):
+        return {"ok": True, "text": text, "evidence": {
+            "status": "pass", "processor": "eks-sllm", "method": "redaction", "model": model,
+            "modelId": "Qwen/Qwen3-8B", "modelRevision": "test-revision", "promptVersion": "test-v1",
+            "entityCounts": [], "total": 0, "sourceChars": len(text), "outputChars": len(text),
+            "ruleResidualCount": 0, "independentNer": "not-configured", "latencyMs": 1,
+        }}
+    monkeypatch.setattr(s2.privacy, "process", fake_privacy)
+    monkeypatch.setattr(s2.pii, "scan_guardrail", lambda text, strict=False: [])
     monkeypatch.setattr(s2, "apply_guardrail", lambda text, source, grounding="", query="": {
         "action": "NONE", "topics": [], "grounding": [], "pii": [], "words": [], "message": ""})
     monkeypatch.setattr(s2.plane, "mode", lambda: "local")
@@ -298,7 +315,7 @@ def test_route_stage_is_emitted_first_with_badges_and_done_carries_gate_measurem
     ctx, sent = _run({"query": Q, "refDate": REF.isoformat()})
     steps = _stages(sent)
     assert steps[0] == "route", steps
-    assert steps == ["route", "guardrail_in", "semantic", "lookup", "calc", "mask", "semantic_check"]
+    assert steps == ["route", "privacy_input", "guardrail_in", "semantic", "lookup", "calc", "privacy_payload", "mask", "semantic_check"]
     assert sent[0]["type"] == "s2.stage" and sent[0]["step"] == "route"       # 어떤 이벤트보다 먼저
     route = sent[0]
     assert route["badge"]["title"] == "추론 경로"
@@ -317,7 +334,7 @@ def test_route_stage_is_emitted_first_with_badges_and_done_carries_gate_measurem
     mask = by["mask"]
     assert mask["plane"] == "boundary" and "maskedPayload" in mask and mask["piiOutbound"] == 0
     assert mask["badge"] == {**mask["badge"], "title": "익명화 게이트", "prod": "가명처리 · 토큰화 · 재식별",
-                             "demo": "합성데이터 가명 생성 + 규칙 기반 토큰화 (ML 가명처리·재식별 볼트 미구현)"}
+                             "demo": "EKS sLLM 식별자 제거 + VPC 내부 토큰화 + 독립 잔여 검사"}
     assert set(mask["badge"]["refuseTypes"]) == set(gate.DEFAULT_REFUSE_TYPES)
     chk = by["semantic_check"]
     assert chk["semanticLayer"] is True and chk["engineValue"] == 450_000 and chk["modelValue"] == 450_000
@@ -391,8 +408,9 @@ def test_route_override_gemma_flows_to_gate_and_badges(harness):
     route = sent[0]
     assert route["step"] == "route" and route["route"] == "gemma" and route["tier"] == "2"
     assert route["modelId"] == "google.gemma-4-31b" and route["region"] == "us-west-2"
-    assert route["badge"]["prod"] == "IDC GPU + vLLM (EKS Hybrid Nodes)"
-    assert route["badge"]["demo"] == "Bedrock Gemma 4 31B @ us-west-2 — GPU 미구성 대체" and route["badge"]["substituted"] is True
+    assert route["badge"]["prod"] == "Bedrock Gemma 4 31B · 상담 설명 모델"
+    assert "개인정보 전처리는 별도 EKS 모델" in route["badge"]["demo"]
+    assert route["badge"]["substituted"] is False
     assert harness["stream"][0]["route"] == "gemma"
     done = sent[-1]
     assert done["route"] == "gemma" and done["modelId"] == "google.gemma-4-31b" and done["tier"] == "2"
@@ -411,7 +429,7 @@ def test_gate_refused_emits_blocked_done_and_payload_never_reaches_model(harness
     harness["make_stream"]("never", refuse="CUSTOMER_TOKEN")
     ctx, sent = _run({"query": Q, "refDate": REF.isoformat()})
     steps = _stages(sent)
-    assert steps == ["route", "guardrail_in", "semantic", "lookup", "calc", "mask"]   # 게이트 뒤 단계는 없다
+    assert steps == ["route", "privacy_input", "guardrail_in", "semantic", "lookup", "calc", "privacy_payload", "mask"]   # 게이트 뒤 단계는 없다
     assert not any(e["type"] == "s2.token" for e in sent)
     done = sent[-1]
     assert done["type"] == "s2.done" and done["blocked"] is True and done["gateRefused"] is True
@@ -431,7 +449,7 @@ def test_guardrail_input_block_still_emits_route_first(harness, monkeypatch):
         "action": "GUARDRAIL_INTERVENED", "topics": ["investment-advice"], "grounding": [], "pii": [], "words": [],
         "message": "투자 권유 관련 질문에는 답변할 수 없습니다."})
     _, sent = _run({"query": "어떤 상품이 제일 돈 많이 벌어요?"})
-    assert _stages(sent) == ["route", "guardrail_in"]
+    assert _stages(sent) == ["route", "privacy_input", "guardrail_in"]
     done = sent[-1]
     assert done["blocked"] is True and done.get("gateRefused") is None and done["topics"] == ["investment-advice"]
     assert done["route"] == "claude" and done["modelId"]

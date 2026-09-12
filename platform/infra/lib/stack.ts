@@ -40,6 +40,8 @@ export interface BankPlatformStackProps extends cdk.StackProps {
   /** 커스텀 도메인 (기본 agent.atomai.click) 과 us-east-1 ACM 인증서 ARN */
   domainName?: string;
   certificateArn?: string;
+  /** Exact IAM-only privacy relay ARN; absent means privacy is unconfigured. */
+  mydataPrivacyFunctionArn?: string;
 }
 
 export class BankPlatformStack extends cdk.Stack {
@@ -47,6 +49,12 @@ export class BankPlatformStack extends cdk.Stack {
     super(scope, id, props);
     const region = this.region;
     const account = this.account;
+    if (props.mydataPrivacyFunctionArn) {
+      const match = /^arn:aws:lambda:ap-northeast-2:(\d{12}):function:[A-Za-z0-9_-]{1,64}$/.exec(props.mydataPrivacyFunctionArn);
+      if (!match || (!cdk.Token.isUnresolved(account) && match[1] !== account)) {
+        throw new Error('mydataPrivacyFunctionArn must be an exact same-account Seoul Lambda ARN.');
+      }
+    }
 
     // ---------- 프론트엔드: S3 (프라이빗) + CloudFront ----------
     const webBucket = new s3.Bucket(this, 'WebBucket', {
@@ -445,6 +453,12 @@ export class BankPlatformStack extends cdk.Stack {
     fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [`arn:aws:secretsmanager:*:${account}:secret:bedrock/api-key*`] }));
     if (props.planeDeployed) {
       fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [bridgeFnArn, writerFnArn] }));
+    }
+    if (props.mydataPrivacyFunctionArn) {
+      fn.addEnvironment('MYDATA_PRIVACY_FUNCTION_ARN', props.mydataPrivacyFunctionArn);
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'], resources: [props.mydataPrivacyFunctionArn],
+      }));
     }
 
     // ---------- AdminFn — IAM invoke 전용 (Neptune 적재·Registry 시드·리셋). WebSocket 경로에서 도달 불가 ----------

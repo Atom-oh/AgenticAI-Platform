@@ -6,11 +6,15 @@ import { useState } from 'react';
 import Md from './Md';
 import type { ReactNode } from 'react';
 import { sock } from './lib';
+import PrivacyControls from './mydata/PrivacyControls';
+import { PrivacyBlocked, PrivacyReceipt } from './mydata/PrivacyReceipt';
+import type { PrivacyEvidence } from './mydata/PrivacyReceipt';
+import { usePrivacyModels } from './mydata/usePrivacyModels';
 
 export const S2_PRESET = '제가 이 상품 우대금리 조건 충족하나요? 얼마나 받을 수 있죠?';
 export const S5_PRESET = '어떤 상품이 제일 돈 많이 벌어요?';
 
-type Stage = { step: string; plane?: string; [k: string]: any };
+type Stage = PrivacyEvidence & { step: string; plane?: string; [k: string]: any };
 type Route = 'claude' | 'gemma';
 type Badge = { title: string; prod: string; demo: string; region?: string; substituted?: boolean; implemented?: boolean };
 type Boundary = { chars?: number; estTokens?: number; fieldsPassed?: string[]; piiRules?: { count?: number; hits?: any[] } } | null | undefined;
@@ -22,7 +26,7 @@ const ROSE = '#f43f5e';
 
 const ROUTES: { id: Route; label: string; sub: string }[] = [
   { id: 'claude', label: 'Tier 0/1 · Claude (global)', sub: 'bedrock-runtime Converse · 소스 리전 ap-northeast-2 · global 프로파일' },
-  { id: 'gemma', label: 'Tier 2 · PII 경로 (데모: Gemma @ us-west-2)', sub: 'bedrock-mantle OpenAI 호환 · us-west-2 직접 호출 — GPU 미구성 대체' },
+  { id: 'gemma', label: 'Gemma 4 · 설명용 Bedrock (us-west-2)', sub: '상담 설명 모델 · 개인정보 전처리는 위의 EKS 모델에서 별도 수행' },
 ];
 
 // 실행 전 표시용 — engine/gate.py route_info() 와 같은 문구 (실행 시 서버 값으로 교체)
@@ -33,14 +37,14 @@ const ROUTE_FALLBACK: Record<Route, { badge: Badge; modelId: string; tier: strin
     modelId: 'global.anthropic.claude-sonnet-5', tier: '0/1', region: 'ap-northeast-2', regionBadge: '저장: 서울 리전 / 추론: global 라우팅',
   },
   gemma: {
-    badge: { title: '추론 경로', prod: 'IDC GPU + vLLM (EKS Hybrid Nodes)',
-      demo: 'Bedrock Gemma 4 31B @ us-west-2 — GPU 미구성 대체', substituted: true },
+    badge: { title: '추론 경로', prod: 'Bedrock Gemma 4 31B · 상담 설명 모델',
+      demo: 'bedrock-mantle · us-west-2 직접 호출 (개인정보 전처리는 별도 EKS 모델)', substituted: false },
     modelId: 'google.gemma-4-31b', tier: '2', region: 'us-west-2', regionBadge: '저장: 서울 리전 / 추론: us-west-2 직접 호출',
   },
 };
-// 실행 전 표시용 — engine/gate.py gate_info() 와 같은 문구 (§16 확인 결과: 규칙 기반 토큰화 구현, ML 가명처리·재식별 볼트 미구현)
+// Execution evidence is shown separately; this is the configured S2 flow.
 const GATE_FALLBACK: Badge = { title: '익명화 게이트', prod: '가명처리 · 토큰화 · 재식별',
-  demo: '합성데이터 가명 생성 + 규칙 기반 토큰화 (ML 가명처리·재식별 볼트 미구현)' };
+  demo: 'EKS sLLM 식별자 제거 + VPC 내부 토큰화 + 독립 잔여 검사 (실행 전)' };
 
 const STEP_LABEL: Record<string, string> = {
   route: '⓪ 추론 경로 — 어떤 모델 · 리전으로 나가는가 (§11-1)',
@@ -285,6 +289,7 @@ function StagePanel({ s, boundary }: { s: Stage; boundary: Boundary }) {
 
 /* ---------------- 화면 ---------------- */
 export default function S2() {
+  const privacyModels = usePrivacyModels();
   const [query, setQuery] = useState(S2_PRESET);
   const [route, setRoute] = useState<Route>('claude');
   const [semanticOn, setSemanticOn] = useState(true);
@@ -299,11 +304,11 @@ export default function S2() {
 
   const run = async (q?: string) => {
     const qq = q ?? query;
-    if (running || !qq.trim()) return;
+    if (running || !qq.trim() || !privacyModels.ready) return;
     if (q) setQuery(q);
     setRunning(true); setErr(''); setStages([]); setText(''); setDone(null); setCached(''); setRouteInfo(null);
     try {
-      await sock.run('s2', { query: qq, route, semanticLayer: semanticOn }, (e) => {
+      await sock.run('s2', { query: qq, route, semanticLayer: semanticOn, privacyModel: privacyModels.selected }, (e) => {
         if (e.type === 'cache.replay') { setCached(e.reason || '캐시 응답'); setStages([]); setText(''); setDone(null); return; }
         if (e.type === 's2.stage') {
           const s = e as unknown as Stage;
@@ -326,24 +331,25 @@ export default function S2() {
 
   return (
     <div>
+      <PrivacyControls models={privacyModels} running={running} onExample={setQuery} />
       <div className="panel p-3 mb-3 flex flex-col gap-2">
-        <div className="flex gap-2 items-center">
-          <button className="chip whitespace-nowrap hover:border-teal-500 text-teal-700" onClick={() => run(S2_PRESET)}>시나리오 S2</button>
-          <button className="chip whitespace-nowrap hover:border-rose-400 text-[#E90061]" onClick={() => run(S5_PRESET)}>S5 차단 시연</button>
-          <input className="flex-1 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+        <div className="flex gap-2 items-center flex-wrap">
+          <button disabled={running || !privacyModels.ready} className="chip whitespace-nowrap hover:border-teal-500 text-teal-700 disabled:opacity-40" onClick={() => run(S2_PRESET)}>시나리오 S2</button>
+          <button disabled={running || !privacyModels.ready} className="chip whitespace-nowrap hover:border-rose-400 text-[#E90061] disabled:opacity-40" onClick={() => run(S5_PRESET)}>S5 차단 시연</button>
+          <input aria-label="상담 질문" maxLength={500} className="flex-1 min-w-0 basis-60 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
             value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} />
-          <button onClick={() => run()} disabled={running}
+          <button onClick={() => run()} disabled={running || !privacyModels.ready || !query.trim()}
             className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
             {running ? '상담 중…' : '상담 실행'}
           </button>
         </div>
         <div className="flex items-center gap-3 flex-wrap text-xs">
-          <span className="text-slate-500">추론 경로</span>
+          <span className="text-slate-500">설명용 모델 · 추론 경로</span>
           {ROUTES.map(r => (
             <button key={r.id} disabled={running} onClick={() => setRoute(r.id)} title={r.sub}
-              className={`chip whitespace-nowrap disabled:opacity-50 ${route === r.id
-                ? (r.id === 'gemma' ? 'border-rose-500 text-rose-200 bg-rose-950/40' : 'border-teal-500 text-teal-900 bg-teal-50/40')
-                : 'text-slate-400 hover:border-slate-400'}`}>
+              className={`chip text-left disabled:opacity-50 ${route === r.id
+                ? (r.id === 'gemma' ? 'border-rose-700 text-rose-900 bg-rose-50' : 'border-teal-700 text-teal-900 bg-teal-50')
+                : 'text-slate-700 hover:border-slate-500'}`}>
               {route === r.id ? '● ' : '○ '}{r.label}
             </button>
           ))}
@@ -360,7 +366,7 @@ export default function S2() {
       </div>
 
       {/* §11 배지 — 항상 표시 (툴팁 아님). 실행 전에는 기본 문구, 실행하면 서버 게이트 값 */}
-      <div className="grid grid-cols-2 gap-3 mb-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3 [&>*]:min-w-0 break-words">
         <BadgeCard no="11-1" b={routeBadge} source={live ? '서버 게이트 값' : '기본 문구 — 실행 시 서버 값으로 갱신'} live={!!live} accent={route === 'gemma' ? ROSE : BEDROCK}>
           <div className="mt-1 text-[11px] text-slate-400">
             모델 ID <span className="font-mono text-teal-900">{live?.modelId || fb.modelId}</span> · Tier {live?.tier || fb.tier}
@@ -368,10 +374,10 @@ export default function S2() {
             {' '}· <span style={{ color: BEDROCK }}>{live?.badge?.region || fb.regionBadge}</span>
           </div>
           {route === 'claude' && (
-            <div className="mt-1 text-[11px] text-slate-500">Tier 2 PII 추론 경로는 이 요청에서 미사용 — 선택하면 운영(IDC GPU + vLLM, EKS Hybrid Nodes) 대신 데모 대체(Bedrock Gemma 4 31B @ us-west-2, GPU 미구성)로 나간다.</div>
+            <div className="mt-1 text-sm text-slate-700">Claude는 개인정보 처리 후 상담 설명을 만듭니다. 개인정보 전처리는 위에서 선택한 EKS 모델이 별도로 수행합니다.</div>
           )}
           {route === 'gemma' && (
-            <div className="mt-1 text-[11px] text-[#E90061]">이 경로는 IDC GPU 가 아니다 — us-west-2 의 Bedrock Gemma 로 직접 호출된다 (교차 리전 추론 미지원).</div>
+            <div className="mt-1 text-sm text-slate-700">설명용 Gemma는 us-west-2의 Bedrock으로 호출됩니다. EKS 개인정보 처리 모델의 선택과는 별개입니다.</div>
           )}
         </BadgeCard>
         <BadgeCard no="11-2" b={gateBadge || GATE_FALLBACK} source={gateBadge ? '서버 게이트 값' : '기본 문구 — 실행 시 서버 값으로 갱신'} live={!!gateBadge} accent={VPC}>
@@ -379,17 +385,19 @@ export default function S2() {
         </BadgeCard>
       </div>
 
-      {err && <div className="text-[#E90061] text-sm mb-3">{err}</div>}
+      {err && <div role="alert" className="text-[#E90061] text-sm mb-3">{err}</div>}
       {cached && <div className="mb-3 text-xs"><span className="chip text-amber-700 border-amber-400">캐시 응답</span> <span className="text-slate-400">{cached} — 실시간 응답이 아닙니다 (이전 실행 결과 재생)</span></div>}
 
-      <div className="grid grid-cols-[1fr_1fr] gap-4">
-        <div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="min-w-0">
           <div className="text-xs text-slate-500 mb-2">파이프라인 단계 (펼쳐보기) — 왼쪽 띠 색: <span style={{ color: VPC }}>■ VPC 내부</span> / <span style={{ color: BEDROCK }}>■ Bedrock</span></div>
-          {stages.length === 0 && !running && <div className="text-xs text-slate-400 panel p-3">실행하면 ⓪ 추론 경로부터 ⑧ Semantic 검증까지 단계가 여기에 쌓인다.</div>}
-          {stages.map((s, i) => <StagePanel key={i} s={s} boundary={boundary} />)}
+          {stages.length === 0 && !running && <div className="text-xs text-slate-400 panel p-3">실행하면 질문·설명 페이로드의 프라이버시 처리 결과와 기존 상담 단계가 여기에 쌓인다.</div>}
+          {stages.map((s, i) => s.step === 'privacy_input' || s.step === 'privacy_payload'
+            ? <PrivacyReceipt key={i} step={s.step} evidence={s} />
+            : <StagePanel key={i} s={s} boundary={boundary} />)}
           {running && <div className="text-xs text-slate-500 mt-1"><span className="blink">▌</span> 진행 중…</div>}
         </div>
-        <div className="panel p-4">
+        <div className="panel p-4 min-w-0">
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="w-2.5 h-2.5 rounded-full" style={{ background: BEDROCK }} />
             <b>⑥ LLM 설명 (숫자는 계산엔진 확정값만) → ⑦ 출력 가드레일 → 재식별</b>
@@ -398,7 +406,9 @@ export default function S2() {
             </span>
           </div>
           {done?.blocked
-            ? (done.gateRefused
+            ? (done.blockedBy === 'privacy'
+              ? <PrivacyBlocked message={done.message} code={done.privacy?.code} stage={done.privacy?.stage} types={done.privacy?.detectedTypes} />
+              : done.gateRefused
               ? <div className="text-[#E90061] text-sm border border-rose-300 rounded-lg p-3">
                 <div className="font-semibold">⛔ 익명화 게이트 차단 — 페이로드가 Bedrock 에 전달되지 않았습니다</div>
                 <div className="text-xs mt-1 text-rose-200">{done.message}</div>

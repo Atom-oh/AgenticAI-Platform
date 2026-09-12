@@ -9,11 +9,13 @@ export default withMermaid(defineConfig({
 
   themeConfig: {
     nav: [
-      { text: '시작', link: '/00-intro/' },
-      { text: '캐싱', link: '/04-caching/prompt-caching-basics' },
-      { text: '권한 제어', link: '/09-authorization/' },
-      { text: 'AgentCore', link: '/10-agentcore/runtime-deep-dive' },
-      { text: '보안·규제', link: '/12-security-korea/korea-fsc-regulation' },
+      { text: '주제별 가이드', items: [
+        { text: '시작', link: '/00-intro/' },
+        { text: '캐싱', link: '/04-caching/prompt-caching-basics' },
+        { text: '권한 제어', link: '/09-authorization/' },
+        { text: 'AgentCore', link: '/10-agentcore/runtime-deep-dive' },
+        { text: '보안·규제', link: '/12-security-korea/korea-fsc-regulation' },
+      ] },
       { text: '🚀 라이브 데모', link: '/14-demo/' },
     ],
 
@@ -200,6 +202,7 @@ export default withMermaid(defineConfig({
         items: [
           { text: '데모 안내 · 접속 정보', link: '/14-demo/' },
           { text: '아키텍처와 설계 결정', link: '/14-demo/architecture' },
+          { text: '마이데이터 개인정보 처리', link: '/14-demo/mydata-privacy' },
           { text: 'UX Studio 검증 루프', link: '/14-demo/ux-validation-loop' },
           { text: 'Design Studio 구현·사용성 점검', link: '/14-demo/studio-implementation-review' },
           { text: '외부 산출물 파일 반입', link: '/14-demo/studio-file-intake' },
