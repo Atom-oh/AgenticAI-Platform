@@ -125,6 +125,8 @@ def test_financial_fact_misclassification_blocks_instead_of_changing_the_answer(
     ("금리는 삼점오퍼센트입니다.", "삼점오"),
     ("대출금액은 KRW5000000000입니다.", "5000000000"),
     ("수수료는 123456.78입니다.", "123456.78"),
+    ("금리는 0.2 퍼센트 포인트입니다.", "포인트"),
+    ("금액은 5,000,000 KRW입니다.", "KRW"),
 ])
 def test_entire_financial_spans_are_protected(text, original):
     with pytest.raises(PrivacyFailure) as raised:

@@ -39,20 +39,18 @@ _FINANCIAL_LABEL = r"(?:금액|수수료|금리|이자|한도|잔액|원금|보�
 # Protect entire spans, including a sign, compound units and rate periods.
 # Short year counts are terms; four-digit birth/calendar years remain eligible
 # for DOB removal rather than being mistaken for loan durations.
-FACTS = re.compile(
-    rf"(?<![\d.,])(?:"
-    rf"(?:연|월|일)?\s*{_SIGN}{_NUMBER}\s*{_RATE_UNIT}"
-    rf"|{_SIGN}[영공일이삼사오육칠팔구십백천만억조점]+\s*{_RATE_UNIT}"
-    rf"|{_SIGN}(?:[₩$€£¥]\s*|{_CURRENCY}\s*){_SIGN}{_NUMBER}"
-    rf"|{_SIGN}{_NUMBER}\s*{_CURRENCY}"
-    rf"|{_FINANCIAL_LABEL}\s*(?:은|는|이|가|:|=)?\s*{_SIGN}{_NUMBER}"
-    rf"|{_SIGN}(?:{_NUMBER}\s*{_UNITS})+(?:{_NUMBER}\s*)?원?"
-    rf"|{_SIGN}{_KOREAN_MONEY}"
-    rf"|{_SIGN}{_NUMBER}\s*원"
-    rf"|{_SIGN}{_NUMBER}\s*개월"
-    rf"|{_SIGN}\d{{1,3}}(?:\.\d+)?\s*년)",
-    re.IGNORECASE,
-)
+FINANCIAL_PATTERNS = tuple(re.compile(rf"(?<![\d.,])(?:{pattern})", re.IGNORECASE) for pattern in (
+    rf"(?:연|월|일)?\s*{_SIGN}{_NUMBER}\s*{_RATE_UNIT}",
+    rf"{_SIGN}[영공일이삼사오육칠팔구십백천만억조점]+\s*{_RATE_UNIT}",
+    rf"{_SIGN}(?:[₩$€£¥]\s*|{_CURRENCY}\s*){_SIGN}{_NUMBER}",
+    rf"{_SIGN}{_NUMBER}\s*{_CURRENCY}",
+    rf"{_FINANCIAL_LABEL}\s*(?:은|는|이|가|:|=)?\s*{_SIGN}{_NUMBER}",
+    rf"{_SIGN}(?:{_NUMBER}\s*{_UNITS})+(?:{_NUMBER}\s*)?원?",
+    rf"{_SIGN}{_KOREAN_MONEY}",
+    rf"{_SIGN}{_NUMBER}\s*원",
+    rf"{_SIGN}{_NUMBER}\s*개월",
+    rf"{_SIGN}\d{{1,3}}(?:\.\d+)?\s*년",
+))
 
 
 def _plausible_numeric_identifier(kind, value):
@@ -101,7 +99,9 @@ def _nonce():
 def _financial_spans(text):
     emails = [(match.start(), match.end()) for kind, pattern in RULES if kind == "EMAIL"
               for match in pattern.finditer(text)]
-    return [match for match in FACTS.finditer(text)
+    # Independent scans retain overlaps: a label+number match must not consume
+    # the number before a longer currency/rate-unit expression is protected.
+    return [match for pattern in FINANCIAL_PATTERNS for match in pattern.finditer(text)
             if not any(start <= match.start() and match.end() <= end for start, end in emails)]
 
 
