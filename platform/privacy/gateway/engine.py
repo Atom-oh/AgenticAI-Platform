@@ -31,13 +31,16 @@ RESIDUALS = [
 ]
 _NUMBER = r"\d[\d,]*(?:\.\d+)?"
 _SIGN = r"(?:[+\-\u2212\uff0b\uff0d]\s*|(?:마이너스|플러스)\s*)?"
+_UNITS = r"(?:[십백천만억조]\s*)+"
+_KOREAN_MONEY = r"(?:[영공일이삼사오육칠팔구]\s*)?(?:[십백천만억조]\s*(?:[영공일이삼사오육칠팔구]\s*)?)+원"
 # Protect entire spans, including a sign, compound units and rate periods.
 # Short year counts are terms; four-digit birth/calendar years remain eligible
 # for DOB removal rather than being mistaken for loan durations.
 FACTS = re.compile(
     rf"(?<![\d.,])(?:"
-    rf"(?:연|월|일)?\s*{_SIGN}{_NUMBER}\s*%p?"
-    rf"|{_SIGN}(?:{_NUMBER}\s*(?:조|억|만|천)\s*)+(?:{_NUMBER}\s*)?원?"
+    rf"(?:연|월|일)?\s*{_SIGN}{_NUMBER}\s*(?:%p?|퍼센트(?:포인트)?|프로)"
+    rf"|{_SIGN}(?:{_NUMBER}\s*{_UNITS})+(?:{_NUMBER}\s*)?원?"
+    rf"|{_SIGN}{_KOREAN_MONEY}"
     rf"|{_SIGN}{_NUMBER}\s*원"
     rf"|{_SIGN}{_NUMBER}\s*개월"
     rf"|{_SIGN}\d{{1,3}}(?:\.\d+)?\s*년)"

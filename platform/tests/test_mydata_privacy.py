@@ -124,6 +124,23 @@ def test_missing_output_guardrail_replacement_never_streams_unchecked_text(harne
     assert not any(event["type"] == "s2.token" for event in sent)
 
 
+@pytest.mark.parametrize("action", ["ANONYMIZED", "GUARDRAIL_INTERVENED"])
+def test_output_removed_number_never_reappears_in_semantic_events(harness, monkeypatch, action):
+    removed = "123456789012"
+    def guardrail(text, source, grounding="", query=""):
+        return {"action": action if source == "OUTPUT" else "NONE",
+                "topics": [], "grounding": [], "pii": [], "words": [],
+                "message": "전월실적은 [제거됨]원입니다." if source == "OUTPUT" else ""}
+    monkeypatch.setattr(s2, "apply_guardrail", guardrail)
+    harness["make_stream"](f"전월실적은 {removed}원입니다.")
+    _, sent = _run({"query": Q})
+    assert removed not in json.dumps(sent, ensure_ascii=False)
+    assert removed not in json.dumps(harness["traces"], ensure_ascii=False)
+    if action == "GUARDRAIL_INTERVENED":
+        assert "semantic_check" not in _stages(sent)
+        assert sent[-1]["blockedBy"] == "guardrail_output"
+
+
 def test_oversized_answer_cannot_publish_an_unchecked_tail(harness):
     harness["make_stream"]("가" * 4001)
     _, sent = _run({"query": Q})

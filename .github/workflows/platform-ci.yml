@@ -79,6 +79,7 @@ jobs:
     defaults: { run: { working-directory: platform/infra } }
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - run: npm ci
@@ -90,4 +91,9 @@ jobs:
         env: { CDK_DEFAULT_ACCOUNT: '000000000000' }
       - run: python3 ../workspace/check_infra.py cdk.out/BankPlatform.template.json
       - name: Verify private MyData stack and API permission boundary
-        run: git show HEAD:platform/infra/lib/stack.ts | node ../privacy/deploy/check-infra.cjs
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "${PR_BASE_SHA}^{commit}"
+          git show "${PR_BASE_SHA}:platform/infra/lib/stack.ts" | node ../privacy/deploy/check-infra.cjs

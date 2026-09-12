@@ -113,6 +113,10 @@ def test_financial_fact_misclassification_blocks_instead_of_changing_the_answer(
     ("우대금리 차이는 -0.2%p입니다.", "-"),
     ("만기는 2년입니다.", "2"),
     ("금리는 연 3.5%입니다.", "연"),
+    ("대출금액은 5백만원입니다.", "5백만원"),
+    ("대출금액은 5천만원입니다.", "만원"),
+    ("금리는 3.5퍼센트입니다.", "3.5"),
+    ("대출금액은 오백만원입니다.", "오백만원"),
 ])
 def test_entire_financial_spans_are_protected(text, original):
     with pytest.raises(PrivacyFailure) as raised:

@@ -393,6 +393,12 @@ def handle(ctx: Ctx, body: dict) -> None:
         elif g_out.get("pii"):
             state["privacyDetectedTypes"] = sorted({item["type"] for item in g_out["pii"]})
             raise privacy.PrivacyUnavailable("PRIVACY_RESIDUAL_PII")
+        if g_out["action"] == "GUARDRAIL_INTERVENED":
+            state["blocked"] = True
+            c.done("s2", blocked=True, blockedBy="guardrail_output", message=final_answer,
+                     guardrailOut=g_out, privacy=state["privacy"],
+                     route=ri["route"], modelId=ri["modelId"], tier=ri["tier"], semanticLayer=semantic_on)
+            return
         # Publish only after the output guardrail has produced the deliverable.
         c.token("s2", final_answer)
         if mode in ("bridge", "direct"):
@@ -402,7 +408,7 @@ def handle(ctx: Ctx, body: dict) -> None:
             fin = _finalize_local(c.trace_id, final_answer, prep["allowedNumbers"])
 
         # ⑧ Semantic 검증 — 모델이 말한 '전월실적' vs 계산엔진 (§6 데모 포인트, §12.4 출력 검증기)
-        chk = semantic_check(answer, semantic_on,
+        chk = semantic_check(final_answer, semantic_on,
                              (metric_by_engine or {}).get(PREV_MONTH_METRIC) if metric_by_engine else None,
                              {**(prep.get("metricDiagnostics") or {}), **(metric_by_engine or {})},  # 당월실적 오인 진단 포함
                              definition=(prep.get("metricDefinitions") or {}).get(PREV_MONTH_METRIC, ""))
