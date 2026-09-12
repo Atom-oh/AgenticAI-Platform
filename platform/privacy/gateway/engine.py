@@ -33,18 +33,50 @@ _NUMBER = r"\d[\d,]*(?:\.\d+)?"
 _SIGN = r"(?:[+\-\u2212\uff0b\uff0d]\s*|(?:마이너스|플러스)\s*)?"
 _UNITS = r"(?:[십백천만억조]\s*)+"
 _KOREAN_MONEY = r"(?:[영공일이삼사오육칠팔구]\s*)?(?:[십백천만억조]\s*(?:[영공일이삼사오육칠팔구]\s*)?)+원"
+_RATE_UNIT = r"(?:%\s*(?:p|포인트)?|퍼센트(?:\s*포인트)?|프로(?:\s*포인트)?|percent(?:age)?(?:\s+points?)?|basis\s+points?|bps?|pp)"
+_CURRENCY = r"(?:KRW|USD|EUR|JPY|GBP|CNY|CHF|AUD|CAD|SGD|HKD|NZD|원화|미화|달러|유로|엔화|위안)"
 # Protect entire spans, including a sign, compound units and rate periods.
 # Short year counts are terms; four-digit birth/calendar years remain eligible
 # for DOB removal rather than being mistaken for loan durations.
 FACTS = re.compile(
     rf"(?<![\d.,])(?:"
-    rf"(?:연|월|일)?\s*{_SIGN}{_NUMBER}\s*(?:%p?|퍼센트(?:포인트)?|프로)"
+    rf"(?:연|월|일)?\s*{_SIGN}{_NUMBER}\s*{_RATE_UNIT}"
+    rf"|{_SIGN}[영공일이삼사오육칠팔구십백천만억조점]+\s*{_RATE_UNIT}"
+    rf"|{_SIGN}(?:[₩$€£¥]\s*|{_CURRENCY}\s+){_SIGN}{_NUMBER}"
+    rf"|{_SIGN}{_NUMBER}\s+{_CURRENCY}"
     rf"|{_SIGN}(?:{_NUMBER}\s*{_UNITS})+(?:{_NUMBER}\s*)?원?"
     rf"|{_SIGN}{_KOREAN_MONEY}"
     rf"|{_SIGN}{_NUMBER}\s*원"
     rf"|{_SIGN}{_NUMBER}\s*개월"
-    rf"|{_SIGN}\d{{1,3}}(?:\.\d+)?\s*년)"
+    rf"|{_SIGN}\d{{1,3}}(?:\.\d+)?\s*년)",
+    re.IGNORECASE,
 )
+
+
+def _plausible_numeric_identifier(kind, value):
+    """Do not delete ambiguous numeric expressions under an arbitrary label."""
+    if not any(char.isdigit() for char in value):
+        return True
+    digits = "".join(char for char in value if char.isdigit())
+    compact = re.sub(r"[\s().+\-]", "", value)
+    if kind == "PHONE":
+        return compact.isdigit() and 8 <= len(digits) <= 15
+    if kind == "RRN":
+        return re.fullmatch(r"\d{6}[- ]?[1-8\d*][\d*]{6}", value) is not None
+    if kind == "CARD":
+        return re.fullmatch(r"[\d*]{13,19}", compact) is not None
+    if kind == "ACCOUNT":
+        return (re.fullmatch(r"(?:CUST|ACCT)-\d{3,}", value) is not None
+                or (re.fullmatch(r"[A-Za-z0-9 \-]+", value) is not None
+                    and 10 <= len(digits) <= 34 and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)))
+    if kind == "DOB":
+        return (re.fullmatch(r"\d{6,8}", compact) is not None
+                or re.fullmatch(r"\d{2,4}(?:년|[./-])\s*\d{1,2}(?:월|[./-])\s*\d{1,2}일?", value) is not None)
+    if kind == "PASSPORT":
+        return compact.isalnum() and any(char.isalpha() for char in compact) and 6 <= len(compact) <= 12
+    if kind == "ADDRESS":
+        return any(char.isalpha() for char in value)
+    return False
 
 
 def _nonce():
@@ -133,6 +165,8 @@ def deidentify(text: str, model: Model, *, infer=invoke_model, allow_tokens: boo
     if any(start < fact_end and end > fact_start
            for start, end, _ in chosen for fact_start, fact_end in protected):
         raise PrivacyFailure("financial-facts-changed")
+    if any(not _plausible_numeric_identifier(kind, text[start:end]) for start, end, kind in chosen):
+        raise PrivacyFailure("ambiguous-numeric-entity")
     offset = 0
     for start, end, kind in chosen:
         value = text[start:end]

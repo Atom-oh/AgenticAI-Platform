@@ -117,6 +117,12 @@ def test_financial_fact_misclassification_blocks_instead_of_changing_the_answer(
     ("대출금액은 5천만원입니다.", "만원"),
     ("금리는 3.5퍼센트입니다.", "3.5"),
     ("대출금액은 오백만원입니다.", "오백만원"),
+    ("대출금액은 ₩5,000,000입니다.", "5,000,000"),
+    ("대출금액은 KRW 5,000,000입니다.", "5,000,000"),
+    ("대출금액은 5,000,000 KRW입니다.", "5,000,000"),
+    ("우대 차이는 0.2 퍼센트 포인트입니다.", "포인트"),
+    ("수수료는 USD 20.00입니다.", "20.00"),
+    ("금리는 삼점오퍼센트입니다.", "삼점오"),
 ])
 def test_entire_financial_spans_are_protected(text, original):
     with pytest.raises(PrivacyFailure) as raised:
@@ -136,6 +142,12 @@ def test_partial_entity_overlap_blocks_but_contained_entities_are_fully_redacted
         {"type": "ADDRESS", "original": "테스트구"},
     ]))
     assert "서울시" not in result["text"] and "테스트구" not in result["text"]
+
+
+def test_numeric_financial_value_cannot_be_disguised_as_an_account_entity():
+    with pytest.raises(PrivacyFailure):
+        deidentify("확인 값: 5,000,000", MODEL,
+                   infer=lambda *_: reply([{"type": "ACCOUNT", "original": "5,000,000"}]))
 
 
 def test_same_entity_gets_request_local_tokens_not_a_hash_of_the_original():
