@@ -64,6 +64,21 @@ template.hasResourceProperties('AWS::Lambda::Function', {
   VpcConfig: { SubnetIds: privacyProps.privacySubnetIds },
 });
 const json = template.toJSON();
+const ec2Actions = ['ec2:CreateNetworkInterface', 'ec2:DescribeNetworkInterfaces',
+  'ec2:DescribeSubnets', 'ec2:DeleteNetworkInterface',
+  'ec2:AssignPrivateIpAddresses', 'ec2:UnassignPrivateIpAddresses'].sort();
+const statements = Object.values(json.Resources)
+  .filter(r => r.Type === 'AWS::IAM::Policy').flatMap(r => r.Properties.PolicyDocument.Statement);
+const eniAllow = statements.find(s => s.Effect === 'Allow'
+  && [].concat(s.Action).includes('ec2:DeleteNetworkInterface'));
+assert.deepEqual([].concat(eniAllow.Action).sort(), ec2Actions);
+assert.equal(eniAllow.Resource, '*', 'Lambda VPC preflight requires all-resource ENI grants');
+assert.deepEqual(eniAllow.Condition, { StringEquals: { 'aws:RequestedRegion': env.region } });
+const handlerDeny = statements.find(s => s.Effect === 'Deny'
+  && [].concat(s.Action).includes('ec2:DeleteNetworkInterface'));
+assert.deepEqual([].concat(handlerDeny.Action).sort(), ec2Actions);
+assert.ok(handlerDeny.Condition.ArnEquals['lambda:SourceFunctionArn'],
+  'Handler code must remain denied all six EC2 operations');
 const resourceId = type => Object.keys(json.Resources).find(id => json.Resources[id].Type === type);
 const relayId = resourceId('AWS::Lambda::Function');
 const relayPolicyId = resourceId('AWS::IAM::Policy');

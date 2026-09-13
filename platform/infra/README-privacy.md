@@ -88,11 +88,13 @@ plane/graph contexts preserved. Do not deploy all stacks or substitute the old
 ## SG, IAM, and target binding contract
 
 The relay has no Function URL or public HTTP route. Its IAM role can write only
-its own retained log group and manage Lambda ENIs: creation references the exact
-subnets/relay SG; delete/assign/unassign reference network interfaces in this VPC.
-Describe actions require a wildcard resource and are region-conditioned. A
-`lambda:SourceFunctionArn` deny prevents the handler itself from using those EC2
-permissions. The Lambda depends on the attached policy before creation.
+its own retained log group and grants Lambda the six documented VPC ENI
+operations on all resources, constrained to Seoul. The first deployment failed
+Lambda's `DeleteNetworkInterface` preflight with resource/VPC-scoped grants.
+The supported grants are therefore not described as VPC-scoped IAM permissions.
+A `lambda:SourceFunctionArn` deny prevents the handler itself from using those
+EC2 permissions. The function's VPC configuration fixes its two subnets and relay
+SG; the Lambda depends on the attached policy before creation.
 
 The NLB is internal, TCP 8080, with only relay-SG ingress. Relay egress references
 that NLB SG; NLB egress and its one additive existing-node-SG ingress rule use

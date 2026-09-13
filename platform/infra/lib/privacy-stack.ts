@@ -113,31 +113,18 @@ export class BankPlatformPrivacyStack extends cdk.Stack {
       resources: [`${logGroup.logGroupArn}:*`],
     }));
     const regionCondition = { StringEquals: { 'aws:RequestedRegion': this.region } };
-    const ec2Arn = (resource: string, resourceName: string) =>
-      this.formatArn({ service: 'ec2', resource, resourceName,
-        arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME });
+    // Lambda's VPC role preflight requires these six actions on all resources.
+    // Resource-scoped DeleteNetworkInterface with ec2:Vpc failed CreateFunction
+    // in the real rollout. Constrain the service grants by region and deny the
+    // handler itself below, as recommended in Lambda's VPC security guidance.
     role.addToPolicy(new iam.PolicyStatement({
-      actions: ['ec2:CreateNetworkInterface'],
-      resources: [
-        ec2Arn('network-interface', '*'),
-        ...props.privacySubnetIds.map(id => ec2Arn('subnet', id)),
-        ec2Arn('security-group', relaySg.securityGroupId),
+      actions: [
+        'ec2:CreateNetworkInterface', 'ec2:DescribeNetworkInterfaces',
+        'ec2:DescribeSubnets', 'ec2:DeleteNetworkInterface',
+        'ec2:AssignPrivateIpAddresses', 'ec2:UnassignPrivateIpAddresses',
       ],
+      resources: ['*'],
       conditions: regionCondition,
-    }));
-    role.addToPolicy(new iam.PolicyStatement({
-      actions: ['ec2:DeleteNetworkInterface', 'ec2:AssignPrivateIpAddresses', 'ec2:UnassignPrivateIpAddresses'],
-      resources: [ec2Arn('network-interface', '*')],
-      conditions: {
-        ...regionCondition,
-        ArnEquals: { 'ec2:Vpc': ec2Arn('vpc', props.privacyVpcId) },
-      },
-    }));
-    // EC2 Describe* does not support resource-level permissions. This is the
-    // required VPCAccess discovery portion, constrained to the deployment region.
-    role.addToPolicy(new iam.PolicyStatement({
-      actions: ['ec2:DescribeNetworkInterfaces', 'ec2:DescribeSubnets'],
-      resources: ['*'], conditions: regionCondition,
     }));
     // Lambda's service may manage Hyperplane ENIs; the handler itself may not.
     role.addToPolicy(new iam.PolicyStatement({
