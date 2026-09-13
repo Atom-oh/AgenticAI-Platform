@@ -174,3 +174,79 @@ test('late optional discovery cannot restore a prior identity after logout', { t
     assert.deepEqual(ui.errors, []);
   } finally { await ui.browser.close(); }
 });
+
+for (const resourceDenied of [false, true]) {
+  test(`shared pending analysis uses its authorized endpoint after raw-job denial (${resourceDenied})`, { timeout: 15000 }, async () => {
+    let rawDenied = false;
+    const ui = await openUI('S1', { hash: '#/s1?projectId=team-a&analysisId=ana-1',
+      route: async ({ target, state, json }) => {
+        state.analysis.projectId = 'team-a'; state.analysis.createdBy = 'teammate';
+        state.document.projectId = 'team-a';
+        if (target === '/jobs/job-1') { rawDenied = true; await json({ error: 'Raw job requester only', code: 'forbidden' }, 403); return true; }
+        if (target === '/impact-analyses/ana-1') {
+          if (rawDenied && resourceDenied) { await json({ error: '합성 원문 접근 권한이 회수되었습니다.', code: 'forbidden' }, 403); return true; }
+          state.analysis.status = rawDenied ? 'needs_review' : 'running';
+        }
+        return false;
+      } });
+    try {
+      if (resourceDenied) {
+        await ui.page.getByText('합성 원문 접근 권한이 회수되었습니다.', { exact: false }).waitFor();
+        assert.equal(await ui.page.getByRole('region', { name: '분석 결과', exact: true }).count(), 0);
+      } else {
+        await ui.page.getByRole('region', { name: '분석 결과', exact: true }).getByText('담당자 검토 필요', { exact: true }).waitFor();
+        assert.equal(await ui.page.getByText('Raw job requester only', { exact: false }).count(), 0);
+        await ui.page.getByRole('link', { name: /E1 · 근거 문단/ }).first().waitFor();
+      }
+      assert(rawDenied); assert.deepEqual(ui.errors, []);
+    } finally { await ui.browser.close(); }
+  });
+}
+
+test('shared processing source recovers via source reads after raw-job denial', { timeout: 15000 }, async () => {
+  let denied = false;
+  const ui = await openUI('documents/LibraryPage', {
+    hash: '#/documents?projectId=team-a&documentId=doc-1&revisionId=doc-1--r1',
+    route: async ({ target, state, json }) => {
+      state.document.projectId = 'team-a'; state.revision.createdBy = 'teammate';
+      state.revision.jobId = 'shared-extract';
+      state.revision.status = denied ? 'draft' : 'processing';
+      if (target === '/jobs/shared-extract') { denied = true; await json({ error: 'Raw job requester only', code: 'forbidden' }, 403); return true; }
+      return false;
+    },
+  });
+  try {
+    await ui.page.getByRole('button', { name: '이 버전 검토 요청', exact: true }).waitFor();
+    assert(denied); assert.equal(await ui.page.getByText('Raw job requester only', { exact: false }).count(), 0);
+    assert.deepEqual(ui.errors, []);
+  } finally { await ui.browser.close(); }
+});
+
+test('explicit unlinked registration remains available when reference discovery fails', { timeout: 15000 }, async () => {
+  const ui = await openUI('documents/LibraryPage', { hash: '#/documents?ref=DOC-missing', route: async ({ target, json }) => {
+    if (target !== '/documents/references') return false;
+    await json({ error: 'Synthetic catalog unavailable', code: 'unavailable' }, 503); return true;
+  } });
+  try {
+    await ui.page.getByLabel('원문 파일', { exact: true }).setInputFiles({ name: 'synthetic.txt', mimeType: 'text/plain', buffer: Buffer.from('합성 원문') });
+    await ui.page.getByRole('button', { name: '연결 없이 등록하기', exact: true }).click();
+    assert.equal(await ui.page.getByRole('button', { name: '원문 전송', exact: true }).isEnabled(), true);
+    assert.equal(await ui.page.getByLabel('관계 목록의 연결 대상', { exact: true }).inputValue(), '');
+    assert.deepEqual(ui.errors, []);
+  } finally { await ui.browser.close(); }
+});
+
+test('an unsupported graph reference or malformed model catalog cannot crash S1', { timeout: 15000 }, async () => {
+  const ui = await openUI('S1', { hash: '#/s1?analysisId=ana-1', route: async ({ state, target, json }) => {
+    state.result.candidates.documents = [{ id: 'document:external', label: 'Document', name: 'Synthetic unsupported reference' }];
+    if (target === '/config') { await json({ defaultModel: 'missing' }); return true; }
+    return false;
+  } });
+  try {
+    await ui.page.getByText('Synthetic unsupported reference', { exact: true }).first().waitFor();
+    await ui.page.getByText('원문 연결 확인 필요', { exact: true }).waitFor();
+    await ui.page.getByRole('link', { name: '새 분석 작성', exact: true }).click();
+    await ui.page.getByText(/모델 목록 형식을 확인하지 못했습니다/).waitFor();
+    assert.deepEqual(ui.errors, []);
+  } finally { await ui.browser.close(); }
+});

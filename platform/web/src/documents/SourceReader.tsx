@@ -4,7 +4,7 @@ import { downloadOriginal, sourceHref } from './client';
 import { libraryHref, Notice, revisionHref, useDocumentScope, usePrivateTask } from './DocumentScope';
 import type { DocumentDetail, Job, Reference, Role, SourceView } from './types';
 import { dateLabel, Details, Progress, roleLabel, Sample, Status, statusLabel } from './presentation';
-import { watchDocumentJob } from './useDocumentJob';
+import { watchAuthorizedResource, watchDocumentJob } from './useDocumentJob';
 import UploadForm from './UploadForm';
 
 type ReaderState = { detail: DocumentDetail; source: SourceView };
@@ -66,10 +66,19 @@ export default function SourceReader({ references, onChanged }: { references: Re
       if (!current() || !loaded) return;
       const revision = loaded.source.revision;
       if (revision.status === 'processing' && revision.jobId) {
-        const finalJob = await watchDocumentJob(client, revision.jobId, signal, next => { if (current()) setJob(next); });
-        if (current()) {
-          await load();
-          if (current() && finalJob.status === 'failed') setMessage('본문 추출을 완료하지 못했습니다. 처리 결과를 확인하고 지원하는 원문으로 새 버전을 등록하세요.');
+        try {
+          const finalJob = await watchDocumentJob(client, revision.jobId, signal, next => { if (current()) setJob(next); });
+          if (current()) {
+            await load();
+            if (current() && finalJob.status === 'failed') setMessage('본문 추출을 완료하지 못했습니다. 처리 결과를 확인하고 지원하는 원문으로 새 버전을 등록하세요.');
+          }
+        } catch (error) {
+          if (!(error instanceof WorkspaceError) || ![403, 404].includes(error.status)) throw error;
+          if (!current()) return;
+          setJob(undefined);
+          // A shared source can be readable while its creator's raw job is not.
+          // The source endpoint rechecks actual access on every refresh.
+          await watchAuthorizedResource(load, value => value.source.revision.status === 'processing', signal);
         }
       }
     });

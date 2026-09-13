@@ -19,7 +19,7 @@ from workspace.storage import Conflict
 
 
 class _HTMLText(HTMLParser):
-    _noncontent = frozenset({"head", "template"})
+    _noncontent = frozenset({"head", "template", "title"})
     _untranscribed = frozenset({
         "svg", "canvas", "iframe", "object", "embed", "img", "image", "picture",
         "video", "audio", "math", "applet", "frame", "frameset", "input",
@@ -45,6 +45,9 @@ class _HTMLText(HTMLParser):
             self.length += min(len(value), remaining)
 
     def handle_starttag(self, tag, attrs):
+        if self.hidden and self.hidden[-1] == "head" and tag not in {
+                "base", "link", "meta", "title", "style", "script", "template"}:
+            self.warnings.add("html-visible-content-not-transcribed")
         if tag in self._untranscribed:
             self.warnings.add("html-visible-content-not-transcribed")
         if tag == "template" and any(name.startswith("shadowroot") for name, _ in attrs):
@@ -83,6 +86,8 @@ class _HTMLText(HTMLParser):
             self.append("\n\n")
 
     def handle_data(self, data):
+        if self.hidden and self.hidden[-1] == "head" and data.strip():
+            self.warnings.add("html-visible-content-not-transcribed")
         if not self.hidden:
             self.append(data)
 

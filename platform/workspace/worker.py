@@ -261,13 +261,18 @@ class Worker:
             message = str(error)[:300] if isinstance(error, (ValueError, GateRefused, GateUnsupported)) else f"작업 처리 실패: {type(error).__name__}"
             if job.get("task") in ("document-finalize", "document-analysis"):
                 from documents.errors import DocumentError
+                from documents.jobs import fail_work
                 message = error.message if isinstance(error, DocumentError) else "문서 작업을 완료하지 못했습니다. 권한과 원문 상태를 확인하세요."
+                persisted = False
+                try:
+                    persisted = fail_work(self, owner, job, message)
+                except Exception:
+                    # Lost authority or unavailable storage cannot justify an
+                    # unfenced fallback write. Authorized reads can reconcile
+                    # stale work later; no result is published.
+                    pass
+                return {"status": "failed", "jobId": identifier, "failurePersisted": persisted}
             self._update(owner, "job", identifier, status="failed", error=message)
-            if job.get("task") in ("document-finalize", "document-analysis"):
-                kind, field = ("docrevision", "revisionId") if job["task"] == "document-finalize" else ("docanalysis", "analysisId")
-                target = self.storage.get(owner, kind, job["input"][field])
-                if target and target.get("status") in ("processing", "queued", "running"):
-                    self._update(owner, kind, target["id"], status="failed", error=message)
             if job["task"] == "release":
                 release = self.storage.get(owner, "release", job["input"]["releaseId"])
                 if release and release.get("status") != "ready":

@@ -818,3 +818,36 @@ def test_timeout_job_get_keeps_creator_and_source_access_checks(api):
     api.storage.put(owner, "document", {**doc, "readRoles": ["owner"]}, doc["version"])
     assert call(api, "GET", "/jobs/" + job["id"], actor="bob", project=pid)[0] == 403
     assert api.storage.get(owner, "job", job["id"]) == job
+
+
+def test_failed_job_repairs_target_when_worker_second_failure_write_is_interrupted(api, monkeypatch):
+    from workspace.worker import Worker
+    import documents.intake
+    result = upload(api)
+    worker = Worker(storage=api.storage)
+    def operation_fails(*args, **kwargs):
+        raise RuntimeError("synthetic operation failure")
+    monkeypatch.setattr(documents.intake, "finalize", operation_fails)
+    update = worker._update
+    def second_write_fails(owner, kind, identifier, **fields):
+        if kind == "docrevision":
+            raise OSError("synthetic interrupted target write")
+        return update(owner, kind, identifier, **fields)
+    monkeypatch.setattr(worker, "_update", second_write_fails)
+    outcome = worker.handle({"owner": "alice", "jobId": result["job"]["id"]})
+    assert outcome["status"] == "failed" and outcome["failurePersisted"] is True
+    failed = api.storage.get("alice", "job", result["job"]["id"])
+    assert failed["status"] == "failed" and failed.get("errorCode") != "job-timeout"
+    revision = api.storage.get("alice", "docrevision", result["revision"]["id"])
+    assert revision["status"] == "failed"
+    assert any({entry["Put"]["Item"]["sk"] for entry in tx["TransactItems"] if "Put" in entry}
+               == {"job#" + failed["id"], "docrevision#" + revision["id"]}
+               for tx in api.storage.table().transactions)
+    # Repair the legacy interrupted-write state without relabelling its error.
+    api.storage.put("alice", "docrevision", {**revision, "status": "processing"}, revision["version"])
+    status, value, _ = call(api, "GET", path(result))
+    assert status == 200 and value["revision"]["status"] == "failed"
+    repaired = api.storage.get("alice", "job", failed["id"])
+    assert repaired["status"] == "failed" and repaired.get("errorCode") == failed.get("errorCode")
+    assert repaired.get("stopReason") == failed.get("stopReason")
+    assert repaired["error"] == failed["error"]

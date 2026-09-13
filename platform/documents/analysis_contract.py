@@ -100,12 +100,14 @@ _CLAIMS = re.compile(
     r"|승인(?:\s*(?:절차|처리|검토))?(?:[이가은는])?\s*(?:완료|확정|성공|됨|되었|됐)"
     r"|자동(?:으로)?\s*승인"
     r"|승인\s*(?:했|하였|합니다)"
+    r"|승인(?:[이가은는])?\s*(?:입니다|이다|이에요|상태입니다)"
     r"|수정(?:\s*(?:대상|범위|여부|필요))?(?:[이가은는])?\s*(?:확정|완료|승인)"
     r"|실제\s*(?:은행|금융사)\s*(?:정책|규정|내규)[^.!?\n]{0,20}(?:적용|시행|인증|확정)"
     r"|(?:automatically|auto[- ]?)\s*approved"
     r"|(?:verification|validation|checks?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already|successfully)\s+){0,4}(?:passed|complete|successful)"
     r"|approval\s+(?:(?:has|have|had|is|was|been|now|already)\s+){0,4}(?:complete|granted|confirmed)"
     r"|(?:changes?|analysis|results?|findings?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already)\s+){0,4}(?:confirmed|approved|finalized|verified|validated)"
+    r"|\b(?:approved|verified|validated)\b"
     r"|official\s+(?:bank(?:ing)?\s+)?(?:policy|regulation))",
     re.IGNORECASE,
 )
@@ -146,9 +148,12 @@ def output_policy(value):
     for match in _CLAIMS.finditer(normalized):
         prefix = normalized[max(0, match.start() - 40):match.start()]
         suffix = normalized[match.end():match.end() + 60]
+        if match.group().lower() == "approved" and re.match(r"^\s+(?:sources?|originals?|documents?|references?)\b", suffix, re.IGNORECASE):
+            # Approval is an input-source attribute, not an analysis verdict.
+            continue
         if (_NEGATIVE_SUFFIX.match(suffix)
                 or _REVIEW_SUFFIX.match(suffix)
-                or re.search(r"\b(?:not|never|no)(?:\s+(?:claim|imply|mean|declare|all))?\s+$", prefix, re.IGNORECASE)):
+                or re.search(r"\b(?:not|never|no)(?:\s+(?:claim|imply|mean|declare|all|been|be|being|yet|fully|successfully)){0,5}\s+$", prefix, re.IGNORECASE)):
             continue
         violations.append("automatic-authority")
         break

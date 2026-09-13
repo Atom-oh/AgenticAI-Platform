@@ -75,7 +75,9 @@ export default function UploadForm({ document, references, onCancel }: {
     {(task.busy || checkpoint) && <div className="doc-progress" role="status">원문 전송 {progress}%
       <progress aria-label="원문 전송" value={progress} max={100} /></div>}
     {task.error && <Notice error>{task.error}</Notice>}
-    {awaitingReference && <Notice>요청한 연결 대상을 확인하고 있습니다. 목록이 로드된 뒤 전송하거나, 연결 대상을 직접 선택하세요. 연결하지 않음도 선택할 수 있습니다.</Notice>}
+    {awaitingReference && <Notice>요청한 연결 대상을 확인하고 있습니다. 목록이 로드된 뒤 전송하거나, 연결 대상을 직접 선택하세요.
+      <button type="button" onClick={() => { setReferenceChosen(true); setGraphRef(''); }}>연결 없이 등록하기</button>
+    </Notice>}
     <div className="doc-row"><button type="submit" className="doc-primary" disabled={task.busy || awaitingReference || !file || (!document && !title.trim())}>
       {task.busy ? '원문 전송 중…' : checkpoint ? '전송 다시 시도' : document ? '새 버전 전송' : '원문 전송'}
     </button></div>

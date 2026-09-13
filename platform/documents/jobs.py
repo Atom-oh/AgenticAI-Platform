@@ -29,18 +29,23 @@ def reconcile(host, scope, kind, target, *, library=None, documents=None):
         updated = job.get("updatedAt")
         active_timeout = (job.get("status") in ("queued", "running") and type(updated) is int
                           and now - updated > STALE_MS)
-        prior_timeout = job.get("status") == "failed" and job.get("errorCode") == "job-timeout"
-        if not active_timeout and not prior_timeout:
+        terminal_failure = job.get("status") == "failed"
+        if not active_timeout and not terminal_failure:
             return target
-    updates = {"status": "failed", "error": MESSAGE, "errorCode": "job-timeout" if job else "job-unavailable",
+    prior_failure = bool(job and job.get("status") == "failed")
+    error_code = (job.get("errorCode") or "job-failed") if prior_failure else ("job-timeout" if job else "job-unavailable")
+    message = "작업 실패 기록을 반영했습니다. 원문 상태를 확인하고 새 요청으로 다시 실행하세요." if prior_failure and error_code != "job-timeout" else MESSAGE
+    updates = {"status": "failed", "error": message, "errorCode": error_code,
                "finishedAt": now}
     if kind == "docrevision":
         updates.update(parseStatus="failed")
     writes = [library.write(kind, {**target, **updates}, target["version"])]
     if job:
-        writes.append(library.write("job", {**job, "status": "failed", "stopReason": "timeout",
-                      "errorCode": "job-timeout", "error": MESSAGE, "finishedAt": job.get("finishedAt", now)},
-                      job["version"]))
+        failed_job = job if prior_failure else {
+            **job, "status": "failed", "stopReason": "timeout", "errorCode": "job-timeout",
+            "error": MESSAGE, "finishedAt": now,
+        }
+        writes.append(library.write("job", failed_job, job["version"]))
     checks = library.checks(documents)
     if not job:
         checks.append({"owner": library.owner, "kind": "job", "id": target["jobId"], "version": None})
@@ -71,3 +76,42 @@ def expire_raw_job(host, scope, job):
         raise DocumentError(404, "job-unavailable", "작업 기록이 만료되었습니다.")
     authorize_job(host, scope, latest)
     return latest
+
+
+def fail_work(host, owner, job, message):
+    """Record a worker failure only while its current authority still permits it."""
+    from workspace.collaboration import Collaboration
+    data = job.get("input", {})
+    collaboration = getattr(host, "collaboration", None) or Collaboration(host.storage)
+    scope = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"))
+    if scope["owner"] != owner:
+        raise DocumentError(403, "forbidden", "작업의 문서함 범위가 일치하지 않습니다.")
+    if job.get("task") == "document-analysis":
+        from documents.analysis import authorize_analysis
+        authorized = authorize_analysis(host, scope, data.get("analysisId"))
+        library, target, documents = authorized["library"], authorized["analysis"], authorized["documents"]
+        kind = "docanalysis"
+        if target.get("createdBy") != scope["actor"]:
+            raise DocumentError(403, "forbidden", "분석 요청자가 일치하지 않습니다.")
+    elif job.get("task") == "document-finalize":
+        library = Library(host, scope)
+        document = library.document(data.get("documentId"), "edit")
+        target = library.revision(document, data.get("revisionId"))
+        documents, kind = [document], "docrevision"
+    else:
+        raise DocumentError(409, "job-changed", "문서 작업이 아닙니다.")
+    current = host.storage.get(owner, "job", job["id"])
+    if (not current or current.get("status") != "running" or current.get("input") != data
+            or current.get("task") != job["task"] or target.get("jobId") != job["id"]
+            or target.get("status") not in ("processing", "queued", "running")):
+        return False
+    now = host.storage.clock()
+    update = {"status": "failed", "error": message, "errorCode": "document-job-failed", "finishedAt": now}
+    if kind == "docrevision":
+        update["parseStatus"] = "failed"
+    library.commit([
+        library.write("job", {**current, "status": "failed", "error": message,
+                             "errorCode": "document-job-failed", "finishedAt": now}, current["version"]),
+        library.write(kind, {**target, **update}, target["version"]),
+    ], documents)
+    return True

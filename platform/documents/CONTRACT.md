@@ -37,9 +37,13 @@ files. Unlinked records must remain explicitly unlinked.
   complete returns `list-scan-limit` without rows or cursor. Document lookahead
   participates in the final permission fence.
 - Canonical `/documents/config` authorization is independent of project-discovery
-  indexes. Missing or unavailable discovery cannot veto an otherwise authorized
+indexes. Missing or unavailable discovery cannot veto an otherwise authorized
   personal collection or shared link; scope mismatch and actual authorization
   failures still block private content.
+- A readable shared source/analysis does not imply access to its requester's
+  raw job. On a raw-job 403/404, the UI refreshes the authorized resource instead;
+  denial from that resource still clears private state. Unlinked registration
+  has an explicit action independent of optional reference discovery.
 
 ## Library records
 
@@ -168,9 +172,18 @@ analysis URL once source bindings exist and every current source-access check
 passes. Before binding, only its requester can read the analysis; raw job
 records are also requester-only. The generic workspace API has no public job
 retry route.
-Stale document work reconciles its job and matching pending target to terminal
+Stale document work and already-failed jobs reconcile their matching pending target to terminal
 failure in one version/authority-fenced transaction. Reads and same-request
 reposts expose that failure; they do not automatically rerun timed-out work.
+An existing non-timeout failure keeps its original job error/category; it is not
+relabelled as a timeout when repairing an interrupted target update.
+Workers also publish ordinary document failures through this authority-fenced
+job/target transaction. If current authority or storage no longer permits that
+transaction, no unfenced fallback updates the private target; authorized later
+reads reconcile stale work.
+Exact request replays resolve their stored identity and frozen model choice
+before new-request graph admission. Removing a regulation does not erase an
+already recorded terminal outcome.
 Completed/approved targets and fresh heartbeats are preserved. An expired,
 missing job fails its pending target under a transactional absence check,
 without inventing another job record.

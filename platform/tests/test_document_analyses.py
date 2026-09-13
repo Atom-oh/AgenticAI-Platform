@@ -460,3 +460,33 @@ def test_missing_analysis_job_recovery_is_fenced_against_a_new_job(api):
         **job, "status": "queued"})
     assert result(api, created)[0] == 409
     assert api.storage.get("alice", "docanalysis", created["analysis"]["id"])["status"] == "queued"
+
+
+def test_exact_request_replay_survives_removed_regulation(api, monkeypatch):
+    catalog(api)
+    created = start(api)
+    monkeypatch.setattr(api.graph_store, "get_node", lambda identifier: None)
+    done, calls = run(api, created)
+    assert done["status"] == "failed" and calls == []
+    invocations = len(api.lambda_client.calls)
+    replay = start(api)
+    assert replay["analysis"]["id"] == created["analysis"]["id"]
+    assert replay["analysis"]["status"] == replay["job"]["status"] == "failed"
+    assert len(api.lambda_client.calls) == invocations
+
+
+def test_worker_cannot_write_failure_after_source_authority_is_revoked(api):
+    catalog(api); team = project(api); regulation = source(api, "REG-1", project_id=team)
+    created = start(api, actor="bob", project_id=team)
+    snapshots = {}
+    def revoke_during_model(system, user):
+        owner = "project:" + team
+        snapshots["job"] = api.storage.get(owner, "job", created["job"]["id"])
+        snapshots["analysis"] = api.storage.get(owner, "docanalysis", created["analysis"]["id"])
+        doc = api.storage.get(owner, "document", regulation["document"]["id"])
+        api.storage.put(owner, "document", {**doc, "readRoles": ["owner"]}, doc["version"])
+        return json.dumps({"summary": "검토가 필요합니다.", "findings": []}), {}, {}
+    done, _ = run(api, created, model=revoke_during_model, owner="project:" + team)
+    assert done["status"] == "failed"
+    assert api.storage.get("project:" + team, "job", created["job"]["id"]) == snapshots["job"]
+    assert api.storage.get("project:" + team, "docanalysis", created["analysis"]["id"]) == snapshots["analysis"]

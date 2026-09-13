@@ -21,3 +21,22 @@ export async function watchDocumentJob(client: WorkspaceClient, id: string, sign
   }
   throw new WorkspaceError('진행 상태 조회를 멈췄습니다. 다시 조회하면 저장된 작업을 확인할 수 있습니다.');
 }
+
+export async function watchAuthorizedResource<T>(
+  load: () => Promise<T | undefined>, pending: (value: T) => boolean, signal: AbortSignal,
+) {
+  const deadline = Date.now() + 30 * 60_000;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const value = await load();
+    signal.throwIfAborted();
+    if (value === undefined || !pending(value)) return value;
+    await new Promise<void>((resolve, reject) => {
+      const cancel = () => { clearTimeout(timer); reject(new DOMException('취소됨', 'AbortError')); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, 1500);
+      signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) cancel();
+    });
+  }
+  throw new WorkspaceError('진행 상태 조회를 멈췄습니다. 다시 조회하면 저장된 상태를 확인할 수 있습니다.');
+}

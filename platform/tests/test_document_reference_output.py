@@ -27,3 +27,17 @@ def test_unknown_normalized_reference_is_rejected_before_persisted_checked_statu
     assert value["verification"]["references"] == "failed"
     assert value["findings"] == []
     assert unknown not in value["summary"]
+
+
+@pytest.mark.parametrize("claim", ["Approved.", "Verified!", "분석 결과는 승인입니다."])
+def test_standalone_authority_claims_are_not_persisted_as_model_explanations(api, claim):
+    catalog(api); source(api, "REG-1")
+    created = start(api)
+    def response(system, user):
+        return json.dumps({"summary": claim, "findings": [
+            {"nodeId": "DOC-1", "reason": "원문 검토", "citationIds": ["E1"]},
+        ]}), {}, {}
+    run(api, created, model=response)
+    value = result(api, created)[1]["result"]
+    assert value["verification"]["outputPolicy"] == "failed"
+    assert value["findings"] == [] and value["summary"] != claim

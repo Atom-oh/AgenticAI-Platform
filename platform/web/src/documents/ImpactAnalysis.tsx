@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resource, WorkspaceError } from '../workspace/client';
 import { documentHref, newRequest, sourceHref } from './client';
 import { analysisHref, libraryHref, Notice, revisionHref, useDocumentQuery, useDocumentScope, usePrivateTask } from './DocumentScope';
 import type { Analysis, AnalysisView, Candidate, DocumentRecord, Evidence, Job, Reference } from './types';
 import { dateLabel, Details, Progress, roleLabel, Sample, Status } from './presentation';
-import { watchDocumentJob } from './useDocumentJob';
+import { watchAuthorizedResource, watchDocumentJob } from './useDocumentJob';
 
 type ModelConfig = { models: { id: string; label: string }[]; defaultModel: string };
 type ReferenceList = { references: Reference[]; backend: string };
@@ -52,7 +52,7 @@ export default function ImpactAnalysis({ preset }: { preset: string }) {
         {stored.error && <Notice error>{stored.error}</Notice>}
         {stored.data && !analyses.length && <p>저장된 분석이 없습니다.</p>}
         <ul className="doc-list">{analyses.map(analysis => <li key={analysis.id} className="doc-stack">
-          <a href={analysisHref(analysis.id, route.projectId)} aria-current={analysis.id === route.analysisId ? 'page' : undefined}>{analysis.query}</a>
+          <SavedAnalysisLink analysis={analysis} />
           <div className="doc-row"><Status value={analysis.status} /><span className="doc-muted">{dateLabel(analysis.createdAt)}</span></div>
         </li>)}</ul>
         {cursor && <button disabled={pagination.busy} onClick={() => void pagination.run(async (signal, current) => {
@@ -77,6 +77,9 @@ export default function ImpactAnalysis({ preset }: { preset: string }) {
 function AnalysisForm({ preset, references }: { preset: string; references: Reference[] }) {
   const { route, client } = useDocumentScope();
   const models = useDocumentQuery<ModelConfig>('/config');
+  const availableModels = useMemo(() => Array.isArray(models.data?.models)
+    ? models.data.models.filter(row => row && typeof row.id === 'string' && typeof row.label === 'string') : [], [models.data]);
+  const malformedModels = models.data !== undefined && !Array.isArray(models.data.models);
   const [regulation, setRegulation] = useState('');
   const [query, setQuery] = useState(preset);
   const [model, setModel] = useState('');
@@ -85,14 +88,14 @@ function AnalysisForm({ preset, references }: { preset: string; references: Refe
   const task = usePrivateTask();
   const request = useRef<{ key: string; id: string }>();
   useEffect(() => {
-    if (models.data) setModel(value => models.data!.models.some(item => item.id === value) ? value
-      : models.data!.models.find(item => item.id === models.data!.defaultModel)?.id || models.data!.models[0]?.id || '');
-  }, [models.data]);
+    if (models.data) setModel(value => availableModels.some(item => item.id === value) ? value
+      : availableModels.find(item => item.id === models.data!.defaultModel)?.id || availableModels[0]?.id || '');
+  }, [models.data, availableModels]);
   const source = readiness.data?.documents.find(document =>
     document.graphRef === regulation && document.status === 'active' && document.approvedRevisionId);
   return <form className="doc-panel doc-stack" onSubmit={event => {
     event.preventDefault();
-    if (!regulation || !query.trim() || !models.data?.models.some(item => item.id === model) || task.busy) return;
+    if (!regulation || !query.trim() || !availableModels.some(item => item.id === model) || task.busy) return;
     const key = JSON.stringify([regulation, query.trim(), model]);
     if (request.current?.key !== key) request.current = { key, id: newRequest() };
     const requestId = request.current.id;
@@ -122,13 +125,14 @@ function AnalysisForm({ preset, references }: { preset: string; references: Refe
         {readiness.error && <Notice error>{readiness.error}</Notice>}
       </div>}
       <label>변경 내용 또는 검토 질문<textarea aria-label="변경 내용 또는 검토 질문" required maxLength={2000} value={query} onChange={event => setQuery(event.target.value)} /></label>
-      <label>분석 모델<select aria-label="분석 모델" value={model} disabled={!models.data?.models.length} onChange={event => setModel(event.target.value)}>
-        {!models.data?.models.length && <option value="">사용 가능한 모델 없음</option>}
-        {models.data?.models.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}
+      <label>분석 모델<select aria-label="분석 모델" value={model} disabled={!availableModels.length} onChange={event => setModel(event.target.value)}>
+        {!availableModels.length && <option value="">사용 가능한 모델 없음</option>}
+        {availableModels.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}
       </select></label>
     </fieldset>
     {models.error && <Notice error>{models.error}<button type="button" onClick={models.reload}>모델 목록 다시 조회</button></Notice>}
-    {!models.busy && models.data && !models.data.models.length && <Notice>사용 가능한 모델이 설정되지 않았습니다. 담당자에게 구성을 확인하세요.</Notice>}
+    {malformedModels && <Notice error>모델 목록 형식을 확인하지 못했습니다. <button type="button" onClick={models.reload}>모델 목록 다시 조회</button></Notice>}
+    {!models.busy && models.data && !availableModels.length && !malformedModels && <Notice>사용 가능한 모델이 설정되지 않았습니다. 담당자에게 구성을 확인하세요.</Notice>}
     {task.error && <Notice error>{task.error} 같은 입력으로 다시 시도하면 동일한 요청을 확인합니다.</Notice>}
     <div className="doc-row"><button className="doc-primary" type="submit" disabled={task.busy || !regulation || !query.trim() || !model}>
       {task.busy ? '분석 요청 중…' : '영향 분석 시작'}</button></div>
@@ -159,10 +163,17 @@ function StoredAnalysis() {
       const value = await load();
       if (!value || !current()) return;
       if (['queued', 'running'].includes(value.analysis.status)) {
-        const finished = await watchDocumentJob(client, value.analysis.jobId, signal, next => { if (current()) setJob(next); });
-        if (current()) {
-          await load();
-          if (current() && finished.status === 'failed') throw new WorkspaceError('분석 작업을 완료하지 못했습니다. 저장된 상태를 확인하고 새 분석을 요청하세요.');
+        try {
+          const finished = await watchDocumentJob(client, value.analysis.jobId, signal, next => { if (current()) setJob(next); });
+          if (current()) {
+            await load();
+            if (current() && finished.status === 'failed') throw new WorkspaceError('분석 작업을 완료하지 못했습니다. 저장된 상태를 확인하고 새 분석을 요청하세요.');
+          }
+        } catch (error) {
+          if (!(error instanceof WorkspaceError) || ![403, 404].includes(error.status)) throw error;
+          if (!current()) return;
+          setJob(undefined);
+          await watchAuthorizedResource(load, value => ['queued', 'running'].includes(value.analysis.status), signal);
         }
       }
     });
@@ -275,7 +286,7 @@ function StoredAnalysis() {
                 {candidate.label === 'Document' && <div className="doc-row">
                   {result.sources.filter(source => source.graphRef === candidate.id).map(source => <SourceLink key={source.revisionId} source={source} />)}
                   {!result.sources.some(source => source.graphRef === candidate.id) && <>
-                    <span>사용 가능한 승인 원문 없음</span><a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId, ref: candidate.id })}>원문 등록·문서함 검색</a>
+                    <span>사용 가능한 승인 원문 없음</span><CandidateSourceLink candidateId={candidate.id} />
                   </>}
                 </div>}
                 <Details title="후보 식별 정보"><code>{candidate.id}</code></Details>
@@ -328,6 +339,22 @@ function SourceLink({ source }: { source: NonNullable<AnalysisView['result']>['s
   try { href = revisionHref(source.documentId, source.revisionId, { ...route, textHash: source.textHash }); }
   catch { return <span>원문 버전 연결 확인 필요</span>; }
   return <a href={href}>{source.title} · 사용한 원문 버전</a>;
+}
+function CandidateSourceLink({ candidateId }: { candidateId: string }) {
+  const { route } = useDocumentScope();
+  try {
+    return <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId, ref: candidateId })}>원문 등록·문서함 검색</a>;
+  } catch {
+    return <span>원문 연결 확인 필요</span>;
+  }
+}
+function SavedAnalysisLink({ analysis }: { analysis: Analysis }) {
+  const { route } = useDocumentScope();
+  try {
+    return <a href={analysisHref(analysis.id, route.projectId)} aria-current={analysis.id === route.analysisId ? 'page' : undefined}>{analysis.query}</a>;
+  } catch {
+    return <span>{analysis.query} · 분석 연결 확인 필요</span>;
+  }
 }
 function EvidenceLink({ evidence }: { evidence: Evidence }) {
   const { route } = useDocumentScope();

@@ -334,6 +334,15 @@ def test_static_html_text_and_noncontent_template_remain_approvable(api):
     assert approve(api, result)[0] == 200
 
 
+@pytest.mark.parametrize("clause", ["<p>Visible exception 25.00%</p>", "Visible exception 25.00%"])
+def test_visible_flow_or_text_in_head_cannot_be_approved_as_complete(api, clause):
+    original = f"<html><head>{clause}</head><body><p>Base rate 10.00%</p></body></html>".encode()
+    result = finalize(api, upload(api, data=original, name="head-flow.html"))
+    assert result["revision"]["parseStatus"] != "complete"
+    assert "html-visible-content-not-transcribed" in result["revision"]["warnings"]
+    assert call(api, "POST", path(result) + "/submit", {"version": result["revision"]["version"]})[0] == 409
+
+
 def pdf_with_vector_clause(encoding):
     """Selectable heading plus an outlined '25' that text extraction cannot read."""
     from pypdf import PdfReader, PdfWriter

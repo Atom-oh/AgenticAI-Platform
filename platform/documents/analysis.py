@@ -146,14 +146,11 @@ def _create(host, scope, body):
     request = request_id(body.get("requestId"))
     query = text(body.get("query"), "query", 2000)
     ref = identifier(body.get("regulationRef"))
-    model = resolve(body.get("modelId"))
-    node = graph_store(host).get_node(ref)
-    if not node or node.label != "Regulation":
-        raise DocumentError(400, "regulation-required", "분석할 규정을 선택하세요.")
-    digest = fingerprint({"query": query, "regulationRef": ref, "modelId": model})
     aid = "ana-" + fingerprint([library.scope["actor"], request])[:40]
     existing = library.storage.get(library.owner, "docanalysis", aid)
     if existing:
+        model = existing["modelId"] if body.get("modelId") is None else body["modelId"]
+        digest = fingerprint({"query": query, "regulationRef": ref, "modelId": model})
         if existing.get("requestHash") != digest:
             raise DocumentError(409, "request-changed", "같은 요청 ID에 다른 분석 조건을 사용할 수 없습니다.")
         from documents.jobs import reconcile_analysis
@@ -170,6 +167,11 @@ def _create(host, scope, body):
             existing, job = saved
         host._invoke(library.owner, job)
         return {"analysis": _public(existing), "job": job}
+    model = resolve(body.get("modelId"))
+    node = graph_store(host).get_node(ref)
+    if not node or node.label != "Regulation":
+        raise DocumentError(400, "regulation-required", "분석할 규정을 선택하세요.")
+    digest = fingerprint({"query": query, "regulationRef": ref, "modelId": model})
     host._worker_ready()
     job_id = "document-analysis-" + fingerprint(aid)[:40]
     analysis = {"id": aid, "query": query, "regulationRef": ref, "modelId": model,
