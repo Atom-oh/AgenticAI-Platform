@@ -17,6 +17,7 @@ platform/infra/dist/
 platform/web/node_modules/
 platform/web/dist/
 platform/web/public/studio-samples/
+platform/web/public/portal-renderers/
 platform/skills-dist/
 platform/agents/_ctx/
 platform/infra/plane-outputs.json

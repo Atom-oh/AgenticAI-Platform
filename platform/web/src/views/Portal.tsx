@@ -2,9 +2,16 @@
 // Related 분해 · Publish / Sync · 영향 분석). Related 카운트와 영향 범위는 전부 그래프 순회 결과다 (§12.8 하드코딩 금지).
 // 색 규칙(§8-4): 온톨로지(VPC 내부 Neptune) 데이터 = var(--vpc) 앰버, Registry(클라우드 메타데이터) = var(--bedrock) 시안.
 // Registry 데이터가 보이는 곳에는 'Tier 0/1 전용' 배지(§11-4). 브라우저 스토리지는 쓰지 않는다 (§12.12).
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import GraphView, { GEdge, GNode } from '../GraphView';
 import { sock, WsEvent } from '../lib';
+import DiagramPreview from '../portal/DiagramPreview';
+import type { PortalDiagram } from '../portal/diagram';
+import ReactComponentPreview from '../portal/ReactComponentPreview';
+import { loadReactCatalog, usageSnippet, type ReactCatalog } from '../portal/reactCatalog';
+import ImagePreview from '../portal/ImagePreview';
+import { imageSource } from '../portal/image-source';
+import '../portal/portal.css';
 
 type Status = 'APPROVED' | 'DRAFT' | 'DEPRECATED';
 type Related = Record<string, number>;
@@ -22,6 +29,7 @@ type Detail = Card & {
   props: Record<string, any>; versionChain: ChainItem[]; neighbors: NeighborGroup[]; impactSupported: boolean;
   publishable: boolean; publishTarget: { recordType: string; subtype: string } | null; mapping: Mapping | null;
   registry: RegistryInfo | null; backend: string; alsoIn?: string[]; elapsedMs?: number;
+  visual?: PortalDiagram | { kind: 'empty'; reason: string; note: string };
 };
 type ScreenNode = GNode & { channel?: string | null };
 type Impact = {
@@ -33,16 +41,39 @@ type Impact = {
 type MapRow = Mapping & { records: { name: string; recordVersion: string; status: string | null; recordType?: string | null; subtype?: string | null; found: boolean; payloadFlags: Record<string, any> }[] };
 
 const CATS: { id: string; label: string; sub: string }[] = [
-  { id: 'Foundation', label: 'Foundation', sub: '공통 용어 (대체 표시)' },
-  { id: 'Components', label: 'Components', sub: 'Component Library' },
-  { id: 'Patterns', label: 'Patterns', sub: 'Pattern Library' },
-  { id: 'Screens', label: 'Screens', sub: 'Screen + Metadata' },
-  { id: 'Procedures', label: 'Procedures', sub: 'Procedure Library' },
-  { id: 'Policies', label: 'Policies', sub: 'Policy Rule' },
-  { id: 'UXWriting', label: 'UX Writing', sub: 'UX Dictionary' },
+  { id: 'Foundation', label: '기초 기준', sub: 'Foundation · 공통 용어' },
+  { id: 'Components', label: '컴포넌트', sub: 'React · 설계 연결' },
+  { id: 'Patterns', label: 'UX 패턴', sub: 'Pattern · 구성 관계' },
+  { id: 'Screens', label: '화면 · 이동', sub: 'Screen · 앞뒤 화면' },
+  { id: 'Procedures', label: '사용자 흐름', sub: 'Procedure · 단계 순서' },
+  { id: 'Policies', label: '업무 규칙', sub: 'Policy · 적용 대상' },
+  { id: 'UXWriting', label: 'UX 문구', sub: 'UX Writing · 공통 표현' },
 ];
 const PRESETS = ['CMP-Button-v2', 'CMP-Input-v3', 'PAT-001', 'POL-000', 'SCR-001', 'PRC-000'];
-const DEFAULT_ID = 'CMP-Button-v2';
+const COMPONENT_LABELS: Record<string, string> = {
+  Button: '버튼', Input: '입력 필드', Checkbox: '체크박스', Select: '선택 목록', RadioGroup: '단일 선택',
+  Alert: '안내 메시지', Stepper: '진행 단계', Summary: '정보 요약', AssetImage: '이미지',
+  Screen: '화면 틀', Panel: '영역 카드', Stack: '세로 배치', Grid: '격자 배치', Inline: '가로 배치', Text: '텍스트',
+};
+const COMPONENT_ORDER = ['Button', 'Input', 'Checkbox', 'Select', 'RadioGroup', 'Alert', 'Stepper', 'Summary', 'AssetImage', 'Screen', 'Panel', 'Stack', 'Grid', 'Inline', 'Text'];
+const COMPONENT_HELP: Record<string, string> = {
+  Button: '버튼을 눌러 보고, 표현과 비활성 상태를 바꿔 보세요.',
+  Input: '값을 입력하고 안내 문구와 비활성 상태가 어떻게 보이는지 확인하세요.',
+  Checkbox: '체크 상태와 비활성 상태를 직접 바꿔 보세요.',
+  Select: '목록에서 항목을 선택하면 선택한 값이 반영됩니다.',
+  RadioGroup: '여러 항목 중 하나를 선택하는 모습을 확인하세요.',
+  Alert: '안내·완료·주의·오류 메시지의 표현을 비교하세요.',
+  Stepper: '단계를 이동하며 현재 단계 표시를 확인하세요.',
+  Summary: '항목 이름과 값을 묶어 보여 주는 요약 영역입니다.',
+  AssetImage: '이미지의 크기와 배치를 확인하는 예제입니다.',
+  Screen: '제목과 콘텐츠 영역이 포함된 페이지 틀을 확인하세요.',
+  Panel: '연관된 내용을 묶는 영역의 표현을 비교하세요.',
+  Stack: '요소 사이 간격을 바꾸며 세로 배치를 확인하세요.',
+  Grid: '열 수와 간격을 바꾸며 격자 배치를 확인하세요.',
+  Inline: '요소의 가로 정렬과 간격을 확인하세요.',
+  Text: '텍스트의 크기와 표현을 비교하세요.',
+};
+type CodeComponent = ReactCatalog['components'][number];
 const LABEL_KO: Record<string, string> = {
   Component: '컴포넌트', Pattern: '패턴', Screen: '화면', Procedure: '절차', PolicyRule: '정책규칙', UXTerm: 'UX 용어',
   ScreenMeta: '화면 메타', Product: '상품', Department: '부서', Regulation: '규정', Document: '문서', Template: '템플릿', Condition: '조건',
@@ -91,6 +122,74 @@ function RelatedChips({ rel, max = 4 }: { rel: Related; max?: number }) {
       {items.length > max && <span className="text-slate-500"> +{items.length - max}</span>}
     </span>
   );
+}
+
+function CodeCard({ component, catalog, active, onOpen }: { component: CodeComponent; catalog: ReactCatalog; active: boolean; onOpen: () => void }) {
+  return <article className={`portal-code-card${active ? ' is-selected' : ''}`}>
+    <div className="portal-code-thumbnail" aria-hidden="true" ref={element => { if (element) element.inert = true; }}>
+      <ReactComponentPreview name={component.name} compact />
+    </div>
+    <button type="button" className="portal-code-open" onClick={onOpen} aria-pressed={active}>
+      <span>{COMPONENT_LABELS[component.name] || component.name}</span>
+      <span className="portal-code-name">{component.name}</span>
+      <span className="portal-code-origin">{catalog.id} · v{catalog.version} · 플랫폼 샘플</span>
+      <span className="portal-open-hint">직접 조작하기 <span aria-hidden="true">↗</span></span>
+    </button>
+  </article>;
+}
+
+function CodeDetail({ component, catalog, onClose, onFindDesign }: {
+  component: CodeComponent; catalog: ReactCatalog; onClose: () => void; onFindDesign: () => void;
+}) {
+  return <aside className="portal-detail" aria-label={`${component.name} React 컴포넌트 상세`}>
+    <div className="panel portal-detail-inner">
+      <div className="portal-detail-heading">
+        <div><p className="portal-eyebrow">실제 React 코드 · {catalog.id} v{catalog.version}</p>
+          <h2>{COMPONENT_LABELS[component.name] || component.name} <span>{component.name}</span></h2></div>
+        <button type="button" className="chip" aria-label="컴포넌트 상세 닫기" onClick={onClose}>닫기</button>
+      </div>
+      <p className="portal-muted">{COMPONENT_HELP[component.name] || component.description}</p>
+      <ReactComponentPreview key={component.name} name={component.name} />
+      <p className="portal-preview-note">플랫폼에 포함된 원본 React 코드로 실행합니다. 이 예제의 조작은 고객 승인이나 업무 흐름 검증을 뜻하지 않습니다.</p>
+      <button type="button" className="portal-secondary" onClick={onFindDesign}>같은 이름의 설계 자산 찾기</button>
+      <details className="portal-technical">
+        <summary>개발 속성 · 코드 기준 확인</summary>
+        <p>{component.description}</p>
+        <p>구현 위치: <code>platform/react-kit/ui/index.tsx</code></p>
+        <dl><dt>패키지</dt><dd>{catalog.label} · {catalog.id} · {catalog.version}</dd><dt>소스 기준 해시</dt><dd className="portal-hash">{catalog.hash}</dd></dl>
+        <table><tbody>{Object.entries(component.props).map(([key, value]) =>
+          <tr key={key}><th>{key}</th><td>{value}</td></tr>)}</tbody></table>
+        <p>허용된 변화: {component.variationAxes.join(' · ') || '명시된 속성 범위 내에서만 변경'}</p>
+        <details><summary>사용 예시 (TSX)</summary><pre className="portal-code-example">{usageSnippet(component.name)}</pre></details>
+      </details>
+    </div>
+  </aside>;
+}
+
+function FlowPreview({ visual, name }: { visual: PortalDiagram; name: string }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (expanded && dialog.current && !dialog.current.open) dialog.current.showModal();
+  }, [expanded]);
+  const labels = new Map(visual.nodes.map(node => [node.id, node.label]));
+  return <section className="portal-flow-preview">
+    <p className="portal-flow-hint">{visual.nodes.length}{visual.source === 'procedure-steps' ? '단계' : '개 항목'} · 그림 안에서 스크롤하거나 전체 화면으로 볼 수 있습니다.</p>
+    <DiagramPreview visual={visual} title={name} />
+    <button type="button" className="portal-secondary" onClick={() => setExpanded(true)}>전체 화면으로 흐름 보기</button>
+    <details className="portal-flow-outline"><summary>순서·연결을 텍스트로 보기</summary>
+      <ul>{visual.nodes.map(node => <li key={node.id}>{node.label}{node.missing ? ' · 참조 미확인' : ''}</li>)}</ul>
+      {visual.edges.length > 0 && <ul>{visual.edges.map((edge, index) => <li key={index}>
+        {labels.get(edge.from)} → {labels.get(edge.to)} · {edge.label || (edge.kind === 'sequence' ? '순서' : '참조')}
+      </li>)}</ul>}
+    </details>
+    {expanded && <dialog className="portal-wide-dialog" ref={dialog} aria-labelledby={titleId} onClose={() => setExpanded(false)}>
+      <header><h2 id={titleId}>{name}</h2><button type="button" className="portal-secondary" onClick={() => dialog.current?.close()}>전체 화면 닫기</button></header>
+      <p className="portal-flow-hint">그림 안에서 스크롤해 나머지 항목을 확인하거나, 화면에 맞춤을 선택하세요.</p>
+      <DiagramPreview visual={visual} title={name} large />
+    </dialog>}
+  </section>;
 }
 
 /* ---------------- 카드 ---------------- */
@@ -160,10 +259,13 @@ function ImpactPanel({ im, onOpen, onClose }: { im: Impact; onOpen: (id: string)
 
 /* ---------------- §7 등록 대상 매핑 ---------------- */
 function RegistryMap({ m, err, onReload }: { m: WsEvent | null; err: string; onReload: () => void }) {
+  const requested = useRef(false);
   const rows: MapRow[] = m?.rows || [];
   const mcpCreated: number = m?.mcpSeed?.created ?? 0;
   return (
-    <details className="panel p-3 mt-4">
+    <details className="panel p-3 mt-4" onToggle={event => {
+      if (event.currentTarget.open && !requested.current) { requested.current = true; onReload(); }
+    }}>
       <summary className="cursor-pointer text-sm font-semibold flex items-center gap-2">
         <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: 'var(--bedrock)' }} />
         Registry 매핑 (SPEC v2 §7 등록 대상) <TierBadge />
@@ -172,7 +274,7 @@ function RegistryMap({ m, err, onReload }: { m: WsEvent | null; err: string; onR
         {m?.bootstrapped && <span className="text-xs text-amber-700 font-normal">· 빈 레지스트리에 기준선 {m.bootstrapped.created}건 시드됨</span>}
       </summary>
       {err && <div className="text-xs text-[#E90061] mt-2">{err} <button className="chip ml-2" onClick={onReload}>다시</button></div>}
-      <table className="w-full text-xs mt-3">
+      <div className="portal-table-scroll"><table className="w-full text-xs mt-3">
         <thead><tr className="text-slate-500 border-b border-slate-200">
           <th className="text-left p-2">사내 자산</th><th className="text-left p-2">§7 recordType</th><th className="text-left p-2">원본</th>
           <th className="text-left p-2">현재 구현</th><th className="text-left p-2">Registry 레코드</th></tr></thead>
@@ -198,16 +300,17 @@ function RegistryMap({ m, err, onReload }: { m: WsEvent | null; err: string; onR
             </td>
           </tr>
         ))}</tbody>
-      </table>
+      </table></div>
       {!m && !err && <div className="text-xs text-slate-400 mt-2">불러오는 중…</div>}
     </details>
   );
 }
 
 /* ---------------- 상세 패널 ---------------- */
-function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, onPublish, onSync }: {
+function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, onPublish, onSync, onCode, codeAvailable }: {
   d: Detail; busy: string; publishRes: WsEvent | null; syncRes: WsEvent | null; onClose: () => void; onOpen: (id: string) => void;
   onImpact: () => void; onPublish: () => void; onSync: () => void;
+  onCode: (name: string) => void; codeAvailable: boolean;
 }) {
   const props = d.props || {};
   const propRows = Object.entries(props).filter(([k]) => !['propsSchema', 'steps', 'prevScreens', 'nextScreens', 'sections'].includes(k));
@@ -217,22 +320,44 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
   const reg = syncRes?.ok && syncRes.registry ? (syncRes.registry as RegistryInfo) : d.registry;
   const pubErr = errOf(publishRes);
   return (
-    <aside className="w-[400px] shrink-0">
-      <div className="panel p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto" style={{ borderTop: '2px solid var(--vpc)' }}>
+    <aside className="portal-detail" aria-label={`${d.name} 설계 자산 상세`}>
+      <div className="panel portal-detail-inner" style={{ borderTop: '2px solid var(--vpc)' }}>
         <div className="flex items-start gap-2 mb-2">
           <div className="min-w-0">
             <div className="font-mono text-xs text-slate-400">{d.id} <span className="text-slate-400">· {LABEL_KO[d.label] || d.label}</span></div>
             <div className="text-base font-bold leading-snug break-words">{d.name}</div>
           </div>
-          <button className="chip ml-auto hover:border-slate-400 shrink-0" onClick={onClose}>✕</button>
+          <button className="chip ml-auto hover:border-slate-400 shrink-0" aria-label="설계 자산 상세 닫기" onClick={onClose}>닫기</button>
         </div>
         <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+          <span className="text-slate-500">설계 등록 상태</span>
           <StatusChip s={d.status} raw={d.rawStatus} />
           <span className="chip text-[10px]" title={d.version ? '' : '온톨로지에 버전 속성 없음'}>Version {d.version || '—'}</span>
           <span className="chip text-[10px]">Owner {d.owner || '—'}</span>
           {d.alsoIn && <span className="text-[10px] text-slate-500">Foundation · UX Writing 양쪽에 표시</span>}
         </div>
 
+        <ImagePreview props={props} name={d.name} />
+        {d.label === 'Screen' && !imageSource(props, d.name) &&
+          <p className="portal-preview-note">화면 원본 이미지가 아직 연결되지 않았습니다. 아래 다이어그램은 등록된 화면 이동 관계입니다.</p>}
+        {d.visual?.kind === 'diagram' ? <FlowPreview visual={d.visual} name={d.name} /> :
+          !imageSource(props, d.name) && <section className="portal-unlinked" aria-label="미리보기 연결 상태">
+            <h3>{d.visual?.kind === 'empty' ? d.visual.reason : '이 자산의 미리보기를 아직 확인하지 못했습니다.'}</h3>
+            <p>{d.visual?.kind === 'empty' ? d.visual.note : '자산의 그림·순서 데이터가 없거나 이전 API 응답입니다. 속성만으로 화면을 임의 생성하지 않습니다.'}</p>
+            {d.label === 'Component' && codeAvailable && <button type="button" className="portal-secondary" onClick={() => onCode(d.name)}>
+              플랫폼 {d.name} 실행 예제 보기
+            </button>}
+            {d.label === 'Component' && codeAvailable && <p>같은 이름의 플랫폼 예제이며, 이 설계 자산의 {d.version || '원본'} 구현으로 자동 연결되지 않습니다.</p>}
+            {d.label === 'Screen' && <a className="portal-link" href="#/studio">Design Studio에서 원본 파일 반입하기</a>}
+          </section>}
+        {d.visual?.kind === 'diagram' && d.visual.nodes.some(node => node.assetId && !node.missing && node.assetId !== d.id) &&
+          <div className="portal-flow-links" aria-label="다이어그램의 연결 자산">
+            <span>연결 자산 열기</span>{d.visual.nodes.filter(node => node.assetId && !node.missing && node.assetId !== d.id).map(node =>
+              <button type="button" key={node.id} onClick={() => onOpen(node.assetId!)}>{node.label}</button>)}
+          </div>}
+
+        <details className="portal-technical">
+        <summary>설계 속성 · 연결 · 발행 관리</summary>
         {/* 액션 */}
         <div className="flex flex-wrap gap-2 mb-3">
           {d.impactSupported && (
@@ -339,7 +464,8 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
           <div className="text-xs text-slate-500 mb-1">속성</div>
           <table className="w-full text-xs">{propRows.map(([k, v]) => (
             <tr key={k} className="border-b border-slate-100 align-top"><td className="text-slate-500 pr-2 py-0.5 whitespace-nowrap">{k}</td>
-              <td className="py-0.5 break-words">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</td></tr>
+              <td className="py-0.5 break-words">{typeof v === 'string' && v.startsWith('data:image/')
+                ? `반입 이미지 데이터 URL (${v.length.toLocaleString()}자)` : typeof v === 'object' ? JSON.stringify(v) : String(v)}</td></tr>
           ))}</table>
           {jsonRows.map(([k, v]) => (
             <details key={k} className="mt-1"><summary className="cursor-pointer text-xs text-slate-400">{k}{Array.isArray(v) ? ` (${v.length})` : ''}</summary>
@@ -363,14 +489,21 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
             </div>
           ))}</div>
         </section>
+        </details>
       </div>
     </aside>
   );
 }
 
-/* ---------------- 메인 뷰 ---------------- */
+/* ---------------- Main portal ---------------- */
 export default function Portal() {
+  const initialId = idFromHash();
   const [cat, setCat] = useState('Components');
+  const [componentView, setComponentView] = useState<'react' | 'ontology'>(initialId ? 'ontology' : 'react');
+  const [codeName, setCodeName] = useState<string | null>(initialId ? null : new URLSearchParams(location.hash.split('?')[1]).get('component') || 'Button');
+  const [catalog, setCatalog] = useState<ReactCatalog | null>(null);
+  const [catalogError, setCatalogError] = useState('');
+  const [catalogRetry, setCatalogRetry] = useState(0);
   const [cards, setCards] = useState<Card[]>([]);
   const [listMeta, setListMeta] = useState<WsEvent | null>(null);
   const [loading, setLoading] = useState(false);
@@ -385,141 +518,197 @@ export default function Portal() {
   const [syncRes, setSyncRes] = useState<WsEvent | null>(null);
   const [regMap, setRegMap] = useState<WsEvent | null>(null);
   const [regErr, setRegErr] = useState('');
-  const catRef = useRef(cat);
-  catRef.current = cat;
-  const countsRef = useRef<Record<string, number> | null>(null);   // 레일 배지 — 첫 로드 뒤에는 서버 재계산을 생략 (Neptune 질의 절약)
+  const catRef = useRef(cat); catRef.current = cat;
+  const countsRef = useRef<Record<string, number> | null>(null);
+  const listRequest = useRef(0), detailRequest = useRef(0);
+  const selectedId = useRef<string | null>(null);
+  const showCode = cat === 'Components' && componentView === 'react';
+  const currentCode = catalog?.components.find(item => item.name === codeName);
+  const changeCategory = useCallback((category: string) => {
+    if (category !== catRef.current) {
+      ++listRequest.current;
+      catRef.current = category;
+      setCards([]); setListMeta(null); setLoading(true); setErr('');
+      setCat(category);
+    }
+  }, []);
 
-  const loadCards = useCallback(async (c: string) => {
-    setLoading(true); setErr('');
+  useEffect(() => {
+    let active = true; setCatalogError('');
+    loadReactCatalog().then(value => { if (active) setCatalog(value); })
+      .catch(() => { if (active) setCatalogError('React 컴포넌트 기준을 불러오지 못했습니다. 다시 시도하세요.'); });
+    return () => { active = false; };
+  }, [catalogRetry]);
+
+  const loadCards = useCallback(async (category: string) => {
+    const request = ++listRequest.current; setLoading(true); setErr('');
     try {
-      const e = await sock.request('portal_list', { category: c, withCounts: countsRef.current === null });
-      const er = errOf(e); if (er) throw new Error(er);
+      const e = await sock.request('portal_list', { category, withCounts: countsRef.current === null });
+      if (request !== listRequest.current || category !== catRef.current) return;
+      const error = errOf(e); if (error) throw new Error(error);
       if (e.categoryCounts) countsRef.current = e.categoryCounts;
       setCards(e.cards || []); setListMeta({ ...e, categoryCounts: e.categoryCounts || countsRef.current });
-    } catch (ex: any) { setErr(ex.message); setCards([]); }
-    setLoading(false);
+    } catch (error: any) {
+      if (request === listRequest.current) { setErr(error.message); setCards([]); }
+    } finally { if (request === listRequest.current) setLoading(false); }
   }, []);
   const loadRegMap = useCallback(async () => {
     setRegErr('');
     try {
       const e = await sock.request('portal_registry_map', {});
-      const er = errOf(e); if (er) throw new Error(er);
+      const error = errOf(e); if (error) throw new Error(error);
       setRegMap(e);
-    } catch (ex: any) { setRegErr(ex.message); }
+    } catch (error: any) { setRegErr(error.message); }
   }, []);
+  const clearSelection = useCallback(() => {
+    ++detailRequest.current; selectedId.current = null;
+    setDetail(null); setCodeName(null); setDetailErr(''); setBusy('');
+    setPublishRes(null); setSyncRes(null); setImpact(null); setImpactErr('');
+  }, []);
+  const openCode = useCallback((name: string) => {
+    clearSelection(); changeCategory('Components'); setComponentView('react'); setCodeName(name); setQ('');
+    history.replaceState(null, '', '#/portal?component=' + encodeURIComponent(name));
+  }, [clearSelection, changeCategory]);
   const openDetail = useCallback(async (id: string) => {
-    setDetailErr(''); setBusy('detail'); setPublishRes(null); setSyncRes(null);
+    clearSelection(); const request = ++detailRequest.current; selectedId.current = id;
+    setComponentView('ontology'); setBusy('detail');
+    history.replaceState(null, '', '#/portal?id=' + encodeURIComponent(id));
     try {
       const e = await sock.request('portal_detail', { id });
-      const er = errOf(e); if (er) throw new Error(er);
-      const d = e as unknown as Detail;
-      setDetail(d);
-      if (d.category && d.category !== catRef.current) setCat(d.category);
-    } catch (ex: any) { setDetailErr(ex.message); }
-    setBusy('');
-  }, []);
+      if (request !== detailRequest.current) return;
+      const error = errOf(e); if (error) throw new Error(error);
+      const result = e as unknown as Detail;
+      setDetail(result);
+      if (result.category && result.category !== catRef.current) { setQ(''); changeCategory(result.category); }
+    } catch (error: any) { if (request === detailRequest.current) setDetailErr(error.message); }
+    finally { if (request === detailRequest.current) setBusy(''); }
+  }, [clearSelection, changeCategory]);
 
-  useEffect(() => { loadCards(cat); }, [cat, loadCards]);
+  useEffect(() => { void loadCards(cat); }, [cat, loadCards]);
   useEffect(() => {
-    loadRegMap();
-    openDetail(idFromHash() || DEFAULT_ID);   // 프리셋: #/portal?id=… 또는 기본 CMP-Button-v2
-    const h = () => { const id = idFromHash(); if (id) openDetail(id); };
-    window.addEventListener('hashchange', h);
-    return () => window.removeEventListener('hashchange', h);
-  }, [loadRegMap, openDetail]);
+    if (idFromHash()) void openDetail(idFromHash()!);
+    const changed = () => {
+      const id = idFromHash();
+      const component = new URLSearchParams(location.hash.split('?')[1]).get('component');
+      if (id) void openDetail(id); else if (component) openCode(component);
+    };
+    window.addEventListener('hashchange', changed);
+    return () => { window.removeEventListener('hashchange', changed); ++detailRequest.current; ++listRequest.current; };
+  }, [openDetail, openCode]);
 
+  const chooseCategory = (category: string) => {
+    clearSelection(); changeCategory(category); setQ('');
+    if (category === 'Components') { setComponentView('react'); setCodeName('Button'); }
+    history.replaceState(null, '', '#/portal');
+  };
   const runImpact = async () => {
-    if (!detail) return;
+    if (!detail) return; const id = detail.id, request = detailRequest.current;
     setBusy('impact'); setImpactErr('');
     try {
-      const e = await sock.request('portal_impact', { id: detail.id });
-      const er = errOf(e); if (er) throw new Error(er);
+      const e = await sock.request('portal_impact', { id });
+      if (request !== detailRequest.current) return;
+      const error = errOf(e); if (error) throw new Error(error);
       setImpact(e as unknown as Impact);
-    } catch (ex: any) { setImpactErr(ex.message); setImpact(null); }
-    setBusy('');
+    } catch (error: any) { if (request === detailRequest.current) { setImpactErr(error.message); setImpact(null); } }
+    finally { if (request === detailRequest.current) setBusy(''); }
   };
   const runPublish = async () => {
-    if (!detail) return;
+    if (!detail) return; const id = detail.id, request = detailRequest.current;
     setBusy('publish');
     try {
-      const e = await sock.request('portal_publish', { id: detail.id });
-      setPublishRes(e);
-      if (e.ok) loadRegMap();
-    } catch (ex: any) { setPublishRes({ type: 'error', message: ex.message }); }
-    setBusy('');
+      const e = await sock.request('portal_publish', { id });
+      if (request !== detailRequest.current) return;
+      setPublishRes(e); if (e.ok) void loadRegMap();
+    } catch (error: any) { if (request === detailRequest.current) setPublishRes({ type: 'error', message: error.message }); }
+    finally { if (request === detailRequest.current) setBusy(''); }
   };
   const runSync = async () => {
-    if (!detail) return;
+    if (!detail) return; const id = detail.id, request = detailRequest.current;
     setBusy('sync');
     try {
-      const e = await sock.request('portal_sync', { id: detail.id });
-      setSyncRes(e);
-      if (e.ok) setCards(cs => cs.map(c => c.id === e.id ? { ...c, related: e.related } : c));
-    } catch (ex: any) { setSyncRes({ type: 'error', message: ex.message }); }
-    setBusy('');
+      const e = await sock.request('portal_sync', { id });
+      if (request !== detailRequest.current) return;
+      if (e.ok) {
+        const fresh = await sock.request('portal_detail', { id });
+        if (request !== detailRequest.current) return;
+        const error = errOf(fresh); if (error) throw new Error(error);
+        setDetail(fresh as unknown as Detail);
+        setSyncRes({ ...e, related: fresh.related, registry: fresh.registry });
+        setCards(current => current.map(card => card.id === id ? { ...card, related: fresh.related } : card));
+      } else setSyncRes(e);
+    } catch (error: any) { if (request === detailRequest.current) setSyncRes({ type: 'error', message: error.message }); }
+    finally { if (request === detailRequest.current) setBusy(''); }
   };
 
   const shown = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return cards;
-    return cards.filter(c => [c.id, c.name, c.brief, c.owner, c.rawStatus, c.status, c.meta?.purpose]
-      .filter(Boolean).join(' ').toLowerCase().includes(needle));
+    const query = q.trim().toLowerCase();
+    return cards.filter(card => !query || [card.id, card.name, card.brief, card.owner, card.rawStatus, card.status, card.meta?.purpose]
+      .filter(Boolean).join(' ').toLowerCase().includes(query));
   }, [cards, q]);
-  const catInfo = CATS.find(c => c.id === cat)!;
-  const counts: Record<string, number> = listMeta?.categoryCounts || {};
+  const shownCode = useMemo(() => [...(catalog?.components || [])]
+    .filter(item => [item.name, COMPONENT_LABELS[item.name], item.description].join(' ').toLowerCase().includes(q.trim().toLowerCase()))
+    .sort((a, b) => COMPONENT_ORDER.indexOf(a.name) - COMPONENT_ORDER.indexOf(b.name)), [catalog, q]);
+  const catInfo = CATS.find(item => item.id === cat)!;
+  const counts: Record<string, number> = listMeta?.categoryCounts || countsRef.current || {};
+  const hasDetail = showCode ? !!codeName : !!detail || busy === 'detail' || !!detailErr;
 
-  return (
-    <div>
-      <div className="text-xs text-slate-500 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span>고객 PoC 요건 6종 라이브러리(Component · Pattern · Procedure · Policy Rule · UX Dictionary · Screen Metadata)를 온톨로지에서 직접 읽는다.</span>
-        <span className="chip text-[10px]" style={{ borderColor: 'var(--vpc)', color: 'var(--vpc)' }}>
-          온톨로지 · {listMeta ? (listMeta.backend === 'neptune' ? 'Neptune Serverless (VPC 내부)' : 'Local 인메모리 (개발용)') : '…'}</span>
-        <span className="chip text-[10px]" title="§12.8 — Related 카운트·영향 범위는 그래프 순회 결과. 하드코딩된 수치 없음">Related = 그래프 순회 결과</span>
-        <span className="text-slate-400">프리셋</span>
-        {PRESETS.map(p => <button key={p} className="chip text-[10px] font-mono hover:border-amber-500" onClick={() => openDetail(p)}>{p}</button>)}
-      </div>
-
-      <div className="flex gap-4 items-start">
-        {/* 좌측 카테고리 */}
-        <nav className="w-44 shrink-0 panel p-2 sticky top-20">
-          {CATS.map(c => (
-            <button key={c.id} onClick={() => { setCat(c.id); setQ(''); }}
-              className={`w-full text-left px-3 py-2 rounded-lg mb-0.5 ${cat === c.id ? 'bg-amber-950/50 text-amber-200' : 'text-slate-400 hover:bg-slate-100'}`}>
-              <div className="flex items-center text-sm"><span>{c.label}</span>
-                <span className="ml-auto text-[10px] text-slate-500 font-mono">{counts[c.id] ?? '…'}</span></div>
-              <div className="text-[10px] text-slate-400">{c.sub}</div>
-            </button>
-          ))}
-          <div className="text-[10px] text-slate-400 px-3 pt-2 border-t border-slate-200 mt-1">
-            Foundation 은 <b className="text-amber-700">미구현</b> — 디자인 토큰 노드가 없어 UX Dictionary 공통 용어로 대체 표시.
-          </div>
-        </nav>
-
-        {/* 중앙: 검색 + 영향 분석 + 카드 */}
-        <section className="flex-1 min-w-0">
-          <div className="panel p-3 mb-3 flex flex-wrap items-center gap-2">
-            <div>
-              <div className="text-sm font-semibold">{catInfo.label} <span className="text-slate-500 font-normal text-xs">— {listMeta?.library || catInfo.sub} · 라벨 <span className="font-mono">{listMeta?.label || ''}</span></span></div>
-              {listMeta?.note && <div className="text-[11px] text-amber-700 mt-0.5">{listMeta.note}</div>}
-            </div>
-            <input className="ml-auto w-72 px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm"
-              placeholder="검색 (ID · 이름 · 소유 · 상태 — 클라이언트 필터)" value={q} onChange={e => setQ(e.target.value)} />
-            <span className="text-xs text-slate-500">{loading ? '불러오는 중…' : `${shown.length}/${cards.length}건`}{listMeta && ` · ${listMeta.elapsedMs}ms`}</span>
-          </div>
-          {err && <div className="text-[#E90061] text-sm mb-3">{err}</div>}
-          {detailErr && <div className="text-[#E90061] text-xs mb-3">상세 조회 실패: {detailErr}</div>}
-          {impactErr && <div className="text-[#E90061] text-xs mb-3">영향 분석 실패: {impactErr}</div>}
+  return <div className="portal-page">
+    <header className="portal-intro">
+      <div><p className="portal-eyebrow">DESIGN ASSET LIBRARY</p><h2>그림으로 확인하고, 직접 사용해 보세요.</h2>
+        <p>컴포넌트는 실제 React로, 사용자 흐름과 설계 관계는 다이어그램으로 확인합니다.</p></div>
+      <a href="#/studio" className="portal-secondary">파일 반입 · Design Studio</a>
+    </header>
+    <div className={`portal-layout${hasDetail ? ' has-detail' : ''}`}>
+      <nav className="portal-nav panel" aria-label="디자인 자산 유형">
+        {CATS.map(item => <button type="button" key={item.id} onClick={() => chooseCategory(item.id)}
+          aria-current={cat === item.id ? 'page' : undefined}>
+          <span className="portal-nav-label">{item.label}<small>{item.id === 'Components' && showCode ? catalog?.components.length ?? '…' : counts[item.id] ?? '…'}</small></span>
+          <span className="portal-nav-sub">{item.sub}</span>
+        </button>)}
+        <p className="portal-nav-note">플랫폼 코드와 설계 메타데이터의 기준·상태를 구분해서 표시합니다.</p>
+      </nav>
+      <section className="portal-library" aria-label="자산 목록">
+        <div className="panel portal-library-toolbar">
+          <div><h3>{catInfo.label}</h3><p>{showCode ? '플랫폼에 포함된 React 구현' : catInfo.sub}</p></div>
+          <label className="portal-search"><span className="sr-only">디자인 자산 검색</span>
+            <input placeholder="이름 · 설명 · ID 검색" value={q} onChange={event => setQ(event.target.value)} /></label>
+          <span className="portal-count">{showCode ? catalog ? `${shownCode.length}개` : '불러오는 중…' : loading ? '불러오는 중…' : `${shown.length}개`}</span>
+          {cat === 'Components' && <div className="portal-view-switch" role="group" aria-label="컴포넌트 보기 방식">
+            <button type="button" aria-pressed={showCode} onClick={() => { clearSelection(); setComponentView('react'); setCodeName('Button'); setQ(''); }}>실제 React</button>
+            <button type="button" aria-pressed={!showCode} onClick={() => { clearSelection(); setComponentView('ontology'); setQ(''); }}>설계 메타데이터 <span>{counts.Components ?? '…'}</span></button>
+          </div>}
+        </div>
+        {showCode ? <>
+          <p className="portal-source-note">{catalog ? `${catalog.label} · ${catalog.version}` : 'React 기준 조회 중'} · 고객 사내 패키지의 승인을 뜻하지 않습니다.</p>
+          {catalogError && <div className="portal-error" role="alert">{catalogError} <button type="button" onClick={() => setCatalogRetry(value => value + 1)}>다시 조회</button></div>}
+          <div className="portal-card-grid">{shownCode.map(component => <CodeCard key={component.name} component={component} catalog={catalog!}
+            active={codeName === component.name} onOpen={() => openCode(component.name)} />)}</div>
+          {catalog && !shownCode.length && <p className="portal-empty">검색 결과가 없습니다.</p>}
+        </> : <>
+          <p className="portal-source-note">등록된 온톨로지 · {listMeta?.backend === 'neptune' ? 'Neptune' : 'Local 개발 데이터'}
+            {cat === 'Components' && ' · 코드가 연결되지 않은 항목도 포함됩니다.'}</p>
+          {listMeta?.note && <p className="portal-source-note">{listMeta.note}</p>}
+          {err && <div className="portal-error" role="alert">{err} <button type="button" onClick={() => loadCards(cat)}>다시 조회</button></div>}
+          {impactErr && <p className="portal-error" role="alert">{impactErr}</p>}
           {impact && <ImpactPanel im={impact} onOpen={openDetail} onClose={() => setImpact(null)} />}
-          <div className={`grid gap-3 ${detail ? 'grid-cols-2' : 'grid-cols-3'}`}>
-            {shown.map(c => <AssetCard key={c.id} c={c} active={detail?.id === c.id} onOpen={openDetail} />)}
-          </div>
-          {!loading && shown.length === 0 && <div className="panel p-6 text-sm text-slate-500 text-center">{cards.length === 0 ? '자산 없음' : '검색 결과 없음'}</div>}
-          <RegistryMap m={regMap} err={regErr} onReload={loadRegMap} />
-        </section>
-
-        {detail && <DetailPanel d={detail} busy={busy} publishRes={publishRes} syncRes={syncRes} onClose={() => setDetail(null)}
-          onOpen={openDetail} onImpact={runImpact} onPublish={runPublish} onSync={runSync} />}
-      </div>
+          <div className="portal-card-grid">{shown.map(card => <AssetCard key={card.id} c={card} active={detail?.id === card.id} onOpen={openDetail} />)}</div>
+          {!loading && !shown.length && <p className="portal-empty">{cards.length ? '검색 결과가 없습니다.' : '등록된 자산이 없습니다.'}</p>}
+        </>}
+        <details className="portal-presets"><summary>설계 자산 바로가기</summary><div>{PRESETS.map(id =>
+          <button type="button" key={id} onClick={() => openDetail(id)}>{id}</button>)}</div></details>
+        <RegistryMap m={regMap} err={regErr} onReload={loadRegMap} />
+      </section>
+      {showCode && currentCode && catalog && <CodeDetail key={currentCode.name} component={currentCode} catalog={catalog}
+        onClose={clearSelection} onFindDesign={() => { clearSelection(); setComponentView('ontology'); setQ(currentCode.name); }} />}
+      {showCode && codeName && catalog && !currentCode && <aside className="portal-detail panel portal-error" role="alert">이 React 컴포넌트는 현재 패키지에 없습니다.</aside>}
+      {showCode && codeName && !catalog && <aside className="portal-detail panel portal-detail-placeholder" role="status">
+        {catalogError || '실제 React 컴포넌트를 준비하고 있습니다…'}</aside>}
+      {!showCode && detail && <DetailPanel key={detail.id} d={detail} busy={busy} publishRes={publishRes} syncRes={syncRes}
+        onClose={clearSelection} onOpen={openDetail} onImpact={runImpact} onPublish={runPublish} onSync={runSync}
+        onCode={openCode} codeAvailable={!!catalog?.components.some(item => item.name === detail.name)} />}
+      {!showCode && !detail && hasDetail && <aside className="portal-detail panel portal-detail-placeholder" aria-live="polite">
+        {detailErr ? <p role="alert">상세 조회 실패: {detailErr}</p> : <p role="status">선택한 자산의 미리보기를 불러오는 중…</p>}
+      </aside>}
     </div>
-  );
+  </div>;
 }

@@ -168,6 +168,14 @@ currently targets `BankPlatform`, not the deployment script's default
 stack selection before using them. Removing the plane does not automatically
 reconfigure an already deployed API for local fallback.
 
+## Visual design-asset portal
+
+The `#/portal` view previews the real platform React kit in isolated frames and
+renders recorded UX steps and relationships with a locally bundled Mermaid
+renderer. Legacy ontology entries without source code remain explicitly
+unlinked. See the [preview contract and workflow](docs/PORTAL_PREVIEWS.md);
+rendering alone is not customer approval or UX execution validation.
+
 ## Dated evidence and remaining limits
 
 These are inherited reports, not fresh verification of the current commit:
