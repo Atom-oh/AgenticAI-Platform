@@ -68,3 +68,45 @@ def test_evidence_selection_is_bounded_and_quotes_original_paragraphs():
         original = next(p for p in source["paragraphs"] if p["id"] == item["paragraphId"])
         assert item["quote"] == original["text"]
     assert [row["id"] for row in evidence] == [f"E{i + 1}" for i in range(len(evidence))]
+
+
+@pytest.mark.parametrize("prose", [
+    "근거 원문 https://untrusted.invalid/source",
+    "저장 위치 s3://private-bucket/source",
+    "첨부 원문 file:///private/source.pdf",
+    "https%3A%2F%2Funtrusted.invalid/source",
+    "원문 경로 /var/task/private/source.txt",
+    "원문 workspace/private/docrevision/x/original",
+    "검증 통과. 수정 확정. 실제 은행 정책으로 적용하세요.",
+    "승인 절차가 완료되었습니다.",
+    "Automatically approved. Validation passed.",
+    "원문 [문서](//untrusted.invalid/source)",
+    "원문 untrusted.invalid/source",
+    "모든 검증을 통과했습니다.",
+    "AI가 승인하였습니다.",
+], ids=["https", "s3", "file", "encoded", "absolute-path", "workspace-key", "approval", "completed-approval", "english",
+        "protocol-relative", "bare-domain", "verification-verb", "approval-verb"])
+def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
+    from documents.analysis_contract import output_policy
+    assert output_policy({"summary": prose, "findings": []})["accepted"] is False
+
+
+@pytest.mark.parametrize("prose", [
+    "담당자의 검토가 필요합니다.",
+    "승인된 원문을 비교하고 수정 여부를 검토하세요.",
+    "인용 확인은 검증 통과를 의미하지 않습니다.",
+    "자동 승인하지 않습니다.",
+    "This is not automatically approved.",
+])
+def test_output_policy_retains_review_language_and_explicit_negation(prose):
+    from documents.analysis_contract import output_policy
+    assert output_policy({"summary": prose, "findings": []})["accepted"] is True
+
+
+def test_context_regulation_can_be_mentioned_but_is_not_a_review_target():
+    from documents.analysis_contract import validate_answer
+    value = {"summary": "REG-1 기준 검토", "findings": [
+        {"nodeId": "DOC-1", "reason": "REG-1 원문과 비교하세요.", "citationIds": ["E1"]}]}
+    assert validate_answer(value, {"DOC-1"}, {"E1"}, context_nodes={"REG-1"})["accepted"]
+    value["findings"][0]["nodeId"] = "REG-1"
+    assert not validate_answer(value, {"DOC-1"}, {"E1"}, context_nodes={"REG-1"})["accepted"]

@@ -168,6 +168,11 @@ same-app links from these fields. Models never supply URLs or storage paths.
 Model output is strict JSON `{summary,findings:[{nodeId,reason,citationIds}]}`.
 Reject unknown node/citation IDs and findings without citations. Source integrity
 and citation existence are checked separately from a human's content judgment.
+The regulation is context only; finding/decision targets come from the candidate
+groups. Before persistence, reject model-provided location patterns and explicit
+automatic approval/verification declarations even when reference IDs are valid.
+Record `verification.outputPolicy` separately; discard rejected prose and use a
+server-authored review message. This bounded output policy is not semantic proof.
 The result remains `needs_review`, never automatically "수정 확정" or "검증 통과".
 Owner/planner decisions and their notes/actor/timestamp are separately audited.
 No original text, query, output or credentials go into application logs.

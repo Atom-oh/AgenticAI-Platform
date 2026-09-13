@@ -50,7 +50,7 @@ export type AnalysisResult = {
   summary: string; coverage: { graphBackend: string; linkedSources: number; unavailableSources: number;
     sourceLimitReached: boolean; contextCharacters?: number; evidenceParagraphs?: number;
     availableParagraphs?: number; truncated?: boolean; candidateContextsOmitted?: number; candidateOmissions?: Record<string, number> };
-  verification: { sourceIntegrity: string; references: string; semantic: string };
+  verification: { sourceIntegrity: string; references: string; semantic: string; outputPolicy?: string };
   model: { invoked: boolean; requestedId?: string; modelId?: string | null; usage?: { inputTokens?: number; outputTokens?: number } };
 };
 export type AnalysisView = { analysis: Analysis; result?: AnalysisResult; staleSources: string[]; canDecide: boolean; decisions: Decision[]; decisionsTruncated: boolean };

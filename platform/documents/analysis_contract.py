@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import html
 import math
 import re
+import unicodedata
 from collections import Counter, deque
+from urllib.parse import unquote
 
 MAX_CONTEXT_CHARS = 36_000
 MAX_MODEL_SOURCES = 20
@@ -47,7 +50,7 @@ def parse_answer(text):
         return {"accepted": False, "error": "invalid-json"}
 
 
-def validate_answer(value, allowed_nodes, evidence_ids):
+def validate_answer(value, allowed_nodes, evidence_ids, *, context_nodes=()):
     invalid = {"accepted": False, "error": "unbound-output"}
     if not isinstance(value, dict) or set(value) != {"summary", "findings"}:
         return invalid
@@ -69,9 +72,61 @@ def validate_answer(value, allowed_nodes, evidence_ids):
             return invalid
         seen.add(node)
     all_text = "\n".join([summary, *(row["reason"] for row in findings)])
-    if set(NODE_IDS.findall(all_text)) - nodes or set(EVIDENCE_IDS.findall(all_text)) - evidence:
+    if set(NODE_IDS.findall(all_text)) - (nodes | set(context_nodes)) or set(EVIDENCE_IDS.findall(all_text)) - evidence:
         return invalid
     return {"accepted": True, "answer": value}
+
+
+_LOCATION = re.compile(
+    r"(?:\b[a-z][a-z0-9+.-]{1,24}\s*:\s*[/\\]{2}|\b(?:www\.|javascript:|data:|vbscript:)"
+    r"|\barn:[a-z0-9-]+:(?:s3|dynamodb|secretsmanager):"
+    r"|(?:^|[\s`'\"(])//[^\s/]+"
+    r"|\b(?:[a-z0-9-]+\.)+[a-z]{2,63}/[^\s]*"
+    r"|\[[^\]\n]{0,200}\]\(\s*[^)\s]+\s*\)"
+    r"|(?:^|[\s`'\"(])(?:[a-z]:[\\/]|\\\\[^\s\\]+\\|\.{1,2}[\\/]|/?workspace[\\/]|/(?:[^/\s]+/)+))",
+    re.IGNORECASE,
+)
+_CLAIMS = re.compile(
+    r"(?:(?:검증|검수|검사)(?:[이가은는을를에])?\s*(?:통과|완료|성공)"
+    r"|승인(?:\s*(?:절차|처리|검토))?(?:[이가은는])?\s*(?:완료|확정|성공|됨|되었|됐)"
+    r"|자동(?:으로)?\s*승인"
+    r"|승인\s*(?:했|하였|합니다)"
+    r"|수정(?:\s*(?:대상|범위|여부|필요))?(?:[이가은는])?\s*(?:확정|완료|승인)"
+    r"|실제\s*(?:은행|금융사)\s*(?:정책|규정|내규)[^.!?\n]{0,20}(?:적용|시행|인증|확정)"
+    r"|(?:automatically|auto[- ]?)\s*approved"
+    r"|(?:verification|validation|checks?)\s+(?:passed|complete|successful)"
+    r"|approval\s+(?:complete|granted|confirmed)"
+    r"|changes?\s+(?:confirmed|approved|finalized)"
+    r"|official\s+(?:bank(?:ing)?\s+)?(?:policy|regulation))",
+    re.IGNORECASE,
+)
+_NEGATIVE_SUFFIX = re.compile(
+    r"^\s*(?:[을를은는이가]\s*)?(?:(?:의미|뜻|선언)(?:하지|하지는)\s*(?:않|못)"
+    r"|(?:상태|결과)(?:가|는)?\s*아니|(?:하지|되지|되지는)\s*(?:않|못)|아니|아닙|불가|금지)"
+)
+
+
+def output_policy(value):
+    """Reject explicit model-created locations/authority claims, not source quotes.
+
+    This bounded policy does not certify semantic truth; human review remains
+    required even for prose that passes it.
+    """
+    prose = "\n".join([value["summary"], *(row["reason"] for row in value["findings"])])
+    normalized = unicodedata.normalize("NFKC", html.unescape(unquote(unquote(prose))))
+    normalized = re.sub("[\u200b\u200c\u200d\ufeff]", "", normalized)
+    violations = []
+    if _LOCATION.search(normalized):
+        violations.append("model-location")
+    for match in _CLAIMS.finditer(normalized):
+        prefix = normalized[max(0, match.start() - 40):match.start()]
+        suffix = normalized[match.end():match.end() + 60]
+        if (_NEGATIVE_SUFFIX.match(suffix)
+                or re.search(r"\b(?:not|never|no)(?:\s+(?:claim|imply|mean|declare))?\s+$", prefix, re.IGNORECASE)):
+            continue
+        violations.append("automatic-authority")
+        break
+    return {"accepted": not violations, "violations": violations}
 
 
 def _tokens(text):
@@ -80,7 +135,7 @@ def _tokens(text):
 
 
 def prompt_evidence(row):
-    return {key: row[key] for key in ("id", "title", "revision", "quote", "page")}
+    return {key: row[key] for key in ("id", "title", "revision", "quote", "page", "provenance")}
 
 
 def select_evidence(sources, query, max_chars=MAX_CONTEXT_CHARS):

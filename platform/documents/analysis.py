@@ -6,7 +6,7 @@ import json
 import uuid
 
 from documents.analysis_contract import (
-    MAX_CONTEXT_CHARS, MAX_MODEL_SOURCES, canonical, parse_answer, prompt_evidence,
+    MAX_CONTEXT_CHARS, MAX_MODEL_SOURCES, canonical, output_policy, parse_answer, prompt_evidence,
     select_evidence, validate_answer,
 )
 from documents.errors import DocumentError
@@ -34,6 +34,9 @@ sources as synthetic. Return only JSON:
   "citationIds":["E1"]}]}
 Every finding needs one or more supplied evidence IDs. Do not supply URLs,
 storage paths, new identifiers, unsupported numbers or a declaration of approval.
+The selected regulation is context only, not a finding target; use candidate IDs.
+Use review language such as 검토가 필요합니다 or 확인해야 합니다. An approved
+source is a source attribute, not permission to declare this analysis approved.
 Do not claim the entire original was reviewed: only listed excerpts are supplied.
 If evidence is insufficient, state the limitation and do not invent a finding."""
 
@@ -344,7 +347,7 @@ def process_analysis(worker, owner, job):
               "coverage": {"graphBackend": store.name, "candidateOmissions": omitted,
                            "linkedSources": len(sources), "unavailableSources": unavailable,
                            "sourceLimitReached": limited, "sharedCatalog": True},
-              "verification": {"sourceIntegrity": "not_checked", "references": "not_run",
+              "verification": {"sourceIntegrity": "not_checked", "references": "not_run", "outputPolicy": "not_run",
                                "semantic": "requires_human_review"},
               "model": {"invoked": False, "requestedId": analysis["modelId"]}}
     if not first:
@@ -352,7 +355,7 @@ def process_analysis(worker, owner, job):
         return _publish(worker, analysis, job, result, "needs_sources")
     # The prompt includes only bounded candidate metadata and source aliases,
     # never storage owners, private paths, source UUIDs or credentials.
-    prompt_nodes = [{"id": regulation.id, "label": "Regulation", "name": reg["title"]}]
+    prompt_nodes = []
     for key in ("documents", "policyRules", "products", "departments", "screens", "components"):
         prompt_nodes.extend(candidates[key][:15])
     prompt_nodes = prompt_nodes[:80]
@@ -362,7 +365,7 @@ def process_analysis(worker, owner, job):
                 "totalParagraphs": entry["totalParagraphs"]} for entry in sources]
     evidence, coverage = select_evidence(windows, analysis["query"], max_chars=remaining)
     result["coverage"].update(coverage)
-    result["coverage"]["candidateContextsOmitted"] = sum(len(v) for v in candidates.values()) + 1 - len(prompt_nodes)
+    result["coverage"]["candidateContextsOmitted"] = sum(len(v) for v in candidates.values()) - len(prompt_nodes)
     result["evidence"] = evidence
     if not evidence or not any(e["documentId"] == first["snapshot"]["documentId"] for e in evidence):
         raise DocumentError(409, "context-limit", "규정 근거 문단을 분석 범위에 포함하지 못했습니다.")
@@ -374,14 +377,19 @@ def process_analysis(worker, owner, job):
     output, usage, info = worker.model_call(SYSTEM, user, [], analysis["modelId"], 4000, job["id"], "document-impact")
     parsed = parse_answer(output)
     validated = validate_answer(parsed["value"], {n["id"] for n in prompt_nodes},
-                                {e["id"] for e in evidence}) if parsed["accepted"] else {"accepted": False}
+                                {e["id"] for e in evidence}, context_nodes={regulation.id}) if parsed["accepted"] else {"accepted": False}
     result["model"] = {"invoked": True, "requestedId": analysis["modelId"],
                        "modelId": info.get("modelId") if isinstance(info, dict) else None,
                        "usage": {k: usage[k] for k in ("inputTokens", "outputTokens") if k in usage}}
     result["verification"]["sourceIntegrity"] = "verified_at_analysis"
     if validated["accepted"]:
-        result.update(validated["answer"])
         result["verification"]["references"] = "checked"
+        policy = output_policy(validated["answer"])
+        result["verification"]["outputPolicy"] = "passed" if policy["accepted"] else "failed"
+        if policy["accepted"]:
+            result.update(validated["answer"])
+        else:
+            result["summary"] = "AI 응답에 허용되지 않은 출처 주소 또는 자동 판정 표현이 포함되어 본문을 표시하지 않았습니다. 원문과 영향 후보를 직접 검토하거나 다시 분석하세요."
     else:
         result["summary"] = "AI 응답의 인용 연결을 확인하지 못했습니다. 원문과 영향 후보를 직접 검토하거나 다시 분석하세요."
         result["verification"]["references"] = "failed"

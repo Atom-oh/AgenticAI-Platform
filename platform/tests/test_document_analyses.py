@@ -242,3 +242,39 @@ def test_completed_analysis_keeps_historical_links_but_stale_decisions_are_block
         "version": historical["analysis"]["version"], "nodeId": "DOC-1",
         "decision": "change_required", "note": "stale",
     })[0] == 409
+
+
+def test_valid_ids_cannot_publish_model_urls_or_approval_declarations(api):
+    catalog(api); source(api, "REG-1")
+    created = start(api)
+
+    def prohibited(system, user):
+        return json.dumps({"summary": "검증 통과. 수정 확정. 실제 은행 정책으로 적용하세요.", "findings": [
+            {"nodeId": "DOC-1", "reason": "https://untrusted.invalid/source ; s3://private/source",
+             "citationIds": ["E1"]},
+        ]}), {}, {}
+
+    done, _ = run(api, created, model=prohibited)
+    assert done["status"] == "completed"
+    payload = result(api, created)[1]
+    assert payload["analysis"]["status"] == "needs_review"
+    assert payload["result"]["findings"] == []
+    assert payload["result"]["verification"]["outputPolicy"] == "failed"
+    assert "untrusted.invalid" not in repr(payload)
+    assert "s3://private" not in repr(payload)
+    assert "수정 확정" not in payload["result"]["summary"]
+
+
+def test_selected_regulation_is_context_not_an_unreviewable_finding(api):
+    catalog(api); source(api, "REG-1")
+    created = start(api)
+
+    def context_only(system, user):
+        return json.dumps({"summary": "규정 검토", "findings": [
+            {"nodeId": "REG-1", "reason": "규정 자체 검토", "citationIds": ["E1"]},
+        ]}), {}, {}
+
+    run(api, created, model=context_only)
+    payload = result(api, created)[1]
+    assert payload["result"]["findings"] == []
+    assert payload["result"]["verification"]["references"] == "failed"
