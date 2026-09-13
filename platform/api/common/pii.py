@@ -128,6 +128,11 @@ def scan_guardrail(text: str, *, strict: bool = False) -> list[dict]:
             raise PiiVerificationUnavailable("PII verification is not configured")
         return []
     if strict and len(text) > 4000:
+        # 창을 넘는 입력은 네트워크 이전에 거부한다 (일부만 검사하고 전체를 검증했다고 주장하지 않는다).
+        # 페이로드가 커져 이 경로에 걸리면 사용자에게는 일반적인 검증 실패로만 보이므로, 운영자가
+        # 원인을 구분할 수 있도록 길이만 기록한다 — 원문은 남기지 않는다 (§12.5).
+        from common.log import log_event
+        log_event("pii.verification_input_too_long", chars=len(text), limit=4000)
         raise PiiVerificationUnavailable("PII verification input exceeds checked length")
     try:
         rt = boto3.client("bedrock-runtime", region_name=REGION)
