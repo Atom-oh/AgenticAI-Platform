@@ -293,3 +293,33 @@ def test_api_receipt_excludes_nested_originals(monkeypatch):
     monkeypatch.setattr(privacy.boto3, "client", lambda *_args, **_kwargs: Lambda())
     result = privacy.process("김테스트", "qwen", "query", "test")
     assert "김테스트" not in json.dumps(result, ensure_ascii=False)
+
+
+# --- 리뷰 후속 패치 (2026-09-13): API·릴레이 requestId 정규식 정합 + latencyMs float 허용 ---
+@pytest.mark.parametrize("bad", ["-abc", "_x", ".y", ":z"])
+def test_request_id_with_leading_punctuation_is_rejected_before_the_relay(monkeypatch, bad):
+    # 릴레이(_REQUEST_ID)는 선두 영숫자만 허용한다. API 계층이 이를 통과시키면 릴레이가 거부해 S2가 차단된다.
+    monkeypatch.setattr(privacy, "_invoke", lambda *_: pytest.fail("relay-invalid requestId must not reach the processor"))
+    with pytest.raises(privacy.PrivacyUnavailable):
+        privacy.process("합성 질문", "qwen", "query", bad)
+
+
+def test_valid_request_id_reaches_processor(monkeypatch):
+    seen = {}
+
+    def inv(payload):
+        seen.update(payload)
+        return receipt("합성 질문")
+
+    monkeypatch.setattr(privacy, "_invoke", inv)
+    out = privacy.process("합성 질문", "qwen", "query", "trace-1.2:3")
+    assert seen.get("requestId") == "trace-1.2:3" and out["ok"] is True
+
+
+def test_float_latency_is_forwarded_as_bounded_int(monkeypatch):
+    ev = receipt("합성 질문")
+    ev["evidence"]["latencyMs"] = 12.7  # 릴레이는 int|float 를 낸다
+
+    monkeypatch.setattr(privacy, "_invoke", lambda *_: ev)
+    out = privacy.process("합성 질문", "qwen", "query", "trace1")
+    assert out["evidence"]["latencyMs"] == 12 and type(out["evidence"]["latencyMs"]) is int
