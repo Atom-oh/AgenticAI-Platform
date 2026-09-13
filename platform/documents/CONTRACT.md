@@ -23,6 +23,11 @@ files. Unlinked records must remain explicitly unlinked.
 - Content is immutable; metadata uses CAS. Project membership and document
   authority participate in transactional fences. Revocation may not publish a
   worker result after the final authorization check.
+- A commit uses the same authority version that authorized its operation.
+  Silently refreshing a downgraded role and fencing that newer version is not
+  authorization. A changed project/document snapshot requires reauthorization
+  of the operation or a conflict. Model completion uses a new read-authorized
+  snapshot of every source, followed by its transactional fences.
 - Records and source bytes remain private. No static website upload, public
   source URL, arbitrary URL fetch, model-generated URL, shared event-cache replay
   or browser local storage is permitted for document content.
@@ -42,6 +47,9 @@ files. Unlinked records must remain explicitly unlinked.
 `textHash`, `paragraphCount`, `pages`, `warnings`, timestamps and review metadata.
 Private `parts`, blob keys and request fingerprints are not returned to clients.
 Approving a revision never mutates its content. New content needs a new revision.
+Approval cannot replace a newer already-approved import ordinal with an older
+one. Historical source links remain on their original revision; a new approved
+revision is reported as stale for an earlier analysis decision.
 
 `Paragraph`: `{id: "p000001", text, page: number|null, sha256}`. Paragraph text is
 the immutable extraction projection, not necessarily a byte-identical PDF text

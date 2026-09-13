@@ -16,6 +16,34 @@ from botocore.exceptions import ClientError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+def test_prefix_pagination_cannot_replay_another_document_history_cursor():
+    from workspace.storage import Storage
+    storage = Storage(table=FakeTable(page_size=1), s3=FakeS3(), bucket="private")
+    for identifier in ("doc-a--r1", "doc-a--r2", "doc-b--r1"):
+        storage.put("alice", "asset", {"id": identifier})
+    first = storage.list_page("alice", "asset", prefix="doc-a--")
+    assert [row["id"] for row in first["items"]] == ["doc-a--r1"]
+    second = storage.list_page("alice", "asset", cursor=first["cursor"], prefix="doc-a--")
+    assert [row["id"] for row in second["items"]] == ["doc-a--r2"]
+    assert "cursor" not in second
+    with pytest.raises(ValueError):
+        storage.list_page("alice", "asset", cursor=first["cursor"], prefix="doc-b--")
+    with pytest.raises(ValueError):
+        storage.list_page("bob", "asset", cursor=first["cursor"], prefix="doc-a--")
+    with pytest.raises(ValueError):
+        storage.list_page("alice", "asset", cursor=first["cursor"])
+    with pytest.raises(ValueError):
+        storage.list_page("alice", "asset", cursor=first["cursor"], prefix="doc-")
+
+
+@pytest.mark.parametrize("prefix", ["../", "asset#", "/", 123, "a" * 129])
+def test_invalid_history_prefix_is_rejected_before_query(prefix):
+    from workspace.storage import Storage
+    storage = Storage(table=FakeTable(), s3=FakeS3(), bucket="private")
+    with pytest.raises(ValueError):
+        storage.list_page("alice", "asset", prefix=prefix)
+
+
 class ConditionalFailure(Exception):
     pass
 
