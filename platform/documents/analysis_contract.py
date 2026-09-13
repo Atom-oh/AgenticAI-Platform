@@ -109,7 +109,8 @@ _CLAIMS = re.compile(
     r"|approval\s+(?:(?:has|have|had|is|was|been|now|already)\s+){0,4}(?:complete|granted|confirmed)"
     r"|(?:changes?|analysis|results?|findings?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already)\s+){0,4}(?:confirmed|approved|finalized|verified|validated)"
     r"|\b(?:approved|verified|validated)\b"
-    r"|official\s+(?:bank(?:ing)?\s+)?(?:policy|regulation))",
+    r"|official\s+(?:bank(?:ing)?\s+)?(?:policy|regulation)"
+    r"|\b(?:approval|verification|validation)\b|승인|검증)",
     re.IGNORECASE,
 )
 _NEGATIVE_SUFFIX = re.compile(
@@ -149,6 +150,16 @@ def output_policy(value):
     for match in _CLAIMS.finditer(normalized):
         prefix = normalized[max(0, match.start() - 40):match.start()]
         suffix = normalized[match.end():match.end() + 60]
+        word = match.group().lower()
+        if word in {"approval", "verification", "validation"} and re.match(
+                r"^\s+(?:(?:is|are|has|have|been)\s+)*(?:not|never|required|needed|pending|criteria|steps?|process|requests?)\b",
+                suffix, re.IGNORECASE):
+            continue
+        if word in {"승인", "검증"} and (
+                re.search(r"(?:미|비|불)$", prefix) or re.match(
+                    r"^\s*(?:된\s*(?:원문|문서|자료)|기준|절차|방법|항목|범위|계획|요청|필요|대기|여부|전(?:에|에는|까지|\s|$))",
+                    suffix)):
+            continue
         if match.group().lower() == "approved" and re.match(r"^\s+(?:sources?|originals?|documents?|references?)\b", suffix, re.IGNORECASE):
             # Approval is an input-source attribute, not an analysis verdict.
             continue

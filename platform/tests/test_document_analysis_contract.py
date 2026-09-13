@@ -99,13 +99,19 @@ def test_evidence_selection_is_bounded_and_quotes_original_paragraphs():
     "분석 결과는 승인입니다.",
     "분석은 승인된 상태입니다.",
     "분석 결과는 검증된 상태입니다.",
+    "Verification succeeded.",
+    "Approval succeeded.",
+    "Verification finished.",
+    "분석은 승인을 받았습니다.",
+    "분석은 검증을 마쳤습니다.",
 ], ids=["https", "s3", "file", "encoded", "absolute-path", "workspace-key", "approval", "completed-approval", "english",
         "protocol-relative", "bare-domain", "verification-verb", "approval-verb",
         "mixed-fullwidth", "mixed-html-percent", "root-file", "auxiliary-verb",
         "plural-auxiliary", "passive-approval", "analysis-approval",
         "passive-verification", "korean-passive-verification", "validated-findings",
         "standalone-approved", "standalone-verified", "korean-nominal-approval",
-        "participial-approval", "participial-verification"])
+        "participial-approval", "participial-verification",
+        "verification-succeeded", "approval-succeeded", "verification-finished", "approval-received", "verification-finished-korean"])
 def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     from documents.analysis_contract import output_policy
     assert output_policy({"summary": prose, "findings": []})["accepted"] is False
@@ -127,6 +133,12 @@ def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     "Approved documents still require a human decision.",
     "분석은 승인된 상태가 아닙니다.",
     "승인된 원문으로 검토해야 합니다.",
+    "Verification is required.",
+    "Approval is pending.",
+    "Verification has not succeeded.",
+    "The approval criteria require review.",
+    "검증 기준을 확인해야 합니다.",
+    "미승인 원문을 검토하세요.",
 ])
 def test_output_policy_retains_review_language_and_explicit_negation(prose):
     from documents.analysis_contract import output_policy
