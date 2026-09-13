@@ -59,6 +59,8 @@ typed graph; arbitrary Mermaid source is not an input mode.
 
 The React renderer manifest comes from the real kit's `manifest.cjs`. The client
 checks the local manifest, size limits, HTML hash and renderer message binding.
+Catalog identity is exposed only after the corresponding HTML is verified;
+both metadata and previews use that same cached revision snapshot.
 Examples are local, synthetic and reset on selection; they do not initiate
 transactions or update approved assets.
 

@@ -525,3 +525,44 @@ async function assertFits(page, width, state) {
     assert.ok(layout.page.width >= width * 0.9, 'Portal should use the available desktop width');
   }
 }
+
+test('selecting lower cards reveals and focuses the active detail at desktop and stacked widths', { timeout: 60_000 }, async t => {
+  const { page } = await mount(t);
+  for (const width of [1920, 1000, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    const button = page.locator('.portal-code-open').filter({ hasText: 'Text' });
+    await button.scrollIntoViewIfNeeded();
+    await button.click();
+    const detail = page.getByRole('complementary', { name: 'Text React 컴포넌트 상세' });
+    await detail.waitFor();
+    await flushUi(page);
+    const state = await detail.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom, viewport: innerHeight,
+        focused: element.contains(document.activeElement) || element === document.activeElement };
+    });
+    assert.ok(state.top >= -1 && state.top < state.viewport && state.bottom > 0,
+      `Selected detail must be visible at ${width}: ${JSON.stringify(state)}`);
+    assert.equal(state.focused, true);
+    await detail.getByRole('button', { name: '컴포넌트 상세 닫기' }).click();
+    await flushUi(page);
+    assert.equal(await button.evaluate(element => element === document.activeElement), true);
+  }
+});
+
+test('Escape closes fullscreen after the trusted diagram iframe receives keyboard focus', { timeout: 45_000 }, async t => {
+  const { page } = await mount(t);
+  await category(page, '사용자 흐름');
+  await openAsset(page, 'PRC-000');
+  const opener = page.getByRole('button', { name: '전체 화면으로 흐름 보기', exact: true });
+  await opener.click();
+  const dialog = page.getByRole('dialog');
+  await dialog.waitFor();
+  const viewport = dialog.frameLocator('iframe[data-portal-diagram]').locator('#viewport');
+  await viewport.waitFor();
+  await viewport.focus();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('dialog[open]'), undefined, { timeout: 6000 });
+  assert.equal(await opener.evaluate(element => element === document.activeElement), true);
+});

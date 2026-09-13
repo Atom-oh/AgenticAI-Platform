@@ -98,6 +98,27 @@ test('loader rejects tampering and can retry without poisoning the shared promis
   assert.equal((await loader.document()).html, html);
 });
 
+test('catalog identity is exposed only with its verified document and rolls over atomically after failure', async () => {
+  const { createReactLoader } = source('portal-react/client.ts');
+  const { manifest, html } = await renderer();
+  const previous = structuredClone(manifest);
+  previous.catalog.version = '0.9.0';
+  previous.catalog.hash = 'a'.repeat(64);
+  let fresh = false;
+  const loader = createReactLoader({ origin: 'https://portal.test', fetcher: async url =>
+    url.endsWith('index.json')
+      ? new Response(JSON.stringify(fresh ? manifest : previous), { headers: { 'content-type': 'application/json' } })
+      : new Response(fresh ? html : html.replace('<title>', '<TITLE>'), { headers: { 'content-type': 'text/html' } }),
+  });
+  await assert.rejects(loader.catalog(), /integrity/);
+  fresh = true;
+  const catalog = await loader.catalog();
+  const document = await loader.document();
+  assert.equal(catalog, document.catalog);
+  assert.equal(catalog.version, manifest.catalog.version);
+  assert.equal(catalog.hash, manifest.catalog.hash);
+});
+
 test('fetch bounds apply to streaming bodies and redirects without trusting Content-Length', async () => {
   const { createReactLoader } = source('portal-react/client.ts');
   for (const response of [
