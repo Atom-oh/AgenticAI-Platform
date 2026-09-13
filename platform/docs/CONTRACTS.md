@@ -1,103 +1,210 @@
-# Platform 내부 계약 (병렬 구현용) — 2026-09-02 (SPEC v2 Single Boundary 반영 · 금지어: 온프렘/Two-Plane/In-Region → 'VPC 내부'/'Single Boundary')
+# Platform module contracts
 
-이 문서는 `platform/` 안에서 동시에 작업하는 모듈들이 지켜야 하는 계약이다. 위반하면 통합이 깨진다.
+Current code audit: 2026-09-13. Read [root instructions](../../AGENTS.md),
+[review context](../../docs/REVIEW_CONTEXT.md), and [SPEC.md](../../SPEC.md) first.
+This document describes integration interfaces, not a permanent allocation of
+files to earlier implementation workers. Dated plans and guidebooks are not
+additional requirements unless the current task explicitly adopts them.
 
-## 0. 디렉토리 소유권 (다른 소유자의 파일은 편집하지 않는다 — 통합 스니펫으로 전달)
+Paths below are relative to `platform/`. Workspace interfaces are defined in
+[CONTRACT.md](../workspace/CONTRACT.md) and
+[REACT_CONTRACT.md](../workspace/REACT_CONTRACT.md).
 
-| 경로 | 소유 | 내용 |
-|---|---|---|
-| `api/ws_handler.py`, `api/common/*`, `api/handlers/__init__.py`, `api/handlers/core.py`, `api/handlers/s1.py`, `api/handlers/s2.py`, `api/admin_handler.py` | 통합자(호스트) | 진입점·공통 |
-| `registry/`, `api/handlers/registry.py`, `web/src/views/RegistryView.tsx`, `tests/test_registry*.py` | Registry 모듈 | F4 |
-| `screengen/`, `gates/`, `skills/`, `api/handlers/screengen.py`, `web/src/views/ScreenGen.tsx`, `tests/test_screengen*.py` | 화면생성 모듈 | F5 |
-| `report/`, `api/handlers/report.py`, `web/src/views/Report.tsx`, `web/public/samples/*`, `tests/test_report*.py` | 보고서 모듈 | F7 |
-| `onprem/`, `bridge/`, `graph/store.py`(Neptune 부분), `tests/test_onprem*.py` | 플레인 모듈 | §3 VPC 내부·Neptune |
-| `agentcore/`, `agents/`, `api/handlers/agents.py`, `web/src/views/AgentBuilder.tsx` | 에이전트 계층 | AgentCore Runtime(Strands 컨테이너)·Harness·Gateway 도구·Registry 미러·빌더 |
-| `api/handlers/portal.py`, `web/src/views/Portal.tsx` | Portal 모듈 | UX Asset Portal (Related = 그래프 순회) |
-| `engine/gate.py`, `engine/llm.py`, `engine/bedrock.py` | 게이트 모듈 | 익명화 게이트(유일한 모델 호출 경로)·LLMClient 어댑터(Claude global · Gemma mantle) |
-| `onprem/aoss_index.py` | 플레인 모듈 | OpenSearch Serverless 하이브리드 인덱스 (VPC 엔드포인트) |
-| `infra/lib/*.ts`, `deploy.sh`, `web/src/App.tsx`, `web/src/lib.ts`, `web/src/Views.tsx` | 통합자 | CDK·셸 |
-| `studio/`, `api/handlers/studio.py`, `api/common/studio_proxy.py`, `web/src/studio/`, `skills/studio-*.md`, `tests/test_studio*.py` | 스튜디오 모듈 | 디자인 스튜디오 · 에이전틱 루프(StudioLoopFn) · 명세 체크리스트 |
+## 1. WebSocket handlers
 
-## 1. 핸들러 계약 (`api/handlers/<module>.py`)
+`api/ws_handler.py` authenticates connections and dispatches `ROUTES` from
+`api/handlers/`. Deployment places `api/common` at the package root:
 
 ```python
 from common.ctx import Ctx
+
 def handle_x(ctx: Ctx, body: dict) -> None: ...
-ROUTES = {"x": handle_x, "x_list": ...}   # 액션 이름은 모듈 접두어로 시작: registry_*, screengen*, report*
+
+ROUTES = {"x": handle_x}
 ```
-- `ctx.post({...})` 이벤트 1건. `reqId`/`traceId` 자동 부여. 응답 이벤트의 `type`은 액션명과 같게 한다
-  (요청/응답형). 스트리밍형은 `<kind>.stage` / `<kind>.token` / `<kind>.done` 3종만 쓴다
-  (프론트 `sock.run`이 `.done` 1건에서 종료, `.stage`/`.token`은 구독으로 전달).
-- `ctx.email`은 Cognito로 검증된 사용자. 감사 이벤트의 actor로 쓴다.
-- 예외는 던져도 된다 — 진입점이 `{"type":"error"}`로 변환한다. 단, 사용자에게 보여야 하는 실패는 직접 `ctx.done(kind, error=...)`.
-- Bedrock 생성은 `engine.bedrock.Stream(system, user, max_tokens)` 사용 → 반복 후 `.usage` 에 실측 토큰.
-  단발은 `engine.bedrock.generate(system, user)` → `(text, usage)`.
-- 계측: `from common import tracing; tracing.record_trace({...})` — 키: `traceId, scenario, email, query, blocked, piiOutbound, maskedFields, tokensIn, tokensOut, cached, plane, elapsedMs` + 자유 필드. **프롬프트 원문·응답 원문·개인데이터 값은 넣지 않는다** (email/query는 자동 해시).
-- 로그: `from common.log import log_event; log_event("module.event", ctx.trace_id, key=value)`. 금지 키는 자동 해시.
-- VPC 내부 플레인 호출: `from common import plane; plane.call("/path", body)` (bridge/direct). `plane.mode()` in {bridge,direct,local,none}.
-- 환경변수는 `os.environ.get("X", default)`; 새 env가 필요하면 통합 스니펫에 명시.
-- Lambda 런타임: Python 3.12, **외부 pip 패키지 없음**(boto3만). PyYAML도 없다 (semantic은 json 변환본 사용).
-- 배포 조립: `deploy.sh`가 `api/*.py`, `api/common`, `api/handlers`, `engine`, `graph`, `onprem`, `semantic`, `seed/out` + **각 모듈 디렉토리**(`registry`, `screengen`, `report`)를 `api-dist/`로 복사한다. 모듈은 `import registry.x` 처럼 최상위 패키지로 import 된다 (`sys.path`에 api-dist 루트).
-- 장기 실행 스트리밍(스튜디오): WsFn 은 ack 1건(`studio_run`)만 보내고 워커 Lambda 가 같은 커넥션에 `studio.stage/.token/.done` 을 push 한다. 워커는 STUDIO_LOOP_FN 미설정 시 `.done(error)` 로 미배포를 알린다.
 
-## 2. 프론트 계약 (`web/src/views/<View>.tsx`)
+- `ctx.post(payload)` supplies `reqId` and `traceId`. Request/reply events normally
+  use the action name as `type`. Streaming uses `<kind>.stage`,
+  `<kind>.token`, and `<kind>.done`; `sock.run` completes on `.done`.
+- `ctx.email` is authenticated connection identity used for scenario audit.
+  Workspace HTTP uses JWT `sub` instead; do not interchange their owner keys.
+- `ctx.error(message)` emits `type="error"`; terminal scenario failures can use
+  `ctx.done(kind, error=...)`. Entry-point exceptions are also reported as errors.
+- Use `engine.gate` for platform LLM generation; `engine.bedrock.Stream` and
+  `generate` are compatibility wrappers. Actual usage comes from the adapter.
+  Strands has its separate pre-model boundary hook.
+- `common.tracing.record_trace` records scenario, identity/query hashes, model,
+  token counts, timing, masking/block/cache evidence and plane labels.
+  `common.log.log_event` hashes sensitive fields. Do not add raw prompts,
+  responses, personal values or credentials to logs/traces.
+- `common.plane.call(path, body)` invokes the internal service through the
+  configured bridge/direct path; `plane.mode()` is `bridge|direct|local|none`.
+  Local mode is a labelled development fallback, not network separation.
+- Python Lambda packaging is not dependency-free: `deploy.sh` vendors
+  boto3/botocore and converts semantic YAML to JSON. Container dependencies are
+  specified separately in `agents/requirements.txt` and `workspace/requirements.txt`.
+- `studio_run` acknowledges the job, then `StudioLoopFn` pushes
+  `studio.stage/.token/.done` to the same connection. Missing `STUDIO_LOOP_FN`
+  reports an explicit failure.
 
-- React 18 + TS + Tailwind v4, 다크 전용, Pretendard. 공용 클래스: `.panel`, `.chip`, `.md`, `.blink`.
-  색 규칙 필수: VPC 내부 = `var(--onprem)`(앰버), 클라우드 = `var(--cloud)`(시안), 정상 = `var(--ok)`; 위험은 `text-rose-400`.
-- 소켓: `import { sock, auth } from '../lib'`.
-  - 요청/응답: `const e = await sock.request('registry_list', { type: 'COMPONENT' })` → 응답 이벤트 1건.
-  - 스트리밍: `await sock.run('screengen', { prompt }, (e) => { ... })` — `.stage/.token/.done` 이벤트 수신, `.done`에서 종료.
-  - 캐시 재생: 이벤트에 `cached: true`가 있으면 "캐시 응답" 배지를 보여야 한다. `type: 'cache.replay'` 수신 시 상태 초기화.
-- 뷰는 `export default function XView()`; 라우팅/내비 등록은 통합자가 `App.tsx`에서 한다.
-- `localStorage`/`sessionStorage`에 개인데이터·토큰 저장 금지 (§12.10).
-- 프리셋 버튼(시연 원클릭)과 "진행 중" 상태 표시를 반드시 둔다. 미구현 기능은 UI에 "미구현"이라고 명시한다 — 흉내 금지.
+`deploy.sh` copies API files plus `engine`, `graph`, `onprem`, `semantic`,
+`registry`, `screengen`, `report`, `agentcore`, `design_loop`, `studio`,
+`workspace`, selected React-kit files, skills and generated seeds into `api-dist/`.
+The EKS gateway and privacy relay have separate build contexts.
 
-## 3. Registry 모듈이 노출해야 하는 Python API (다른 모듈이 import)
+## 2. Frontend
+
+The SPA uses React, TypeScript, Vite and Tailwind. Existing scenario views use
+`sock`/`auth` from `web/src/lib.ts`; workspace panels use their scoped HTTP client.
+
+```typescript
+const event = await sock.request('registry_list', { type: 'CUSTOM', subtype: 'COMPONENT' });
+await sock.run('screengen', { prompt }, (event) => { /* render evidence */ });
+```
+
+Show progress, errors and actual evidence. A `cached: true` event needs the
+`캐시 응답` label; `cache.replay` resets the displayed run. S2 never replays the
+shared scenario cache. Do not store personal values or authentication tokens in
+`localStorage`/`sessionStorage`; current auth tokens live in module memory.
+Keep internal/cloud/success labels consistent with `--onprem`, `--cloud`, `--ok`.
+Legacy scenario styling does not define the React kit's component contract.
+
+## 3. Registry
 
 ```python
 # registry/api.py
-def counts() -> dict                      # {"total": int, "approved": int, "byType": {...}}
-def list_approved(record_type: str | None = None, subtype: str | None = None) -> list[dict]   # Consumer API — APPROVED만
-def get_record(name: str, version: str) -> dict | None
-def search(query: str, record_type: str | None = None) -> list[dict]   # 키워드 + 임베딩 하이브리드
+def counts() -> dict: ...
+def list_approved(record_type=None, subtype=None) -> list[dict]: ...
+def get_record(name, version) -> dict | None: ...
+def search(query, record_type=None) -> list[dict]: ...
+
 # registry/seed.py
-def seed(actor: str, reset: bool = False) -> dict          # 기준선 시드 (멱등)
-def reset_demo_state(actor: str) -> dict                   # 시연 리셋: Button v2 APPROVED, v3 PENDING_APPROVAL 등 기준선 복원
+def seed(actor, reset=False) -> dict: ...
+def reset_demo_state(actor) -> dict: ...
 ```
-레코드 형태(공통):
+
+Record example (illustrative values, not a fixed approved version):
+
 ```json
-{"name": "Button", "recordVersion": "v2", "recordType": "CUSTOM", "subtype": "COMPONENT",
- "status": "APPROVED", "description": "...", "owner": "UI플랫폼팀", "tags": ["form"],
- "payload": {"propsSchema": {...}, "import": "@atom/ui", "supersededBy": "v3"},
- "createdAt": 1690000000000, "updatedAt": 1690000000000, "updatedBy": "demo@atomai.click"}
+{"name":"Button","recordVersion":"v2","recordType":"CUSTOM","subtype":"COMPONENT",
+ "status":"APPROVED","description":"...","owner":"UI플랫폼팀","tags":["form"],
+ "payload":{"propsSchema":{},"import":"@atom/ui/button","supersededBy":"v3"},
+ "createdAt":1690000000000,"updatedAt":1690000000000,"updatedBy":"demo@atomai.click"}
 ```
-- recordType ∈ {MCP, AGENT, SKILL, CUSTOM}; 컴포넌트는 `CUSTOM` + `subtype: COMPONENT`.
-- 상태 전이: DRAFT→PENDING_APPROVAL→APPROVED→DEPRECATED, PENDING_APPROVAL→REJECTED→DRAFT. 그 외 전이는 400 오류.
-- `name`+`recordVersion` 유일 (DynamoDB 조건부 put). 모든 전이는 감사 이벤트(actor, from, to, reason, ts) 저장.
-- 테이블: `REGISTRY_TABLE` env. 키 설계는 모듈 자유. 이 테이블은 통합자가 CDK에 추가한다 (pk: string `pk`, sk: string `sk`, GSI `byStatus`: pk `status`, sk `updatedAt` 이라고 가정하고 구현; 다른 설계가 필요하면 스니펫에 명시).
 
-## 4. 화면생성 모듈 (F5) 계약
+- `recordType`: `MCP|AGENT|SKILL|CUSTOM`. Current component contracts use `CUSTOM` /
+  `COMPONENT`, a recorded deviation from SPEC §7’s required `SKILL` mapping. Keep
+  the requirement, implementation and portal deviation badge distinct.
+- Transitions: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` and
+  `PENDING_APPROVAL → REJECTED → DRAFT`. Other transitions fail with code `400`.
+  `REJECTED` and `DEPRECATED` require a reason.
+- `name` + `recordVersion` is unique. Conditional writes detect conflicts;
+  transitions retain actor/from/to/reason/time audit data.
+- `REGISTRY_TABLE` uses `pk`, `sk`, and GSI `byStatus(status, updatedAt)`.
+  No table configuration selects the in-memory test store.
+- Consumer queries return only `APPROVED` records. Administrative hybrid search
+  is separate: `search` returns scored hit objects containing `record`.
+  Embeddings can be disabled or unavailable; `search_detailed` reports
+  keyword-only operation rather than claiming dense retrieval.
 
-- 액션 `screengen` (스트리밍): body `{prompt}`. 단계 `registry_lookup`(승인 컴포넌트 + propsSchema, 정확 조회), `skills`, `generate`(토큰 스트리밍), `gates`(결과), `regenerate`(1회만, 실패 사유 포함), `.done` `{code, componentsUsed:[{name,version}], gates:{build,types,lint,a11y,visual}, attempts}`.
-- 게이트 실행기는 별도 Node 20 Lambda(`gates/`)이며 Python 오케스트레이터가 `GATES_FN` env로 invoke 한다. 입력 `{code, filename, components:[{name, version, propsSchema}]}` → 출력 `{build:{ok,errors[]}, types:{ok,errors[]}, lint:{ok,errors[]}, a11y:{ok,violations[]}, visual:{ok,note,diff?}}`.
-- 컴포넌트 import 규약: 생성 코드는 `import { Button } from '@atom/ui'` 형태만 쓴다. 게이트는 승인 propsSchema로 `@atom/ui` 타입 선언을 합성해 타입검사한다 (Deprecated 컴포넌트는 선언에 없으므로 타입 오류).
-- 승인 상태가 바뀌면 결과가 바뀌어야 한다: Registry `list_approved(subtype="COMPONENT")`만 프롬프트에 넣는다. 벡터 검색 금지.
+## 4. Legacy F5 screen generation
 
-## 5. 보고서 모듈 (F7) 계약
+Action `screengen` accepts `{prompt}`. Stages include `registry_lookup`, `skills`,
+`generate`, `gates`, and at most one `regenerate`. The result includes `code`,
+`componentsUsed`, `gates`, `attempts`, `ok`, usage, provenance and failure details.
+Only approved component schemas enter the prompt; this lookup does not use
+vector search.
 
-- 액션 `report` (스트리밍): body `{url?}` 기본값은 `web/public/samples/vendor-news.html`(CloudFront 경로 `/samples/vendor-news.html`, 인젤션 지시문 포함).
-  단계 `reader_fetch`, `reader_summarize`(도구 호출 시도·AccessDenied 로그 포함), `handoff`(구조화 JSON), `writer_search`(내부 문서), `writer_generate`(토큰 스트리밍), `.done`.
-- Reader/Writer는 **별도 Lambda + 별도 IAM 역할**. Reader 역할: Bedrock invoke만(내부 조회 Lambda invoke 권한 없음 → 시도 시 AccessDeniedException을 캡처해 보여준다). Writer: 내부 문서(seed/out Document 노드) 읽기 + Bedrock, URL fetch 코드 없음.
-- 오케스트레이터(`api/handlers/report.py`)는 `READER_FN`, `WRITER_FN`, `INTERNAL_TOOL_FN` env로 invoke. 둘 사이는 구조화 JSON만 통과.
+`screengen/agent.py` loads the three non-`studio` skill files. Generated TSX uses
+the exact `@atom/ui/<module>` import from each approved record, and a first-line
+`// registry: Name@version` header. The module-root import is not the documented
+generation format, even where a lower-level checker tolerates it.
 
-## 6. 플레인 모듈 (§3) 계약
+`GATES_FN` invokes the Node runner with code and approved component schemas.
+Results include `build`, `types`, `lint`, `a11y`, `visual`, plus the orchestrator's
+Registry check. Type declarations and rendered UI are generated stubs, not the
+customer's component implementation. `visual` compares normalized HTML structure,
+not pixels; a changed snapshot is evidence, not automatically a failure.
+The a11y runner sets `ok` from violations and separately returns `incomplete`.
+An `ok` result therefore does not certify checks that were incomplete.
 
-- `onprem/service.py` 라우트 유지: `/health`, `/s2/prepare`, `/s2/finalize`, `/audit/recent` + 추가 `/vector/search` `{query, queryEmbedding:[float]}` → `{hits:[{chunkId,text,score,stage}], timing}`.
-- 감사 원문·재식별 매핑은 `DATA_BACKEND=rds`면 RDS 테이블(`audit_log`)에, 아니면 파일에. `/audit/recent`는 원문을 노출하지 않는다(길이만).
-- 브리지: `bridge/handler.py` (이미 있음) — 변경 시 op 이름 유지.
+The publishing skill's status/error examples must defer to the selected schema:
+live seed `Badge.tone` uses `critical` and `Alert` uses `severity`; the isolated
+fixture uses `danger` and `kind`. The live FormField seed also omits fixture
+`required`/`error` props. Preserve accessible required/error behavior using
+supported markup; do not invent props. Do not copy fixture props into live generation.
 
-## 7. 테스트
+## 5. Reader/Writer report
 
-- Python: `cd platform && python3 -m pytest tests/ -q` — AWS 호출 없이 통과해야 한다 (DynamoDB는 인메모리 페이크로 주입, boto3 클라이언트는 지연 생성).
-- Node(gates): `cd platform/gates && npm test`.
-- 프론트: `cd platform/web && npx tsc --noEmit && npm run build`.
+`report` accepts `{url?, audience?}`; `report_sample` describes the synthetic
+injection sample at `web/public/samples/vendor-news.html`.
+Stages are `reader_fetch`, `reader_summarize`, `handoff`, `writer_search`,
+`writer_generate`, followed by `report.done`.
+
+Reader and Writer are separate handlers and IAM roles. Reader fetches external
+content and attempts the internal tool for the denial demonstration; the Reader
+role lacks that invocation grant. Writer consumes structured summary data and
+internal search results, without fetching the original URL. The orchestrator uses
+`READER_FN`, `WRITER_FN`, `INTERNAL_TOOL_FN` and `STREAM_TABLE`.
+Writer streams through DynamoDB; the orchestrator reports actual
+`delivery=stream|partial_fallback|single_event` and relay errors.
+IAM-denial or streaming claims require observed results, not role names alone.
+
+## 6. Internal plane and MyData
+
+`onprem/service.py` retains `/health`, `/s2/prepare`, `/s2/finalize`,
+`/audit/recent`, and `/vector/search`. Vector requests carry
+`{query, queryEmbedding}` and return hits plus timing. Bridge operation names
+are defined in `bridge/handler.py`.
+
+With `DATA_BACKEND=rds`, audit text and reidentification maps are stored in RDS;
+local development uses files. `/audit/recent` returns metadata/lengths rather than
+raw audit text. Authenticated S2 stage events can contain lookup values and the
+final reidentified answer; the cloud trace is not a copy of those events.
+
+Current S2 free text must pass `api/common/privacy.py` and the private EKS
+processor before cloud Guardrails. Known structured fields are tokenized by the
+internal producer, then scanned independently. The explanation route is separate
+from `privacyModel`; `gemma` does not replace private Qwen processing.
+Preserve `privacy_input`, `privacy_payload`, `s2_privacy_models`,
+`schema-and-independent-scan`, `structured-tokenization`, `modelInvoked`,
+receipt field names and Korean runtime strings. Privacy verification failure
+blocks S2, with no shared cache fallback. See
+[privacy infrastructure](../infra/README-privacy.md).
+
+## 7. Validation commands
+
+From `platform/`, with dependencies/browser assets installed as in CI:
+
+```bash
+python3 -m pytest tests/ -q
+(cd gates && npm test)
+(cd react-kit && npm test)
+(cd web && npx tsc --noEmit && npm run build && node --test test/*.test.cjs)
+```
+
+Use focused suites while changing a module; a documentation audit does not prove
+deployment or all live model routes. Preserve exact fixtures and runtime-consumed
+skill semantics when translating explanatory text.
+
+## 8. Audit notes
+
+The 2026-09-13 code audit found these contradictions. They remain explicit so a
+reviewer does not turn an older description into a requirement for unrelated code:
+
+| Earlier claim | Current code and implication |
+| --- | --- |
+| All agents are Harness; four specs | `api/admin_handler.py` prefers Runtime/Strands when configured; `agentcore/agent_specs.py` has five specs. Custom creation still uses Harness. Some source comments retain older wording. |
+| Every generation path regenerates once | F5 and `design_loop/loop.py` do; `studio/loop.py` permits 20 rounds and `workspace/http.py` permits five. |
+| Gemma substitutes for private PII processing | S2 requires the private EKS detector for free text. Its Gemma route is explanation only. |
+| Raw question goes to input Guardrails first | `api/handlers/s2.py` now sanitizes it through EKS first. Its opening source docstring still describes the older order. |
+| All scenario failures replay cache | S2 explicitly sets `cache=False`. |
+| CloudFront is the only public endpoint; all VPCs have no NAT | The browser directly uses WebSocket API Gateway. The isolated plane and reused EKS VPC are separate topologies. |
+| Loading, shared seeding and reset must be IAM-admin-only | Neptune loading follows the administrative path. Authenticated `reset` (`api/handlers/core.py`) and `registry_seed(reset=true)` (`api/handlers/registry.py`) can mutate shared Registry state without that administrative boundary. These are existing authorization gaps, not approved exceptions or client-only resets. |
+| F5 gates verify production React/pixels | `gates/a11y.js` uses stubs/jsdom and `gates/visual.js` uses structure hashes. Real kit/browser/release checks are under `workspace/` and `react-kit/`. |
+| `Badge danger` / `Alert kind` always work | These are fixture props; `registry/seed.py` uses `critical` / `severity`. The actual approved schema wins. |
+| Deployment and teardown target the same stack | `deploy.sh` defaults to `BankPlatformCore`; `teardown.sh --all` targets `BankPlatform`. Privacy contexts are not forwarded by `deploy.sh`. |
+
+These notes document behavior and integration risks; they do not waive applicable
+security or output requirements. Source/runtime corrections require a separately
+scoped code change.

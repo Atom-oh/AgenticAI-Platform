@@ -1,12 +1,15 @@
 # React workspace implementation interfaces
 
-2026-09-11. Extends `CONTRACT.md`; old personal HTML runs remain readable as prototypes.
-New deliverables use a real pinned React package and a verified release, not the old stub gates.
-Implementation owners must preserve these interfaces or coordinate a change before editing another owner's files.
+Current code audit: 2026-09-13. Follow [root instructions](../../AGENTS.md),
+[review context](../../docs/REVIEW_CONTEXT.md), and [SPEC.md](../../SPEC.md) §7-1.
+Extends [CONTRACT.md](CONTRACT.md); older personal HTML runs remain prototypes.
+Current React deliverables use the pinned package and verified release path.
+This is an implemented interface contract, not the earlier task ownership plan.
+Paths below are relative to `platform/` unless stated otherwise.
 
 ## React kit
 
-Directory `platform/react-kit`. Node/CommonJS tooling; React source is TypeScript/TSX.
+Directory `react-kit/`. Node/CommonJS tooling; React source is TypeScript/TSX.
 Exact versions: React/ReactDOM 18.3.1, TypeScript 5.6.3, esbuild 0.25.12,
 @types/react 18.3.31, @types/react-dom 18.3.7, Playwright 1.62.0.
 `package-lock.json` is committed. No runtime npm install.
@@ -25,18 +28,18 @@ Components include `data-studio-component` and `data-studio-version` on their ro
 
 | Export | Required/important props |
 |---|---|
-| Screen | `pageId:string`, `children:ReactNode`, `width?:"mobile"|"content"|"wide"`, `title?:string` |
-| Stack | `children`, `gap?:1|2|3|4|6|8` |
-| Grid | `children`, `columns?:1|2|3`, `gap?:1|2|3|4|6|8` |
-| Inline | `children`, `gap?:1|2|3|4|6`, `align?:"start"|"center"|"end"`, `justify?:"start"|"between"|"end"` |
-| Panel | `children`, `title?:string`, `tone?:"default"|"subtle"|"brand"` |
-| Text | `children`, `as?:"span"|"p"|"h1"|"h2"|"h3"`, `size?:"sm"|"md"|"lg"`, `tone?:"default"|"muted"|"brand"|"danger"` |
-| Button | `label:string`, `onClick?:()=>void`, `kind?:"primary"|"secondary"|"danger"`, `disabled?:boolean`, `type?:"button"|"submit"` |
-| Input | `label:string`, `value:string`, `onChange:(value:string)=>void`, `type?:"text"|"number"|"email"|"tel"`, `hint?:string`, `error?:string`, `required?:boolean`, `disabled?:boolean`, `min?:number`, `max?:number`, `placeholder?:string` |
+| Screen | `pageId:string`, `children:ReactNode`, `width?:"mobile"\|"content"\|"wide"`, `title?:string` |
+| Stack | `children`, `gap?:1\|2\|3\|4\|6\|8` |
+| Grid | `children`, `columns?:1\|2\|3`, `gap?:1\|2\|3\|4\|6\|8` |
+| Inline | `children`, `gap?:1\|2\|3\|4\|6`, `align?:"start"\|"center"\|"end"`, `justify?:"start"\|"between"\|"end"` |
+| Panel | `children`, `title?:string`, `tone?:"default"\|"subtle"\|"brand"` |
+| Text | `children`, `as?:"span"\|"p"\|"h1"\|"h2"\|"h3"`, `size?:"sm"\|"md"\|"lg"`, `tone?:"default"\|"muted"\|"brand"\|"danger"` |
+| Button | `label:string`, `onClick?:()=>void`, `kind?:"primary"\|"secondary"\|"danger"`, `disabled?:boolean`, `type?:"button"\|"submit"` |
+| Input | `label:string`, `value:string`, `onChange:(value:string)=>void`, `type?:"text"\|"number"\|"email"\|"tel"`, `hint?:string`, `error?:string`, `required?:boolean`, `disabled?:boolean`, `min?:number`, `max?:number`, `placeholder?:string` |
 | Checkbox | `label:string`, `checked:boolean`, `onChange:(checked:boolean)=>void`, `disabled?:boolean`, `required?:boolean` |
 | Select | `label:string`, `value:string`, `onChange:(value:string)=>void`, `options:{value:string,label:string}[]`, `disabled?:boolean` |
 | RadioGroup | `label:string`, `value:string`, `onChange:(value:string)=>void`, `options:{value:string,label:string}[]` |
-| Alert | `message:string`, `title?:string`, `tone?:"info"|"success"|"warning"|"danger"` |
+| Alert | `message:string`, `title?:string`, `tone?:"info"\|"success"\|"warning"\|"danger"` |
 | Stepper | `steps:{id:string,label:string}[]`, `current:string` |
 | Summary | `title?:string`, `items:{label:string,value:string}[]` |
 | AssetImage | `src:string` (data image only), `alt:string`, `width?:number`, `height?:number` |
@@ -77,8 +80,8 @@ Source ZIP includes actual kit files, source, trusted package/lock/config/build 
 Dist has only local paths; no outside fonts/scripts/images. Preview is a derivative of the same JS/CSS, never a separate AI generation.
 Compilation does not execute generated module code, user configuration or package hooks.
 
-Python integration is parent-owned: a `react` task in the credential-free browser child runs compile, then
-the existing behavioral/a11y/image verifier against the actual static bundle. The response contains build fields and browser report.
+A `kind="react"` task runs compilation in the credential-free browser child, then
+the behavioral/a11y/image verifier checks the actual static bundle. The response contains build fields and browser report.
 `evaluate_html` remains compatible; `evaluate_bundle` fulfills only exact local bundle URLs in memory and denies every other request.
 Do not silently replace a failed React build with HTML or a stub.
 
@@ -92,7 +95,8 @@ Roles: owner, planner, designer, developer. Canonical `project.members` maps use
 Membership index rows only aid listing; stale index rows never authorize a revoked member.
 Owner manages members. Planner/owner publishes product guidelines. Designer/owner approves UX.
 All members read/discuss/upload; planner/designer/owner edit rules; designer/owner generates.
-Developer/owner exports an already-approved release. Existing personal owner retains all personal actions.
+Designer/developer/owner may create a release from approved source;
+developer/owner exports a ready release. Existing personal owner retains all personal actions.
 
 Project/member/product/comment routes:
 
@@ -121,7 +125,7 @@ Python module `workspace/collaboration.py` exposes `Collaboration(storage,direct
 `handle(method,parts,body,query,actor,project_id)->(status,payload)|None`,
 `published_context(scope,product_id)->{product,guideline,ontology,assetId}`,
 `is_current(scope,run)->bool`. It raises `CollaborationError(status,code,message)`.
-HTTP glue and worker integration remain parent-owned; module routes return None for non-owned paths.
+HTTP and worker integration use this module; routes return None for paths it does not handle.
 
 Storage extension: `put_many(writes)` atomically writes CAS records across scopes.
 Each write is `{owner,kind,item,expected_version}` and returns the prepared records in order.
@@ -130,25 +134,35 @@ No fallback sequential writes in production. User directory callable is injected
 
 ## Runs, batches and release
 
-Parent-owned extensions:
+Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_service.py`:
 
 - Contract/run snapshots add `projectId?`, `productId?`, `guidelineId?`, `ontologyHash?`, `catalogHash`.
-- Run `outputType:"react"|"html"`. New generation defaults React; imported HTML inspection remains `html`.
+- Run `outputType:"react"|"html"`. New contracts carry `catalogHash` and default to React;
+  older contracts without it retain HTML behavior. Imported HTML inspection is `html`.
 - POST `/batches` `{contractId,contractVersion,model,mode:"creative"|"guided",variationCount?,maxRounds,...referenceSettings}`.
   Creative creates one run. Guided validates 2..5 and creates baseline + N variations, all sharing frozen inputs.
   Batch has `{id,mode,baselineRunId?,runIds,variationCount,contractHash,catalogHash}` and per-run status.
 - Each React round adds build gates/sourceHash/bundleHash/catalogHash, private source/dist ZIP keys, preview and pageSources.
-- Existing approval API must require all React build + required browser gates for a React run.
+- Approval requires all React build and required behavioral/accessibility gates.
+  A reference baseline uses exact visual policy. Creative/guided variations can retain
+  measured `comparisonStatus` under `status:"review-required"`; approval requires
+  `acceptVariation:true` and records `acceptedVariation`. Missing/invalid evidence
+  never becomes an accepted variation. Without a reference, visual is `not-run`.
   Legacy HTML approval is prototype review and cannot authorize a release.
 - POST `/releases` `{runId,round,requestId}` creates a rebuild/retest job for the exact approved source.
+  It makes no AI call and compares the rebuilt page against the approved screenshot
+  at tolerance `0.02`; this does not prove fidelity to an original design image.
 - GET `/releases/:id` and `/releases/:id/blob?kind=source|dist|manifest|report` expose authorized results.
 - Release record includes sourceHash,bundleHash,catalogHash,contractHash,guidelineId,approval,rebuildEvidence,status.
 - GET `/git-connections` exposes configured connection IDs/labels/repository visibility only; no credentials.
 - POST `/releases/:id/git` `{connectionId,requestId}` starts authorized feature-branch export.
   GET release includes actual export `{status,branch,commitSha,commitUrl,filesUrl,baseSha}` or explicit unavailable/failure.
 
-Git destination is not supplied yet. Implement a configurable connection adapter and local bare-repository contract tests;
-do not export private/customer input to the public platform repository by assumption.
+Git destinations come from `WORKSPACE_GIT_CONNECTIONS` (CDK context
+`workspaceGitConnections`), not request URLs. No customer destination or credential
+is bundled. The adapter and local bare-repository tests exist; their presence does
+not prove a configured remote connection. Do not infer permission to export
+private/customer input to the public platform repository.
 Only registered destinations, feature branch prefixes and generated project directories are writable.
 No main writes, force updates, hook execution, or invented successful commit URLs.
 
@@ -161,7 +175,7 @@ Git adapter interface (`workspace/git_export.py`):
   Local provider is for explicit local/integration-test destinations; production Git destinations are registered, never supplied by a model/request URL.
 - Target directory is `pathPrefix/project_key`, branch is `branchPrefix/release_id`.
   Validate bounded safe IDs/prefixes; branchPrefix must start `feature/`. Never write outside the target generated directory.
-- Remote auth comes only from `token_provider`; the parent resolves configured Secrets Manager references.
+- Remote auth comes only from `token_provider`; the worker resolves configured Secrets Manager references.
   Injected transport signature: `transport(method, url, headers, payload_or_none) -> parsed JSON`.
   Default HTTPS transport refuses redirects and returns sanitized error codes.
 - Capture the actual base SHA; if expected_base_sha is supplied and differs, fail with conflict.
@@ -170,12 +184,22 @@ Git adapter interface (`workspace/git_export.py`):
 - Return `{status:"committed",branch,baseSha,commitSha,commitUrl,filesUrl,repository,connectionId,sourceHash}`.
   Local destinations return `commitUrl:null,filesUrl:null` rather than invented HTTP links.
 - Tests must create a real local bare repository and verify commit contents, idempotence, occupied-branch conflict, base changes and source/path rejection.
-  Remote adapters use primary API documentation and injected transport tests; no customer remote publication without a configured target.
+  Remote adapters have injected transport tests; no customer remote publication without a configured target.
 
-## UI ownership
+## UI scope
 
 Project selection is explicit and remounts project-bound panels. Use a project-bound HTTP client via React context;
 never mutate a global client's owner/scope while async downloads/polling are active.
 The planning/discussion/developer sidebar stays tied to the selected product/run/page and exposes actual permissions.
 Guided comparison pins baseline and shows 2..5 variants with independent evidence and failures.
 Unknown/missing build, ontology, release or Git evidence never becomes a green badge.
+
+## Validation and evidence
+
+The component table matches `react-kit/ui/types.ts`; hashes come from
+`react-kit/manifest.cjs`. Policy/build implementation is in `react-kit/policy.cjs`
+and `compile.cjs`; approval and release checks are in `workspace/http.py`,
+`react_quality.py`, and `releases.py`. Run relevant `tests/test_workspace_*.py`
+and `react-kit` tests with the dependencies in CI. Historical test totals and
+live Astra/Fable runs are dated in [the platform README](../README.md); they do
+not certify the current deployment or a customer's package/Git integration.

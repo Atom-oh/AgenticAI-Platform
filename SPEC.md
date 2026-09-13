@@ -1,642 +1,479 @@
-# Agentic AI Platform 데모 — 명세 v2 (Single Boundary)
+# Bank platform specification
 
-> 이 문서는 플랫폼 요구사항의 정본이다. 2026-09-11 React 공동 디자인 작업실의 기준은 **§7-1**,
-> 현재 확인된 배포·검증 상태는 **§16**을 따른다. 실제 사용자 흐름은
-> `docs/14-demo/studio-designer-guide.md`, 모듈 간 계약은 `platform/workspace/REACT_CONTRACT.md`에 기록한다.
-> 기존 Registry·HTML 시안의 검증 결과와 새 React 릴리스의 완료 조건을 구분한다.
+Current requirements, reconciled 2026-09-13 against merged code `5a14725`.
+Section numbers remain stable for source references. Explicit React (§7-1) and
+MyData (§4-3) requirements supersede older demo assumptions only in those features.
+See `docs/REVIEW_CONTEXT.md` for authority; implementation is not proof of deployment.
 
----
+## 1. Purpose
 
-## 1. 목표와 증명 대상
+A 15-minute demonstration should establish three claims:
 
-부서장급이 15분 시연을 보고 아래 세 가지를 스스로 설명할 수 있어야 한다.
-
-| # | 증명할 주장 | 증명 방법 |
-|---|---|---|
-| P1 | 벡터 RAG만으로는 "있는 것을 없다고" 답하는 오류를 못 막는다 | 동일 질문을 Vector RAG / GraphRAG에 던져 좌우 비교 |
-| P2 | **경계는 하나뿐이고, 익명화를 통과하지 못하면 Bedrock에 도달할 수 없다** | 요청마다 무엇이 경계를 넘었는지 실측 표시 |
-| P3 | 사내 AI 자산은 승인·버전 관리되고, 승인 안 된 자산은 에이전트에게 보이지 않는다 | Registry에서 Deprecated 전환 시 생성 결과가 즉시 달라짐 |
-
-### 1-1. 첫 작업 — 정합성 감사 (코드 수정 전 수행)
-현재 데모 코드와 이 명세를 대조해 표로 보고한다.
-
-| 명세 항목 | 데모 현황 | 상태 (일치 / 불일치 / 미구현 / 명세에 없음) | 조치 |
-
-특히 다음을 확인한다.
-- "온프렘", "On-Premises", "Two-Plane", "In-Region", "서울을 벗어나지 않" 문자열이 남아 있는지 → 전부 교체 대상
-- 기존 ECS 프라이빗 플레인 구성이 있는지 → VPC 프라이빗 서브넷으로 재정의
-- 개인신용정보 반출 0건 카운터가 있는지 → §8 지표로 교체
-
-불일치와 미구현만 다음 단계로 넘긴다. **명세에 없는 주장을 데모가 하지 않게 한다.**
-
----
-
-## 2. 데모 시나리오
-
-### S1. 규정 영향 분석 — GraphRAG의 존재 이유 (4분) ★ 최우선
-질의: **"전세자금대출 담보 인정 규정이 개정되면 영향받는 상품 · 화면 · 컴포넌트 · 담당부서 · 수정이 필요한 문서는?"**
-
-- 좌: Vector RAG — 규정 청크 3~5개만 반환. 영향 범위를 답하지 못함
-- 우: GraphRAG — 경로를 따라가 영향 대상을 **순회 경로와 함께** 반환
-- 하단: 실제 순회 경로 그래프 시각화 (전체 그래프가 아니라 경로만 강조)
-- 순회 경로: `Regulation → PolicyRule → Product → Screen → Component → Department → Document`
-
-> 다른 것을 줄여도 이 화면은 완성도를 최우선으로 한다.
-
-### S2. 마이데이터 상담 — 숫자는 LLM이 만들지 않는다 (4분)
-질의: **"제가 이 상품 우대금리 조건 충족하나요? 얼마나 받을 수 있죠?"**
-
-- 개인 금융데이터는 **정확 조회**(tool call). 벡터 검색 사용 금지
-- 우대금리는 **결정론적 계산엔진**이 계산, LLM은 설명만
-- 화면에 분리 표시: ① 조회된 원본 값 ② 계산 내역(수식 포함) ③ LLM 생성 설명
-- **Bedrock에 실제 전달된 페이로드를 기본 표시** (토글 아님)
-- 추론 경로 배지 표시 (§11)
-
-### S3. 화면 생성 — Registry 거버넌스 (3분)
-질의: **"여신 심사 결과 조회 화면을 만들어줘"**
-
-- 에이전트가 Registry에서 **APPROVED 상태 컴포넌트만** 조회해 React 코드 생성
-- 검증 게이트 결과 표시: 빌드 / 타입 / 린트 / KWCAG 접근성 / 시각 회귀
-- **실시간 반전**: 시연 중 `Button v2`를 Deprecated로 바꾸고 재생성 → `Button v3`을 쓴 다른 코드가 나온다
-
-기존 Registry 시연의 메타데이터·UI 모사·구조 검사만으로 실제 제품 컴포넌트 검증을 주장하지 않는다.
-새 디자인 작업실의 최종 소스·빌드·브라우저·릴리스 기준은 §7-1의 실제 React 코드 경로를 따른다.
-
-### S4. Single Boundary 뷰 (2분)
-- S1~S3 실행 이력 타임라인
-- 요청별: VPC 내부에 남은 항목 / 경계를 넘은 토큰 수 / 사용한 모델 ID / Guardrails 차단 여부
-- 상단 고정 지표는 §8 참조
-
-### S5. Guardrails 실패 시연 (2분)
-- 투자권유성 질문("어떤 상품이 제일 돈 많이 벌어요?") → Bedrock Guardrails 차단
-- 근거 없는 질문 → "모른다" 응답 (환각 방지)
-
----
-
-## 3. 아키텍처 — Single Boundary
-
-### 3-1. 경계는 하나다
-```
-        AWS 서울 리전 VPC 프라이빗 서브넷 (인터넷 게이트웨이 없음)
-        ┌──────────────────────────────────────────────┐
-        │ PII 원장 (Aurora)                             │
-        │ RAG 인덱스 (OpenSearch)  ← PII 포함 문서 가능   │
-        │ 온톨로지 (Neptune)                            │
-        │ Semantic Layer                               │
-        │ 결정론적 계산엔진                              │
-        │ 오케스트레이터 / 도구                          │
-        │ 감사로그 원문                                  │
-        └───────────────┬──────────────────────────────┘
-                        │
-              ╔═════════▼═════════╗
-              ║   익명화 게이트     ║  ← 유일한 통과 지점
-              ╚═════════╤═════════╝
-                        │
-        ┌───────────────▼──────────────────────────────┐
-        │ Amazon Bedrock (global 프로파일)              │
-        └──────────────────────────────────────────────┘
-
-        익명화 불가 워크로드 → EKS Hybrid Nodes (IDC GPU + vLLM)
-                                ※ 데모에서는 Bedrock Gemma로 대체
-```
-
-### 3-2. 반드시 지킬 것
-- **익명화 게이트를 우회하는 코드 경로를 만들지 않는다.** 모든 Bedrock 호출은 이 게이트를 통과해야 한다.
-- **경계 계측은 실측값이다.** 하드코딩된 "0건" 금지. 실제 페이로드를 계측해 기록한다.
-- **Guardrails는 실제로 설정한다.** 시뮬레이션 금지.
-- **원장은 복제하지 않는다.** 개인 데이터는 조회만 하고 벡터화·그래프 적재하지 않는다.
-- 프롬프트 원문은 VPC 내부에만 저장한다. CloudWatch에는 메트릭과 `traceId`만.
-
-### 3-3. 데이터 배치
-| 구성 요소 | 위치 |
+| Claim | Evidence |
 |---|---|
-| PII 원장 (합성 마이데이터·거래내역) | VPC 프라이빗 서브넷 · RDS PostgreSQL |
-| 벡터 인덱스 | VPC · OpenSearch 또는 pgvector |
-| 규정·UX 자산 데모 그래프 | VPC · Neptune |
-| 공동 상품 지침 온톨로지 | 프로젝트 범위의 비공개 S3 JSON + DynamoDB 메타데이터 (§7-1) |
-| Semantic Layer 정의 | VPC · YAML + 로더 |
-| 결정론적 계산엔진 | VPC · Lambda 또는 Fargate |
-| 익명화 게이트 | VPC · 게이트 서비스 + 토큰 볼트 |
-| 감사로그 원문 | VPC |
-| LLM 생성 (Tier 0/1) | Bedrock Claude (global 프로파일) |
-| PII 추론 (Tier 2) | 운영: EKS Hybrid Nodes / **데모: Bedrock Gemma** |
-| Guardrails | Bedrock Guardrails |
-| Registry | VPC 내 자체 구현 또는 AWS Agent Registry |
+| Vector retrieval alone cannot establish complete dependency impact | Run the same regulation question through Vector RAG and graph traversal |
+| Sensitive model-bound data must pass the privacy boundary | Show actual inspected fields, model route, usage and pass/block evidence |
+| Only approved, versioned assets are available to consumers | Deprecate an asset and show the changed consumer result |
 
----
+### 1-1. Consistency audit
 
-## 4. 모델 · 엔드포인트 (확정)
+Before a material change, compare the applicable requirement with code and tests.
+Classify it as implemented, partial, missing, or outside the specification. Record
+unverified deployment separately. Do not add unsupported product claims.
+The review-context table records resolved historical conflicts; it does not exempt
+new or existing security defects.
 
-### 4-1. Tier 0/1 경로 — Claude
-| 항목 | 값 |
+## 2. Demonstration scenarios
+
+| Scenario | Required behavior |
 |---|---|
-| 모델 ID | `global.anthropic.claude-sonnet-5` (기본), `global.anthropic.claude-opus-5` (고품질) |
-| 엔드포인트 | `bedrock-runtime`, Converse API |
-| 소스 리전 | `ap-northeast-2` (서울) |
-| 라우팅 | **global 프로파일 — 전 세계 상용 리전** |
-| 인증 | IAM SigV4 |
+| S1: regulation impact, 4 minutes | Compare a normal hybrid/reranked vector baseline with graph traversal across regulation, rules, products, screens, components, departments and documents. Show the actual traversed path. Highest demo priority. |
+| S2: MyData consultation, 4 minutes | Exact authorized lookup, deterministic rate/limit calculation, separately displayed raw values/calculation/explanation, actual outgoing payload and model/processor evidence. Apply §4-3. |
+| S3: Registry governance, 3 minutes | Generate using APPROVED assets; show build/type/lint/accessibility/visual results and version changes after deprecation. Legacy metadata/stub gates do not certify real React components. Apply §7-1 for React releases. |
+| S4: boundary view, 2 minutes | Show S1–S3 request history, private data categories, measured outgoing tokens/fields, model IDs and Guardrails decisions. |
+| S5: failure handling, 2 minutes | Use actual Guardrails for disallowed investment solicitation; unsupported answers should report insufficient evidence. |
 
-**서울 리전은 geographic 교차 리전 추론(APAC 프로파일)을 지원하지 않는다.** 단일 리전 온디맨드 경로도 없다. 따라서 추론 시점의 프롬프트는 국외로 이동할 수 있고, 이것이 익명화가 필수인 이유다.
+## 3. Architecture and privacy boundary
 
-### 4-2. Tier 2 경로 — Gemma (데모 대체)
-| 항목 | 값 |
+### 3-1. Target and implemented topology
+
+The target keeps the ledger, indexes, graph, calculation, orchestration and raw audit
+data inside the private data boundary, with inspected payloads reaching external
+inference. Do not describe all current workloads as already deployed in one VPC.
+
+The bank implementation has `BankPlatform` (web/API/orchestration),
+`BankPlatformPlane` (isolated VPC data services), and optional `BankPlatformPrivacy`
+(private relay into an existing EKS VPC). The latter is additive and does not create
+VPC peering or a new GPU fleet. This topology is a documented difference from the
+original single-VPC target, not proof that network enforcement is complete.
+
+### 3-2. Mandatory behavior
+
+- All bank model-bound payloads require boundary inspection and measurement. Engine
+  handlers use `engine/gate.py`; the Strands scenario runtime uses the pre-model hook
+  in `agents/boundary_gate.py`. Assess both against the same privacy obligations;
+  neither an adapter nor a hook by itself establishes complete enforcement. Private
+  EKS entity detection is separate preprocessing, not a Bedrock bypass.
+- S2 removes free-text identifiers before any Bedrock Guardrails/model call, then
+  independently inspects the complete prepared payload (§4-3).
+- Measure actual boundary traffic. Do not report hardcoded zero leakage or simulated
+  Guardrails as a successful live check.
+- Read personal financial records through authorized exact lookup; do not replicate
+  them into vector or graph indexes.
+- Neptune loading, shared-data seeding and Registry resets require IAM-only admin
+  access. The authenticated `reset` and `registry_seed(reset=true)` code paths remain
+  an authorization gap; client-only display reset is a different operation.
+- Keep raw prompts, identity mappings and sensitive audit content private. CloudWatch
+  and public receipts receive permitted metadata, not raw prompts/entity originals.
+
+### 3-3. Data placement and evidence
+
+| Component | Contract / implementation |
 |---|---|
-| 모델 ID | `google.gemma-4-31b` (Gemma 4 31B, 307억 파라미터, 256K 컨텍스트) |
-| 엔드포인트 | **`bedrock-mantle`** — `bedrock-runtime` 미지원 |
-| 호출 URL | `https://bedrock-mantle.us-west-2.api.aws/openai/v1` |
-| API | OpenAI 호환 — `Chat Completions` / `Responses`. **Converse · InvokeModel 미지원** |
-| 리전 | `us-west-2` (서울 미제공, 교차 리전 추론 미지원 → 리전 직접 호출) |
-| 인증 | Bedrock **장기 API 키** (`OPENAI_API_KEY`) → **Secrets Manager 경유 필수** |
-| 제약 | 병렬 도구 호출 미지원 (순차 호출), 요청 페이로드 최대 3.5MB |
+| Synthetic ledger | Private RDS PostgreSQL; `onprem/` is a legacy source name |
+| Vector index | OpenSearch Serverless is the selected design; verify actual backend and deployment |
+| Bank regulation/UX graph | `GraphStore`, local development or Neptune demonstration backend |
+| Published workspace guideline ontology | Project-scoped private JSON nodes/edges; not Neptune integration |
+| Calculation and identity restoration | Trusted data service; deterministic values and private mapping |
+| Free-text privacy detection | Dedicated private EKS CPU gateway using a configured existing vLLM model |
+| Explanation inference | Configured Claude/Gemma adapter after applicable checks |
+| Registry | Implemented Registry APIs; verify each integration rather than inferring AgentCore coverage |
 
-**구현 요구**: Claude 경로와 클라이언트가 완전히 다르므로 `LLMClient` 인터페이스를 정의하고 두 어댑터를 만든다. 환경변수 `LLM_ROUTE=claude | gemma`로 전환하고, 운영 전환 시 `onprem-vllm` 어댑터를 추가할 수 있게 설계한다.
+## 4. Model routes
 
-```python
-# 예시 — Gemma 경로
-from openai import OpenAI
-client = OpenAI(
-    api_key=get_secret("bedrock/api-key"),
-    base_url="https://bedrock-mantle.us-west-2.api.aws/openai/v1",
-)
-resp = client.chat.completions.create(
-    model="google.gemma-4-31b",
-    messages=[{"role": "user", "content": prompt}],
-)
+Model IDs below are repository configuration, not a current AWS availability claim.
+Check the target account, configured catalog and live health before demonstration.
+
+### 4-1. Claude explanation
+
+The default configured generation profile is `global.anthropic.claude-sonnet-5`;
+`global.anthropic.claude-opus-5` is another configured choice. The adapter uses
+Bedrock Runtime Converse with IAM, sourced from `ap-northeast-2`. Global routing
+must not be described as inference guaranteed to remain in Seoul.
+The earlier blanket claim that APAC profiles are unavailable in Seoul was contradicted
+by the recorded account check; it is not a project invariant.
+
+### 4-2. Gemma explanation and legacy substitution
+
+The Gemma adapter targets `google.gemma-4-31b` at the configured
+`bedrock-mantle` endpoint in `us-west-2`, using its OpenAI-compatible client.
+`LLMClient` separates adapters. Keep endpoint/API/auth behavior in `engine/llm.py`
+and `engine/bedrock_token.py`; prefer a configured Secrets Manager key or the
+implemented IAM-derived short-lived bearer token. Never hardcode credentials.
+
+`LLM_ROUTE` selects the explanation adapter (`claude`, `gemma`, or configured
+`idc_vllm`). The old demo used Gemma as a private-GPU substitution. In current S2,
+Gemma is an explanation choice; it is not the EKS privacy processor.
+
+### 4-3. MyData private privacy processing
+
+This section incorporates the 2026-09-12 MyData requirements and supersedes S2's
+older Gemma-as-privacy, no-transformation, raw-token-streaming and cached-fallback assumptions.
+
+1. Authenticate and validate the request. Send the raw free-text question only to
+   the configured private privacy service before INPUT Guardrails.
+2. The EKS gateway asks the configured model for entity evidence. Deterministic code
+   validates schema, spans, occurrences, identifier formats and overlaps, preserves
+   amounts/rates/periods, and performs replacement. Malformed, truncated, ambiguous
+   or unverifiable detections block the request.
+3. The trusted data producer performs exact lookup, calculation and typed-field
+   tokenization. Do not ask a second generative pass to reinterpret financial facts.
+   Independently inspect the complete prepared payload with rules and Guardrails;
+   evidence identifies this stage as `modelInvoked: false`.
+4. Send only the checked payload through the explanation gate. Buffer explanation
+   output until output verification. Keep financial validation and trusted-plane
+   restoration; diagnostics must not re-expose content removed by Guardrails.
+5. Do not read, write or replay S2 through the shared event cache. Missing configuration,
+   failed verification or residual identifiers block rather than return cached success.
+6. Receipts contain permitted model/revision, processor, method, counts, timing and
+   inspection status. Do not return entity originals or raw questions. Newly detected
+   free-text identifiers are removed; existing trusted-plane restoration is separate.
+   Do not claim legal or complete anonymization.
+7. Select privacy models from the server allowlist and actual health. Qwen is the
+   reference EKS implementation; Gemma/DeepSeek privacy candidates are unconfigured
+   until an endpoint and artifact revision are registered. Explanation and privacy
+   selections remain distinct.
+8. Private NER is optional and reported as unconfigured unless connected. Synthetic
+   evaluation and SageMaker job preparation do not mean training or promotion ran.
+
+The relay uses `MYDATA_PRIVACY_FUNCTION_ARN`, has no function URL, and accepts only
+its supported operations against a fixed private endpoint. Reuse the existing GPU;
+add only the CPU gateway, private target binding/load balancer and IAM relay.
+See `platform/infra/README-privacy.md` for prerequisites and network checks.
+
+## 5. Ontology
+
+### 5-1. Lending-domain target
+
+| Label | Target count | Key fields |
+|---|---:|---|
+| Regulation | 60 | code, title, article, effectiveDate, version, status |
+| RegulationAmendment | 25 | amendmentId, date, summary, diffType |
+| Product | 120 | productCode, name, category, launchDate, status |
+| Condition | 800 | conditionId, type, operator, value, unit, priority |
+| Department | 20 | deptCode, name, role |
+| Document | 200 | docId, title, type, deptCode, updatedAt |
+| Template | 12 | templateId, name, sections |
+| Customer | 500 | pseudonymous customerId, segment, joinDate |
+| Account | 1200 | token accountId, productCode, balance, openDate |
+| Merchant | 150 | merchantId, name, mccCode, category |
+
+Customer/account graph nodes are synthetic demonstration fixtures, not a copy of
+customer ledger records. Counts are seed targets, not live measurements.
+
+### 5-2. UX-domain target
+
+| Label | Target count | Purpose |
+|---|---:|---|
+| Screen | 150 | Screen references |
+| Component | 80 | Component library |
+| Pattern | 40 | Pattern library |
+| Procedure | 30 | Procedures |
+| PolicyRule | 60 | Business/policy rules |
+| UXTerm | 200 | UX dictionary |
+| ScreenMeta | 150 | Screen metadata |
+
+Components carry ID/name/version/approval/props schema/owner; screen metadata carries
+screen number, purpose, entry condition and predecessor/successor screens. Original
+aggregate targets were approximately 3,800 nodes and 11,000 relationships.
+
+### 5-3. Relationships
+
+`schema/ontology.cypher` and seed generation define the actual schema. Required paths:
+
+```text
+Regulation -APPLIES_TO-> Product
+Regulation -AMENDED_BY-> RegulationAmendment
+Regulation -SUPERSEDES-> Regulation
+Product -HAS_CONDITION-> Condition -DERIVED_FROM-> Regulation
+Condition -EXCLUDES-> Merchant
+Condition -REQUIRES-> Condition
+Product -OWNED_BY-> Department
+Document -REFERENCES-> Regulation
+Document -FOLLOWS-> Template
+Document -OWNED_BY-> Department
+Customer -HOLDS-> Account -OF_PRODUCT-> Product
+Account -TRANSACTED_AT-> Merchant
+Product -SOLD_VIA-> Screen -USES-> Component
+Screen -FOLLOWS-> Pattern -COMPOSES-> Component
+Procedure -INCLUDES-> Screen
+Screen -OWNED_BY-> Department
+PolicyRule -CONSTRAINS-> Screen
+PolicyRule -DERIVED_FROM-> Regulation
+Component -SUPERSEDED_BY-> Component
+ScreenMeta -DESCRIBES-> Screen
+UXTerm -USED_IN-> Screen
 ```
 
----
+### 5-4. Required synthetic coverage
 
-## 5. 온톨로지 (최우선 산출물)
+- At least three regulations each reach at least 4 products, 6 screens, 8 components,
+  3 departments and 5 documents.
+- At least three components each affect at least 12 screens, 4 patterns and 2 policy rules.
+- Verify these constraints in tests; display query results rather than target counts.
 
-### 5-1. 여신 도메인 노드
-| 라벨 | 목표 건수 | 핵심 속성 |
-|---|---|---|
-| `Regulation` | 60 | `code`, `title`, `article`, `effectiveDate`, `version`, `status` |
-| `RegulationAmendment` | 25 | `amendmentId`, `date`, `summary`, `diffType` |
-| `Product` | 120 | `productCode`, `name`, `category`, `launchDate`, `status` |
-| `Condition` | 800 | `conditionId`, `type`, `operator`, `value`, `unit`, `priority` |
-| `Department` | 20 | `deptCode`, `name`, `role` |
-| `Document` | 200 | `docId`, `title`, `type`, `deptCode`, `updatedAt` |
-| `Template` | 12 | `templateId`, `name`, `sections[]` |
-| `Customer` | 500 | `customerId`(가명), `segment`, `joinDate` |
-| `Account` | 1,200 | `accountId`(토큰), `productCode`, `balance`, `openDate` |
-| `Merchant` | 150 | `merchantId`, `name`, `mccCode`, `category` |
+### 5-5. S1 traversal
 
-### 5-2. UX 자산 도메인 노드 (고객 PoC 요건 6종 라이브러리)
-| 라벨 | 목표 건수 | 대응 라이브러리 |
-|---|---|---|
-| `Screen` | 150 | — |
-| `Component` | 80 | Component Library |
-| `Pattern` | 40 | Pattern Library |
-| `Procedure` | 30 | Procedure Library |
-| `PolicyRule` | 60 | Policy Rule |
-| `UXTerm` | 200 | UX Dictionary |
-| `ScreenMeta` | 150 | Screen Metadata |
+Traverse conditions derived from a regulation and their products; include screens
+constrained by policy rules derived from the same regulation, product screens and
+components, owning departments and referencing documents. Deduplicate results and
+return traversal evidence. Use the actual graph implementation and coverage tests,
+not a copied illustrative query as an alternative executable contract.
 
-`Component` 속성: `componentId`, `name`, `version`, `approvalStatus`, `propsSchema`, `owner`
-`ScreenMeta` 속성: `screenNo`, `purpose`, `entryCondition`, `prevScreens[]`, `nextScreens[]`
+## 6. Semantic layer
 
-**합계 목표: 노드 약 3,800 / 관계 약 11,000**
+`platform/semantic/metrics.yaml` and its loader define metrics separately from the
+ontology. Preserve exact machine names and Korean aliases from that file. SQL uses
+approved templates and parameters; the LLM does not invent metric definitions.
 
-### 5-3. 관계
-```
-// 여신
-(Regulation)-[:APPLIES_TO]->(Product)
-(Regulation)-[:AMENDED_BY]->(RegulationAmendment)
-(Regulation)-[:SUPERSEDES]->(Regulation)
-(Product)-[:HAS_CONDITION]->(Condition)
-(Condition)-[:DERIVED_FROM]->(Regulation)        // S1 핵심 엣지
-(Condition)-[:EXCLUDES]->(Merchant)
-(Condition)-[:REQUIRES]->(Condition)
-(Product)-[:OWNED_BY]->(Department)
-(Document)-[:REFERENCES]->(Regulation)
-(Document)-[:FOLLOWS]->(Template)
-(Document)-[:OWNED_BY]->(Department)
-(Customer)-[:HOLDS]->(Account)
-(Account)-[:OF_PRODUCT]->(Product)
-(Account)-[:TRANSACTED_AT]->(Merchant)
-
-// UX 자산
-(Product)-[:SOLD_VIA]->(Screen)
-(Screen)-[:USES]->(Component)
-(Screen)-[:FOLLOWS]->(Pattern)
-(Pattern)-[:COMPOSES]->(Component)
-(Procedure)-[:INCLUDES]->(Screen)
-(Screen)-[:OWNED_BY]->(Department)
-(PolicyRule)-[:CONSTRAINS]->(Screen)
-(PolicyRule)-[:DERIVED_FROM]->(Regulation)       // 두 도메인 연결점
-(Component)-[:SUPERSEDED_BY]->(Component)
-(ScreenMeta)-[:DESCRIBES]->(Screen)
-(UXTerm)-[:USED_IN]->(Screen)
-```
-
-### 5-4. 커버리지 제약 (검증 테스트 필수)
-합성데이터는 아래를 만족해야 한다. 시연에서 결과가 빈약하면 논지가 무너진다.
-
-- **최소 3개 `Regulation`**에 대해 S1 순회가 `Products ≥ 4`, `Screens ≥ 6`, `Components ≥ 8`, `Departments ≥ 3`, `Documents ≥ 5` 반환
-- **최소 3개 `Component`**에 대해 영향 분석이 `Screens ≥ 12`, `Patterns ≥ 4`, `PolicyRules ≥ 2` 반환
-
-### 5-5. S1 순회 쿼리 (동작 필수)
-```cypher
-MATCH (r:Regulation {code: $regCode})
-OPTIONAL MATCH (r)<-[:DERIVED_FROM]-(c:Condition)<-[:HAS_CONDITION]-(p:Product)
-OPTIONAL MATCH (r)<-[:DERIVED_FROM]-(pol:PolicyRule)-[:CONSTRAINS]->(s2:Screen)
-OPTIONAL MATCH (p)-[:SOLD_VIA]->(s:Screen)-[:USES]->(comp:Component)
-OPTIONAL MATCH (p)-[:OWNED_BY]->(pd:Department)
-OPTIONAL MATCH (s)-[:OWNED_BY]->(sd:Department)
-OPTIONAL MATCH (d:Document)-[:REFERENCES]->(r)
-RETURN r,
-  collect(DISTINCT c) AS conditions,
-  collect(DISTINCT p) AS products,
-  collect(DISTINCT s) + collect(DISTINCT s2) AS screens,
-  collect(DISTINCT comp) AS components,
-  collect(DISTINCT pd) + collect(DISTINCT sd) AS departments,
-  collect(DISTINCT d) AS documents
-```
-
----
-
-## 6. Semantic Layer
-
-온톨로지와 **분리된** 지표 정의 계층. YAML로 정의하고 Text-to-SQL이 이것만 참조한다.
-
-```yaml
-# semantic/metrics.yaml
-metrics:
-  - name: 우대금리_적용율
-    korean_aliases: [우대금리, 금리우대, 우대이율]
-    description: 기본금리 대비 실제 적용금리의 차이
-    sql_template: |
-      SELECT (base_rate - applied_rate) AS value
-      FROM account_rate WHERE account_id = :account_id
-    unit: percent
-    owner_dept: 여신기획부
-  - name: 전월실적
-    korean_aliases: [전월 실적, 지난달 사용액, 전월 이용금액]
-    description: 직전월 1일~말일 승인 합계 (취소분 제외)
-    sql_template: |
-      SELECT COALESCE(SUM(amount), 0) AS value FROM txn
-      WHERE account_id = :account_id
-        AND approved_at >= date_trunc('month', now()) - interval '1 month'
-        AND approved_at <  date_trunc('month', now())
-        AND status = 'APPROVED'
-    unit: krw
-    owner_dept: 여신기획부
-dimensions:
-  - name: 고객세그먼트
-    korean_aliases: [고객등급, 세그먼트]
-    values: [일반, 우대, 프리미엄, VIP]
-```
-
-**데모 포인트**: Semantic Layer를 끄면 LLM이 "전월실적"을 당월로 계산한다. 숫자가 조용히 틀리는 문제를 토글로 보여준다.
-
----
+The Semantic Layer OFF demo deliberately omits a definition to expose possible
+misinterpretation of the previous-month metric. Label this as an antipattern; compare
+actual model values against deterministic values without guaranteeing a mismatch.
+Diagnostics may inspect only the verified deliverable, never blocked original output.
 
 ## 7. Agent Registry
 
-- `recordType`: `MCP` / `AGENT` / `SKILL` / `CUSTOM`
-- 상태 전이: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` (+ `REJECTED` → `DRAFT` 복귀)
-- `name` + `recordVersion` 유일성 제약 (같은 이름의 다중 버전 허용)
-- **Consumer API는 `APPROVED`만 반환한다.** 이 제약이 S3 데모의 전부다.
-- 승인 / 반려 시 감사 이벤트 기록
-- 검색: 키워드 + 자연어(임베딩) 하이브리드
+- Record types: `MCP`, `AGENT`, `SKILL`, `CUSTOM`.
+- Lifecycle: `DRAFT -> PENDING_APPROVAL -> APPROVED -> DEPRECATED`, with rejection and
+  revision paths implemented by the Registry contract.
+- Preserve name/version uniqueness, approval audit events, and APPROVED-only consumer lookup.
+- Normal Registry search combines keywords and embedding similarity. Report an
+  unavailable/disabled embedding backend as a fallback, not the full hybrid target.
+- Customer asset sources are version-controlled component guidance, screen specs,
+  skills, agents and registered tools. Proposed GitLab/MCP/AgentCore integrations
+  are not automatically implemented by creating a Registry record.
+- Import externally provided assets through the organization's intake process.
+  Studio must not fetch missing Figma/CDN resources or invent internal MCP contracts.
 
-**등록 대상 매핑**
-| 사내 자산 | recordType | 원본 |
+### Required asset mapping and implementation deviation
+
+| Asset | Required record type | Source / integration scope |
 |---|---|---|
-| 컴포넌트 설명·사용 지침 | SKILL | Git |
-| 화면 스펙 (MDX / JSON) | CUSTOM | Git |
-| 레지스트리 · GitLab MCP 서버 | MCP | VPC 내 EKS |
-| Skills (은행 퍼블리싱 규약) | SKILL | Git · 마크다운 |
-| 화면 생성 에이전트 | AGENT | AgentCore Runtime |
-| draw.io MCP | MCP | 외부 SaaS |
+| Component descriptions and usage guidance | `SKILL` | Version-controlled component guidance |
+| Screen specifications (MDX/JSON) | `CUSTOM` | Version-controlled specifications |
+| Registry and GitLab MCP servers | `MCP` | Registered internal services; deployment is separately verified |
+| Bank publishing skills | `SKILL` | Versioned Markdown |
+| Screen-generation agent | `AGENT` | Selected agent runtime; verify actual integration |
+| draw.io MCP | `MCP` | External service proposal; not permission to fetch external Studio inputs |
 
-디자인 입력은 조직의 반입 절차를 거친 외부 파일에서 시작한다. Studio가 Figma·CDN·외부 리소스를 직접 조회하거나
-누락 자료를 다운로드하지 않는다. 사내 도구는 실제 제공된 사내 MCP 계약만 사용한다.
-원본 보관·해석·화면 검증·사람 승인·릴리스 상태는 각각 구분한다.
+The current Registry represents component contracts as `CUSTOM` with subtype
+`COMPONENT`, while the requirement remains `SKILL`. `registry/seed.py` and the portal
+mapping/tests explicitly mark this deviation. Do not remove that distinction without
+an authorized change to the requirement. Registration is not proof of deployment.
 
-### 7-1. React 공동 디자인 작업실
+### 7-1. React collaborative workspace
 
-**기준과 산출물.** 컴포넌트의 권위는 실제 React 코드·타입·토큰·버전·소스 해시다.
-MD는 상품·업무·작업 가이드 입력이며 컴포넌트 구현을 대체하지 않는다.
-현재 `@studio/approved-ui`는 Screen, Stack, Grid, Inline, Panel, Text, Button, Input, Checkbox,
-Select, RadioGroup, Alert, Stepper, Summary, AssetImage **15종**을 구현한 플랫폼 기본 패키지다.
-고객 React 패키지는 미제공 상태이며 이 패키지를 고객의 사내 승인 패키지로 표시하지 않는다.
+The final unit is real React source plus the static bundle built from it. Markdown
+provides business guidance, not component implementation. `@studio/approved-ui` is
+currently a platform baseline, not a supplied customer's approved package. Its 15
+components are Screen, Stack, Grid, Inline, Panel, Text, Button, Input, Checkbox,
+Select, RadioGroup, Alert, Stepper, Summary and AssetImage.
 
-**공동 작업.** 개인과 프로젝트 저장 범위를 구분하고, 프로젝트 요청마다 현재 참여 권한을 확인한다.
-행동한 사용자와 저장 범위를 분리하며 개인 자료를 자동 공유하지 않는다.
+**Access and planning.** Separate private and project storage. Check current membership
+on each project operation. Owners manage members; planners publish product guidance
+and edit/approve rules; designers edit/approve rules, generate/refine/approve UX and
+prepare releases; developers prepare releases and export to registered Git targets.
+Members may access project assets and discussions within the implemented role contract.
+Do not automatically share personal uploads.
 
-| 역할 | 권한 |
-|---|---|
-| 공통 | 프로젝트 자료 조회·업로드·의견 작성 |
-| owner | 참여자 관리 및 전체 작업 |
-| planner | 상품 초안·지침 게시, 검증 규칙 편집·승인 |
-| designer | 규칙 편집·승인, 시안 생성·수정·UX 승인, 승인 소스 릴리스 준비 |
-| developer | 승인 소스 릴리스 준비·등록 Git 대상으로 내보내기 |
+Publishing guidance stores an immutable revision, private source asset and typed
+Product/Condition/PolicyRule/Procedure/ScreenMeta nodes and edges. Generation reads
+the persisted project ontology. Connect discussions and impacts to product/page/round;
+changed guidance invalidates reuse of earlier approval under the latest criteria.
 
-**지침과 온톨로지.** 상품 초안 저장과 기준 게시를 구분한다. 게시 시 불변 지침 원문, 비공개 가이드 자산,
-Product·Condition·PolicyRule·Procedure·ScreenMeta 노드·관계의 JSON과 상품의 게시 revision을 저장한다.
-생성은 저장된 프로젝트 온톨로지를 읽으며 임시 그래프를 영구 저장이나 Neptune 연동으로 표시하지 않는다.
-기획·지침/의견/개발·내보내기 사이드바는 상품·페이지·라운드와 연결된다.
-새 지침이 게시되면 관련 시안은 재검증 대상이며 과거 승인 기록을 최신 기준으로 재사용하지 않는다.
+**Generation and verification.** `creative` creates one candidate; `guided` creates
+one baseline plus 2–5 variants. Each has independent history and the same mandatory
+business rules, component version and guidance revision. Pin source/type/token hashes.
+AI writes permitted screen composition/state code, not the trusted package or compiler.
+Use real TypeScript checks, production compilation and browser tests of that same bundle
+in a restricted process without data credentials. Do not execute uploaded build settings
+or download npm packages, external images or fonts during execution.
 
-**생성과 검수.** Creative는 새 UX 1개, guided는 기준안 1개와 변형 2~5개(총 3~6개)다.
-각 안의 이력은 독립이며 필수 업무 규칙·컴포넌트·지침 버전은 공통이다.
-AI는 허용된 화면 구성·상태 로직만 작성한다. 실제 React 타입·코드 사용 규칙·production build 후
-데이터 자격 증명이 없는 격리 실행기에서 같은 번들의 동작·접근성·외부 요청·오류를 검사한다.
-업로드한 설정·패키지 스크립트를 실행하거나 실행 중 npm·외부 이미지·폰트를 내려받지 않는다.
-실패·미판정은 같은 기준으로 수정·재검증하며 자동 승인하지 않는다.
+Failing or indeterminate checks require repair and revalidation against the same rules.
+A requested image comparison and intentional variant acceptance are different results.
+Do not label an absent image baseline as a visual pass.
 
-**승인과 릴리스.** 사람의 승인은 선택한 라운드의 소스·컴포넌트·지침·규칙·번들·검수 근거에 귀속된다.
-규칙의 현재 버전 확인과 승인 저장은 원자적으로 처리한다.
-의도적인 변형 수용은 픽셀 일치 통과와 별개다. 릴리스는 AI 재생성 없이 같은 승인 소스를 다시 빌드·검증하며
-동일 소스·번들을 확인한다. 승인한 시작 화면과의 재비교 허용 차이는 **2%**다.
-시작 화면 비교를 모든 페이지·전이 상태의 픽셀 검증으로 확대하지 않는다.
-소스 ZIP, dist ZIP, 정적 site 파일, manifest·검수 근거는 비공개 S3에 보관한다.
-S3 배포 가능한 번들이 준비됐다는 이유로 고객 서비스나 공개 사이트에 자동 게시하지 않는다.
+**Approval and release.** Bind human approval to source/component/guideline/rule/bundle/
+evidence revisions. Atomically verify current criteria when storing approval. Rebuild
+and revalidate the same approved source without AI regeneration. Compare the approved
+start screen with a maximum difference of 2%; this does not certify every state/page.
+Keep source ZIP, dist ZIP/site files, manifests and evidence private. A ready bundle
+does not authorize publication to a customer service or public website.
 
-**Git 전달.** 관리자가 등록한 대상·기준 브랜치·허용 경로·비밀 참조만 사용한다.
-승인된 릴리스 소스만 기능 브랜치로 내보내며, 중복 요청은 검증한 기존 커밋을 반환하고 충돌은 덮어쓰지 않는다.
-main 직접 쓰기·강제 갱신·업로드 코드 실행은 제공하지 않는다.
-실제 커밋이 완료된 뒤 최신 기준 조회에 실패해도 커밋 SHA를 보존하고 확인 불가를 별도 표시한다.
-GitHub/GitLab 어댑터와 실제 로컬 bare 저장소 테스트는 구현됐지만 **고객 Git 대상은 미설정**이다.
-원격 커밋 성공을 만들지 않으며 연결 전에는 소스·dist 다운로드를 사용한다.
+**Git export.** Use administrator-registered targets, base branches, allowed paths and
+secret references. Export approved release source to a feature branch; never direct
+main writes, force updates or uploaded-code execution. Verify idempotent commits and
+refuse conflicts. Preserve an actual commit SHA if a later status lookup fails.
+GitHub/GitLab adapters and local bare-repository tests exist; customer destinations
+remain unconfigured unless separately supplied. Do not fabricate remote success.
 
-**범위.** HTML·CSS·PNG/JPG/SVG를 우선 반입하고 PDF·텍스트도 처리한다. FIG는 원본 보관만 지원한다.
-반입 HTML 검사는 참고 프로토타입 검증으로 남으며 React 릴리스 승인으로 전환하지 않는다.
-실제 금융 API·인증·거래는 제공된 테스트 범위 밖이다. 기존 갤러리·초안의 자동 일괄 이관은 완료로 주장하지 않는다.
-현재 배포와 남은 라이브 확인은 §16 및 `platform/README.md`를 따른다.
+**Input scope.** HTML/CSS/PNG/JPG/SVG are primary inputs; PDF/text are supported and FIG
+is original-file storage only. Imported HTML verification remains prototype evidence,
+not React release approval. No claim covers unsupplied financial APIs/authentication/
+transactions or completed migration of all legacy galleries/drafts.
+The detailed interface is `platform/workspace/REACT_CONTRACT.md`.
 
----
+## 8. User interface
 
-## 8. 화면
+### 8-1. Surfaces
 
-### 8-1. 화면 목록
-| # | 화면 | 목적 |
-|---|---|---|
-| 1 | 로그인 | 데모 계정 인증 |
-| 2 | 플랫폼 대시보드 | 에이전트 · 도구 · 스킬 수, Registry 상태, 경계 지표 |
-| 3 | **규정 영향 분석** | S1 — Vector vs Graph 좌우 비교 + 경로 시각화 |
-| 4 | 온톨로지 탐색기 | 노드 클릭 → 이웃 확장, 타입 필터 |
-| 5 | **마이데이터 상담** | S2 — 채팅 + 단계별 펼침 패널 |
-| 6 | **Agent Registry** | S3 — 카탈로그, 승인 워크플로우, 버전 체인 |
-| 7 | 화면 생성 | S3 — 생성 코드 + 검증 게이트 결과 |
-| 8 | **UX Asset Portal** | 고객 요건 반영 (§8-2) |
-| 9 | 보고서 생성 | Reader / Writer 권한 분리 시각화 |
-| 10 | **Single Boundary 뷰** | S4 — 경계 통과 실측 |
-| 11 | Guardrails 로그 | S5 — 차단 이력 |
-| 12 | **React 공동 디자인 작업실** | §7-1 — 개인/프로젝트, 상품 지침·논의, 실제 React 검수·릴리스·개발 전달 |
+Provide login, dashboard, regulation comparison, graph explorer, MyData consultation,
+Registry, generation, UX asset portal, Reader/Writer reports, boundary history,
+Guardrails history and the collaborative React workspace.
 
-### 8-2. UX Asset Portal (신설)
-- 좌측 카테고리: `Foundation` / `Components` / `Patterns` / `Screens` / `Procedures` / `Policies` / `UX Writing`
-- 자산 상세 카드: `ID`, `Status`(Approved · Draft · Deprecated), `Version`, `Owner`
-- **Related 카운트는 그래프 순회 결과다.** 하드코딩 금지. 예: `6 Patterns · 24 Screens · 3 Policies`
-- `Version History`, `Publish / Sync` 액션
-- 상세 카드에 **"이 컴포넌트를 변경하면 영향받는 화면"** 버튼 → 영향 분석 결과로 이동
+### 8-2. UX asset portal
 
-### 8-3. Single Boundary 뷰 지표 (기존 "반출 0건" 카운터 교체)
-1. **VPC 내부에 남은 항목** — 인덱스 / 원장 / 감사로그 건수
-2. **경계를 넘은 토큰 수** + 전달된 필드 목록 (실측)
-3. **사용한 모델 ID** — `global.anthropic.claude-sonnet-5` 또는 `google.gemma-4-31b`
-4. **배지** — `저장: 서울 리전 / 추론: global 라우팅`
-5. Guardrails 차단 여부
+Categories: Foundation, Components, Patterns, Screens, Procedures, Policies, UX Writing.
+Show asset ID/status/version/owner, version history and publication/sync actions.
+Related counts and affected-screen navigation come from actual graph queries.
 
-### 8-4. 시각 요구사항
-- VPC 내부 영역과 Bedrock 영역을 **전 화면 동일한 색 규칙**으로 구분
-- 경계를 넘는 데이터는 애니메이션으로 표시
-- 그래프는 순회 경로만 강조 (전체 그래프 렌더 금지)
-- 한국어 UI, Pretendard, 다크 테마 우선
+### 8-3. Boundary metrics
 
-### 8-5. 데모 안전장치
-- **리셋 버튼** — Registry 상태와 대화 이력 초기화
-- **시나리오 프리셋** — S1~S5 질문 원클릭 입력 (오타 방지)
-- **스트리밍 필수** — 5초 내 첫 토큰. 8초 침묵은 데모를 죽인다
-- **폴백** — Bedrock 실패 시 캐시 응답 + "캐시 응답" 배지
+Show private data categories/counts, actual outgoing fields and token usage, actual
+model ID, storage versus inference route, and Guardrails status. S2 shows privacy
+processor evidence separately from explanation-model evidence.
 
----
+### 8-4. Presentation
 
-## 9. 합성데이터
+Use consistent private/external-inference colors and highlight traversed graph paths.
+The demo application remains Korean, using Pretendard and a dark-first presentation.
+English PR-review/development documentation does not change the Korean public
+guidebook, demo instructions, or product UI language.
+Avoid unsupported geographic-residency or physical-topology claims.
 
-- **실제 고객데이터 · 실제 상품명 · 실제 내규 조항을 사용하지 않는다.** 상품명은 가상으로 만든다.
-- 규정 조항은 실제 전자금융감독규정을 인용하지 않고 구조만 모사한 가상 조항으로 만든다.
-- **개인 식별자는 생성 시점부터 토큰 형태로 만든다.** 주민번호 형식조차 만들지 않는다.
-  → 이렇게 하면 익명화 변환 로직이 없어도 게이트 통과 결과가 동일하다 (§11-2)
-- 생성 스크립트는 `seed/`에 두고 시드값을 고정해 재현 가능하게 한다
-- §5-4 커버리지 제약 검증 테스트를 포함한다
+### 8-5. Demo controls
 
----
+Provide authorized reset, scenario presets and progress indicators. The original
+five-second first-token target is a UX goal, not permission to expose unverified S2
+output. Cached-response fallback is permitted only in supported nonsensitive scenarios
+with an explicit cache badge; S2 privacy failures and shared replay are excluded.
 
-## 10. 기술 스택
+## 9. Synthetic data
 
-| 계층 | 선택 |
-|---|---|
-| 프론트엔드 | React 18 + Vite + TypeScript + Tailwind |
-| 그래프 시각화 | Cytoscape.js 또는 react-force-graph (경로 강조 필수) |
-| 배포 | S3 + CloudFront (기존 파이프라인 재사용) |
-| API | API Gateway + Lambda (Python 3.12) |
-| VPC 워크로드 | Lambda / ECS Fargate (프라이빗 서브넷, NAT 없음) |
-| 그래프 DB | Amazon Neptune (§10-1 비용 주의) |
-| 벡터 검색 | pgvector on RDS (기본) 또는 OpenSearch Serverless |
-| PII 원장 | RDS PostgreSQL (프라이빗, 합성데이터) |
-| LLM | Bedrock — Claude (Tier 0/1) / Gemma 4 31B (Tier 2 대체) |
-| 가드레일 | Bedrock Guardrails (실제 설정) |
-| 에이전트 | §14 확정 |
-| 인증 | Amazon Cognito |
-| IaC | AWS CDK (TypeScript) |
+Use fixed seeds, fictional products and fictional regulation content. Never copy real
+customer records or private bank clauses. General ledger fixtures use pseudonymous or
+token identifiers. The MyData privacy evaluation deliberately uses controlled synthetic
+identifier-shaped text to test removal; it is not real customer data. Keep that scoped
+exception distinct from production ledger generation. Verify ontology coverage (§5-4).
 
-**사용 금지**: AWS CodeCommit, AWS CodePipeline. CI/CD는 기존 GitLab을 전제로 표기한다.
+## 10. Technology and source systems
 
-### 10-1. 비용 주의
-- **Neptune은 상시 과금된다.** `GraphStore` 인터페이스 + 두 구현(`NeptuneGraphStore` / `LocalGraphStore`)을 만들고 `GRAPH_BACKEND=neptune|local`로 전환한다.
-- **고객 시연은 반드시 `neptune`으로 실행한다.** 로컬 구현으로 시연하면서 "Neptune입니다"라고 말하는 것은 허용되지 않는다. UI 하단에 현재 백엔드를 항상 표시한다.
-- CDK `destroy` 스크립트와 시연 후 정리 절차를 README에 적는다.
+React/Vite/TypeScript frontend; API Gateway and Python Lambda; private Lambda/ECS data
+services; RDS PostgreSQL ledger; selectable local/Neptune graph; selected OpenSearch
+Serverless vector design; Bedrock explanation/Guardrails; Cognito; TypeScript CDK.
+The optional privacy gateway reuses EKS/vLLM. Inspect package manifests for exact versions.
 
----
+The customer proposal assumes existing GitLab and excludes CodeCommit/CodePipeline.
+This repository uses GitHub Actions; customer assumptions do not forbid its actual CI.
+SDK/AgentCore choices and deployment limits are recorded in §16.
 
-## 11. 데모 제약과 표기 규칙 ★
+### 10-1. Graph backend and cost
 
-데모는 운영 아키텍처의 일부를 대체한다. **대체 사실을 화면에서 숨기지 않는다.** 배지를 안 달고 넘어가다 시연 중 들키는 것이 최악이다.
+Use `GRAPH_BACKEND=local|neptune` through `GraphStore`. A customer demonstration claiming
+Neptune must use Neptune and display the actual backend. Preserve deployment/teardown
+instructions in `platform/README.md`; obtain current pricing before estimating costs.
 
-### 11-1. PII 추론 경로 대체
-- 운영: EKS Hybrid Nodes의 IDC GPU + vLLM
-- 데모: Bedrock Gemma 4 31B @ `us-west-2` (GPU 미구성)
-- **화면 배지 (필수)**
-  ```
-  PII 추론 경로
-  운영: IDC GPU + vLLM (EKS Hybrid Nodes)
-  데모: Bedrock Gemma 4 31B @ us-west-2 — GPU 미구성 대체
-  ```
-- 이 경로를 "IDC GPU"라고 표시해서는 안 된다.
+## 11. Honest implementation labels
 
-### 11-2. 익명화 변환 로직 미구현
-- 운영: 게이트에서 가명처리 · 식별자 토큰화 · 재식별 수행
-- 데모: **변환 로직을 구현하지 않는다** (시간 제약)
-- 대신 §9에 따라 **합성데이터를 처음부터 가명 · 토큰 형태로 생성**한다. 변환할 것이 없으므로 게이트 통과 결과가 운영과 동일하다.
-- 게이트 자체는 **경계 통과 지점으로 실제 존재해야 한다.** 모든 Bedrock 호출이 이 지점을 지나가고, 여기서 페이로드를 계측한다.
-- **화면 배지 (필수)**
-  ```
-  익명화 게이트
-  운영: 가명처리 · 토큰화 · 재식별
-  데모: 합성데이터가 이미 가명 형태 — 변환 로직 미구현
-  ```
+### 11-1. Privacy versus explanation
 
-### 11-3. 온프렘 구성 없음
-- 운영: 계정계 원장을 Direct Connect로 조회
-- 데모: 합성 원장을 VPC 내 RDS에 둔다
-- 화면에서 "온프렘"이라는 표현을 쓰지 않는다. "VPC 프라이빗 서브넷"으로 표기한다.
+Label actual processors and endpoints. The historical Gemma-for-GPU substitution is
+not the current S2 privacy path. A configured EKS Qwen detector and a Bedrock Gemma
+explanation may coexist; neither proves an IDC Hybrid Nodes deployment.
 
-### 11-4. AgentCore 사용 제약
-AgentCore insights · Evaluations · Policy는 서울에서 global 교차 리전 추론이 강제되고 SCP로 차단되지 않으며 목적지 리전에 프롬프트 · 응답이 저장될 수 있다.
-- Tier 2 워크로드 경로에서 사용하지 않는다
-- 사용하는 화면에는 `Tier 0/1 전용` 배지를 표시한다
+### 11-2. Transformation scope
 
----
+Rule-based structured tokenization and EKS free-text removal exist. Replace the old
+“no transformation implemented” claim with the actual mechanism and validation status.
+Do not imply a full ML anonymization/re-identification vault or legal certification.
 
-## 12. 안티 요구사항 (예외 없음)
+### 11-3. Ledger placement
 
-1. **익명화 게이트를 우회하는 코드 경로를 만들지 않는다.**
-2. **대체 구성을 화면에서 숨기지 않는다.** (§11 배지 필수)
-3. **개인 금융데이터를 벡터화하지 않는다.** 임베딩은 문서(약관 · 규정)에만.
-4. **LLM이 금액 · 금리 · 한도를 생성하지 않는다.** 계산엔진 출력만 사용하고 출력 검증기를 둔다.
-5. **프롬프트 원문을 CloudWatch에 남기지 않는다.** 메트릭과 `traceId`만.
-6. **Guardrails를 목(mock)으로 만들지 않는다.**
-7. **Vector RAG 비교군을 의도적으로 약화시키지 않는다.** 하이브리드 + 리랭커까지 정상 구현한다.
-8. **하드코딩된 수치를 실측처럼 보이게 하지 않는다.** (Related 카운트, 경계 통과량 포함)
-9. **비밀번호 · API 키를 코드나 문서에 하드코딩하지 않는다.** Secrets Manager 또는 `.env.local`(gitignore).
-10. **실제 은행 상품명 · 내규 조항을 사용하지 않는다.**
-11. **무한 재시도 루프를 만들지 않는다.** 기존 데모 시나리오의 재생성은 최대 1회다. §7-1 작업실은 요청별 1~5라운드와 시간 상한을 적용하며 상한 도달을 승인으로 처리하지 않는다.
-12. **브라우저 스토리지에 개인데이터를 저장하지 않는다.**
-13. "온프렘", "Two-Plane", "In-Region", "서울을 벗어나지 않" 표현을 쓰지 않는다.
+The demo uses a synthetic private RDS ledger, not a demonstrated Direct Connect link
+to a customer's core banking system. Use accurate private-subnet language in the UI.
+Legacy `onprem` source/event identifiers are not a requirement to rename APIs.
 
----
+### 11-4. AgentCore scope
 
-## 13. Phase
+The selected governance design uses AgentCore for permitted nonsensitive workloads.
+Do not route Tier 2 personal inference through AgentCore insights/Evaluations/Policy.
+Label applicable screens Tier 0/1-only and verify current service routing/storage
+before deployment; earlier broad availability claims are not permanent AWS facts.
 
-### Phase 1 — 온톨로지와 데이터 ★
-- [ ] §5 스키마 정의 (`schema/ontology.cypher`) — 여신 + UX 자산 도메인
-- [ ] 합성데이터 생성 스크립트 (`seed/generate.py`), 시드 고정, 식별자는 토큰 형태
-- [ ] §5-4 커버리지 검증 테스트
-- [ ] `GraphStore` 인터페이스 + Local 구현
-- [ ] §6 Semantic Layer YAML + 로더
+## 12. Prohibited behavior
 
-> **완료 조건**: §5-5 쿼리가 CLI에서 실행되어 커버리지 제약을 만족한다.
+1. Bypassing the applicable model-bound gate or S2 preprocessing/inspection.
+2. Hiding substitutions or reporting unconfigured integrations as live.
+3. Vectorizing personal ledger data; document embeddings must respect data scope.
+4. Inventing amounts, rates or limits instead of validating deterministic results.
+5. Logging raw prompts/entity originals to CloudWatch.
+6. Presenting mock Guardrails as real deployment evidence.
+7. Intentionally weakening the Vector RAG comparison baseline.
+8. Reporting hardcoded counts as measured results.
+9. Hardcoding passwords/API keys in source, documentation or logs. A 2026-09-03
+   permission covered only the synthetic demo access page; no credential value is
+   required in maintained docs, and that historical exception is not a general waiver.
+10. Using actual private bank products/clauses as synthetic fixtures.
+11. Unbounded retries. Legacy scenario regeneration is at most once; workspace requests
+    have 1–5 rounds and a time limit. Reaching a limit never means approval.
+12. Storing personal data in browser storage.
+13. Misleading UI claims of physical on-premises deployment, multiple privacy boundaries,
+    in-region inference or guaranteed Seoul-only routing. Historical/code identifiers
+    are not live topology assertions.
 
-### Phase 2 — GraphRAG 엔진과 S1
-- [ ] 의도 분해 → Seed 선택 → 순회 → Context 조립
-- [ ] Vector RAG 비교군 (하이브리드 + 리랭커)
-- [ ] S1 좌우 비교 화면 + 경로 시각화
-- [ ] `LLMClient` 인터페이스 + Claude 어댑터 + 스트리밍
+## 13. Implementation phases
 
-> **완료 조건**: S1을 처음부터 끝까지 시연할 수 있다. 여기서 멈추고 검토받는다.
+Historical delivery sequence: (1) ontology/data/semantic layer; (2) GraphRAG and S1;
+(3) private services, calculation, boundary and S2; (4) Registry/portal/generation;
+(5) Reader/Writer reports and rehearsal. These are not a current unchecked backlog.
+Use current source, tests and module status for completion; use dated plans for history.
 
-### Phase 3 — 경계와 S2
-- [ ] VPC 프라이빗 서브넷 구성 (CDK)
-- [ ] RDS 합성 원장 + 정확 조회 API
-- [ ] 결정론적 계산엔진 + 단위테스트
-- [ ] 익명화 게이트 (통과 지점 + 계측, 변환 로직 미구현)
-- [ ] Gemma 어댑터 (`bedrock-mantle`, OpenAI 호환)
-- [ ] Bedrock Guardrails 설정
-- [ ] S2 상담 화면 + 단계별 펼침 패널
-- [ ] Single Boundary 뷰 (§8-3)
-- [ ] §11 배지 전체 적용
+## 14. Configuration decisions
 
-### Phase 4 — Registry · Portal · S3
-- [ ] Registry 데이터모델 + 상태 전이 + 승인 API
-- [ ] Consumer API (APPROVED만 반환)
-- [ ] Registry 관리 화면
-- [ ] UX Asset Portal (§8-2), Related 카운트는 그래프 쿼리
-- [ ] 화면 생성 에이전트 + 실제 검증 게이트
+Before configuring a new environment, resolve actual target account/region, model
+access, integration scope, budget, credentials and rehearsal duration. Do not reopen
+already accepted project choices merely because the original questionnaire listed them.
+Do not infer authorization to modify unrelated shared-cluster resources.
 
-### Phase 5 — 보고서와 마무리
-- [ ] Reader / Writer IAM 역할 분리 + 인젝션 시연 데이터
-- [ ] Guardrails 로그 화면
-- [ ] 리셋 / 프리셋 / 폴백
-- [ ] Neptune 전환 및 리허설
-- [ ] README (시연 스크립트, 비용 정리 절차)
+## 15. Demonstration mapping
 
----
+S1 demonstrates dependency-aware retrieval and AI-ready data; S2 demonstrates exact
+calculation and privacy processing; S3 demonstrates approved assets; the portal
+explains asset relationships; S4 explains measured inference boundaries; S5 shows
+safety failure handling; Reader/Writer shows separate read and write permissions.
 
-## 14. 시작 전 확인 질문
+## 16. Implementation and verification record
 
-1. **기존 데모 코드베이스 위치** — `d1twhttjtzqewp.cloudfront.net`의 저장소는 어디인가? 확장인가 신규인가?
-2. **에이전트 SDK** — Strands Agents / LangGraph / Claude Agent SDK 중 무엇? (Skills 사용 여부가 여기에 걸림)
-3. **AgentCore 사용 범위** — Runtime · Gateway · Registry를 실제로 쓸까, 자체 구현으로 개념만 보여줄까? 서울 리전 가용성 확인 필요.
-4. **벡터 저장소** — pgvector on RDS(기본 제안) vs OpenSearch Serverless?
-5. **AWS 계정 · 리전** — 배포 대상 계정, 그리고 `ap-northeast-2`의 Claude 모델 액세스와 `us-west-2`의 Gemma 액세스가 활성화되어 있는지?
-6. **Neptune 예산** — 시연 기간 상시 가동 가능한가, 직전에만 띄울까?
-7. **시연 시간** — 15분 기준으로 설계했다. 30분이면 시나리오를 늘릴 수 있다.
-8. **데모 계정 비밀번호** — `DEMO_USER_PASSWORD`로 주입한다. 채팅으로 전달된 값은 교체 권장.
+This section preserves dated evidence, not a current deployment attestation.
 
----
+- **2026-09-02 decisions:** Strands for the selected agent implementation; managed
+  AgentCore Harness, Gateway and Registry for their permitted governance scope;
+  OpenSearch Serverless replaces the earlier default pgvector proposal. These choices
+  do not mean every bank handler executes in Harness or every integration is deployed.
+- **2026-09-02 observations:** the account had configured global and APAC profiles;
+  the Gemma adapter used the Mantle catalog/auth path rather than assuming the standard
+  foundation-model catalog listed it. Verify current availability before use.
+- **2026-09-11 React record:** real pinned components, shared guidance, source rebuilding,
+  approval and private archives were implemented. The recorded check had 784 Python
+  and 41 UI tests; backend UPDATE_COMPLETE and synthetic project/upload/model/release
+  checks were reported. Two approval/Git-recording Major findings were fixed. The
+  recorded model generation lacked a source-image baseline (`visual: not-run`), while
+  release recomparison used the approved start screen and 2% threshold. Frontend
+  publication was recorded separately; no customer React package or Git target was supplied.
+- **2026-09-12 MyData, PR #3:** private gateway/relay, deterministic entity replacement,
+  S2 ordering/cache restrictions and synthetic evaluation were merged. Latest reviewed
+  feature HEAD was `b3d05e1`; merge commit is `5a14725`. Five CI jobs passed; the final
+  independent review reported no remaining Critical/Major findings. A live synthetic
+  model exercise is not proof of deployment of the new Lambda/NLB/network route.
+  Shared-cluster prerequisites and network-policy enforcement still require operational
+  verification. SageMaker training and candidate-model promotion were not established.
 
-## 15. 데모 ↔ 제안서 대응
+Keep detailed operational evidence in `platform/README.md`,
+`platform/infra/README-privacy.md` and `docs/14-demo/`. Do not convert a historical test
+count, a local Git test or a staging result into a claim about today's deployment.
 
-| 데모 화면 | 뒷받침하는 슬라이드 |
-|---|---|
-| S1 규정 영향 분석 | "Vector RAG와 GraphRAG는 다른 질문에 답합니다" |
-| S1 + 온톨로지 탐색기 | "AI-Ready 데이터는 두 계층입니다" |
-| S2 마이데이터 상담 | "과제 2 아키텍처", "정확성 문제는 두 방향으로 실패합니다" |
-| S3 Registry | "사내 AI 자산 거버넌스", "자산 공유 체계의 3대 원칙" |
-| UX Asset Portal | "과제 1 — AI-Readable 화면/에셋 관리" |
-| S4 Single Boundary 뷰 | "설계 원칙 — 경계는 하나", "추론 경로와 데이터 소재" |
-| S5 Guardrails | "규제 판단 — 추론 경로를 명시한다" |
-| Reader / Writer 분리 | "과제 3 아키텍처" |
+## Appendix: access
 
----
-
-## 부록. 데모 접속
-- URL: 배포 후 `platform/README.md`의 라이브 URL 참조 (`d1twhttjtzqewp`는 이전 컨트롤룸 데모 URL)
-- 계정: `demo@atomai.click`
-- 비밀번호: 환경변수 `DEMO_USER_PASSWORD` / Secrets Manager `bank-platform/demo-user` (이 문서에 기록하지 않는다)
-- Cognito 사용자 풀에 데모 계정 1개만 생성, 셀프 가입 비활성화
-
----
-
-## 16. 현재 구현·검증 상태 — 2026-09-11
-
-React 공동 디자인 작업실의 완료 여부는 구현·로컬/컨테이너 검증·라이브 확인·사용자 화면 게시를 구분해 기록한다.
-
-| 항목 | 확인된 상태 |
-|---|---|
-| 실제 React 기준 | 플랫폼 기본 15종 코드·타입·토큰, 고정 소스 해시와 실제 빌드·브라우저 검사 구현 |
-| 공동 작업 | 프로젝트 권한·상품 초안/게시 지침·영구 저장 온톨로지·의견·영향 조회 구현 |
-| 생성·릴리스 | Creative 1개 또는 기준안+2~5 변형, 동일 기준 수정, 승인 소스 재빌드·2% 승인 시작 화면 재비교, 비공개 소스/dist/site 저장 구현 |
-| 자동 검증 | 최신 통합 점검 **Python 784개·UI 41개 통과**, 컨테이너 실제 React 경로 통과 |
-| 독립 검토 | 승인 경쟁 상태와 Git 커밋 기록 유실 **Major 2건 수정·독립 재현 확인으로 종료** |
-| 백엔드 | **AWS UPDATE_COMPLETE** |
-| 라이브 공동 지침 | 프로젝트·상품 게시 지침과 저장된 온톨로지 조회 확인. 합성 자료 **노드 7개·관계 8개** |
-| 라이브 파일 반입 | **HTML·CSS·SVG·PNG·JPG 5종** 업로드·인증 다운로드·원본 해시 일치 |
-| 라이브 React 모델 | 코드 `7325c72` 기준, Astra guided 기준안+변형 2개와 Fable creative 1개가 모두 **2라운드 통과**. 실제 타입·빌드·접근성·동작 5개 규칙과 필수 온톨로지 안내 Screen 확인 |
-| 수정·시각 비교 범위 | 첫 기준안의 pageId 정책 실패를 같은 기준으로 수정해 통과. 모델 실행에 원본 이미지 기준은 없어 **visual: not-run**, Figma 픽셀 일치 검증 아님 |
-| 실제 승인·AWS 릴리스 | 선택한 Astra 기준안·Fable 시안을 실제 트랜잭션으로 승인. **AI 호출 없는 같은 소스 재빌드·실제 브라우저·승인 화면 대비 2% 비교 통과** |
-| 비공개 아카이브 | source/dist ZIP의 비공개 S3 저장·다운로드 해시 일치. Astra 기준안 **34,540/53,101 B**, Fable creative **36,664/54,049 B**(소스/dist 순서) |
-| 스테이징 UI | 실제 API의 프로젝트·상품과 연결한 새 UI가 FHD/QHD/WQHD에서 통과, 페이지 오류 없음 |
-| 공개 소스 권한 | 플랫폼 소스의 공개 PR 게시 권한 승인. 고객 자료 공개 허용과 별개 |
-
-고객 React 패키지와 Git 목적지는 미제공·미설정이다. 실제 금융 API는 제공된 테스트 범위 밖이다.
-로컬 bare Git 테스트를 고객 원격 쓰기 성공으로, 라이브 모델·스테이징 UI 통과를 원본 이미지 비교나 게시 UI 통과로 표시하지 않는다.
-플랫폼 소스 공개 허용은 고객 입력·산출물을 공개 저장소로 보내는 허용과 별개다.
-
-사용법은 `docs/14-demo/studio-designer-guide.md`, 입력 범위는 `studio-file-intake.md`,
-구현 점검은 `studio-implementation-review.md`, 완료 체크리스트는
-`docs/superpowers/plans/2026-09-11-react-design-workspace.md`를 따른다.
-프런트엔드를 운영에 게시했고 실제 공동 프로젝트·React 미리보기·릴리스 상태를 확인했다.
-
-### §14 확정 답변 (2026-09-02, 발주자)
-
-1. **에이전트 SDK: Strands Agents** — Harness 컨테이너·화면 생성 에이전트의 구현 SDK.
-2. **AgentCore 사용 범위** (설계 위임에 따른 확정): **실행 = AgentCore Harness(관리형),
-   도구 = AgentCore Gateway(MCP, IAM 인바운드), 자산 승인 = Agent Registry** 를 실사용한다.
-   경계: Tier 2(PII 추론) 경로는 AgentCore를 태우지 않고 자체 `LLMClient` 어댑터로 직행한다(§11-4).
-   AgentCore insights·Evaluations·Policy는 Tier 0/1 화면에 한정하고 배지를 단다.
-   근거 — 이 조합이 "관리형 거버넌스(CloudTrail 감사·승인 수명주기)"라는 제안 논지를 실물로 보여주면서
-   §11-4의 리전 제약을 위반하지 않는 유일한 경계선이다.
-3. **벡터 저장소: OpenSearch Serverless** (v1 답변 유지 — §10 기본 제안 pgvector를 대체).
-
-
-- §4-1: 서울(ap-northeast-2)에서 `global.anthropic.claude-sonnet-5`, `global.anthropic.claude-opus-5` 추론 프로파일 ACTIVE 확인. `apac.anthropic.claude-sonnet-4-*` 프로파일도 ACTIVE로 존재한다(APAC 프로파일 미지원이라는 문구와 다름) — 명세에 따라 global 프로파일을 기본으로 쓰고, 트레이스에 실제 모델 ID를 기록한다.
-- §4-2: us-west-2 표준 카탈로그(`list-foundation-models`)에는 `google.gemma-3-{4b,12b,27b}-it`만 보인다. `google.gemma-4-31b`는 bedrock-mantle 카탈로그에서 런타임에 확인한다(어댑터 헬스체크). 장기 API 키 시크릿은 계정에 없다 → 어댑터는 IAM 자격으로 단기 Bearer 토큰(12h)을 발급해 사용하고, 장기 키가 Secrets Manager에 있으면 그것을 우선한다.
-- §11-2: 데모는 규칙 기반 토큰화(마스킹 게이트)를 **구현했다**. 배지는 사실대로 "합성데이터 가명 생성 + 규칙 기반 토큰화 (ML 가명처리·재식별 볼트 미구현)"로 표기한다.
-- §12.9·부록(데모 접속): 사용자 결정(2026-09-03)으로 데모 계정 비밀번호를 가이드북 `docs/14-demo/index.md` 접속 정보에 적는다(데모 전용 계정, 합성데이터만 접근). 코드·로그·이 문서에는 적지 않으며 원본은 Secrets Manager `bank-platform/demo-user`다.
-- 기존 정적 Studio의 HTML 시안·승인 이력은 참고 기록으로 보존한다. 새 React 릴리스 승인으로 자동 승격하거나
-  기존 갤러리·초안의 일괄 이관이 완료됐다고 주장하지 않는다.
+Use the URLs and authorized account setup in `docs/14-demo/index.md`. Cognito remains
+invitation-only. Obtain the bank demo credential from Secrets Manager
+`bank-platform/demo-user`; never include its value in this specification.

@@ -2,13 +2,13 @@
   "diagram_type": "workflow",
   "specification": {
     "path": "docs/diagrams/ux-validation-loop.workflow.json",
-    "sha256": "0a52d5e0a540eb687b268b9ba13416165df3cafdccec92ffa718407c98a35339",
-    "bytes": 7008
+    "sha256": "805a8ed7fe747d509d295af79118093b9328e81c853973b6a8220962de2dde82",
+    "bytes": 6512
   },
   "artifact": {
     "path": "docs/public/ux-validation-loop.html",
-    "sha256": "6f14b4ce39368c253f1e71ddcf55059a3f42b96d97e77cc139cbb41055df13bb",
-    "bytes": 721280
+    "sha256": "cf0cd8328a3894db6e1bec5badb128d0f6bc11017ce24b7136d30615de58ed97",
+    "bytes": 720635
   },
   "validation": {
     "checksPassed": 9,
@@ -20,7 +20,7 @@
   "visual_review": {
     "status": "passed",
     "reviewer": "Codex visual inspection",
-    "correction_rounds": 1,
+    "correction_rounds": 2,
     "screenshots": [
       "ux-validation-loop.visual-check.1440x900.light.png",
       "ux-validation-loop.visual-check.1440x900.dark.png",
@@ -59,6 +59,6 @@
     "command": "NODE_OPTIONS=--max-old-space-size=8192 npm run docs:build",
     "exitCode": 0
   },
-  "scope": "Graph and documentation only; no service logic changes or deployment.",
-  "evidence_note": "Meeting page shell retrieved, but transcript unavailable; requirements traced to repository design documents with matching meeting ID."
+  "scope": "Documentation reconciliation only; private-service deployment is not claimed.",
+  "evidence_note": "Reconciled with SPEC section 7-1 and the React workspace contract. Public diagram prose remains Korean."
 }

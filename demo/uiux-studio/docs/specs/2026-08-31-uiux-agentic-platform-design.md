@@ -1,105 +1,40 @@
-# Hana UI/UX Agentic AI Platform — PoC Design
+# Original UI/UX Studio — historical PoC design
 
-Date: 2026-08-31
-Status: Approved (user), pending spec review
-Root: `hana/uiux-platform/` (other Hana projects may live as siblings under `hana/`)
-Target: real AWS deployment · account 180294183052 · region ap-northeast-2 (Seoul)
+**Date: 2026-08-31.** The design was recorded as user-approved with spec review pending. It targeted the former `hana/uiux-platform/` project in account `180294183052`, Seoul. The migrated implementation is now `demo/uiux-studio/`. This record preserves decisions; [the current README](../../README.md), code, and `demo/SECURITY-GOVERNANCE.md` establish present scope.
 
-## Goal
+This was an external-service HTML-design PoC. It is separate from root `SPEC.md` §7-1's main React workspace, which accepts approved files without a Figma connection and creates private verified React releases.
 
-A deployable PoC demonstrating an org-wide Agentic AI Platform for UI/UX work at Hana Bank:
+## Goal and chosen interface
 
-1. Ingest design assets from external SaaS (Figma)
-2. Share org-managed design assets via a shared MCP endpoint
-3. Share org-wide agent skill sets
-4. Generate design drafts through an AgentCore-hosted harness
+Demonstrate shared design assets and organizational instructions: Figma ingestion → Gateway MCP → skill registry → AgentCore Runtime generation → CloudFront gallery. The selected gallery direction was a prompt-first showcase with large preview cards. The original canvas reference was <https://claude.ai/code/artifact/cf92ef19-6fb2-40b5-b001-6cdacddd64d5>; local design references remain in `design-canvas/`.
 
-Verified preconditions: AgentCore Runtime available in ap-northeast-2 (an existing runtime already runs in this account); Claude models reachable via `global.*`/`apac.*` inference profiles; Figma PAT valid (temporary, test-only — stored in Secrets Manager, revoked after PoC).
+The chosen draft direction was a mobile single screen with card sections, a primary action, no fake device chrome, and 44-pixel minimum hit targets. Hana-themed green/ink/off-white tokens and Noto Sans KR were design inputs, not evidence of customer approval or compliance. Korean copy and bank-like values in samples are fixtures.
 
-## Frontend direction (chosen on design canvas)
+## Components and implementation boundary
 
-Canvas: https://claude.ai/code/artifact/cf92ef19-6fb2-40b5-b001-6cdacddd64d5
+| Component | Design decision | Checked-in result |
+|---|---|---|
+| Figma ingestion | Normalize source tokens/components into shared S3/DynamoDB assets | `ingestion/figma_sync.py` fetches a file; `normalizer.py` extracts tokens/metadata. Image export and a disabled daily schedule were deferred |
+| Shared MCP | One Gateway with token/search/component/guideline/skill tools | Six initial tools, later extended by generic asset list/get; schemas in `mcp/tool_schemas.py` |
+| Identity | Disable self-registration; admin-created accounts and M2M access | M2M plus a later human designer client exist. The initial “M2M-only” limit is historical |
+| Skill registry | Versioned `SKILL.md` seeds in S3 | `scripts/sync_skills.py` and Gateway skill retrieval; not the nonexistent historical `sync-skills.sh` recipe |
+| Harness | Strands in AgentCore Runtime, originally configured with `global.anthropic.claude-sonnet-5` | `harness/app.py`; model selection is configurable, availability unverified by this document |
+| Variants | Three outputs, each changing density, emphasis, or flow under token guidance | Prompt-directed HTML generation; not an enforced visual regression guarantee |
+| Gallery | CloudFront with private S3 origin | Public gallery artifacts through CloudFront; origin privacy is not private viewer access |
+| Feedback | Approve/reject, copy approved HTML, reuse two recent patterns | Manifest/S3 operations in `feedback/handler.py` and `harness/publish.py`; not transactional React approval |
 
-- **Gallery: Option B — showcase style.** Prompt-first hero ("어떤 화면을 만들어 볼까요?"), generated drafts as large preview cards with status badges (승인됨/검토중/초안). Palette: Hana green #008485 / #00615f, warm off-white #fbfcfb, ink #17332f, Noto Sans KR.
-- **Generated-draft default style: single-screen.** Card-sectioned single page (출금계좌 / 받는분 / 금액 / CTA), 44px+ hit targets, no fake device chrome. This style is codified in the `design-draft-html` skill.
+## Constraints and unresolved work
 
-## Components
+Keep temporary Figma credentials in the approved secret channel and revoke them after use; no credentials belong in this design record. The 2026-09-03 permission for a synthetic demo access page was limited to that page, not a general waiver for source, logs, or other documentation.
 
-### 1. Figma asset ingestion — `ingestion/`
+Cognito no-self-registration, authenticated protected writes, origin protection, least privilege, and trustworthy approval evidence remain requirements. Early unauthenticated feedback was an implementation limitation, not a security exception. Current normal POST routes authenticate, but the compatibility branch, public reads, same-origin generated HTML, wildcard IAM, and credential configuration still require attention.
 
-- **Seed Figma file** created via Figma MCP in this session: Hana-toned design system (color/typography/spacing tokens + core banking components: button, card, account list item, amount input, chips, status badges) matching the approved canvas palette.
-- **Lambda `figma-sync`** (Python 3.13, arm64):
-  - Reads Figma PAT from Secrets Manager secret `hana/figma-token` (never in code or git).
-  - Calls Figma REST API: file document + styles/variables → normalized design-token JSON; component nodes → metadata; `/v1/images` → PNG/SVG exports.
-  - Writes token JSON and images to S3 bucket `hana-design-assets-<acct>`; upserts records into DynamoDB `hana-design-registry` (PK `asset_id`, attrs: `type` token|component|icon, `name`, `version`, `s3_key`, `figma_node_id`, `updated_at`).
-  - Trigger: manual invoke for the PoC; EventBridge daily rule included but disabled.
+The original out-of-scope items included Figma write-back, multiple-tenant isolation, private-network deployment, and a general approval backend. Later work added human login, web generation, assets/history, memory, and refinement; these must not be described as still entirely absent. Full React release verification and private customer-project artifacts belong to the main platform, not this gallery.
 
-**Scope cut (PoC):** component image export via `/v1/images`, the `icon` asset type, and
-the disabled EventBridge schedule are documented-but-not-built for this PoC — only
-token/metadata sync is implemented and exercised end-to-end.
+Embedding search over approved drafts, draft-to-asset graph relationships, external brief intake, and automatic skill-revision batches were proposed extensions. This record does not claim they were built. Error handling must be checked in source; planned retry/partial-success behavior is not an implementation guarantee.
 
-### 2. Shared design-asset MCP — AgentCore Gateway, `mcp/`
+## Historical verification and operations
 
-- **AgentCore Gateway** (Seoul) with one Lambda target `design-asset-tools` exposing MCP tools:
-  - `list_design_tokens`, `search_assets`, `get_component`, `get_brand_guideline`
-  - `list_skills`, `get_skill` (reads the skill registry)
-- **Inbound auth:** Cognito user pool — `selfSignUpEnabled: false` explicit, admin-created users only (org security policy) — plus an M2M app client (client-credentials) for agents and team members. Gateway JWT authorizer validates Cognito tokens.
-- Org members connect from Claude Code / Kiro / any MCP client via the Gateway's streamable-HTTP URL + OAuth token.
+The 2026-08-31 record reported Figma token/metadata sync, initial MCP calls, three generated drafts, and a later generation using approved-pattern context. It did not prove all file formats, all models, comprehensive accessibility, or production security. Earlier claims that a temporary credential was valid/revoked or a service was available need current operator evidence.
 
-**Scope cut (PoC):** human (non-M2M) Cognito clients for org members are roadmap, not built —
-the PoC uses only the M2M client (client-credentials) for both the harness runtime and any
-manual testing.
-
-### 3. Shared skill registry — `skills/` → S3
-
-- S3 bucket `hana-skill-registry-<acct>`, layout `skills/<name>/<version>/SKILL.md` (+ resources).
-- Seed skills:
-  - `hana-design-system` — how to apply the tokens/components from the asset registry.
-  - `design-draft-html` — rules for generating a draft screen. Encodes the approved direction: single-screen card-sectioned layout, Hana palette, Noto Sans KR, 44px hit targets, self-contained HTML, no fake device chrome.
-  - `a11y-finance` — 금융권 웹접근성 checklist (KWCAG-informed).
-- Consumption: agents fetch at runtime via Gateway `get_skill`; humans sync via `scripts/sync-skills.sh` (`aws s3 sync`).
-
-### 4. Design draft harness — AgentCore Runtime, `harness/`
-
-- **Strands Agents** Python agent, container image → AgentCore Runtime (Seoul). Model: `global.anthropic.claude-sonnet-5`.
-- **Variation policy** (asset-grounded, axis-driven): tokens are law (all colors/type/spacing from the registry, never invented); registry components are the preferred vocabulary but the agent may compose within token space; each brief yields **3 variants that each deliberately move one named axis** — 밀도 (compact↔airy), 강조 (hierarchy focus), 흐름 (single-screen↔stepped; single-screen is the default per the canvas decision). Random component remixing is explicitly not the mechanism — it produces near-identical variants. This requires the asset registry to carry semantic metadata (component purpose/usage rules), which the DynamoDB schema provides.
-- Flow: `InvokeAgentRuntime(brief)` → agent loads `design-draft-html` + `hana-design-system` skills → queries Gateway MCP for tokens/components → generates self-contained HTML draft variants (default 3, per the variation policy) → uploads to S3 `hana-design-drafts-<acct>` and appends it to the gallery's `drafts.json` manifest → returns the CloudFront URL.
-- **Gallery frontend (Option B showcase):** static site on the drafts S3 bucket behind **CloudFront (OAC)** — the only public entry point; no public compute (org policy). The gallery index lists drafts from a `drafts.json` manifest the harness updates.
-- `scripts/invoke.py` demonstrates the end-to-end run.
-
-## IaC & deployment
-
-- **CDK (Python)** app in `infra/`: S3 ×3, DynamoDB, Lambda ×2, Cognito, CloudFront, Secrets Manager secret shell, IAM roles.
-- **boto3 deploy scripts** in `scripts/` for AgentCore Gateway + Runtime (CDK support immature; mirrors current AgentCore practice): `deploy_gateway.py`, `deploy_runtime.py`, `teardown.py`.
-- Secret value injected post-deploy by operator command (`aws secretsmanager put-secret-value`), never committed.
-
-## Error handling
-
-- `figma-sync`: Figma 429/5xx → bounded retry with backoff; partial failure writes what succeeded and reports skipped nodes in the response.
-- MCP tools: unknown asset/skill → MCP error result with message, not exception; DynamoDB/S3 errors surface as tool errors.
-- Harness: model/tool failure → structured error response from InvokeAgentRuntime; drafts are only registered after successful S3 upload.
-
-## Testing
-
-- pytest: token normalizer (Figma JSON → token JSON), MCP tool handlers (moto/stubbed AWS).
-- Post-deploy `scripts/verify_e2e.py`: sync Figma → call MCP tools with a Cognito M2M token → invoke harness with a sample brief → assert a draft URL renders.
-
-## Cost & teardown
-
-All serverless/on-demand (Lambda, DynamoDB on-demand, S3, CloudFront, AgentCore consumption, Bedrock per-token). `scripts/teardown.py` + `cdk destroy` remove everything; Figma PAT revoked by user after PoC.
-
-## Organizational learning loop (added 2026-08-31, user-approved)
-
-What separates this platform from individuals using Claude Code: centrally enforced governance (already in the Gateway design) plus a shared learning loop:
-
-- Gallery cards get 승인/반려 buttons → `POST /api/feedback` (CloudFront behavior → Lambda Function URL with OAC — still no direct public compute).
-- Approve promotes the draft to `approved-patterns/` in the drafts bucket and updates `approved-patterns/index.json`; reject records the status.
-- The harness loads up to 2 recent approved patterns as few-shot references before generating, so org-wide approvals improve everyone's next generation.
-- PoC limitation (documented): feedback endpoint has no per-user auth; production would put it behind Cognito. The API is unauthenticated in this PoC, which now includes writes (asset registration) — production must put Cognito in front.
-
-Roadmap (documented, not built): draft-asset network effects (embedding search over approved drafts, graph edges `uses_token`/`composed_in`/`generated_from` toward Neptune/GraphRAG), Slack/portal brief intake for non-developers, rejection-comment-driven skill revision batches.
-
-## Out of scope (YAGNI)
-
-- Web UI for invoking the agent (PoC uses `invoke.py`; gallery is read-only static).
-- Multi-tenant orgs, approval workflow backend (status badges are data-only), Figma write-back, VPC/private networking beyond defaults.
+`tests/` covers normalizer, tools, publication, feedback, dispatch, and infrastructure assertions. `scripts/verify_e2e.py` exercises live services and creates artifacts. Deployment/teardown scripts and CDK removal policies are operational tools, not authority to recreate or delete historical resources. Current setup dependencies are in [the README](../../README.md); the [implementation plan](../plans/2026-08-31-uiux-agentic-platform.md) and [Phase 2 plan](../plans/2026-08-31-phase2-asset-platform.md) preserve the delivery sequence.
