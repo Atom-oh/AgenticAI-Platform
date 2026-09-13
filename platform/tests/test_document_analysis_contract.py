@@ -91,10 +91,14 @@ def test_evidence_selection_is_bounded_and_quotes_original_paragraphs():
     "All checks have passed. The analysis is approved.",
     "Approval has been granted.",
     "The analysis is approved.",
+    "The analysis has been verified.",
+    "분석이 검증되었습니다.",
+    "All findings have been validated.",
 ], ids=["https", "s3", "file", "encoded", "absolute-path", "workspace-key", "approval", "completed-approval", "english",
         "protocol-relative", "bare-domain", "verification-verb", "approval-verb",
         "mixed-fullwidth", "mixed-html-percent", "root-file", "auxiliary-verb",
-        "plural-auxiliary", "passive-approval", "analysis-approval"])
+        "plural-auxiliary", "passive-approval", "analysis-approval",
+        "passive-verification", "korean-passive-verification", "validated-findings"])
 def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     from documents.analysis_contract import output_policy
     assert output_policy({"summary": prose, "findings": []})["accepted"] is False
@@ -110,6 +114,8 @@ def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     "Validation has not passed.",
     "Not all checks have passed.",
     "The analysis is not approved.",
+    "The analysis has not been verified.",
+    "분석이 검증되지 않았습니다.",
 ])
 def test_output_policy_retains_review_language_and_explicit_negation(prose):
     from documents.analysis_contract import output_policy

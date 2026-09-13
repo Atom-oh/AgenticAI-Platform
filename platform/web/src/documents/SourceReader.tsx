@@ -101,7 +101,7 @@ export default function SourceReader({ references, onChanged }: { references: Re
             {revision.effectiveDate && <> · 시행일 {revision.effectiveDate}</>}</p>
         </div>
         {document.status === 'archived' && <Notice>보관 처리된 문서입니다. 새 분석에는 사용할 수 없으며, 접근 권한이 있는 기존 원문과 검토 이력은 유지됩니다.</Notice>}
-        {route.analysisId && document.approvedRevisionId !== revision.id && <Notice>분석 당시의 원문 버전입니다. 현재 승인본과 달라졌거나 승인이 해제되었습니다. 분석 결과에서 다시 분석하세요.</Notice>}
+        {route.analysisId && document.approvedRevisionId !== revision.id && <Notice>현재 승인된 원문이 아니거나 승인본과 다른 버전입니다. 분석에 사용된 버전은 분석 결과의 근거 링크에서 확인하세요.</Notice>}
         {document.provenance === 'synthetic_sample' && <Notice>동작 확인을 위한 합성 자료입니다. 실제 은행 내규가 아니며 원본 교체는 지원하지 않습니다.
           <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId, register: true })}>별도 문서 등록</a></Notice>}
         <label>원문 버전<select aria-label="원문 버전" value={revision.id} onChange={event => {

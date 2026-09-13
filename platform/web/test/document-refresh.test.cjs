@@ -68,13 +68,16 @@ for (const explicitEmpty of [false, true]) {
       await select.waitFor();
       while (!held.length) await page.waitForTimeout(20);
       if (explicitEmpty) await select.selectOption('');
-      for (const release of held) await release();
-      await select.locator('option[value="DOC-missing"]').waitFor({ state: 'attached' });
-      assert.equal(await select.inputValue(), explicitEmpty ? '' : 'DOC-missing');
       await page.getByLabel('원문 파일', { exact: true }).setInputFiles({
         name: 'synthetic.txt', mimeType: 'text/plain', buffer: Buffer.from('합성 원문입니다.'),
       });
-      await page.getByRole('button', { name: '원문 전송', exact: true }).click();
+      const submit = page.getByRole('button', { name: '원문 전송', exact: true });
+      assert.equal(await submit.isDisabled(), !explicitEmpty);
+      assert.equal(ui.calls.filter(call => call.target === '/documents' && call.method === 'POST').length, 0);
+      for (const release of held) await release();
+      await select.locator('option[value="DOC-missing"]').waitFor({ state: 'attached' });
+      assert.equal(await select.inputValue(), explicitEmpty ? '' : 'DOC-missing');
+      await submit.click();
       await page.getByText('합성 요청 본문 확인 완료', { exact: false }).waitFor();
       assert.equal(registration.graphRef, explicitEmpty ? undefined : 'DOC-missing');
       assert.deepEqual(ui.errors, []);
@@ -106,6 +109,22 @@ test('source refresh restarts the activity history at its first page', { timeout
     assert.deepEqual(activityCalls.map(call => call.query), [{}, {}]);
     await page.getByText(/NEW_ACTIVITY_SENTINEL/).waitFor();
     assert.equal(await page.getByText(/OLD_ACTIVITY_SENTINEL/).count(), 0);
+    assert.deepEqual(ui.errors, []);
+  } finally { await ui.browser.close(); }
+});
+
+test('an analysis return parameter never certifies the selected document as its source', { timeout: 15000 }, async () => {
+  const ui = await openUI('documents/LibraryPage', {
+    hash: '#/documents?documentId=doc-1&revisionId=doc-1--r1&analysisId=unrelated-analysis',
+    route: async ({ state }) => {
+      state.document.approvedRevisionId = 'doc-1--r2';
+      return false;
+    },
+  });
+  try {
+    await ui.page.getByText('합성 문단: 담당자가 변경 범위를 검토합니다.', { exact: true }).waitFor();
+    assert.equal(await ui.page.getByText(/분석 당시의 원문 버전입니다/).count(), 0);
+    await ui.page.getByText(/분석에 사용된 버전은 분석 결과의 근거 링크에서 확인/).waitFor();
     assert.deepEqual(ui.errors, []);
   } finally { await ui.browser.close(); }
 });

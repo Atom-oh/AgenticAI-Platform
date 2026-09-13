@@ -313,8 +313,8 @@ def process_analysis(worker, owner, job):
     regulation = store.get_node(analysis["regulationRef"])
     if not regulation or regulation.label != "Regulation":
         raise DocumentError(409, "regulation-missing", "선택한 규정이 현재 관계 목록에 없습니다.")
-    impact = store.impact_of_regulation(regulation.props.get("code") or regulation.id)
-    if impact.regulation is None:
+    impact = store.impact_of_regulation_id(regulation.id)
+    if impact.regulation is None or impact.regulation.id != regulation.id:
         raise DocumentError(409, "regulation-missing", "선택한 규정의 관계를 조회하지 못했습니다.")
     candidates, omitted = _candidates(impact)
     reg = {"id": regulation.id, "title": str(regulation.props.get("title") or regulation.id),

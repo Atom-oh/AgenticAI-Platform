@@ -213,6 +213,18 @@ def test_decisions_require_business_review_role_and_leave_actor_bound_history(ap
     assert call(api, "POST", route, body, actor="bob", project=team)[0] == 409
 
 
+def test_request_history_is_own_scoped_while_shared_bound_results_recheck_access(api):
+    catalog(api); team = project(api); source(api, "REG-1", project_id=team)
+    created = start(api, project_id=team)
+    assert result(api, created, actor="bob", project_id=team)[0] == 403
+    run(api, created, owner="project:" + team)
+    assert result(api, created, actor="bob", project_id=team)[0] == 200
+    mine = call(api, "GET", "/impact-analyses", project=team)[1]["analyses"]
+    peer = call(api, "GET", "/impact-analyses", actor="bob", project=team)[1]["analyses"]
+    assert [row["id"] for row in mine] == [created["analysis"]["id"]]
+    assert peer == []
+
+
 def test_new_approved_revision_blocks_inflight_publication(api):
     catalog(api); regulation = source(api, "REG-1")
     created = start(api)
@@ -287,6 +299,9 @@ def test_selected_regulation_is_context_not_an_unreviewable_finding(api):
     ("All checks have passed. The analysis is approved.", False),
     ("검증 통과 여부는 담당자가 확인해야 합니다.", True),
     ("Validation has not passed.", True),
+    ("The analysis has been verified.", False),
+    ("분석이 검증되었습니다.", False),
+    ("The analysis has not been verified.", True),
 ])
 def test_output_policy_variants_are_enforced_before_persistence(api, prose, accepted):
     catalog(api); source(api, "REG-1")

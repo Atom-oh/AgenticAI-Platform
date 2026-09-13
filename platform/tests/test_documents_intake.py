@@ -332,3 +332,65 @@ def test_static_html_text_and_noncontent_template_remain_approvable(api):
     assert "Literal & 10.00%" in text and "Exception 25.00%." in text
     assert "Inactive example" not in text and "Metadata" not in text
     assert approve(api, result)[0] == 200
+
+
+def pdf_with_vector_clause(encoding):
+    """Selectable heading plus an outlined '25' that text extraction cannot read."""
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(pdf("Synthetic base rate: 10.00%"))))
+    page = writer.pages[0]
+    # Seven-segment digits 2 and 5, painted as rectangles without a text operator.
+    bars = [(10, 70, 20, 3), (27, 60, 3, 10), (10, 57, 20, 3), (10, 47, 3, 10), (10, 44, 20, 3),
+            (40, 70, 20, 3), (40, 60, 3, 10), (40, 57, 20, 3), (57, 47, 3, 10), (40, 44, 20, 3)]
+    paint = b"S" if encoding == "stroke" else b"f"
+    command = b"\n".join((" ".join(map(str, bar)) + " re ").encode() + paint for bar in bars)
+    if encoding == "form":
+        form = DecodedStreamObject()
+        form.update({NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Form"),
+                     NameObject("/BBox"): ArrayObject([NumberObject(n) for n in (0, 0, 100, 100)]),
+                     NameObject("/Resources"): DictionaryObject()})
+        form.set_data(command)
+        page["/Resources"][NameObject("/XObject")] = DictionaryObject({NameObject("/Clause"): writer._add_object(form)})
+        command = b"/Clause Do"
+    elif encoding == "type3":
+        glyph = DecodedStreamObject()
+        glyph.set_data(b"100 0 d0\n" + command)
+        font = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type3"),
+            NameObject("/FontBBox"): ArrayObject([NumberObject(n) for n in (0, 0, 100, 100)]),
+            NameObject("/FontMatrix"): ArrayObject([NumberObject(n) for n in (1, 0, 0, 1, 0, 0)]),
+            NameObject("/CharProcs"): DictionaryObject({NameObject("/A"): writer._add_object(glyph)}),
+            NameObject("/Encoding"): DictionaryObject({NameObject("/Type"): NameObject("/Encoding"),
+                NameObject("/Differences"): ArrayObject([NumberObject(65), NameObject("/A")])}),
+            NameObject("/FirstChar"): NumberObject(65), NameObject("/LastChar"): NumberObject(65),
+            NameObject("/Widths"): ArrayObject([NumberObject(100)]),
+            NameObject("/Resources"): DictionaryObject(),
+        })
+        page["/Resources"]["/Font"][NameObject("/Outline")] = writer._add_object(font)
+        command = b"BT /Outline 1 Tf (A) Tj ET"
+    stream = DecodedStreamObject()
+    stream.set_data(page.get_contents().get_data() + b"\nq\n" + command + b"\nQ")
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("encoding", ["fill", "stroke", "form", "type3"])
+def test_pdf_untranscribed_vector_clauses_block_approval_and_preserve_original(api, encoding):
+    original = pdf_with_vector_clause(encoding)
+    result = finalize(api, upload(api, data=original, name="outlined-clause.pdf", graphRef="REG-1"))
+    text = "".join(p["text"] for p in result["paragraphs"])
+    assert "Synthetic base rate: 10.00%" in text
+    assert "25" not in text
+    assert result["revision"]["parseStatus"] == "partial"
+    warning = "pdf-type3-fonts-not-transcribed" if encoding == "type3" else "pdf-vector-graphics-not-transcribed"
+    assert warning in result["revision"]["warnings"]
+    assert call(api, "POST", path(result) + "/submit", {"version": result["revision"]["version"]})[0] == 409
+    assert call(api, "POST", path(result) + "/review", {
+        "version": result["revision"]["version"], "decision": "approved", "note": "Missing outlined number",
+    })[0] == 409
+    assert api.storage.get("alice", "document", result["document"]["id"])["approvedRevisionId"] is None
+    assert call(api, "GET", path(result) + "/blob")[1] == original

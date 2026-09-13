@@ -87,7 +87,7 @@ _LOCATION = re.compile(
     re.IGNORECASE,
 )
 _CLAIMS = re.compile(
-    r"(?:(?:검증|검수|검사)(?:[이가은는을를에])?\s*(?:통과|완료|성공)"
+    r"(?:(?:검증|검수|검사)(?:[이가은는을를에])?\s*(?:통과|완료|성공|되었|됐|됨)"
     r"|승인(?:\s*(?:절차|처리|검토))?(?:[이가은는])?\s*(?:완료|확정|성공|됨|되었|됐)"
     r"|자동(?:으로)?\s*승인"
     r"|승인\s*(?:했|하였|합니다)"
@@ -96,7 +96,7 @@ _CLAIMS = re.compile(
     r"|(?:automatically|auto[- ]?)\s*approved"
     r"|(?:verification|validation|checks?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already|successfully)\s+){0,4}(?:passed|complete|successful)"
     r"|approval\s+(?:(?:has|have|had|is|was|been|now|already)\s+){0,4}(?:complete|granted|confirmed)"
-    r"|(?:changes?|analysis|results?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already)\s+){0,4}(?:confirmed|approved|finalized)"
+    r"|(?:changes?|analysis|results?|findings?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already)\s+){0,4}(?:confirmed|approved|finalized|verified|validated)"
     r"|official\s+(?:bank(?:ing)?\s+)?(?:policy|regulation))",
     re.IGNORECASE,
 )

@@ -13,19 +13,21 @@ export default function UploadForm({ document, references, onCancel }: {
   const [title, setTitle] = useState('');
   const [kind, setKind] = useState('regulation');
   const [graphRef, setGraphRef] = useState(references.some(ref => ref.id === route.ref) ? route.ref! : '');
-  const referenceChosen = useRef(false);
+  const [referenceChosen, setReferenceChosen] = useState(false);
   useEffect(() => {
-    if (!referenceChosen.current && route.ref && references.some(ref => ref.id === route.ref)) {
+    if (!referenceChosen && route.ref && references.some(ref => ref.id === route.ref)) {
       setGraphRef(route.ref);
     }
-  }, [route.ref, references]);
+  }, [route.ref, references, referenceChosen]);
+  const awaitingReference = !!route.ref && !referenceChosen && graphRef !== route.ref;
   const [versionLabel, setVersionLabel] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [checkpoint, setCheckpoint] = useState<DocumentUpload>();
   const [progress, setProgress] = useState(0);
   const request = useRef<{ fingerprint: string; id: string }>();
   const submit = () => {
-    if (!file || task.busy) return;
+    if (!file || task.busy || awaitingReference) return;
+    setReferenceChosen(true);
     const fingerprint = JSON.stringify([file.name, file.size, file.lastModified, title, kind, graphRef, versionLabel, effectiveDate]);
     if (!request.current || request.current.fingerprint !== fingerprint) request.current = { fingerprint, id: newRequest() };
     const requestId = request.current.id;
@@ -58,7 +60,7 @@ export default function UploadForm({ document, references, onCancel }: {
           <option value="reference">참고 자료</option>
         </select></label>
         <label>관계 목록의 연결 대상<select aria-label="관계 목록의 연결 대상" value={graphRef} onChange={event => {
-          referenceChosen.current = true; setGraphRef(event.target.value);
+          setReferenceChosen(true); setGraphRef(event.target.value);
         }}>
           <option value="">연결하지 않음</option>
           {references.map(ref => <option key={ref.id} value={ref.id}>{ref.label === 'Regulation' ? '규정' : '문서'} · {ref.title}</option>)}
@@ -73,7 +75,8 @@ export default function UploadForm({ document, references, onCancel }: {
     {(task.busy || checkpoint) && <div className="doc-progress" role="status">원문 전송 {progress}%
       <progress aria-label="원문 전송" value={progress} max={100} /></div>}
     {task.error && <Notice error>{task.error}</Notice>}
-    <div className="doc-row"><button type="submit" className="doc-primary" disabled={task.busy || !file || (!document && !title.trim())}>
+    {awaitingReference && <Notice>요청한 연결 대상을 확인하고 있습니다. 목록이 로드된 뒤 전송하거나, 연결 대상을 직접 선택하세요. 연결하지 않음도 선택할 수 있습니다.</Notice>}
+    <div className="doc-row"><button type="submit" className="doc-primary" disabled={task.busy || awaitingReference || !file || (!document && !title.trim())}>
       {task.busy ? '원문 전송 중…' : checkpoint ? '전송 다시 시도' : document ? '새 버전 전송' : '원문 전송'}
     </button></div>
     <p className="doc-muted">원문은 승인 전까지 분석에 사용되지 않습니다. HTML은 실행하지 않고 추출한 글로 확인합니다.</p>

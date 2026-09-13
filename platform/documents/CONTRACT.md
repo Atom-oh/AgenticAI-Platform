@@ -143,7 +143,7 @@ Do not label ID existence as semantic verification.
 | Method / path | Input / output |
 |---|---|
 | POST `/impact-analyses` | `{requestId,query,regulationRef,modelId?}` → 202 `{analysis,job}` |
-| GET `/impact-analyses?cursor=` | currently authorized `analyses`, optional cursor |
+| GET `/impact-analyses?cursor=` | the caller's currently authorized `analyses`, optional cursor |
 | GET `/impact-analyses/{id}` | `{analysis,result?}`; reauthorize every source before returning any private result |
 | POST `/impact-analyses/{id}/decisions` | `{version,nodeId,decision:"change_required"|"unaffected"|"needs_review",note}` → `{analysis,decisions}` |
 
@@ -151,6 +151,14 @@ Worker task `document-analysis` pins original/extraction hashes and approved
 revision IDs before model input. Select the regulation explicitly; reuse the
 actual GraphStore traversal for candidate assets, recording its backend. The
 shared demonstration ontology is not a verified customer graph.
+Private analysis uses `impact_of_regulation_id` with the selected node ID and
+checks the returned identity. Optional or duplicated display codes may not
+select a different regulation; the legacy code-based entry point remains separate.
+The list is the caller's own request history. A teammate may open a shared
+analysis URL once source bindings exist and every current source-access check
+passes. Before binding, only its requester can read the analysis; raw job
+records are also requester-only. The generic workspace API has no public job
+retry route.
 
 At most 20 approved, authorized source documents and 36,000 context characters
 enter a model call. Record excluded/unlinked/truncated coverage explicitly.

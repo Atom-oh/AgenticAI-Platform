@@ -9,7 +9,7 @@ import sys
 
 
 def _content_warnings(page, reader, budget):
-    """Inspect every Form stream/resources without decoding raster image data."""
+    """Bounded Form/resource inspection; untranscribed graphics are not text."""
     from pypdf.generic import ContentStream, StreamObject
 
     def resolved(value):
@@ -31,6 +31,18 @@ def _content_warnings(page, reader, budget):
         if resources.get("/Pattern"):
             # Tiling patterns may paint images or other untranscribed content.
             warnings.add("pdf-patterns-not-transcribed")
+        fonts = resolved(resources.get("/Font", {}))
+        if not isinstance(fonts, dict) or len(fonts) > budget["objects"]:
+            raise ValueError("Invalid or excessive PDF fonts")
+        budget["objects"] -= len(fonts)
+        for reference in fonts.values():
+            font = resolved(reference)
+            if not isinstance(font, dict):
+                raise ValueError("Invalid PDF font")
+            if font.get("/Subtype") == "/Type3":
+                # CharProcs are arbitrary graphics, not the extracted character
+                # name. A glyph can paint an entire clause or a different number.
+                warnings.add("pdf-type3-fonts-not-transcribed")
         identity = (id(stream), id(resources))
         if identity in ancestors:
             raise ValueError("PDF resource cycle")
@@ -46,6 +58,12 @@ def _content_warnings(page, reader, budget):
                 raise ValueError("PDF content inspection limit")
             if any(operator == b"INLINE IMAGE" for _, operator in operations):
                 warnings.add("pdf-images-not-transcribed")
+            if any(operator in {b"S", b"s", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"sh"}
+                   for _, operator in operations):
+                # Outlined words/numbers and diagrams have no text operators.
+                # Decorative paths also require review in a supported text source;
+                # this parser cannot establish that their omission is harmless.
+                warnings.add("pdf-vector-graphics-not-transcribed")
         objects = resolved(resources.get("/XObject", {}))
         if not isinstance(objects, dict) or len(objects) > budget["objects"]:
             raise ValueError("Invalid or excessive PDF XObjects")

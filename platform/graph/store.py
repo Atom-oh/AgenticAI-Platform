@@ -129,6 +129,9 @@ class GraphStore(ABC):
     def impact_of_regulation(self, reg_code: str) -> ImpactResult: ...
 
     @abstractmethod
+    def impact_of_regulation_id(self, regulation_id: str) -> ImpactResult: ...
+
+    @abstractmethod
     def impact_of_component(self, component_id: str) -> ComponentImpact: ...
 
     @abstractmethod
@@ -236,7 +239,15 @@ class LocalGraphStore(GraphStore):
         regs = self.find_by_label("Regulation", code=reg_code)
         if not regs:
             return ImpactResult(None, [], [], [], [], [], [], [])
-        reg = regs[0]
+        return self._impact_for_regulation(regs[0])
+
+    def impact_of_regulation_id(self, regulation_id: str) -> ImpactResult:
+        reg = self.get_node(regulation_id)
+        if reg is None or reg.label != "Regulation":
+            return ImpactResult(None, [], [], [], [], [], [], [])
+        return self._impact_for_regulation(reg)
+
+    def _impact_for_regulation(self, reg: Node) -> ImpactResult:
         path: list[Edge] = []
         seen: dict[str, set[str]] = defaultdict(set)
 
@@ -482,9 +493,17 @@ class NeptuneGraphStore(GraphStore):
         regs = self.find_by_label("Regulation", code=reg_code)
         if not regs:
             return ImpactResult(None, [], [], [], [], [], [], [])
-        reg = regs[0]
-        p = {"c": reg_code, "c2": reg.id}
-        base = "MATCH (r:Regulation {code: $c})"
+        return self._impact_for_regulation(regs[0])
+
+    def impact_of_regulation_id(self, regulation_id: str) -> ImpactResult:
+        reg = self.get_node(regulation_id)
+        if reg is None or reg.label != "Regulation":
+            return ImpactResult(None, [], [], [], [], [], [], [])
+        return self._impact_for_regulation(reg)
+
+    def _impact_for_regulation(self, reg: Node) -> ImpactResult:
+        p = {"c": reg.id, "c2": reg.id}
+        base = "MATCH (r:Regulation {id: $c})"
         via_prod = (base + "<-[:DERIVED_FROM]-(:Condition)<-[:HAS_CONDITION]-(pp:Product)-[:SOLD_VIA]->(s:Screen)")
         via_pol = (base + "<-[:DERIVED_FROM]-(pol:PolicyRule)-[:CONSTRAINS]->(s:Screen)")
 
