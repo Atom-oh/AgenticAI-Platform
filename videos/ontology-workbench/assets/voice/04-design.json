@@ -1,0 +1,58 @@
+{"time":0,"type":"sentence","start":28,"end":120,"value":"디자인 스튜디오는 프로젝트의 상품 지침과 입력 자료를 사용합니다."}
+{"time":62,"type":"word","start":28,"end":37,"value":"디자인"}
+{"time":500,"type":"word","start":38,"end":53,"value":"스튜디오는"}
+{"time":1312,"type":"word","start":54,"end":69,"value":"프로젝트의"}
+{"time":2137,"type":"word","start":70,"end":76,"value":"상품"}
+{"time":2500,"type":"word","start":77,"end":86,"value":"지침과"}
+{"time":3125,"type":"word","start":87,"end":93,"value":"입력"}
+{"time":3587,"type":"word","start":94,"end":103,"value":"자료를"}
+{"time":4037,"type":"word","start":104,"end":119,"value":"사용합니다"}
+{"time":5317,"type":"sentence","start":121,"end":252,"value":"화면을 만드는 것에서 끝나지 않고, 승인한 규칙과 실제 리액트 결과물의 검증 기록을 연결합니다."}
+{"time":5330,"type":"word","start":121,"end":130,"value":"화면을"}
+{"time":5892,"type":"word","start":131,"end":150,"value":"만드는 것에서"}
+{"time":6692,"type":"word","start":151,"end":167,"value":"끝나지 않고"}
+{"time":7705,"type":"word","start":169,"end":178,"value":"승인한"}
+{"time":8267,"type":"word","start":179,"end":188,"value":"규칙과"}
+{"time":8805,"type":"word","start":189,"end":195,"value":"실제"}
+{"time":9142,"type":"word","start":196,"end":205,"value":"리액트"}
+{"time":9567,"type":"word","start":206,"end":218,"value":"결과물의"}
+{"time":10130,"type":"word","start":219,"end":225,"value":"검증"}
+{"time":10505,"type":"word","start":226,"end":235,"value":"기록을"}
+{"time":10880,"type":"word","start":236,"end":251,"value":"연결합니다"}
+{"time":12197,"type":"sentence","start":253,"end":374,"value":"컴포넌트, 패턴, 절차, 정책 규칙, 용어와 화면 메타데이터는 서로 다른 자산으로 다룹니다."}
+{"time":12260,"type":"word","start":253,"end":265,"value":"컴포넌트"}
+{"time":13135,"type":"word","start":267,"end":273,"value":"패턴"}
+{"time":13835,"type":"word","start":275,"end":281,"value":"절차"}
+{"time":14522,"type":"word","start":283,"end":289,"value":"정책"}
+{"time":14947,"type":"word","start":290,"end":296,"value":"규칙"}
+{"time":15522,"type":"word","start":298,"end":307,"value":"용어와"}
+{"time":16085,"type":"word","start":308,"end":314,"value":"화면"}
+{"time":16485,"type":"word","start":315,"end":333,"value":"메타데이터는"}
+{"time":17460,"type":"word","start":334,"end":340,"value":"서로"}
+{"time":17822,"type":"word","start":341,"end":347,"value":"다른"}
+{"time":18135,"type":"word","start":348,"end":360,"value":"자산으로"}
+{"time":18635,"type":"word","start":361,"end":373,"value":"다룹니다"}
+{"time":19865,"type":"sentence","start":375,"end":546,"value":"기획자는 흐름과 가이드를 확인하고, 디자이너는 산출물을 검토하며, 개발자는 변경된 컴포넌트와 전달할 결과물을 확인합니다."}
+{"time":19927,"type":"word","start":375,"end":387,"value":"기획자는"}
+{"time":20627,"type":"word","start":388,"end":397,"value":"흐름과"}
+{"time":21115,"type":"word","start":398,"end":410,"value":"가이드를"}
+{"time":21615,"type":"word","start":411,"end":423,"value":"확인하고"}
+{"time":22365,"type":"word","start":425,"end":440,"value":"디자이너는"}
+{"time":23302,"type":"word","start":441,"end":453,"value":"산출물을"}
+{"time":23902,"type":"word","start":454,"end":466,"value":"검토하며"}
+{"time":24740,"type":"word","start":468,"end":480,"value":"개발자는"}
+{"time":25552,"type":"word","start":481,"end":490,"value":"변경된"}
+{"time":26115,"type":"word","start":491,"end":506,"value":"컴포넌트와"}
+{"time":26990,"type":"word","start":507,"end":516,"value":"전달할"}
+{"time":27527,"type":"word","start":517,"end":529,"value":"결과물을"}
+{"time":28165,"type":"word","start":530,"end":545,"value":"확인합니다"}
+{"time":29370,"type":"sentence","start":547,"end":647,"value":"새로운 지침이 생기면 이전 검증이 계속 유효한지도 다시 확인해야 합니다."}
+{"time":29507,"type":"word","start":547,"end":556,"value":"새로운"}
+{"time":29945,"type":"word","start":557,"end":566,"value":"지침이"}
+{"time":30370,"type":"word","start":567,"end":576,"value":"생기면"}
+{"time":30882,"type":"word","start":577,"end":583,"value":"이전"}
+{"time":31132,"type":"word","start":584,"end":593,"value":"검증이"}
+{"time":31682,"type":"word","start":594,"end":600,"value":"계속"}
+{"time":32007,"type":"word","start":601,"end":616,"value":"유효한지도"}
+{"time":32632,"type":"word","start":617,"end":623,"value":"다시"}
+{"time":32945,"type":"word","start":624,"end":646,"value":"확인해야 합니다"}

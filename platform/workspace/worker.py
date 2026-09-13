@@ -199,6 +199,8 @@ class Worker:
         self.extractor = extractor or extract_file
         self.ocr = ocr or _ocr
         self.clock = clock or time.monotonic
+        from workbench.runtime import install
+        install(self)
 
     def _update(self, owner, kind, identifier, **fields):
         for _ in range(3):
@@ -238,6 +240,9 @@ class Worker:
             elif task == "git":
                 from workspace.git_service import process_export
                 result = process_export(self, owner, job)
+            elif task == "workbench":
+                from workbench.worker import process
+                result = process(self, owner, job)
             else:
                 raise ValueError("지원하지 않는 작업입니다.")
             self._update(owner, "job", identifier, status="completed", progress=100, result=result)

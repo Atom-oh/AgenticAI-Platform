@@ -1,0 +1,66 @@
+{"time":0,"type":"sentence","start":28,"end":103,"value":"연금 상담은 합성 페르소나의 대시보드에서 시작합니다."}
+{"time":125,"type":"word","start":28,"end":34,"value":"연금"}
+{"time":450,"type":"word","start":35,"end":44,"value":"상담은"}
+{"time":1037,"type":"word","start":45,"end":51,"value":"합성"}
+{"time":1437,"type":"word","start":52,"end":67,"value":"페르소나의"}
+{"time":2187,"type":"word","start":68,"end":86,"value":"대시보드에서"}
+{"time":3062,"type":"word","start":87,"end":102,"value":"시작합니다"}
+{"time":4305,"type":"sentence","start":104,"end":208,"value":"적립액이나 은퇴 시점, 수익률 가정을 바꾸면 서버가 결과를 다시 계산합니다."}
+{"time":4430,"type":"word","start":104,"end":119,"value":"적립액이나"}
+{"time":5242,"type":"word","start":120,"end":126,"value":"은퇴"}
+{"time":5555,"type":"word","start":127,"end":133,"value":"시점"}
+{"time":6142,"type":"word","start":135,"end":144,"value":"수익률"}
+{"time":6680,"type":"word","start":145,"end":154,"value":"가정을"}
+{"time":7092,"type":"word","start":155,"end":164,"value":"바꾸면"}
+{"time":7692,"type":"word","start":165,"end":174,"value":"서버가"}
+{"time":8255,"type":"word","start":175,"end":184,"value":"결과를"}
+{"time":8805,"type":"word","start":185,"end":191,"value":"다시"}
+{"time":9117,"type":"word","start":192,"end":207,"value":"계산합니다"}
+{"time":10422,"type":"sentence","start":209,"end":322,"value":"사용자는 인사이트를 골라 진단과 계획, 적립, 운용, 인출 관점의 설명을 확인합니다."}
+{"time":10547,"type":"word","start":209,"end":221,"value":"사용자는"}
+{"time":11235,"type":"word","start":222,"end":237,"value":"인사이트를"}
+{"time":11885,"type":"word","start":238,"end":244,"value":"골라"}
+{"time":12260,"type":"word","start":245,"end":254,"value":"진단과"}
+{"time":12810,"type":"word","start":255,"end":261,"value":"계획"}
+{"time":13310,"type":"word","start":263,"end":269,"value":"적립"}
+{"time":14035,"type":"word","start":271,"end":277,"value":"운용"}
+{"time":14785,"type":"word","start":279,"end":285,"value":"인출"}
+{"time":15135,"type":"word","start":286,"end":295,"value":"관점의"}
+{"time":15572,"type":"word","start":296,"end":305,"value":"설명을"}
+{"time":16110,"type":"word","start":306,"end":321,"value":"확인합니다"}
+{"time":17377,"type":"sentence","start":323,"end":406,"value":"기본 계산 안내와 모델이 선택한 지표는 구분해서 표시합니다."}
+{"time":17440,"type":"word","start":323,"end":329,"value":"기본"}
+{"time":17815,"type":"word","start":330,"end":336,"value":"계산"}
+{"time":18127,"type":"word","start":337,"end":346,"value":"안내와"}
+{"time":18627,"type":"word","start":347,"end":356,"value":"모델이"}
+{"time":19002,"type":"word","start":357,"end":366,"value":"선택한"}
+{"time":19502,"type":"word","start":367,"end":376,"value":"지표는"}
+{"time":20065,"type":"word","start":377,"end":389,"value":"구분해서"}
+{"time":20815,"type":"word","start":390,"end":405,"value":"표시합니다"}
+{"time":22107,"type":"sentence","start":407,"end":526,"value":"모델은 질문에 맞는 지표를 선택하고, 지표의 이름과 단위, 실제 숫자는 서버가 채웁니다."}
+{"time":22170,"type":"word","start":407,"end":416,"value":"모델은"}
+{"time":22670,"type":"word","start":417,"end":426,"value":"질문에"}
+{"time":23107,"type":"word","start":427,"end":433,"value":"맞는"}
+{"time":23482,"type":"word","start":434,"end":443,"value":"지표를"}
+{"time":23957,"type":"word","start":444,"end":456,"value":"선택하고"}
+{"time":24795,"type":"word","start":458,"end":467,"value":"지표의"}
+{"time":25482,"type":"word","start":468,"end":477,"value":"이름과"}
+{"time":25932,"type":"word","start":478,"end":484,"value":"단위"}
+{"time":26520,"type":"word","start":486,"end":492,"value":"실제"}
+{"time":26982,"type":"word","start":493,"end":502,"value":"숫자는"}
+{"time":27482,"type":"word","start":503,"end":512,"value":"서버가"}
+{"time":27957,"type":"word","start":513,"end":525,"value":"채웁니다"}
+{"time":29125,"type":"sentence","start":527,"end":655,"value":"계산 가정이 바뀌면 이전 답변은 오래된 근거로 표시되며, 직원 평가는 실제 답변에 연결됩니다."}
+{"time":29187,"type":"word","start":527,"end":533,"value":"계산"}
+{"time":29575,"type":"word","start":534,"end":543,"value":"가정이"}
+{"time":30000,"type":"word","start":544,"end":553,"value":"바뀌면"}
+{"time":30687,"type":"word","start":554,"end":560,"value":"이전"}
+{"time":30962,"type":"word","start":561,"end":570,"value":"답변은"}
+{"time":31550,"type":"word","start":571,"end":580,"value":"오래된"}
+{"time":32125,"type":"word","start":581,"end":590,"value":"근거로"}
+{"time":32512,"type":"word","start":591,"end":603,"value":"표시되며"}
+{"time":33375,"type":"word","start":605,"end":611,"value":"직원"}
+{"time":33837,"type":"word","start":612,"end":621,"value":"평가는"}
+{"time":34387,"type":"word","start":622,"end":628,"value":"실제"}
+{"time":34750,"type":"word","start":629,"end":638,"value":"답변에"}
+{"time":35187,"type":"word","start":639,"end":654,"value":"연결됩니다"}

@@ -1,0 +1,24 @@
+<!doctype html><html lang="ko"><head><meta charset="UTF-8"></head><body><template>
+          <style>
+          @font-face{font-family:'Workbench Korean';src:url('assets/fonts/korean-regular.woff2');font-weight:400}
+          @font-face{font-family:'Workbench Korean';src:url('assets/fonts/korean-black.woff2');font-weight:900}
+          #root {position:absolute;inset:0;width:1920px;height:1080px;box-sizing:border-box;background:#f0f6f4;color:#123d3d;
+            font-family:'Workbench Korean';overflow:hidden;padding:66px 82px 150px}
+          .mast {display:flex;justify-content:space-between;font-size:24px;align-items:center;border-bottom:2px solid #99bdb6;padding-bottom:22px}
+          .chapter {font-weight:900;color:#006767} .serial {font-family:'IBM Plex Mono';font-size:22px}
+          .body {display:grid;grid-template-columns:570px 1fr;gap:64px;align-items:center;height:720px}
+          h1 {font-size:65px;line-height:1.3;letter-spacing:-2px;font-weight:900;margin:0 0 40px;word-break:keep-all}
+          .points {display:grid;gap:20px}.point {font-size:30px;line-height:1.5;padding-left:24px;border-left:4px solid #008485}
+          .evidence {position:relative;border:2px solid #91b8af;border-radius:24px;background:#fff;overflow:hidden;box-shadow:0 18px 35px #123d3d14}
+          .alternate {position:absolute;inset:0}
+          .screen {width:100%;height:680px;object-fit:cover;object-position:left top;display:block}
+          .footnote {position:absolute;bottom:128px;left:82px;right:82px;font-size:22px;color:#335c57}
+          svg {display:block;width:100%;height:680px} .progress {position:absolute;left:0;bottom:0;width:100%;height:7px;background:#008485;transform-origin:left center}
+        </style><div id="root" data-composition-id="02-roles" data-width="1920" data-height="1080" data-duration="26.459870893149628">
+          <div class="mast"><span class="chapter">역할별 작업실</span><span class="serial">ATOM AI / 02 — 08</span></div>
+          <div class="body"><div><h1 id="s-02-roles-title">직무에 맞는 시작 화면</h1><div class="points"><div class="point" id="s-02-roles-point-0">기획자 · 디자이너 · 개발자</div><div class="point" id="s-02-roles-point-1">직무별 메뉴, 프로젝트별 자료</div><div class="point" id="s-02-roles-point-2">권한은 서버에서 확인</div></div></div><div class="evidence"><img class="screen" src="assets/screens/roles.png" alt="역할별 작업실 실제 구현 화면"/></div></div>
+          <div class="footnote">화면의 역할 선택은 권한 부여가 아닙니다</div><div class="progress"></div></div><script>const tl=gsap.timeline({paused:true});
+          tl.fromTo('#s-02-roles-title',{x:-24,opacity:0},{x:0,opacity:1,duration:.7,ease:'power3.out'},.1);
+          tl.fromTo('.evidence',{y:26,opacity:0},{y:0,opacity:1,duration:.8,ease:'power2.out'},.25);
+          tl.fromTo('.progress',{scaleX:0},{scaleX:1,duration:26.459870893149628,ease:'none'},0);
+        tl.fromTo('#s-02-roles-point-0',{x:16,opacity:0},{x:0,opacity:1,duration:.6,ease:'power1.out'},1.0);tl.fromTo('#s-02-roles-point-1',{x:16,opacity:0},{x:0,opacity:1,duration:.6,ease:'power1.out'},7.35036901435591);tl.fromTo('#s-02-roles-point-2',{x:16,opacity:0},{x:0,opacity:1,duration:.6,ease:'power1.out'},13.70073802871182);window.__timelines['02-roles']=tl;</script></template></body></html>

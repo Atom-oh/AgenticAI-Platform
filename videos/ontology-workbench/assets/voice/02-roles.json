@@ -1,0 +1,50 @@
+{"time":0,"type":"sentence","start":28,"end":97,"value":"메뉴는 기술 이름보다 업무를 중심으로 나눴습니다."}
+{"time":62,"type":"word","start":28,"end":37,"value":"메뉴는"}
+{"time":562,"type":"word","start":38,"end":44,"value":"기술"}
+{"time":937,"type":"word","start":45,"end":57,"value":"이름보다"}
+{"time":1487,"type":"word","start":58,"end":67,"value":"업무를"}
+{"time":1875,"type":"word","start":68,"end":80,"value":"중심으로"}
+{"time":2437,"type":"word","start":81,"end":96,"value":"나눴습니다"}
+{"time":3755,"type":"sentence","start":98,"end":280,"value":"기획자는 상품기획서와 변경 요청을, 디자이너는 디자인 스튜디오와 산출물을, 개발자는 리액트 컴포넌트와 검증 작업을 먼저 찾습니다."}
+{"time":3817,"type":"word","start":98,"end":110,"value":"기획자는"}
+{"time":4567,"type":"word","start":111,"end":129,"value":"상품기획서와"}
+{"time":5630,"type":"word","start":130,"end":136,"value":"변경"}
+{"time":6130,"type":"word","start":137,"end":146,"value":"요청을"}
+{"time":6755,"type":"word","start":148,"end":163,"value":"디자이너는"}
+{"time":7705,"type":"word","start":164,"end":173,"value":"디자인"}
+{"time":8130,"type":"word","start":174,"end":189,"value":"스튜디오와"}
+{"time":8830,"type":"word","start":190,"end":202,"value":"산출물을"}
+{"time":9605,"type":"word","start":204,"end":216,"value":"개발자는"}
+{"time":10442,"type":"word","start":217,"end":226,"value":"리액트"}
+{"time":10880,"type":"word","start":227,"end":242,"value":"컴포넌트와"}
+{"time":11630,"type":"word","start":243,"end":249,"value":"검증"}
+{"time":12067,"type":"word","start":250,"end":259,"value":"작업을"}
+{"time":12480,"type":"word","start":260,"end":266,"value":"먼저"}
+{"time":12755,"type":"word","start":267,"end":279,"value":"찾습니다"}
+{"time":13935,"type":"sentence","start":281,"end":364,"value":"연금 상담과 보고서 작업실은 업무 담당자를 위한 영역입니다."}
+{"time":14060,"type":"word","start":281,"end":287,"value":"연금"}
+{"time":14385,"type":"word","start":288,"end":297,"value":"상담과"}
+{"time":14935,"type":"word","start":298,"end":307,"value":"보고서"}
+{"time":15372,"type":"word","start":308,"end":320,"value":"작업실은"}
+{"time":16072,"type":"word","start":321,"end":327,"value":"업무"}
+{"time":16560,"type":"word","start":328,"end":340,"value":"담당자를"}
+{"time":17147,"type":"word","start":341,"end":347,"value":"위한"}
+{"time":17435,"type":"word","start":348,"end":363,"value":"영역입니다"}
+{"time":18765,"type":"sentence","start":365,"end":438,"value":"자주 쓰는 영역을 골라도 권한이 늘어나지는 않습니다."}
+{"time":18890,"type":"word","start":365,"end":371,"value":"자주"}
+{"time":19177,"type":"word","start":372,"end":378,"value":"쓰는"}
+{"time":19477,"type":"word","start":379,"end":388,"value":"영역을"}
+{"time":19902,"type":"word","start":389,"end":398,"value":"골라도"}
+{"time":20390,"type":"word","start":399,"end":408,"value":"권한이"}
+{"time":20852,"type":"word","start":409,"end":424,"value":"늘어나지는"}
+{"time":21452,"type":"word","start":425,"end":437,"value":"않습니다"}
+{"time":22670,"type":"sentence","start":439,"end":532,"value":"실제 읽기와 수정 권한은 서버에서 프로젝트 참여 정보로 확인합니다."}
+{"time":22807,"type":"word","start":439,"end":445,"value":"실제"}
+{"time":23245,"type":"word","start":446,"end":455,"value":"읽기와"}
+{"time":23707,"type":"word","start":456,"end":462,"value":"수정"}
+{"time":24045,"type":"word","start":463,"end":472,"value":"권한은"}
+{"time":24432,"type":"word","start":473,"end":485,"value":"서버에서"}
+{"time":25045,"type":"word","start":486,"end":498,"value":"프로젝트"}
+{"time":25557,"type":"word","start":499,"end":505,"value":"참여"}
+{"time":25882,"type":"word","start":506,"end":515,"value":"정보로"}
+{"time":26332,"type":"word","start":516,"end":531,"value":"확인합니다"}

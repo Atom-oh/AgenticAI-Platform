@@ -20,6 +20,7 @@ COPY react-kit/package.json react-kit/package-lock.json ./react-kit/
 RUN cd react-kit && npm ci --ignore-scripts --no-audit --no-fund
 COPY react-kit ./react-kit
 COPY workspace ./workspace
+COPY workbench ./workbench
 COPY engine ./engine
 COPY studio ./studio
 COPY api/common ./common

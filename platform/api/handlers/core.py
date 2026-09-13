@@ -227,5 +227,5 @@ def reset(ctx: Ctx, body: dict) -> None:
 
 ROUTES = {
     "hub": hub, "agents": agents, "chat": chat, "assets": assets, "surfaces": surfaces,
-    "traces": traces, "explore": explore, "reset": reset,
+    "traces": traces, "explore": explore,
 }

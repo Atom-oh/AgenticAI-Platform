@@ -25,7 +25,8 @@ class _Apigw:
 
 
 def test_routes_cover_spec_actions():
-    required = {"s1", "s2", "hub", "traces", "explore", "reset", "surfaces"}
+    required = {"s1", "s2", "hub", "traces", "explore", "surfaces"}
+    assert "reset" not in ws_handler.ROUTES and "registry_seed" not in ws_handler.ROUTES
     assert required <= set(ws_handler.ROUTES), set(ws_handler.ROUTES)
     assert "load_neptune" not in ws_handler.ROUTES, "관리 작업은 사용자 경로에 없어야 한다"
 

@@ -1,0 +1,52 @@
+{"time":0,"type":"sentence","start":28,"end":148,"value":"보고서 작업실은 변경 영향과 연금 평가, 내부 심사와 경영, 규정 검토용 초안을 만듭니다."}
+{"time":12,"type":"word","start":28,"end":37,"value":"보고서"}
+{"time":500,"type":"word","start":38,"end":50,"value":"작업실은"}
+{"time":1250,"type":"word","start":51,"end":57,"value":"변경"}
+{"time":1700,"type":"word","start":58,"end":67,"value":"영향과"}
+{"time":2262,"type":"word","start":68,"end":74,"value":"연금"}
+{"time":2562,"type":"word","start":75,"end":81,"value":"평가"}
+{"time":3150,"type":"word","start":83,"end":89,"value":"내부"}
+{"time":3637,"type":"word","start":90,"end":99,"value":"심사와"}
+{"time":4162,"type":"word","start":100,"end":106,"value":"경영"}
+{"time":4625,"type":"word","start":108,"end":114,"value":"규정"}
+{"time":5150,"type":"word","start":115,"end":124,"value":"검토용"}
+{"time":5625,"type":"word","start":125,"end":134,"value":"초안을"}
+{"time":6062,"type":"word","start":135,"end":147,"value":"만듭니다"}
+{"time":7205,"type":"sentence","start":149,"end":266,"value":"제공한 자료의 버전과 계산 결과를 기록하고, 부족한 근거는 미확인 항목으로 남깁니다."}
+{"time":7330,"type":"word","start":149,"end":158,"value":"제공한"}
+{"time":7842,"type":"word","start":159,"end":168,"value":"자료의"}
+{"time":8267,"type":"word","start":169,"end":178,"value":"버전과"}
+{"time":8792,"type":"word","start":179,"end":185,"value":"계산"}
+{"time":9142,"type":"word","start":186,"end":195,"value":"결과를"}
+{"time":9592,"type":"word","start":196,"end":208,"value":"기록하고"}
+{"time":10205,"type":"word","start":210,"end":219,"value":"부족한"}
+{"time":10705,"type":"word","start":220,"end":229,"value":"근거는"}
+{"time":11205,"type":"word","start":230,"end":239,"value":"미확인"}
+{"time":11580,"type":"word","start":240,"end":252,"value":"항목으로"}
+{"time":12080,"type":"word","start":253,"end":265,"value":"남깁니다"}
+{"time":13272,"type":"sentence","start":267,"end":354,"value":"보고서를 승인할 때는 내용 해시와 원본 버전을 다시 확인합니다."}
+{"time":13285,"type":"word","start":267,"end":279,"value":"보고서를"}
+{"time":13897,"type":"word","start":280,"end":296,"value":"승인할 때는"}
+{"time":14785,"type":"word","start":297,"end":303,"value":"내용"}
+{"time":15122,"type":"word","start":304,"end":313,"value":"해시와"}
+{"time":15547,"type":"word","start":314,"end":320,"value":"원본"}
+{"time":15960,"type":"word","start":321,"end":330,"value":"버전을"}
+{"time":16422,"type":"word","start":331,"end":337,"value":"다시"}
+{"time":16760,"type":"word","start":338,"end":353,"value":"확인합니다"}
+{"time":17977,"type":"sentence","start":355,"end":444,"value":"변경을 찾고, 담당자의 작업으로 연결하고, 검증 근거를 남기는 것."}
+{"time":17990,"type":"word","start":355,"end":364,"value":"변경을"}
+{"time":18540,"type":"word","start":365,"end":371,"value":"찾고"}
+{"time":19015,"type":"word","start":373,"end":385,"value":"담당자의"}
+{"time":19702,"type":"word","start":386,"end":398,"value":"작업으로"}
+{"time":20227,"type":"word","start":399,"end":411,"value":"연결하고"}
+{"time":20927,"type":"word","start":413,"end":419,"value":"검증"}
+{"time":21365,"type":"word","start":420,"end":429,"value":"근거를"}
+{"time":21865,"type":"word","start":430,"end":443,"value":"남기는 것"}
+{"time":22970,"type":"sentence","start":445,"end":530,"value":"이것이 이번에 구현한 에이전틱 에이아이 작업실의 핵심입니다."}
+{"time":23107,"type":"word","start":445,"end":454,"value":"이것이"}
+{"time":23545,"type":"word","start":455,"end":464,"value":"이번에"}
+{"time":23907,"type":"word","start":465,"end":474,"value":"구현한"}
+{"time":24407,"type":"word","start":475,"end":487,"value":"에이전틱"}
+{"time":24995,"type":"word","start":488,"end":500,"value":"에이아이"}
+{"time":25407,"type":"word","start":501,"end":513,"value":"작업실의"}
+{"time":25970,"type":"word","start":514,"end":529,"value":"핵심입니다"}

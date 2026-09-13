@@ -27,3 +27,10 @@ platform/web/tsconfig.tsbuildinfo
 
 # Claude Code worktrees (local isolation)
 .claude/worktrees/
+
+# Reproducible video source is tracked; local render caches are not.
+videos/**/.hyperframes/
+videos/**/renders/
+videos/**/snapshots/
+videos/**/__pycache__/
+videos/**/.media/

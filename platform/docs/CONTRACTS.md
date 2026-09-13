@@ -200,7 +200,7 @@ reviewer does not turn an older description into a requirement for unrelated cod
 | Raw question goes to input Guardrails first | `api/handlers/s2.py` now sanitizes it through EKS first. Its opening source docstring still describes the older order. |
 | All scenario failures replay cache | S2 explicitly sets `cache=False`. |
 | CloudFront is the only public endpoint; all VPCs have no NAT | The browser directly uses WebSocket API Gateway. The isolated plane and reused EKS VPC are separate topologies. |
-| Loading, shared seeding and reset must be IAM-admin-only | Neptune loading follows the administrative path. Authenticated `reset` (`api/handlers/core.py`) and `registry_seed(reset=true)` (`api/handlers/registry.py`) can mutate shared Registry state without that administrative boundary. These are existing authorization gaps, not approved exceptions or client-only resets. |
+| Loading, shared seeding and reset must be IAM-admin-only | Neptune loading follows the administrative path. Explicit authenticated `reset` and `registry_seed` routes are removed. Other legacy bootstrap/list behavior still needs separate review; route removal does not certify every Registry write. |
 | F5 gates verify production React/pixels | `gates/a11y.js` uses stubs/jsdom and `gates/visual.js` uses structure hashes. Real kit/browser/release checks are under `workspace/` and `react-kit/`. |
 | `Badge danger` / `Alert kind` always work | These are fixture props; `registry/seed.py` uses `critical` / `severity`. The actual approved schema wins. |
 | Deployment and teardown target the same stack | `deploy.sh` defaults to `BankPlatformCore`; `teardown.sh --all` targets `BankPlatform`. Privacy contexts are not forwarded by `deploy.sh`. |

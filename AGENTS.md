@@ -26,6 +26,7 @@ old test counts, screenshots, or a successful merge.
 | `platform/` architecture, deployment, shared services | `SPEC.md`, `platform/README.md` |
 | API events and module integration | `platform/docs/CONTRACTS.md` |
 | React workspace and releases | `platform/workspace/REACT_CONTRACT.md` |
+| Role workbench, knowledge ETL, impact, Skill Creator, pension/report workspace | `platform/workbench/CONTRACT.md`, `platform/workbench/README.md` |
 | Imported HTML validation | `platform/workspace/CONTRACT.md` |
 | MyData privacy | `platform/infra/README-privacy.md`, `docs/14-demo/mydata-privacy.md` |
 | `demo/uiux-studio/` | its `README.md`, `demo/SECURITY-GOVERNANCE.md` |
@@ -49,8 +50,8 @@ old test counts, screenshots, or a successful merge.
   guideline, rule, bundle, and evidence revisions. Imported HTML approval is not
   React release approval.
 - Keep Cognito invitation-only. Neptune loading, shared-data seeding and Registry
-  resets must use IAM-only administrative entry points. The current authenticated
-  `reset` and `registry_seed` routes are documented authorization gaps, not exceptions.
+  resets must use IAM-only administrative entry points. Explicit WebSocket `reset`
+  and `registry_seed` routes are removed; inspect other legacy bootstrap paths separately.
   Do not add credentials to source, docs, logs, or review artifacts.
 - Display actual backends and demo substitutions. Do not describe a local graph,
   platform component package, or optional integration as a verified customer service.

@@ -350,7 +350,7 @@ def _ctx():
 def test_handler_routes_end_to_end():
     h = _handler_module()
     assert set(h.ROUTES) == {"registry_list", "registry_get", "registry_transition", "registry_search",
-                             "registry_consumer", "registry_create", "registry_seed"}
+                             "registry_consumer", "registry_create"}
     ctx, gw = _ctx()
     # 빈 레지스트리 → 목록 요청이 기준선을 부트스트랩한다
     h.registry_list(ctx, {})

@@ -1,0 +1,49 @@
+{"time":0,"type":"sentence","start":28,"end":119,"value":"상품 조건 하나를 바꿨는데, 어느 화면과 안내문을 수정해야 할까요?"}
+{"time":137,"type":"word","start":28,"end":34,"value":"상품"}
+{"time":500,"type":"word","start":35,"end":41,"value":"조건"}
+{"time":937,"type":"word","start":42,"end":51,"value":"하나를"}
+{"time":1250,"type":"word","start":52,"end":64,"value":"바꿨는데"}
+{"time":2187,"type":"word","start":66,"end":72,"value":"어느"}
+{"time":2437,"type":"word","start":73,"end":82,"value":"화면과"}
+{"time":2950,"type":"word","start":83,"end":95,"value":"안내문을"}
+{"time":3500,"type":"word","start":96,"end":118,"value":"수정해야 할까요"}
+{"time":5042,"type":"sentence","start":120,"end":206,"value":"아이콘이나 리액트 컴포넌트를 바꿀 때도 같은 문제가 생깁니다."}
+{"time":5230,"type":"word","start":120,"end":135,"value":"아이콘이나"}
+{"time":5855,"type":"word","start":136,"end":145,"value":"리액트"}
+{"time":6292,"type":"word","start":146,"end":161,"value":"컴포넌트를"}
+{"time":6980,"type":"word","start":162,"end":175,"value":"바꿀 때도"}
+{"time":7555,"type":"word","start":176,"end":182,"value":"같은"}
+{"time":7930,"type":"word","start":183,"end":192,"value":"문제가"}
+{"time":8330,"type":"word","start":193,"end":205,"value":"생깁니다"}
+{"time":9535,"type":"sentence","start":207,"end":353,"value":"이 작업실은 변경 대상과 연결된 자료를 찾고, 기획자와 디자이너, 개발자가 해야 할 일을 나누어 보여줍니다."}
+{"time":9672,"type":"word","start":207,"end":210,"value":"이"}
+{"time":9785,"type":"word","start":211,"end":223,"value":"작업실은"}
+{"time":10447,"type":"word","start":224,"end":230,"value":"변경"}
+{"time":10785,"type":"word","start":231,"end":240,"value":"대상과"}
+{"time":11285,"type":"word","start":241,"end":250,"value":"연결된"}
+{"time":11847,"type":"word","start":251,"end":260,"value":"자료를"}
+{"time":12222,"type":"word","start":261,"end":267,"value":"찾고"}
+{"time":12722,"type":"word","start":269,"end":281,"value":"기획자와"}
+{"time":13535,"type":"word","start":282,"end":294,"value":"디자이너"}
+{"time":14160,"type":"word","start":296,"end":308,"value":"개발자가"}
+{"time":14797,"type":"word","start":309,"end":319,"value":"해야 할"}
+{"time":15235,"type":"word","start":320,"end":326,"value":"일을"}
+{"time":15472,"type":"word","start":327,"end":336,"value":"나누어"}
+{"time":15860,"type":"word","start":337,"end":352,"value":"보여줍니다"}
+{"time":17202,"type":"sentence","start":354,"end":524,"value":"이번 영상에서는 합성 상품을 사용해, 변경 요청부터 영향 분석과 검증 보고서까지 이어지는 실제 구현 흐름을 살펴보겠습니다."}
+{"time":17340,"type":"word","start":354,"end":360,"value":"이번"}
+{"time":17577,"type":"word","start":361,"end":376,"value":"영상에서는"}
+{"time":18515,"type":"word","start":377,"end":383,"value":"합성"}
+{"time":19040,"type":"word","start":384,"end":393,"value":"상품을"}
+{"time":19515,"type":"word","start":394,"end":403,"value":"사용해"}
+{"time":20090,"type":"word","start":405,"end":411,"value":"변경"}
+{"time":20702,"type":"word","start":412,"end":424,"value":"요청부터"}
+{"time":21565,"type":"word","start":425,"end":431,"value":"영향"}
+{"time":22002,"type":"word","start":432,"end":441,"value":"분석과"}
+{"time":22465,"type":"word","start":442,"end":448,"value":"검증"}
+{"time":22827,"type":"word","start":449,"end":464,"value":"보고서까지"}
+{"time":23602,"type":"word","start":465,"end":477,"value":"이어지는"}
+{"time":24202,"type":"word","start":478,"end":484,"value":"실제"}
+{"time":24640,"type":"word","start":485,"end":491,"value":"구현"}
+{"time":25015,"type":"word","start":492,"end":501,"value":"흐름을"}
+{"time":25390,"type":"word","start":502,"end":523,"value":"살펴보겠습니다"}

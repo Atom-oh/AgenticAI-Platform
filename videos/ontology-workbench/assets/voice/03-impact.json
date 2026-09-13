@@ -1,0 +1,59 @@
+{"time":0,"type":"sentence","start":28,"end":122,"value":"변경할 상품이나 흐름을 선택하고, 이전 내용과 새 내용을 기록합니다."}
+{"time":12,"type":"word","start":28,"end":37,"value":"변경할"}
+{"time":562,"type":"word","start":38,"end":50,"value":"상품이나"}
+{"time":1250,"type":"word","start":51,"end":60,"value":"흐름을"}
+{"time":1625,"type":"word","start":61,"end":73,"value":"선택하고"}
+{"time":2387,"type":"word","start":75,"end":81,"value":"이전"}
+{"time":2887,"type":"word","start":82,"end":91,"value":"내용과"}
+{"time":3387,"type":"word","start":92,"end":95,"value":"새"}
+{"time":3587,"type":"word","start":96,"end":105,"value":"내용을"}
+{"time":4062,"type":"word","start":106,"end":121,"value":"기록합니다"}
+{"time":5367,"type":"sentence","start":123,"end":234,"value":"영향 분석은 저장된 관계를 따라 가이드, 화면, 컴포넌트와 아이콘까지 탐색합니다."}
+{"time":5492,"type":"word","start":123,"end":129,"value":"영향"}
+{"time":5867,"type":"word","start":130,"end":139,"value":"분석은"}
+{"time":6430,"type":"word","start":140,"end":149,"value":"저장된"}
+{"time":6992,"type":"word","start":150,"end":159,"value":"관계를"}
+{"time":7455,"type":"word","start":160,"end":166,"value":"따라"}
+{"time":7830,"type":"word","start":167,"end":176,"value":"가이드"}
+{"time":8580,"type":"word","start":178,"end":184,"value":"화면"}
+{"time":9367,"type":"word","start":186,"end":201,"value":"컴포넌트와"}
+{"time":10367,"type":"word","start":202,"end":217,"value":"아이콘까지"}
+{"time":11055,"type":"word","start":218,"end":233,"value":"탐색합니다"}
+{"time":12347,"type":"sentence","start":235,"end":332,"value":"결과에는 왜 영향을 받는지 설명하는 경로와 원본 버전이 함께 남습니다."}
+{"time":12410,"type":"word","start":235,"end":247,"value":"결과에는"}
+{"time":13347,"type":"word","start":248,"end":251,"value":"왜"}
+{"time":13597,"type":"word","start":252,"end":261,"value":"영향을"}
+{"time":14047,"type":"word","start":262,"end":271,"value":"받는지"}
+{"time":14472,"type":"word","start":272,"end":284,"value":"설명하는"}
+{"time":15097,"type":"word","start":285,"end":294,"value":"경로와"}
+{"time":15660,"type":"word","start":295,"end":301,"value":"원본"}
+{"time":16297,"type":"word","start":302,"end":311,"value":"버전이"}
+{"time":16760,"type":"word","start":312,"end":318,"value":"함께"}
+{"time":17097,"type":"word","start":319,"end":331,"value":"남습니다"}
+{"time":18277,"type":"sentence","start":333,"end":383,"value":"담당 역할에 맞는 작업도 생성됩니다."}
+{"time":18377,"type":"word","start":333,"end":339,"value":"담당"}
+{"time":18727,"type":"word","start":340,"end":349,"value":"역할에"}
+{"time":19152,"type":"word","start":350,"end":356,"value":"맞는"}
+{"time":19427,"type":"word","start":357,"end":366,"value":"작업도"}
+{"time":19952,"type":"word","start":367,"end":382,"value":"생성됩니다"}
+{"time":21307,"type":"sentence","start":384,"end":467,"value":"다만 등록하지 않은 자료까지 모두 찾았다고 말하지 않습니다."}
+{"time":21370,"type":"word","start":384,"end":390,"value":"다만"}
+{"time":21757,"type":"word","start":391,"end":410,"value":"등록하지 않은"}
+{"time":22620,"type":"word","start":411,"end":423,"value":"자료까지"}
+{"time":23182,"type":"word","start":424,"end":430,"value":"모두"}
+{"time":23445,"type":"word","start":431,"end":443,"value":"찾았다고"}
+{"time":23995,"type":"word","start":444,"end":466,"value":"말하지 않습니다"}
+{"time":25575,"type":"sentence","start":468,"end":591,"value":"확인된 연결과 후보, 수집이 빠진 범위를 구분해 검토자가 다음 조사 대상을 알 수 있습니다."}
+{"time":25587,"type":"word","start":468,"end":477,"value":"확인된"}
+{"time":26200,"type":"word","start":478,"end":487,"value":"연결과"}
+{"time":26725,"type":"word","start":488,"end":494,"value":"후보"}
+{"time":27212,"type":"word","start":496,"end":505,"value":"수집이"}
+{"time":27762,"type":"word","start":506,"end":512,"value":"빠진"}
+{"time":28125,"type":"word","start":513,"end":522,"value":"범위를"}
+{"time":28575,"type":"word","start":523,"end":532,"value":"구분해"}
+{"time":29150,"type":"word","start":533,"end":545,"value":"검토자가"}
+{"time":29937,"type":"word","start":546,"end":552,"value":"다음"}
+{"time":30287,"type":"word","start":553,"end":559,"value":"조사"}
+{"time":30512,"type":"word","start":560,"end":569,"value":"대상을"}
+{"time":31037,"type":"word","start":570,"end":577,"value":"알 수"}
+{"time":31325,"type":"word","start":578,"end":590,"value":"있습니다"}
