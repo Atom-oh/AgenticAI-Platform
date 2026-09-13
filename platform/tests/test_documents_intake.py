@@ -4,11 +4,15 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from test_documents_library import CHUNK, api, begin, call, finalize, path, project, revoke, upload
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from test_documents_library import CHUNK, api, approve, begin, call, finalize, path, project, revoke, upload
 
 
 def pdf(*pages, encrypted=False):
@@ -156,3 +160,175 @@ def test_changed_part_with_extra_bytes_after_queue_is_not_silently_truncated(api
         process(SimpleNamespace(storage=api.storage, collaboration=api.collaboration), "alice", job)
     stored = api.storage.get("alice", "docrevision", revision["id"])
     assert stored["status"] == "failed" and not stored.get("textHash")
+
+
+def pdf_with_form_or_image(encoding, *, depth=2):
+    """A real raster clause with a selectable heading; no OCR substitutes."""
+    from PIL import Image, ImageDraw
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject
+
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(pdf("Synthetic base rate: 10.00%"))))
+    page = writer.pages[0]
+    resources = page["/Resources"]
+    image = Image.new("RGB", (250, 24), "white")
+    ImageDraw.Draw(image).text((2, 2), "Synthetic exception: 25.00%", fill="black")
+    pixels = image.tobytes()
+    raster = DecodedStreamObject()
+    raster.update({
+        NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+        NameObject("/Width"): NumberObject(250), NameObject("/Height"): NumberObject(24),
+        NameObject("/ColorSpace"): NameObject("/DeviceRGB"), NameObject("/BitsPerComponent"): NumberObject(8),
+    })
+    raster.set_data(pixels)
+    inline = b"BI /W 250 /H 24 /CS /RGB /BPC 8 ID " + pixels + b"\nEI\n"
+    node = writer._add_object(raster)
+    command = b"/Clause Do"
+    if encoding in ("inline", "form-inline"):
+        command = inline
+    elif encoding == "form-text":
+        command = b"BT /F1 12 Tf 10 40 Td (Synthetic exception: 25.00%) Tj ET"
+    if encoding.startswith("form") or encoding == "cycle":
+        for level in range(depth):
+            form = DecodedStreamObject()
+            form.update({
+                NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Form"),
+                NameObject("/BBox"): ArrayObject([NumberObject(n) for n in (0, 0, 300, 100)]),
+                NameObject("/Resources"): DictionaryObject({NameObject("/Font"): resources["/Font"]}),
+            })
+            if level or encoding not in ("form-inline", "form-text"):
+                form["/Resources"][NameObject("/XObject")] = DictionaryObject({NameObject("/Clause"): node})
+            form.set_data(command)
+            node = writer._add_object(form)
+            command = b"/Clause Do"
+        if encoding == "cycle":
+            # A resource cycle need not be executed to require bounded inspection.
+            form["/Resources"][NameObject("/XObject")] = DictionaryObject({NameObject("/Cycle"): node})
+            form.set_data(b"q Q")
+    if encoding == "pattern-image":
+        pattern = DecodedStreamObject()
+        pattern.update({
+            NameObject("/Type"): NameObject("/Pattern"), NameObject("/PatternType"): NumberObject(1),
+            NameObject("/PaintType"): NumberObject(1), NameObject("/TilingType"): NumberObject(1),
+            NameObject("/BBox"): ArrayObject([NumberObject(n) for n in (0, 0, 250, 24)]),
+            NameObject("/XStep"): NumberObject(250), NameObject("/YStep"): NumberObject(24),
+            NameObject("/Resources"): DictionaryObject({
+                NameObject("/XObject"): DictionaryObject({NameObject("/Clause"): node}),
+            }),
+        })
+        pattern.set_data(b"q 250 0 0 24 0 0 cm /Clause Do Q")
+        resources[NameObject("/Pattern")] = DictionaryObject({NameObject("/Clause"): writer._add_object(pattern)})
+        command = b"/Pattern cs /Clause scn 0 0 250 24 re f"
+    elif encoding == "annotation-image":
+        appearance = DecodedStreamObject()
+        appearance.update({
+            NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/BBox"): ArrayObject([NumberObject(n) for n in (0, 0, 250, 24)]),
+            NameObject("/Resources"): DictionaryObject({
+                NameObject("/XObject"): DictionaryObject({NameObject("/Clause"): node}),
+            }),
+        })
+        appearance.set_data(b"q 250 0 0 24 0 0 cm /Clause Do Q")
+        annotation = DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject("/Stamp"),
+            NameObject("/Rect"): ArrayObject([NumberObject(n) for n in (0, 0, 250, 24)]),
+            NameObject("/AP"): DictionaryObject({NameObject("/N"): writer._add_object(appearance)}),
+        })
+        page[NameObject("/Annots")] = ArrayObject([writer._add_object(annotation)])
+        command = b""
+    elif encoding != "inline":
+        resources[NameObject("/XObject")] = DictionaryObject({NameObject("/Clause"): node})
+    stream = DecodedStreamObject()
+    stream.set_data(page.get_contents().get_data() + b"\nq\n" + command + b"\nQ")
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("encoding", ["direct", "form-image", "inline", "form-inline"])
+def test_pdf_untranscribed_image_encodings_block_submit_and_review(api, encoding):
+    original = pdf_with_form_or_image(encoding)
+    result = finalize(api, upload(api, data=original, name="synthetic-clause.pdf", graphRef="REG-1"))
+    text = "".join(p["text"] for p in result["paragraphs"])
+    assert "Synthetic base rate: 10.00%" in text
+    assert "Synthetic exception: 25.00%" not in text
+    assert result["revision"]["parseStatus"] == "partial"
+    assert "pdf-images-not-transcribed" in result["revision"]["warnings"]
+    assert call(api, "POST", path(result) + "/submit", {"version": result["revision"]["version"]})[0] == 409
+    assert call(api, "POST", path(result) + "/review", {
+        "version": result["revision"]["version"], "decision": "approved", "note": "Must not omit the exception",
+    })[0] == 409
+    document = api.storage.get("alice", "document", result["document"]["id"])
+    assert document["approvedRevisionId"] is None
+    assert call(api, "GET", path(result) + "/blob")[1] == original
+
+
+@pytest.mark.parametrize("encoding,depth", [("cycle", 1), ("form-text", 40)])
+def test_pdf_resource_cycles_and_excessive_depth_fail_closed(encoding, depth):
+    from documents.intake import extract
+    result = extract("bounded.pdf", pdf_with_form_or_image(encoding, depth=depth))
+    assert result["parseStatus"] != "complete" and result["warnings"]
+
+
+def test_supported_text_only_nested_pdf_forms_remain_approvable(api):
+    original = pdf_with_form_or_image("form-text")
+    result = finalize(api, upload(api, data=original, name="text-form.pdf", graphRef="REG-1"))
+    assert result["revision"]["parseStatus"] == "complete"
+    assert "Synthetic exception: 25.00%" in "".join(p["text"] for p in result["paragraphs"])
+    assert approve(api, result)[0] == 200
+
+
+@pytest.mark.parametrize("encoding", ["pattern-image", "annotation-image"])
+def test_pdf_unhandled_image_containers_cannot_claim_complete_extraction(api, encoding):
+    original = pdf_with_form_or_image(encoding)
+    result = finalize(api, upload(api, data=original, name="unhandled-image.pdf"))
+    text = "".join(p["text"] for p in result["paragraphs"])
+    assert "Synthetic base rate: 10.00%" in text and "Synthetic exception: 25.00%" not in text
+    assert result["revision"]["parseStatus"] == "partial" and result["revision"]["warnings"]
+    assert call(api, "POST", path(result) + "/submit", {"version": result["revision"]["version"]})[0] == 409
+    assert call(api, "POST", path(result) + "/review", {
+        "version": result["revision"]["version"], "decision": "approved", "note": "",
+    })[0] == 409
+    assert call(api, "GET", path(result) + "/blob")[1] == original
+
+
+@pytest.mark.parametrize("clause", [
+    '<svg xmlns="http://www.w3.org/2000/svg"><text>Synthetic exception rate 25.00%.</text></svg>',
+    '<canvas>Synthetic exception rate 25.00%.</canvas>',
+    '<img src="https://invalid.example/exception.png" alt="Synthetic exception rate 25.00%.">',
+    '<iframe srcdoc="<p>Synthetic exception rate 25.00%.</p>"></iframe>',
+    '<object data="https://invalid.example/exception.svg"></object>',
+    '<embed src="https://invalid.example/exception.pdf">',
+    '<video src="https://invalid.example/exception.mp4"></video>',
+    '<input value="Synthetic exception rate 25.00%.">',
+    '<script>document.write("Synthetic exception rate 25.00%.")</script>',
+    '<p onmouseover="this.textContent=\'Synthetic exception rate 25.00%.\'">Hover</p>',
+    '<style>p::after {content: "Synthetic exception rate 25.00%."}</style>',
+    '<link rel="stylesheet" href="https://invalid.example/exception.css">',
+    '<p style="background-image:url(https://invalid.example/exception.svg)">Background</p>',
+    '<image src="https://invalid.example/exception.png">',
+    '<div><template shadowrootmode="open"><p>Synthetic exception rate 25.00%.</p></template></div>',
+    '<textarea><template>Synthetic exception rate 25.00%.</template></textarea>',
+])
+def test_html_unsupported_visible_or_active_content_blocks_approval(api, clause):
+    original = ("<html><body><p>Synthetic base rate 10.00%.</p>" + clause + "</body></html>").encode()
+    result = finalize(api, upload(api, data=original, name="mixed.html", graphRef="REG-1"))
+    assert "Synthetic base rate 10.00%." in "".join(p["text"] for p in result["paragraphs"])
+    assert result["revision"]["parseStatus"] == "partial" and result["revision"]["warnings"]
+    assert call(api, "POST", path(result) + "/submit", {"version": result["revision"]["version"]})[0] == 409
+    assert call(api, "POST", path(result) + "/review", {
+        "version": result["revision"]["version"], "decision": "approved", "note": "Missing visible content",
+    })[0] == 409
+    assert api.storage.get("alice", "document", result["document"]["id"])["approvedRevisionId"] is None
+    assert call(api, "GET", path(result) + "/blob")[1] == original
+
+
+def test_static_html_text_and_noncontent_template_remain_approvable(api):
+    original = b'<html><head><title>Metadata</title></head><body><p>Literal &amp; 10.00%</p><template>Inactive example</template><p>Exception 25.00%.</p></body></html>'
+    result = finalize(api, upload(api, data=original, name="static.html"))
+    assert result["revision"]["parseStatus"] == "complete"
+    text = "".join(p["text"] for p in result["paragraphs"])
+    assert "Literal & 10.00%" in text and "Exception 25.00%." in text
+    assert "Inactive example" not in text and "Metadata" not in text
+    assert approve(api, result)[0] == 200

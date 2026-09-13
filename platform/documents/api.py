@@ -9,7 +9,7 @@ from urllib.parse import quote
 from documents.errors import DocumentError
 from documents.library import (
     CHUNK_BYTES, EXTENSIONS, MAX_DOCUMENTS, MAX_FILE_BYTES, MAX_REVISIONS, PAGE_PARAGRAPHS, ROLES,
-    Library, binding_id, cursor_encode, cursor_offset, file_fields, fingerprint, graph_store,
+    Library, authorize_job, binding_id, cursor_encode, cursor_offset, file_fields, fingerprint, graph_store,
     identifier, invalid, public_document, public_revision, read_roles, request_id, text, version,
 )
 from workspace.collaboration import CollaborationError
@@ -30,6 +30,8 @@ def _revision(library, document, rid, fields, ordinal, digest):
 
 def _create(library, body, *, trusted_sample=False):
     library.fresh()
+    if trusted_sample is True and library.scope["role"] != "owner":
+        raise DocumentError(403, "forbidden", "Only an owner can install synthetic sample documents")
     request = request_id(body.get("requestId"))
     fields = file_fields(body)
     if "provenance" in body:
@@ -74,6 +76,9 @@ def _create(library, body, *, trusted_sample=False):
 
 
 def _new_revision(library, document, body):
+    if document.get("provenance") == "synthetic_sample":
+        raise DocumentError(409, "sample-immutable",
+                            "Create a new uploaded document to replace a synthetic sample")
     request = request_id(body.get("requestId"))
     displayed_version = version(body.get("version"))
     fields = file_fields(body)
@@ -136,6 +141,9 @@ def _complete(library, document, revision):
         job = library.storage.get(library.owner, "job", revision["jobId"])
         if not job:
             raise DocumentError(409, "job-unavailable", "The retained revision cannot replay an expired job")
+        # Raw job disclosure and dispatch retries have the same creator/source
+        # authority as GET /jobs, even for another document editor or owner.
+        authorize_job(host, library.scope, job)
         if job.get("errorCode") == "dispatch-failed" and not job.get("startedAt"):
             saved = library.commit([
                 library.write("job", {**job, "status": "queued", "error": None, "errorCode": None}, job["version"]),

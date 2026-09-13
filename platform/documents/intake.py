@@ -19,7 +19,13 @@ from workspace.storage import Conflict
 
 
 class _HTMLText(HTMLParser):
-    _hidden = frozenset({"head", "script", "style", "template", "iframe", "object", "svg", "canvas"})
+    _noncontent = frozenset({"head", "template"})
+    _untranscribed = frozenset({
+        "svg", "canvas", "iframe", "object", "embed", "img", "image", "picture",
+        "video", "audio", "math", "applet", "frame", "frameset", "input",
+        "textarea", "xmp", "plaintext", "noembed", "noframes",
+    })
+    _discarded = frozenset({"script", "style", "iframe", "object", "svg", "canvas", "video", "audio", "applet"})
     _blocks = frozenset({"p", "div", "section", "article", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote"})
 
     def __init__(self):
@@ -28,6 +34,7 @@ class _HTMLText(HTMLParser):
         self.fragments = []
         self.length = 0
         self.truncated = False
+        self.warnings = set()
 
     def append(self, value):
         remaining = MAX_TEXT_CHARS - self.length
@@ -38,7 +45,23 @@ class _HTMLText(HTMLParser):
             self.length += min(len(value), remaining)
 
     def handle_starttag(self, tag, attrs):
-        if tag in self._hidden:
+        if tag in self._untranscribed:
+            self.warnings.add("html-visible-content-not-transcribed")
+        if tag == "template" and any(name.startswith("shadowroot") for name, _ in attrs):
+            self.warnings.add("html-visible-content-not-transcribed")
+        if tag == "script" or any(name.startswith("on") for name, _ in attrs):
+            self.warnings.add("html-active-content-not-executed")
+        if tag == "style" or any(name == "style" for name, _ in attrs):
+            self.warnings.add("html-style-not-evaluated")
+        if tag == "link" and any(name == "rel" and "stylesheet" in (value or "").lower().split() for name, value in attrs):
+            self.warnings.add("html-style-not-evaluated")
+        if any(name in ("href", "src", "action", "formaction", "xlink:href")
+               and "".join((value or "").split()).lower().startswith(("javascript:", "vbscript:", "data:text/html"))
+               for name, value in attrs):
+            self.warnings.add("html-active-content-not-executed")
+        # Non-content metadata and unhandled visible/active subtrees both stay
+        # out of the text projection. Only the latter invalidate completeness.
+        if tag in self._noncontent or tag in self._discarded:
             self.hidden.append(tag)
         if not self.hidden:
             if tag in self._blocks:
@@ -104,6 +127,7 @@ def extract(name, data):
                 parser.feed(value)
                 parser.close()
                 value = "".join(parser.fragments)
+                warnings.extend(parser.warnings)
                 if parser.truncated:
                     warnings.append("text-character-limit")
                 if parser.hidden:

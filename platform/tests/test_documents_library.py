@@ -590,3 +590,84 @@ def test_native_workspace_routes_and_worker_publish_private_intake_without_model
     job_path = f"/jobs/{result['job']['id']}"
     assert call(native, "GET", job_path, actor="bob", project=pid)[0] == 200
     assert call(native, "GET", job_path, actor="alice", project=pid)[0] == 403
+
+
+def test_sample_document_replacement_requires_new_uploaded_document(api):
+    from documents.api import handle
+    original = b"Synthetic server sample."
+    body = {"requestId": "immutable-sample", "title": "Synthetic", "kind": "policy", "name": "sample.txt",
+            "size": len(original), "sha256": hashlib.sha256(original).hexdigest()}
+    response = handle(api, api.collaboration.resolve_scope("alice", None), "POST", ["documents"],
+                      {"body": json.dumps(body)}, {}, trusted_sample=True)
+    assert response["statusCode"] == 201
+    sample = json.loads(response["body"])
+    assert call(api, "PUT", path(sample) + "/parts/0", original)[0] == 200
+    sample = finalize(api, call(api, "POST", path(sample) + "/complete", {})[1])
+    before = api.storage.get("alice", "document", sample["document"]["id"])
+    version_before = api.storage.get("alice", "docrevision", sample["revision"]["id"])
+    status, response, _ = call(api, "POST", f"/documents/{before['id']}/revisions", {
+        "requestId": "user-replacement", "version": before["version"], "name": "replacement.txt",
+        "size": 3, "sha256": hashlib.sha256(b"new").hexdigest(),
+    })
+    assert status == 409 and response["code"] == "sample-immutable"
+    assert api.storage.get("alice", "document", before["id"]) == before
+    assert api.storage.get("alice", "docrevision", sample["revision"]["id"]) == version_before
+    assert call(api, "GET", path(sample) + "/blob")[1] == original
+    replacement = begin(api, request="new-uploaded-document", data=b"new")
+    assert replacement["document"]["provenance"] == "uploaded"
+    assert replacement["document"]["id"] != before["id"]
+
+
+@pytest.mark.parametrize("state", ["queued", "dispatch-failed", "completed"])
+def test_complete_replay_applies_creator_policy_before_return_or_retry(api, state):
+    pid = project(api)
+    result = upload(api, actor="bob", project=pid)
+    owner = f"project:{pid}"
+    job = api.storage.get(owner, "job", result["job"]["id"])
+    if state == "dispatch-failed":
+        job = api.storage.put(owner, "job", {**job, "status": "failed", "errorCode": "dispatch-failed"}, job["version"])
+    elif state == "completed":
+        finalize(api, result, actor="bob", project=pid)
+        job = api.storage.get(owner, "job", result["job"]["id"])
+    invocations = len(api.lambda_client.calls)
+    status, response, _ = call(api, "POST", path(result) + "/complete", {}, actor="alice", project=pid)
+    assert status == 403 and "job" not in response
+    assert api.storage.get(owner, "job", job["id"]) == job
+    assert len(api.lambda_client.calls) == invocations
+    status, own, _ = call(api, "POST", path(result) + "/complete", {}, actor="bob", project=pid)
+    assert status == 202 and own["job"]["id"] == job["id"]
+
+
+@pytest.mark.parametrize("actor", ["bob", "carol", "dana"])
+def test_trusted_sample_creation_requires_owner_without_changing_normal_upload_rights(api, actor):
+    from documents.api import handle
+    pid = project(api)
+    body = {"requestId": "owner-only-sample", "title": "Synthetic", "kind": "policy", "name": "sample.txt",
+            "size": 3, "sha256": hashlib.sha256(b"abc").hexdigest()}
+    response = handle(api, api.collaboration.resolve_scope(actor, pid), "POST", ["documents"],
+                      {"body": json.dumps(body)}, {}, trusted_sample=True)
+    assert response["statusCode"] == 403
+    assert api.storage.list(f"project:{pid}", "document") == []
+    ordinary = begin(api, actor=actor, project=pid)
+    assert ordinary["document"]["provenance"] == "uploaded"
+
+
+def test_trusted_sample_owner_check_is_fenced_against_mid_create_downgrade(api, monkeypatch):
+    from documents.api import handle
+    pid = project(api)
+    owner = f"project:{pid}"
+    original = api.graph_store.get_node
+
+    def downgrade_after_role_check(identifier):
+        row = api.storage.get(owner, "project", pid)
+        members = {**row["members"], "alice": {"role": "planner"}, "bob": {"role": "owner"}}
+        api.storage.put(owner, "project", {**row, "members": members}, row["version"])
+        return original(identifier)
+
+    monkeypatch.setattr(api.graph_store, "get_node", downgrade_after_role_check)
+    body = {"requestId": "raced-sample", "title": "Synthetic", "kind": "policy", "name": "sample.txt",
+            "size": 3, "sha256": hashlib.sha256(b"abc").hexdigest(), "graphRef": "REG-1"}
+    response = handle(api, api.collaboration.resolve_scope("alice", pid), "POST", ["documents"],
+                      {"body": json.dumps(body)}, {}, trusted_sample=True)
+    assert response["statusCode"] in (403, 409)
+    assert api.storage.list(owner, "document") == []

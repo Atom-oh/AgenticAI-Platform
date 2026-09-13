@@ -102,6 +102,10 @@ Identifiers are server generated; create operations require an idempotent
 Regular uploads cannot claim `synthetic_sample` provenance. The sample installer
 is server-owned and labels every source as synthetic. No real bank material is
 committed or sent to external reviewers.
+Sample creation requires current collection-owner authority inside its write
+fence. A sample document cannot receive an ordinary replacement revision; users
+create a separate uploaded document instead. Historical sample provenance is
+never relabelled.
 
 ## Backend integration interface
 
