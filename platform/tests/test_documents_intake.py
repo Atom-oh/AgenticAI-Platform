@@ -110,6 +110,21 @@ def test_hash_mismatch_never_publishes_a_revision(api):
         process(SimpleNamespace(storage=api.storage, collaboration=api.collaboration), "alice", job)
     saved = api.storage.get("alice", "docrevision", result["revision"]["id"])
     assert saved["status"] == "failed" and not saved.get("textHash")
+    assert api.storage.get("alice", "job", job["id"])["status"] == "failed"
+
+
+def test_intake_domain_failure_through_worker_terminates_job_and_revision(api):
+    from workspace.worker import Worker
+    result = begin(api, data=b"abc")
+    assert call(api, "PUT", path(result) + "/parts/0", b"xyz")[0] == 200
+    result = call(api, "POST", path(result) + "/complete", {})[1]
+    done = Worker(storage=api.storage).handle({"owner": "alice", "jobId": result["job"]["id"]})
+    assert done["status"] == "failed" and done["failurePersisted"] is True
+    assert call(api, "GET", "/jobs/" + result["job"]["id"])[1]["job"]["status"] == "failed"
+    revision = api.storage.get("alice", "docrevision", result["revision"]["id"])
+    assert revision["status"] == "failed" and revision["warnings"] == ["original-mismatch"]
+    replay = call(api, "POST", path(result) + "/complete", {})[1]
+    assert replay["job"]["status"] == replay["revision"]["status"] == "failed"
 
 
 def test_acl_revocation_at_finalize_commit_never_publishes_text(api):

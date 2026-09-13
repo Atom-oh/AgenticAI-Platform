@@ -229,6 +229,8 @@ def finalize(worker, owner, job):
             library.commit([
                 library.write("docrevision", {**revision, "status": "failed", "parseStatus": "failed",
                                               "warnings": [error.code], "error": error.message}, revision["version"]),
+                library.write("job", {**current_job, "status": "failed", "errorCode": error.code,
+                                     "error": error.message, "finishedAt": storage.clock()}, current_job["version"]),
                 library.audit(document, "intake-failed", revision, code=error.code),
             ], [document])
         except (DocumentError, Conflict):

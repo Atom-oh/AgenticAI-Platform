@@ -101,9 +101,12 @@ def fail_work(host, owner, job, message):
     else:
         raise DocumentError(409, "job-changed", "문서 작업이 아닙니다.")
     current = host.storage.get(owner, "job", job["id"])
-    if (not current or current.get("status") != "running" or current.get("input") != data
-            or current.get("task") != job["task"] or target.get("jobId") != job["id"]
-            or target.get("status") not in ("processing", "queued", "running")):
+    if (not current or current.get("input") != data or current.get("task") != job["task"]
+            or target.get("jobId") != job["id"]):
+        return False
+    if current.get("status") == target.get("status") == "failed":
+        return True
+    if current.get("status") != "running" or target.get("status") not in ("processing", "queued", "running"):
         return False
     now = host.storage.clock()
     update = {"status": "failed", "error": message, "errorCode": "document-job-failed", "finishedAt": now}
