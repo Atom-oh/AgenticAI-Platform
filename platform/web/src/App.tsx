@@ -30,7 +30,8 @@ const NAV = [
 ];
 // 구 해시 호환 — 북마크·문서의 #/twoplane 은 Single Boundary 뷰로 연다
 const ALIAS: Record<string, string> = { twoplane: 'boundary' };
-const resolveView = () => { const h = location.hash.replace('#/', '') || 'home'; return ALIAS[h] || h; };
+// Query parameters identify an asset inside a view, not a different app menu.
+const resolveView = () => { const h = location.hash.replace('#/', '').split('?')[0] || 'home'; return ALIAS[h] || h; };
 
 const TITLE: Record<string, string> = {
   home: '플랫폼 대시보드', s1: '규정 영향 분석 — Vector RAG vs GraphRAG',
