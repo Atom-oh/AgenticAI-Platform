@@ -26,6 +26,8 @@ if (privacyVpcId) {
     env, privacyVpcId,
     privacyVpcCidr: String(app.node.tryGetContext('privacyVpcCidr') ?? ''),
     privacySubnetIds: listContext('privacySubnetIds'),
+    privacySubnetRouteTableIds: app.node.tryGetContext('privacySubnetRouteTableIds')
+      ? listContext('privacySubnetRouteTableIds') : undefined,
     privacyAvailabilityZones: listContext('privacyAvailabilityZones'),
     privacyTargetSecurityGroupIds: listContext('privacyTargetSecurityGroupIds'),
     description: 'Private MyData CPU gateway entry point and IAM relay; reuse existing EKS GPU model',

@@ -1,8 +1,8 @@
 # Private MyData infrastructure handoff
 
-This is an additive stack and a manifest renderer. No deployment, image push,
-commit, or merge was performed during the INFRA+RELAY check. The parent owns the
-API, gateway, integration review, and deployment.
+This additive stack and manifest renderer reuse the existing FSI EKS cluster.
+Application PR #3 is merged. Shared-cluster maintenance was authorized on
+2026-09-13; deployment results must be recorded separately from offline checks.
 
 ## Verified existing topology (read-only, 2026-09-12 UTC)
 
@@ -74,6 +74,7 @@ CDK_DEFAULT_ACCOUNT=180294183052
 privacyVpcId=vpc-04e77172c67f19814
 privacyVpcCidr=10.0.0.0/16
 privacySubnetIds=subnet-0381e6c41375cbc53,subnet-037c396f41efedba8
+privacySubnetRouteTableIds=rtb-0d3f6ff29f519ebe1,rtb-075c2e281c3624165
 privacyAvailabilityZones=ap-northeast-2a,ap-northeast-2b
 privacyTargetSecurityGroupIds=sg-0143b07a17cc02c27
 ```
@@ -106,6 +107,14 @@ addresses, and outbound only to `sllm/app=qwen-sllm:8080` and cluster DNS. Verif
 enforcement and a denied direct-pod request before processing anything beyond
 synthetic inputs. HTTP stays inside the existing VPC; this change does not add
 application TLS or claim full cluster/host isolation.
+
+VPC CNI standard mode permits traffic while a new pod's policies are being
+programmed. The gateway therefore checks the actual TCP peer against the same
+verified NLB addresses in `PRIVACY_ALLOWED_CLIENT_IPS` before reading a request
+body or invoking a model. Missing or invalid configuration denies processing;
+forwarding headers cannot override this check. `/health` remains available for
+node and NLB probes and exposes no model or input data. This is an additional
+application boundary, not a claim of strict-mode or host-level isolation.
 
 The main stack accepts the exact same-account Seoul relay ARN using
 `mydataPrivacyFunctionArn`. Only the WebSocket API role receives the new
@@ -156,7 +165,7 @@ The relay requires `processor=eks-sllm`, `status=pass`, `method=redaction`, matc
 request model, nonempty model/revision/prompt identifiers, integer counts with
 `sum(entityCounts)=total`, matching character lengths, zero residuals, an allowed
 independent-NER status, and finite nonnegative latency. Zero detections must
-preserve text; new `⟨TYPE:random8hex⟩` occurrences must match the per-type counts,
+preserve text; new `⟨TYPE:32-random-a-to-p-letters⟩` occurrences must match the per-type counts,
 and existing markers must survive. Optional `modelDetections` counts candidate spans before dedup;
 `ruleSupplements` counts chosen rule-only spans. PASSPORT is supported. Unknown
 receipt fields and all raw errors are excluded; malformed mandatory evidence
