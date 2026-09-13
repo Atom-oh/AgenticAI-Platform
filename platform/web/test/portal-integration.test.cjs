@@ -43,11 +43,13 @@ const CARD_ROWS = [
   ['PRC-001', 'Procedure', 'Procedures', '상담 접수 절차'],
   ['POL-000', 'PolicyRule', 'Policies', '한도 확인 정책'],
   ['TERM-002', 'UXTerm', 'UXWriting', '다음 단계 안내 문구'],
+  ['TRM-0004', 'UXTerm', 'UXWriting', '전세대출 만기'],
 ];
 const CARDS = CARD_ROWS.map(([id, label, category, name]) => ({
   id, label, category, name, status: 'APPROVED', version: id === 'CMP-Button-v2' ? 'v2' : '1',
   owner: '테스트 소유자', brief: `${name} 합성 자산`, related: {},
   computedBy: 'graph-traversal-fixture',
+  ...(id === 'TRM-0004' ? { status: 'DRAFT', rawStatus: null, version: null, owner: null, termCategory: '여신' } : {}),
 }));
 const EMPTY = { kind: 'empty', reason: '표시할 구성·참조 관계가 없습니다.',
   note: '저장된 메타데이터를 확인하세요. 근거 없는 다이어그램은 만들지 않습니다.' };
@@ -70,6 +72,12 @@ function detail(id) {
   if (item.label === 'Component') {
     result.visual = { ...LEGACY };
     result.props.package = '@atom/ui';
+  }
+  if (id === 'TRM-0004') {
+    result.props = { termId: id, term: item.name, category: '여신',
+      definition: "전세대출 업무 화면에서 '만기'을(를) 가리키는 표준 표기. 고객 안내 문구·버튼 명칭은 '전세대출 만기'으로 통일한다." };
+    result.neighbors = [{ rel: 'USED_IN', direction: 'out', count: 2,
+      nodes: [{ id: 'SCR-001', label: 'Screen', name: '약관 확인' }, { id: 'SCR-002', label: 'Screen', name: '계좌 확인' }] }];
   }
   if (id === 'SCR-001') {
     result.props.imageDataUrl = IMAGE;
@@ -565,4 +573,75 @@ test('Escape closes fullscreen after the trusted diagram iframe receives keyboar
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('dialog[open]'), undefined, { timeout: 6000 });
   assert.equal(await opener.evaluate(element => element === document.activeElement), true);
+});
+
+test('UX terms show their registered explanation and usage instead of unsupported-preview and invented draft states', { timeout: 45_000 }, async t => {
+  const { page } = await mount(t);
+  await category(page, 'UX 문구');
+  await page.getByRole('heading', { name: '용어와 사용 맥락을 확인하세요.' }).waitFor();
+  const tile = assetCard(page, 'TRM-0004');
+  assert.doesNotMatch(await tile.innerText(), /초안|v —|Owner/);
+  const term = await openAsset(page, 'TRM-0004');
+  await term.getByRole('heading', { name: '등록된 설명', exact: true }).waitFor();
+  assert.equal(await term.getByText(detail('TRM-0004').props.definition, { exact: true }).first().isVisible(), true);
+  assert.equal(await term.locator('.portal-unlinked, iframe').count(), 0);
+  assert.doesNotMatch(await term.innerText(), /초안|Version —|Owner —|미리보기.*지원하지/);
+  const usages = term.getByRole('region', { name: '연결된 사용 화면' });
+  assert.equal(await usages.getByRole('button').count(), 2);
+  await usages.getByRole('button', { name: /약관 확인/ }).click();
+  await page.getByRole('complementary', { name: '약관 확인 설계 자산 상세' }).waitFor();
+  await category(page, '기초 기준');
+  await page.getByRole('heading', { name: '용어와 사용 맥락을 확인하세요.' }).waitFor();
+  await category(page, '컴포넌트');
+  await page.getByRole('heading', { name: '그림으로 확인하고, 직접 사용해 보세요.' }).waitFor();
+});
+
+test('term details distinguish missing descriptions and incomplete usage samples without fabricating content', { timeout: 45_000 }, async t => {
+  const { page, hold } = await mount(t);
+  await category(page, 'UX 문구');
+  const pending = hold('portal_detail', { id: 'TRM-0004' });
+  await assetCard(page, 'TRM-0004').click(); await pending.seen;
+  const value = detail('TRM-0004');
+  value.props.definition = '';
+  value.rawStatus = 'APPROVED'; value.status = 'APPROVED';
+  value.neighbors = [{ rel: 'USED_IN', direction: 'out', count: 20, nodes: [
+    { id: 'SCR-001', label: 'Screen', name: '약관 확인' },
+    { id: 'SCR-001', label: 'Screen', name: '약관 확인' },
+    { id: 'CMP-Button-v2', label: 'Component', name: 'Button' },
+  ] }, { rel: 'OTHER', direction: 'in', count: 1, nodes: [{ id: 'SCR-002', label: 'Screen', name: '계좌 확인' }] }];
+  await pending.release(value);
+  const term = page.getByRole('complementary', { name: '전세대출 만기 설계 자산 상세' });
+  await term.getByText('등록된 설명이 없습니다.', { exact: true }).waitFor();
+  assert.match(await term.innerText(), /승인/);
+  const usages = term.getByRole('region', { name: '연결된 사용 화면' });
+  assert.equal(await usages.getByRole('button').count(), 1);
+  await usages.getByText('일부 연결만 표시됩니다.', { exact: false }).waitFor();
+  await term.locator('.portal-technical > summary').click();
+  assert.equal(await term.getByRole('button', { name: 'Publish', exact: true }).count(), 0);
+  assert.equal(await term.getByText(/Publish 미구현/).count(), 0);
+  await term.getByRole('button', { name: '용어 정보 새로고침', exact: true }).click();
+  await term.getByText(detail('TRM-0004').props.definition, { exact: true }).first().waitFor();
+});
+
+test('term source text remains literal and fits the detail at desktop and stacked widths', { timeout: 45_000 }, async t => {
+  const { page, hold } = await mount(t);
+  await category(page, 'UX 문구');
+  const pending = hold('portal_detail', { id: 'TRM-0004' });
+  await assetCard(page, 'TRM-0004').click(); await pending.seen;
+  const value = detail('TRM-0004');
+  value.props.definition = '<img src=x onerror="window.termScriptRan=true"> 원문\n' + '아주긴등록용어'.repeat(80);
+  value.neighbors = [];
+  await pending.release(value);
+  const term = page.getByRole('complementary', { name: '전세대출 만기 설계 자산 상세' });
+  await term.getByText(value.props.definition, { exact: true }).first().waitFor();
+  assert.equal(await term.locator('img').count(), 0);
+  assert.equal(await page.evaluate(() => window.termScriptRan), undefined);
+  await term.getByText('현재 조회 결과에 연결된 사용 화면이 없습니다.', { exact: true }).waitFor();
+  for (const width of [1920, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await flushUi(page);
+    await assertFits(page, width, 'term');
+    const size = await term.evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth }));
+    assert.ok(size.scroll <= size.client + 1, 'Term text must wrap inside the detail');
+  }
 });

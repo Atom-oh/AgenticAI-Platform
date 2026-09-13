@@ -194,6 +194,20 @@ function FlowPreview({ visual, name }: { visual: PortalDiagram; name: string }) 
 
 /* ---------------- 카드 ---------------- */
 function AssetCard({ c, active, onOpen }: { c: Card; active: boolean; onOpen: (id: string) => void }) {
+  if (c.label === 'UXTerm') return (
+    <button type="button" className={`portal-term-card${active ? ' is-selected' : ''}`}
+      onClick={() => onOpen(c.id)} aria-pressed={active}>
+      <span className="portal-term-card-meta"><span>{c.id}</span>{c.termCategory && <span>{c.termCategory}</span>}</span>
+      <strong>{c.name}</strong>
+      <span className="portal-term-card-description">{c.brief || '등록된 설명이 없습니다.'}</span>
+      <span className="portal-term-card-meta">
+        {c.rawStatus && <span>{STATUS_KO[c.rawStatus] || c.rawStatus}</span>}
+        {c.version && <span>버전 {c.version}</span>}
+        {c.owner && <span>담당 {c.owner}</span>}
+        <span>설명 · 사용 화면 보기 ↗</span>
+      </span>
+    </button>
+  );
   return (
     <button onClick={() => onOpen(c.id)}
       className={`panel p-3 text-left hover:border-amber-500/60 flex flex-col gap-1 ${active ? 'border-amber-500' : ''}`}
@@ -307,6 +321,34 @@ function RegistryMap({ m, err, onReload }: { m: WsEvent | null; err: string; onR
 }
 
 /* ---------------- 상세 패널 ---------------- */
+function TermContent({ d, onOpen }: { d: Detail; onOpen: (id: string) => void }) {
+  const description = typeof d.props?.definition === 'string' ? d.props.definition : '';
+  const groups = d.neighbors.filter(group => group.rel === 'USED_IN' && group.direction === 'out');
+  const screens = [...new Map(groups.flatMap(group => group.nodes)
+    .filter(node => node.label === 'Screen').map(node => [node.id, node])).values()];
+  const partial = groups.some(group => group.count > group.nodes.length);
+  return <div className="portal-term-content">
+    <section className="portal-term-definition" aria-label="용어 설명">
+      <h3>등록된 설명</h3>
+      {description.trim()
+        ? <p>{description}</p>
+        : <p className="portal-muted">등록된 설명이 없습니다.</p>}
+    </section>
+    <section className="portal-term-usage" aria-label="연결된 사용 화면">
+      <div className="portal-term-section-heading"><h3>연결된 사용 화면</h3><span>표시 {screens.length}개</span></div>
+      <p className="portal-muted">등록된 사용 관계입니다. 화면에 실제로 쓰인 문구를 대조한 결과는 아닙니다.</p>
+      {partial && <p className="portal-term-partial">일부 연결만 표시됩니다. 조회 응답에 포함된 화면을 보여줍니다.</p>}
+      {screens.length ? <ul>{screens.map(screen => <li key={screen.id}>
+        <button type="button" onClick={() => onOpen(screen.id)}>
+          <span>{screen.name}</span><span className="portal-term-screen-id">{screen.id}</span><span aria-hidden="true">↗</span>
+        </button>
+      </li>)}</ul> : <p className="portal-muted">{partial
+        ? '이번 조회 표본에서는 사용 화면을 확인하지 못했습니다.'
+        : '현재 조회 결과에 연결된 사용 화면이 없습니다.'}</p>}
+    </section>
+  </div>;
+}
+
 function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, onPublish, onSync, onCode, codeAvailable }: {
   d: Detail; busy: string; publishRes: WsEvent | null; syncRes: WsEvent | null; onClose: () => void; onOpen: (id: string) => void;
   onImpact: () => void; onPublish: () => void; onSync: () => void;
@@ -319,28 +361,38 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
   const maxRel = Math.max(1, ...related.map(([, v]) => v));
   const reg = syncRes?.ok && syncRes.registry ? (syncRes.registry as RegistryInfo) : d.registry;
   const pubErr = errOf(publishRes);
+  const isTerm = d.label === 'UXTerm';
+  const termCategory = typeof d.termCategory === 'string' ? d.termCategory
+    : typeof props.category === 'string' ? props.category : '';
   return (
     <aside className="portal-detail" aria-label={`${d.name} 설계 자산 상세`}>
       <div className="panel portal-detail-inner" style={{ borderTop: '2px solid var(--vpc)' }}>
         <div className="flex items-start gap-2 mb-2">
           <div className="min-w-0">
             <div className="font-mono text-xs text-slate-400">{d.id} <span className="text-slate-400">· {LABEL_KO[d.label] || d.label}</span></div>
-            <div className="text-base font-bold leading-snug break-words">{d.name}</div>
+            {isTerm ? <h2 className="portal-term-title">{d.name}</h2>
+              : <div className="text-base font-bold leading-snug break-words">{d.name}</div>}
           </div>
           <button className="chip ml-auto hover:border-slate-400 shrink-0" aria-label="설계 자산 상세 닫기" onClick={onClose}>닫기</button>
         </div>
-        <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+        {isTerm ? <div className="portal-term-meta">
+          {termCategory && <span>{termCategory}</span>}
+          {d.rawStatus && <span>{STATUS_KO[d.rawStatus] || d.rawStatus}</span>}
+          {d.version && <span>버전 {d.version}</span>}
+          {d.owner && <span>담당 {d.owner}</span>}
+        </div> : <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
           <span className="text-slate-500">설계 등록 상태</span>
           <StatusChip s={d.status} raw={d.rawStatus} />
           <span className="chip text-[10px]" title={d.version ? '' : '온톨로지에 버전 속성 없음'}>Version {d.version || '—'}</span>
           <span className="chip text-[10px]">Owner {d.owner || '—'}</span>
           {d.alsoIn && <span className="text-[10px] text-slate-500">Foundation · UX Writing 양쪽에 표시</span>}
-        </div>
+        </div>}
 
+        {isTerm && <TermContent d={d} onOpen={onOpen} />}
         <ImagePreview props={props} name={d.name} />
         {d.label === 'Screen' && !imageSource(props, d.name) &&
           <p className="portal-preview-note">화면 원본 이미지가 아직 연결되지 않았습니다. 아래 다이어그램은 등록된 화면 이동 관계입니다.</p>}
-        {d.visual?.kind === 'diagram' ? <FlowPreview visual={d.visual} name={d.name} /> :
+        {!isTerm && (d.visual?.kind === 'diagram' ? <FlowPreview visual={d.visual} name={d.name} /> :
           !imageSource(props, d.name) && <section className="portal-unlinked" aria-label="미리보기 연결 상태">
             <h3>{d.visual?.kind === 'empty' ? d.visual.reason : '이 자산의 미리보기를 아직 확인하지 못했습니다.'}</h3>
             <p>{d.visual?.kind === 'empty' ? d.visual.note : '자산의 그림·순서 데이터가 없거나 이전 API 응답입니다. 속성만으로 화면을 임의 생성하지 않습니다.'}</p>
@@ -349,7 +401,7 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
             </button>}
             {d.label === 'Component' && codeAvailable && <p>같은 이름의 플랫폼 예제이며, 이 설계 자산의 {d.version || '원본'} 구현으로 자동 연결되지 않습니다.</p>}
             {d.label === 'Screen' && <a className="portal-link" href="#/studio">Design Studio에서 원본 파일 반입하기</a>}
-          </section>}
+          </section>)}
         {d.visual?.kind === 'diagram' && d.visual.nodes.some(node => node.assetId && !node.missing && node.assetId !== d.id) &&
           <div className="portal-flow-links" aria-label="다이어그램의 연결 자산">
             <span>연결 자산 열기</span>{d.visual.nodes.filter(node => node.assetId && !node.missing && node.assetId !== d.id).map(node =>
@@ -357,7 +409,7 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
           </div>}
 
         <details className="portal-technical">
-        <summary>설계 속성 · 연결 · 발행 관리</summary>
+        <summary>{isTerm ? '원본 데이터 · 연결 정보' : '설계 속성 · 연결 · 발행 관리'}</summary>
         {/* 액션 */}
         <div className="flex flex-wrap gap-2 mb-3">
           {d.impactSupported && (
@@ -366,15 +418,15 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
               {busy === 'impact' ? '순회 중…' : IMPACT_TITLE[d.label]}
             </button>
           )}
-          <button onClick={onPublish} disabled={!!busy || !d.publishable}
+          {!isTerm && <button onClick={onPublish} disabled={!!busy || !d.publishable}
             title={d.publishable ? `Registry 로 발행 — ${d.publishTarget?.recordType}/${d.publishTarget?.subtype} (DRAFT)` : 'Publish 미구현 — §7 등록 대상 매핑에 없는 자산 유형'}
             className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#008485] hover:bg-[#0a6b6c] text-white disabled:opacity-40">
             {busy === 'publish' ? '발행 중…' : 'Publish'}
-          </button>
-          <button onClick={onSync} disabled={!!busy} title="그래프 재순회 + Registry 재조회 (외부 원본 Git · Figma 동기화는 미구현)"
-            className="chip text-xs hover:border-amber-500">{busy === 'sync' ? '재순회 중…' : 'Sync (그래프 재순회)'}</button>
+          </button>}
+          <button onClick={onSync} disabled={!!busy} title={isTerm ? '등록된 용어와 사용 관계를 다시 조회합니다.' : '그래프 재순회 + Registry 재조회 (외부 원본 Git · Figma 동기화는 미구현)'}
+            className="chip text-xs hover:border-amber-500">{busy === 'sync' ? isTerm ? '조회 중…' : '재순회 중…' : isTerm ? '용어 정보 새로고침' : 'Sync (그래프 재순회)'}</button>
         </div>
-        {!d.publishable && <div className="text-[11px] text-slate-500 mb-3">Publish <b className="text-amber-700">미구현</b> — §7 등록 대상 매핑에 없는 자산 유형({LABEL_KO[d.label] || d.label}). Component · Pattern · Screen 만 발행한다.</div>}
+        {!isTerm && !d.publishable && <div className="text-[11px] text-slate-500 mb-3">Publish <b className="text-amber-700">미구현</b> — §7 등록 대상 매핑에 없는 자산 유형({LABEL_KO[d.label] || d.label}). Component · Pattern · Screen 만 발행한다.</div>}
         {syncRes && (
           <div className={`text-[11px] mb-3 ${syncRes.ok ? 'text-emerald-700' : 'text-[#E90061]'}`}>
             {syncRes.ok ? `${syncRes.syncLabel} 완료 · ${syncRes.backend === 'neptune' ? 'Neptune' : 'Local'} · ${syncRes.elapsedMs}ms` : errOf(syncRes)}
@@ -677,13 +729,15 @@ export default function Portal() {
     .filter(item => [item.name, COMPONENT_LABELS[item.name], item.description].join(' ').toLowerCase().includes(q.trim().toLowerCase()))
     .sort((a, b) => COMPONENT_ORDER.indexOf(a.name) - COMPONENT_ORDER.indexOf(b.name)), [catalog, q]);
   const catInfo = CATS.find(item => item.id === cat)!;
+  const termCategory = cat === 'UXWriting' || cat === 'Foundation';
   const counts: Record<string, number> = listMeta?.categoryCounts || countsRef.current || {};
   const hasDetail = showCode ? !!codeName : !!detail || busy === 'detail' || !!detailErr;
 
   return <div className="portal-page" ref={root}>
     <header className="portal-intro">
-      <div><p className="portal-eyebrow">DESIGN ASSET LIBRARY</p><h2>그림으로 확인하고, 직접 사용해 보세요.</h2>
-        <p>컴포넌트는 실제 React로, 사용자 흐름과 설계 관계는 다이어그램으로 확인합니다.</p></div>
+      <div><p className="portal-eyebrow">{termCategory ? 'UX WRITING · 용어 사전' : 'DESIGN ASSET LIBRARY'}</p>
+        <h2>{termCategory ? '용어와 사용 맥락을 확인하세요.' : '그림으로 확인하고, 직접 사용해 보세요.'}</h2>
+        <p>{termCategory ? '등록된 용어 설명과 연결된 사용 화면을 함께 확인합니다.' : '컴포넌트는 실제 React로, 사용자 흐름과 설계 관계는 다이어그램으로 확인합니다.'}</p></div>
       <a href="#/studio" className="portal-secondary">파일 반입 · Design Studio</a>
     </header>
     <div className={`portal-layout${hasDetail ? ' has-detail' : ''}`}>

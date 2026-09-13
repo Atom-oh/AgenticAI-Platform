@@ -24,6 +24,14 @@ metadata. A visible preview is not an approval or a successful UX execution test
 - **Images:** display connected imported image bytes or permitted static app image
   paths. External URLs, including Figma URLs, are metadata only. The preview
   does not download external originals.
+- **UX terms / common terms:** read the registered explanation and follow stored
+  outgoing `USED_IN` links to screens. A term does not require a graphical preview.
+  Missing approval metadata is not presented as a draft; absent version/owner
+  badges are omitted. Explanations are displayed verbatim, not rewritten or
+  promoted to approved business guidance. Usage lists deduplicate returned screen
+  IDs, disclose truncated samples and do not imply a comparison with live copy.
+  Raw properties and relationship data remain in a secondary disclosure; term
+  refresh reloads the source without offering an unsupported Registry publish action.
 
 Diagrams support zoom, fit and an expanded view. The Portal also provides a
 full-window dialog and links to the graph assets. Properties, version history,
