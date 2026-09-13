@@ -137,7 +137,7 @@ export class StudioWorkspace extends Construct {
       resources: [bucket.arnForObjects('workspace/*')],
     }));
     workerRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:ConditionCheckItem'],
       resources: [table.tableArn],
     }));
     workerRole.addToPolicy(new iam.PolicyStatement({

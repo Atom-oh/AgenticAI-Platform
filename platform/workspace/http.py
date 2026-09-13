@@ -212,6 +212,9 @@ class WorkspaceAPI:
             from documents.errors import DocumentError
             try:
                 if parts[0] == "documents":
+                    if parts == ["documents", "samples"] and method == "POST":
+                        from documents.samples import install_samples
+                        return _json(202, install_samples(self, scope, _body(event)))
                     from documents.api import handle
                 else:
                     from documents.analysis import handle
