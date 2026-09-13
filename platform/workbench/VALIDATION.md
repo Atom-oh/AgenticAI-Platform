@@ -31,6 +31,21 @@ Existing build notices remain visible: large JavaScript chunks, Cedar syntax
 highlighting fallback, and CDK deprecation/runtime notices. None was suppressed
 to obtain a passing result.
 
+## Required CI follow-up
+
+The first Draft PR run passed Python, web, React and gates but found an outdated
+privacy-integration assertion in the infrastructure check: it expected only the
+WebSocket function and policy to change when the relay was enabled. The new
+Workspace API also intentionally consumes that relay.
+
+The checker now permits exactly the WebSocket and Workspace API function/policy
+pairs, checks each exact relay ARN and invocation grant, and compares the entire
+restored template with the disabled baseline. Unrelated changes remain rejected.
+Eight focused regression cases and the complete offline privacy check passed
+locally against PR base `29f39118017dc7473bf8fc206ef11ce49c6d37b7`.
+This follow-up changes validation code and its CI invocation, not runtime
+permissions or deployed resources. The updated commit's CI is a separate result.
+
 ## Content result
 
 The installed `aws-content-plugin` 2.0.0 content-review procedure scored the

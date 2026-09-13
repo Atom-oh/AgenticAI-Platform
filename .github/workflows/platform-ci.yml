@@ -94,6 +94,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
+          node --test ../privacy/deploy/check-main-privacy-delta.test.cjs
           [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git cat-file -e "${PR_BASE_SHA}^{commit}"
           git show "${PR_BASE_SHA}:platform/infra/lib/stack.ts" | node ../privacy/deploy/check-infra.cjs
