@@ -97,12 +97,15 @@ def test_evidence_selection_is_bounded_and_quotes_original_paragraphs():
     "Approved.",
     "Verified!",
     "분석 결과는 승인입니다.",
+    "분석은 승인된 상태입니다.",
+    "분석 결과는 검증된 상태입니다.",
 ], ids=["https", "s3", "file", "encoded", "absolute-path", "workspace-key", "approval", "completed-approval", "english",
         "protocol-relative", "bare-domain", "verification-verb", "approval-verb",
         "mixed-fullwidth", "mixed-html-percent", "root-file", "auxiliary-verb",
         "plural-auxiliary", "passive-approval", "analysis-approval",
         "passive-verification", "korean-passive-verification", "validated-findings",
-        "standalone-approved", "standalone-verified", "korean-nominal-approval"])
+        "standalone-approved", "standalone-verified", "korean-nominal-approval",
+        "participial-approval", "participial-verification"])
 def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     from documents.analysis_contract import output_policy
     assert output_policy({"summary": prose, "findings": []})["accepted"] is False
@@ -122,6 +125,8 @@ def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     "분석이 검증되지 않았습니다.",
     "The approved source requires human review of the proposed change.",
     "Approved documents still require a human decision.",
+    "분석은 승인된 상태가 아닙니다.",
+    "승인된 원문으로 검토해야 합니다.",
 ])
 def test_output_policy_retains_review_language_and_explicit_negation(prose):
     from documents.analysis_contract import output_policy

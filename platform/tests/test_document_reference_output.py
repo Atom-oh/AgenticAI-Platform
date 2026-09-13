@@ -29,7 +29,8 @@ def test_unknown_normalized_reference_is_rejected_before_persisted_checked_statu
     assert unknown not in value["summary"]
 
 
-@pytest.mark.parametrize("claim", ["Approved.", "Verified!", "분석 결과는 승인입니다."])
+@pytest.mark.parametrize("claim", ["Approved.", "Verified!", "분석 결과는 승인입니다.",
+                                  "분석은 승인된 상태입니다.", "분석 결과는 검증된 상태입니다."])
 def test_standalone_authority_claims_are_not_persisted_as_model_explanations(api, claim):
     catalog(api); source(api, "REG-1")
     created = start(api)
