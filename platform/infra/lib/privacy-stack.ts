@@ -13,6 +13,7 @@ export interface BankPlatformPrivacyStackProps extends cdk.StackProps {
   privacyVpcId: string;
   privacyVpcCidr: string;
   privacySubnetIds: string[];
+  privacySubnetRouteTableIds?: string[];
   privacyAvailabilityZones: string[];
   /** SGs actually attached to the existing CPU nodes hosting the gateway. */
   privacyTargetSecurityGroupIds: string[];
@@ -33,6 +34,9 @@ export class BankPlatformPrivacyStack extends cdk.Stack {
         || props.privacySubnetIds.length !== props.privacyAvailabilityZones.length
         || new Set(props.privacySubnetIds).size !== props.privacySubnetIds.length
         || new Set(props.privacyAvailabilityZones).size !== props.privacyAvailabilityZones.length
+        || (props.privacySubnetRouteTableIds !== undefined
+          && (props.privacySubnetRouteTableIds.length !== props.privacySubnetIds.length
+            || props.privacySubnetRouteTableIds.some(v => !/^rtb-[0-9a-f]{8,17}$/.test(v))))
         || props.privacySubnetIds.some(v => !/^subnet-[0-9a-f]{8,17}$/.test(v))
         || props.privacyAvailabilityZones.some(v => !/^ap-northeast-2[a-d]$/.test(v))
         || props.privacyTargetSecurityGroupIds.length === 0
@@ -45,6 +49,7 @@ export class BankPlatformPrivacyStack extends cdk.Stack {
       vpcCidrBlock: props.privacyVpcCidr,
       availabilityZones: props.privacyAvailabilityZones,
       privateSubnetIds: props.privacySubnetIds,
+      privateSubnetRouteTableIds: props.privacySubnetRouteTableIds,
     });
     const subnets = { subnets: vpc.privateSubnets };
     const relaySg = new ec2.SecurityGroup(this, 'RelaySg', {

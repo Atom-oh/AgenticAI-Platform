@@ -300,6 +300,9 @@ test('project scope, collaboration, guided baselines and real release metadata r
     await page.getByLabel('생성 방식', { exact: true }).selectOption('guided');
     await page.getByRole('button', { name: '기준안 + 변형 2개 만들기' }).click();
     await page.getByRole('heading', { name: '엄격 기준안 고정 비교' }).waitFor();
+    // The heading is already visible in guided mode, before the batch response.
+    // Wait for the actual cards, as the six-card case below also does.
+    await page.waitForFunction(() => document.querySelectorAll('.ws-comparison button').length === 3);
     assert.equal(await page.locator('.ws-comparison button').count(), 3);
     assert.match(await page.locator('.ws-comparison button').first().innerText(), /엄격 기준안.*고정/s);
     assert.match(await page.locator('.ws-comparison').innerText(), /실패/);

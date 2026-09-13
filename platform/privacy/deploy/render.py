@@ -43,7 +43,8 @@ def render(outputs, image, model_revision="unverified", *, nlb_addresses=()):
     template = Template(Path(__file__).with_name("gateway.manifest.json").read_text())
     manifest = json.loads(template.substitute(
         IMAGE=image, TARGET_GROUP_ARN=tg, VPC_ID=vpc_id,
-        NLB_ADDRESS=str(addresses[0]), MODEL_REVISION=model_revision))
+        NLB_ADDRESS=str(addresses[0]), MODEL_REVISION=model_revision,
+        NLB_ADDRESSES=",".join(str(address) for address in sorted(addresses))))
     policy = next(item for item in manifest["items"] if item["kind"] == "NetworkPolicy")
     policy["spec"]["ingress"][0]["from"] = [
         {"ipBlock": {"cidr": f"{address}/32"}} for address in sorted(addresses)
