@@ -4,7 +4,46 @@
   "meta": {
     "title": "마이데이터 — Bedrock 이전의 프라이빗 개인정보 처리",
     "locale": "en",
-    "quality_profile": "showcase"
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "happy",
+        "label": "정상 처리",
+        "focus": [
+          "privacy",
+          "input_guard",
+          "prepare",
+          "inspect",
+          "explain",
+          "output_guard",
+          "reply"
+        ],
+        "note": "개인정보 처리와 설명 생성을 구분하며, 수치 최종화 전에 텍스트가 전송되는 현재 순서를 표시한다."
+      },
+      {
+        "id": "blocked",
+        "label": "차단",
+        "focus": [
+          "privacy",
+          "input_guard",
+          "inspect",
+          "blocked"
+        ],
+        "note": "미설정·유효하지 않은 검사·잔여 식별자는 캐시 성공으로 대체하지 않는다."
+      },
+      {
+        "id": "evidence",
+        "label": "검증 근거",
+        "focus": [
+          "privacy",
+          "inspect",
+          "output_guard",
+          "reply"
+        ],
+        "note": "전처리·페이로드 검사·출력 Guardrails와 수치 최종화의 근거를 각각 확인한다."
+      }
+    ]
   },
   "lanes": [
     {
@@ -76,8 +115,8 @@
       "lane": "request",
       "col": 5,
       "type": "security",
-      "label": "출력 검사",
-      "sublabel": "이후 프라이빗 최종화",
+      "label": "출력 Guardrails",
+      "sublabel": "통과 후 텍스트 전송",
       "width": 140
     },
     {
@@ -85,8 +124,8 @@
       "lane": "response",
       "col": 5,
       "type": "frontend",
-      "label": "최종 결과",
-      "sublabel": "검증 완료 근거",
+      "label": "전송 후 최종화",
+      "sublabel": "수치·Semantic 검사",
       "width": 140
     },
     {
@@ -174,8 +213,8 @@
       "dot": "cyan",
       "title": "실패 시 차단",
       "items": [
-        "출력 Guardrails 뒤 프라이빗 수치 검증·재식별을 수행한다.",
-        "S2는 공유 이벤트 캐시를 조회·저장·재생하지 않는다."
+        "출력 Guardrails → 텍스트 전송 → 프라이빗 수치·Semantic 최종화 순서다.",
+        "숫자의 표시 전 차단은 미구현이며, S2 공유 캐시 조회·저장·재생은 금지된다."
       ]
     },
     {

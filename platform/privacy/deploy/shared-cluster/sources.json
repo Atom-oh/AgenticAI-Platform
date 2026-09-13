@@ -1,0 +1,10 @@
+{
+  "listenerSet": {
+    "url": "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/v1.5.0/config/crd/standard/gateway.networking.k8s.io_listenersets.yaml",
+    "version": "v1.5.0",
+    "sha256": "3d1dec3c5dd0ed432a38c85dcb480d54827d84fa9141e7886148fdd7cf0049a9"
+  },
+  "controllerVersion": "v3.2.1",
+  "cniVersion": "v1.21.1-eksbuild.8",
+  "networkPolicyAgentVersion": "v1.3.4-eksbuild.1"
+}

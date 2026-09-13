@@ -4,7 +4,45 @@
   "meta": {
     "title": "은행 플랫폼 — 구현 경계와 남은 배포 확인",
     "locale": "en",
-    "quality_profile": "showcase"
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "request",
+        "label": "인증된 요청",
+        "focus": [
+          "users",
+          "cognito",
+          "spa",
+          "wsfn"
+        ],
+        "note": "웹 앱과 API 요청의 인증 경로를 구분한다."
+      },
+      {
+        "id": "boundary",
+        "label": "데이터 경계",
+        "focus": [
+          "wsfn",
+          "bridge",
+          "ecs",
+          "rds",
+          "neptune",
+          "gate",
+          "bedrock"
+        ],
+        "note": "브리지도 데이터 VPC 안에 있다. 외부 IAM 호출과 브리지의 VPC 소속은 별개다."
+      },
+      {
+        "id": "privacy",
+        "label": "개인정보 전처리",
+        "focus": [
+          "wsfn",
+          "harness",
+          "gateway"
+        ],
+        "note": "기존 EKS VPC의 중계·게이트웨이가 S2 자유 입력을 처리한다. 배포 완료는 별도 확인한다."
+      }
+    ]
   },
   "components": [
     {
@@ -42,7 +80,7 @@
       "label": "Cognito",
       "sublabel": "초대 전용",
       "pos": [
-        210,
+        30,
         130
       ],
       "size": [
@@ -71,7 +109,7 @@
       "label": "개인정보 중계",
       "sublabel": "IAM 전용 Lambda",
       "pos": [
-        430,
+        210,
         130
       ],
       "size": [
@@ -86,7 +124,7 @@
       "label": "EKS 개인정보 처리",
       "sublabel": "CPU 게이트웨이 + vLLM",
       "pos": [
-        690,
+        430,
         130
       ],
       "size": [
@@ -188,6 +226,7 @@
       "kind": "security-group",
       "label": "데이터 서비스 VPC — 격리 서브넷",
       "wraps": [
+        "bridge",
         "ecs",
         "rds",
         "neptune"
@@ -217,7 +256,7 @@
       "label": "로그인",
       "variant": "security",
       "fromSide": "top",
-      "toSide": "left"
+      "toSide": "bottom"
     },
     {
       "id": "spa-ws",
@@ -235,7 +274,10 @@
       "variant": "emphasis",
       "fromSide": "top",
       "toSide": "bottom",
-      "labelDy": -60
+      "labelAt": [
+        408,
+        206
+      ]
     },
     {
       "id": "harness-gw",

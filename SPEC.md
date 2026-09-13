@@ -1,6 +1,6 @@
 # Bank platform specification
 
-Current requirements, reconciled 2026-09-13 against merged code `5a14725`.
+Current requirements, reconciled 2026-09-13 against merged code `acad38c` (including PR #4).
 Section numbers remain stable for source references. Explicit React (§7-1) and
 MyData (§4-3) requirements supersede older demo assumptions only in those features.
 See `docs/REVIEW_CONTEXT.md` for authority; implementation is not proof of deployment.
@@ -136,10 +136,20 @@ older Gemma-as-privacy, no-transformation, raw-token-streaming and cached-fallba
 8. Private NER is optional and reported as unconfigured unless connected. Synthetic
    evaluation and SageMaker job preparation do not mean training or promotion ran.
 
+Current S2 implementation sends `c.token` after OUTPUT Guardrails but before
+private numeric/Semantic finalization. Do not claim numeric validation suppresses
+every incorrect number before display; this is a remaining output-ordering gap,
+not an exemption from deterministic-finance requirements.
+
 The relay uses `MYDATA_PRIVACY_FUNCTION_ARN`, has no function URL, and accepts only
 its supported operations against a fixed private endpoint. Reuse the existing GPU;
 add only the CPU gateway, private target binding/load balancer and IAM relay.
 See `platform/infra/README-privacy.md` for prerequisites and network checks.
+The HTTP gateway also checks the actual TCP peer against verified NLB addresses in
+`PRIVACY_ALLOWED_CLIENT_IPS` before reading model-bound input. `/health` is a
+non-sensitive probe exception. Forwarded headers cannot override peer checks; this
+mitigates the CNI standard-mode startup window without claiming strict-mode or host
+isolation. Keep NLB client-IP preservation disabled for this contract.
 
 ## 5. Ontology
 
@@ -467,6 +477,13 @@ This section preserves dated evidence, not a current deployment attestation.
   model exercise is not proof of deployment of the new Lambda/NLB/network route.
   Shared-cluster prerequisites and network-policy enforcement still require operational
   verification. SageMaker training and candidate-model promotion were not established.
+
+- **2026-09-13 MyData, PR #4:** merged TCP-peer admission checks for the NLB path,
+  explicit subnet route-table metadata, and shared-cluster ListenerSet/CNI canary
+  inputs. Shared maintenance was authorized; actual rollout, cold-start dependencies
+  and policy-enforcement results remain separate verification. PR #5 artifact-pinning
+  work was still open during this reconciliation and is not claimed as implemented
+  by this baseline.
 
 Keep detailed operational evidence in `platform/README.md`,
 `platform/infra/README-privacy.md` and `docs/14-demo/`. Do not convert a historical test

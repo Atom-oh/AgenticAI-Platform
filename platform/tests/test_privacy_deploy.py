@@ -36,6 +36,8 @@ def test_only_target_namespace_and_private_service():
     assert not pod["automountServiceAccountToken"]
     container = pod["containers"][0]
     assert container["image"] == IMAGE
+    env = {entry["name"]: entry["value"] for entry in container["env"]}
+    assert env["PRIVACY_ALLOWED_CLIENT_IPS"] == ",".join(NLB_ADDRESSES)
     assert container["securityContext"]["readOnlyRootFilesystem"]
     assert "nvidia.com/gpu" not in container["resources"]["limits"]
     policy = next(i for i in items if i["kind"] == "NetworkPolicy")

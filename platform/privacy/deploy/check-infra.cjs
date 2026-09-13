@@ -24,6 +24,7 @@ const scope = app('privacy');
 const privacyProps = {
   env, privacyVpcId: 'vpc-04e77172c67f19814', privacyVpcCidr: '10.0.0.0/16',
   privacySubnetIds: ['subnet-0381e6c41375cbc53', 'subnet-037c396f41efedba8'],
+  privacySubnetRouteTableIds: ['rtb-0d3f6ff29f519ebe1', 'rtb-075c2e281c3624165'],
   privacyAvailabilityZones: ['ap-northeast-2a', 'ap-northeast-2b'],
   privacyTargetSecurityGroupIds: ['sg-0143b07a17cc02c27'],
 };
@@ -35,6 +36,10 @@ for (const cidr of ['10.999.0.0/16', '10.0.0.1/16', '10.0.0.0/29', '10.0.0.0/8']
 assert.throws(() => new BankPlatformPrivacyStack(app('duplicate-subnets'), 'InvalidPrivacy', {
   ...privacyProps, privacySubnetIds: [privacyProps.privacySubnetIds[0], privacyProps.privacySubnetIds[0]],
 }), /explicit private VPC/);
+for (const routeTables of [[], ['rtb-0d3f6ff29f519ebe1'], ['bad', 'rtb-075c2e281c3624165']]) {
+  assert.throws(() => new BankPlatformPrivacyStack(app(`invalid-routes-${routeTables.length}`),
+    'InvalidPrivacy', { ...privacyProps, privacySubnetRouteTableIds: routeTables }), /explicit private VPC/);
+}
 const template = Template.fromStack(stack);
 template.resourceCountIs('AWS::Lambda::Function', 1);
 template.resourceCountIs('AWS::Lambda::Url', 0);

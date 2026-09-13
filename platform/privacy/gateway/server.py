@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import ipaddress
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -17,6 +19,32 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def trusted_peer(self):
+        """Use the TCP peer, never a caller-controlled forwarding header.
+
+        VPC CNI standard mode has a startup allow window. This check remains
+        active from the first request, independently of policy programming.
+        NLB target groups must disable client-IP preservation.
+        """
+        try:
+            addresses = [
+                ipaddress.IPv4Address(value.strip())
+                for value in os.environ.get("PRIVACY_ALLOWED_CLIENT_IPS", "").split(",")
+            ]
+            private = ipaddress.IPv4Network("10.0.0.0/8")
+            return (2 <= len(addresses) <= 4
+                    and len(set(addresses)) == len(addresses)
+                    and all(address in private for address in addresses)
+                    and ipaddress.IPv4Address(self.client_address[0]) in addresses)
+        except ValueError:
+            return False
+
+    def reject_peer(self):
+        self.close_connection = True
+        return self.reply(403, {"ok": False, "error": {
+            "code": "untrusted-peer", "message": "허용되지 않은 연결입니다.",
+        }})
+
     def reply(self, status: int, payload: dict):
         raw = json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(status)
@@ -29,6 +57,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             return self.reply(200, {"ok": True, "processor": "eks-sllm"})
+        if not self.trusted_peer():
+            return self.reject_peer()
         if self.path != "/models":
             return self.reply(404, {"ok": False, "error": {"code": "not-found", "message": "Unknown operation"}})
         try:
@@ -37,6 +67,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(503, {"ok": False, "error": {"code": error.code, "message": "모델 설정을 확인할 수 없습니다."}})
 
     def do_POST(self):
+        if not self.trusted_peer():
+            return self.reject_peer()
         if self.path != "/deidentify":
             return self.reply(404, {"ok": False, "error": {"code": "not-found", "message": "Unknown operation"}})
         if not SLOTS.acquire(blocking=False):

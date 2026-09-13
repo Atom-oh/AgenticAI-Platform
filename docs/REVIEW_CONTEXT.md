@@ -1,6 +1,6 @@
 # Review context
 
-Baseline: merged MyData implementation in `5a14725` (PR #3), 2026-09-12.
+Baseline: merged MyData implementation through `acad38c` (PR #4), 2026-09-13.
 This file maps requirements to evidence; it does not waive defects or certify deployment.
 
 ## Read the applicable contract
@@ -48,6 +48,16 @@ component guidance is required to map to `SKILL`, while current Registry records
 Engine handlers and the Strands scenario runtime have different boundary-check entry
 points (`engine/gate.py` and `agents/boundary_gate.py`). Check their actual enforcement
 against the same requirement; module identity alone proves neither compliance nor bypass.
+
+The PR #4 HTTP gateway additionally checks actual TCP peers against verified NLB
+addresses before accepting model-bound input. `/health` remains a limited probe;
+this is not permission for anonymous model requests or proof of strict CNI isolation.
+Shared-cluster maintenance authorization is recorded in the scoped runbook; rollout
+and model cold-start verification remain separate from merging prerequisite code.
+
+S2 currently sends answer text after OUTPUT Guardrails and before private numeric/
+Semantic finalization. Report this ordering accurately; the later check does not
+prove that every incorrect number was suppressed before user-visible delivery.
 
 ## Review evidence and severity
 

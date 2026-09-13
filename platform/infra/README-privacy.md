@@ -6,6 +6,11 @@ Current code audit: 2026-09-13. This runbook covers `lib/privacy-stack.ts`,
 [SPEC.md](../../SPEC.md), and [platform contracts](../docs/CONTRACTS.md).
 Deployment observations below are dated evidence, not current readiness claims.
 
+Shared-cluster maintenance was authorized on 2026-09-13. PR #4 adds startup
+TCP-peer enforcement and shared-cluster prerequisite inputs. See the
+[shared-cluster runbook](../privacy/deploy/shared-cluster/README.md). Authorization
+and merged code do not establish successful deployment.
+
 ## Current code
 
 `bin/app.ts` instantiates the additive `BankPlatformPrivacy` stack only when
@@ -81,7 +86,7 @@ cluster policy enforcement need their own explicit operational scope.
 Run from the repository root with the already installed dependencies:
 
 ```sh
-python3 -m pytest -q platform/tests/test_privacy_relay.py platform/tests/test_privacy_deploy.py
+python3 -m pytest -q platform/tests/test_privacy_http.py platform/tests/test_privacy_relay.py platform/tests/test_privacy_deploy.py platform/tests/test_privacy_canary.py
 git show HEAD:platform/infra/lib/stack.ts | node platform/privacy/deploy/check-infra.cjs
 cd platform/infra
 ./node_modules/.bin/tsc --noEmit
@@ -104,6 +109,7 @@ CDK_DEFAULT_ACCOUNT=180294183052
 privacyVpcId=vpc-04e77172c67f19814
 privacyVpcCidr=10.0.0.0/16
 privacySubnetIds=subnet-0381e6c41375cbc53,subnet-037c396f41efedba8
+privacySubnetRouteTableIds=rtb-0d3f6ff29f519ebe1,rtb-075c2e281c3624165
 privacyAvailabilityZones=ap-northeast-2a,ap-northeast-2b
 privacyTargetSecurityGroupIds=sg-0143b07a17cc02c27
 ```
@@ -142,6 +148,14 @@ addresses, and outbound only to `sllm/app=qwen-sllm:8080` and cluster DNS. Verif
 enforcement and a denied direct-pod request before processing anything beyond
 synthetic inputs. HTTP stays inside the existing VPC; this change does not add
 application TLS or claim full cluster/host isolation.
+
+VPC CNI standard mode permits traffic while a new pod's policies are being
+programmed. The gateway therefore checks the actual TCP peer against the same
+verified NLB addresses in `PRIVACY_ALLOWED_CLIENT_IPS` before reading a request
+body or invoking a model. Missing or invalid configuration denies processing;
+forwarding headers cannot override this check. `/health` remains available for
+node and NLB probes and exposes no model or input data. This is an additional
+application boundary, not a claim of strict-mode or host-level isolation.
 
 The main stack accepts the exact same-account Seoul relay ARN using
 `mydataPrivacyFunctionArn`. Only the WebSocket API role receives the new
