@@ -56,7 +56,7 @@ def process(text: str, model: str, purpose: str, request_id: str) -> dict:
     if (not isinstance(text, str) or not text.strip() or len(text.encode()) > MAX_BYTES
             or not isinstance(model, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,39}", model)
             or purpose not in ("query", "payload")
-            or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_id)):
+            or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", request_id)):
         raise PrivacyUnavailable("PRIVACY_INVALID_REQUEST")
     if purpose == "query" and pii.tokens_in(text):
         raise PrivacyUnavailable("PRIVACY_RESERVED_TOKEN_INPUT")
@@ -94,6 +94,7 @@ def process(text: str, model: str, purpose: str, request_id: str) -> dict:
                "entityCounts", "total", "sourceChars", "outputChars", "ruleResidualCount", "independentNer")
     public = {key: evidence[key] for key in allowed}
     public["entityCounts"] = [{"type": item["type"], "count": item["count"]} for item in counts]
-    if type(evidence.get("latencyMs")) is int and 0 <= evidence["latencyMs"] <= 150000:
-        public["latencyMs"] = evidence["latencyMs"]
+    latency = evidence.get("latencyMs")
+    if isinstance(latency, (int, float)) and not isinstance(latency, bool) and 0 <= latency <= 150000:
+        public["latencyMs"] = int(latency)
     return {"ok": True, "text": output, "evidence": public}
