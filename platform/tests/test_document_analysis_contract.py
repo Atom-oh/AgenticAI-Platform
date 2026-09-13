@@ -140,7 +140,8 @@ def test_context_regulation_can_be_mentioned_but_is_not_a_review_target():
     assert not validate_answer(value, {"DOC-1"}, {"E1"}, context_nodes={"REG-1"})["accepted"]
 
 
-@pytest.mark.parametrize("reference", ["Ｅ９９", "E\u200b99", "&#69;99", "Ｅ％３９％３９", "TEAM-999"])
+@pytest.mark.parametrize("reference", ["Ｅ９９", "E\u200b99", "&#69;99", "Ｅ％３９％３９", "TEAM-999",
+                                      "Ｅ９９를", "근거E99에서", "REG-999를", "TEAM-999는"])
 def test_normalized_prose_references_and_supplied_node_namespaces_must_be_bound(reference):
     from documents.analysis_contract import validate_answer
     value = {"summary": f"검토 근거 {reference}", "findings": [
@@ -151,7 +152,7 @@ def test_normalized_prose_references_and_supplied_node_namespaces_must_be_bound(
 
 def test_normalization_does_not_rewrite_valid_prose_or_reinterpret_structured_ids():
     from documents.analysis_contract import validate_answer
-    value = {"summary": "Ｅ１ 원문과 TEAM-1 의견을 검토하세요. UTF-8 · SHA-256",
+    value = {"summary": "Ｅ１을 원문과 TEAM-1의 의견으로 검토하세요. UTF-8 · SHA-256",
              "findings": [{"nodeId": "DOC-1", "reason": "원문 대조 필요", "citationIds": ["E1"]}]}
     assert validate_answer(value, {"DOC-1", "TEAM-1"}, {"E1"})["answer"] == value
     value["findings"][0]["citationIds"] = ["Ｅ１"]

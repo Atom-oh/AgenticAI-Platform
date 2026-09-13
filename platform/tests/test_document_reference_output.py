@@ -10,7 +10,7 @@ from test_document_analyses import api, catalog, result, run, source, start
 from graph.store import Edge, Node
 
 
-@pytest.mark.parametrize("unknown", ["Ｅ９９", "E\u200b99", "TEAM-999"])
+@pytest.mark.parametrize("unknown", ["Ｅ９９", "E\u200b99", "TEAM-999", "Ｅ９９를", "근거E99에서", "TEAM-999는"])
 def test_unknown_normalized_reference_is_rejected_before_persisted_checked_status(api, unknown):
     catalog(api)
     api.graph_store.upsert_nodes([Node("TEAM-1", "Department", {"name": "합성 담당팀"})])

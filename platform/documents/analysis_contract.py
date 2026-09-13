@@ -12,8 +12,8 @@ from urllib.parse import unquote
 MAX_CONTEXT_CHARS = 36_000
 MAX_MODEL_SOURCES = 20
 MAX_MODEL_OUTPUT_BYTES = 64_000
-NODE_IDS = re.compile(r"\b(?:REG|PRD|SCR|CMP|CND|DOC|TPL|POL|PAT|PRC|SM|D)-[A-Za-z0-9-]+\b", re.IGNORECASE)
-EVIDENCE_IDS = re.compile(r"\bE[0-9]+\b", re.IGNORECASE)
+NODE_IDS = re.compile(r"(?<![A-Za-z0-9_])(?:REG|PRD|SCR|CMP|CND|DOC|TPL|POL|PAT|PRC|SM|D)-[A-Za-z0-9_-]+(?![A-Za-z0-9_-])", re.IGNORECASE | re.ASCII)
+EVIDENCE_IDS = re.compile(r"(?<![A-Za-z0-9_])E[0-9]+(?![A-Za-z0-9_])", re.IGNORECASE | re.ASCII)
 
 
 def canonical(value):
@@ -78,8 +78,8 @@ def validate_answer(value, allowed_nodes, evidence_ids, *, context_nodes=()):
     mentions = set(NODE_IDS.findall(all_text))
     prefixes = {node.split("-", 1)[0] for node in allowed_mentions if isinstance(node, str) and "-" in node}
     if prefixes:
-        supplied_ids = re.compile(r"\b(?:" + "|".join(re.escape(prefix) for prefix in sorted(prefixes)) +
-                                  r")-[A-Za-z0-9_-]+\b", re.IGNORECASE)
+        supplied_ids = re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(prefix) for prefix in sorted(prefixes)) +
+                                  r")-[A-Za-z0-9_-]+(?![A-Za-z0-9_-])", re.IGNORECASE | re.ASCII)
         mentions.update(supplied_ids.findall(all_text))
     if mentions - allowed_mentions or set(EVIDENCE_IDS.findall(all_text)) - evidence:
         return invalid
