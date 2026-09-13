@@ -1,12 +1,12 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Init-only Qwen artifact reader for fsi-demo-cluster; exact S3 objects via existing private endpoint",
+  "Description": "Qwen artifact prefetch worker for fsi-demo-cluster; exact S3 objects via existing private endpoint",
   "Resources": {
     "QwenArtifactReader": {
       "Type": "AWS::IAM::Role",
       "Properties": {
         "RoleName": "fsi-demo-qwen-artifacts",
-        "Description": "Qwen init container only; pinned model artifacts through the FSI S3 endpoint",
+        "Description": "CPU-only Qwen artifact prefetch worker; no serving-pod credentials",
         "MaxSessionDuration": 3600,
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",

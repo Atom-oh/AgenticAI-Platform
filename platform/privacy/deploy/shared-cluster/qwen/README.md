@@ -1,8 +1,11 @@
-# Pinned Qwen artifacts and init identity
+# Pinned Qwen artifacts and prefetch identity
 
 This is the bootstrap dependency for the shared FSI cluster's Qwen workload.
 It creates no GPU, VPC, endpoint, bucket or application route. The workload
 source lives in `Atom-oh/aws-fsi-demo`; coordinate that PR with these resources.
+This document describes the declared rollout design. Check the deployed
+revision and CNI probe evidence separately; policy files alone do not establish
+live network blocking. The captured prerequisite baseline had CNI disabled.
 
 ## Artifact publication
 
@@ -53,8 +56,10 @@ not a cross-account installer.
 The trust binds one OIDC provider, the STS audience and the
 `sllm/qwen-artifacts` ServiceAccount. The only permission is `s3:GetObject` on
 the exact 21 keys, requiring TLS and existing gateway endpoint
-`vpce-04a82e15d312f39b8`. It grants no write, list, metadata or unrelated service
-permissions. No existing bucket policy, endpoint policy or node role is changed.
+`vpce-04a82e15d312f39b8`. It grants no write, list or unrelated service
+permissions. GetObject also permits metadata reads for those keys; EC2 IMDS is
+restricted separately by workload configuration. No existing bucket policy,
+endpoint policy or node role is changed.
 
 Deploy only after latest-HEAD code/content review and CI pass. Validate the
 template, review a **CREATE** change set for `FsiQwenArtifacts`, confirm it
@@ -64,16 +69,21 @@ stacks as part of this step.
 
 ## Runtime verification
 
-The serving container has no projected AWS token; only init can assume this
-role. The GitOps init downloads exact keys and rechecks every byte count and
-SHA-256 before vLLM loads local target/draft paths. Keep its API model name
-`Qwen/Qwen3-8B` unchanged.
+Only the separate CPU prefetch Job can assume this role. It downloads exact
+keys and rechecks every byte count and SHA-256 onto a model-only PVC. The
+serving Pod is configured without a projected AWS token or declared S3 egress
+allowance. Network blocking requires active CNI enforcement. Its local
+verification init and vLLM mount that volume read-only. Keep the API model name
+`Qwen/Qwen3-8B` unchanged. GitOps must complete the prefetch hook before updating
+the existing serving Deployment; a failed hook leaves that Deployment running.
 
 Publication and a successful IAM stack do not prove runtime authorization.
-Require the actual init to complete, verify real Qwen readiness/inference, then
-check allowed S3/STS/DNS and denied public/metadata paths after CNI enforcement.
-The whole-pod S3 network allowance is not a bucket-level filter or a complete
-exfiltration control.
+Require the prefetch Job and local verification init to complete, verify real
+Qwen readiness/inference, then check the producer's allowed S3/STS/DNS and the
+serving Pod's denied S3/public/metadata paths after CNI enforcement. The
+producer's regional S3 network allowance is not a bucket-level filter; the Job
+accepts no inference requests, mounts no personal-data store and has only
+exact-object read permissions. Its labels must never match the inference Service.
 
 Run the offline publisher/IAM contract suite from the repository root:
 
