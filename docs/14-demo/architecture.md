@@ -5,7 +5,7 @@
 
 ## 인터랙티브 다이어그램 (archify)
 
-- **[플랫폼 아키텍처 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html)** — Single Boundary VPC·중앙 MCP·거버넌스를 가이드 뷰 3장으로 탐색 (Play story 지원)
+- **[플랫폼 아키텍처 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html)** — 인증 요청·데이터 경계·개인정보 전처리를 가이드 뷰 3장으로 탐색 (Play story 지원)
 - **[S2 상담 파이프라인 워크플로우 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/s2-workflow.html)** — 정상 처리·차단·검증 근거
 - **[UX Studio 검증 루프 (인터랙티브)](https://www.atomai.click/AgenticAI-Platform/ux-validation-loop.html)** — 규칙 검증·피드백·수정·재검증·승인의 경로별 범위와 목표. [완료 조건과 구현 대조](./ux-validation-loop)
 
