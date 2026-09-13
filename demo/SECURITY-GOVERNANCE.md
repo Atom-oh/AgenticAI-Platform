@@ -1,83 +1,82 @@
-# Agentic AI Platform 보안·거버넌스 전략 (v4)
+# Demo security and governance
 
-플랫폼에 **시행 중인** 통제와 **residual gap**을 구분해 기록한다. 데모라도 시행되지 않은 통제를 시행 중이라고 쓰지 않는다.
+Scope: the main banking application (`platform/`), the builder control room (`demo/builder-harness/`), and the original UI/UX Studio (`demo/uiux-studio/`). They have different trust boundaries. This code-based account, updated 2026-09-13, is not a live security audit or a policy exception.
 
-## 1. 신뢰 경계와 신원
+Root `SPEC.md` §§3-2, 4-3, 7, 7-1, 11, and 12 remain the stable main-platform requirements. Historical plans and demo implementation gaps do not relax authentication, least privilege, private data handling, approval, or truthful evidence requirements.
 
-| 통제 | 시행 방식 | 검증 |
-|---|---|---|
-| 퍼블릭 진입점 단일화 | CloudFront만 공개. API GW·Lambda는 `x-origin-verify` 시크릿 헤더 없으면 403 | 직접 호출 403 확인 |
-| 사용자 인증 | Cognito User Pool `ap-northeast-2_h2rhe1TKo` — **self sign-up 차단, admin-create only** (CLAUDE.md 정책) | 무토큰 `/api/*` 401 |
-| API 인가 | API GW **JWT authorizer**(Cognito issuer/audience) — 앱 코드 진입 전에 차단 | 만료/위조 토큰 401 |
-| RBAC | `cognito:groups` → `platform-admins`(운영 탭·승인·예산), `team-*`(팀 소유권) | 팀원 admin API 403 |
-| 리소스 소유권 | 에이전트/데이터소스/스킬/워크플로우에 `ownerEmail`+`team` — 소유자·같은 팀·관리자만 변경/삭제 | 타팀 삭제 403 |
-| 중앙 MCP 인바운드 | AgentCore Gateway `CUSTOM_JWT`(같은 Cognito) — access token 필요 | 무토큰 MCP 401 |
+The previous **2026-09-03 credential exception covered only the synthetic demo access page** (SPEC §12 item 9). It was not permission to publish credentials elsewhere. This reconciliation removes existing published password prose and uses retrieval guidance; it neither expands that exception nor changes the scoped policy. Main-demo credentials are retrieved from the approved Secrets Manager entry `bank-platform/demo-user` by an authorized operator.
 
-## 2. 에이전트 거버넌스 (골든 패스)
+## 1. Security requirements
 
-```
-생성 요청 → 스모크 평가(evals-as-gate) → Tier 판정
-  Tier 1 + 평가 통과 → 자동 승인          (셀프서비스 골든 패스)
-  Tier 2 또는 평가 실패 → PENDING         (플랫폼 엔지니어 검토)
-승인/거부 = Agent Registry 상태 변경(사유 필수) → CloudTrail 감사
-```
+- Use administrator-issued identities; do not enable self-registration as a workaround.
+- Verify identity and authorization at each protected operation. Ownership metadata or a frontend control is not authorization by itself.
+- Protect model-bound data with the required privacy/boundary checks. Failure, missing evidence, and unavailable services are not successful checks.
+- Keep secrets out of source, Markdown, command transcripts, and rendered output. Retrieve them through approved credential/secret channels.
+- Keep S3 Block Public Access enabled; require the intended authenticated/origin-controlled entry paths. Do not add anonymous Function URLs or bypass paths.
+- Scope IAM actions/resources and service trust. Unconditioned wildcard permissions, public exposure, or plaintext secret configuration remain issues to remediate, not accepted demo exceptions.
+- Preserve versioned approval and audit evidence. Missing synchronization, failed audit writes, and partial validation must remain visible.
 
-- 거버넌스 **정본은 AgentCore Agent Registry**(us-east-1 `b2hOSZL4eOhDXAyk`, 수동 승인 모드). DynamoDB는 런타임 캐시.
-- 감사 이중화: ① Registry 상태 변경 = CloudTrail(주체·시각·사유) ② 플랫폼 감사 테이블(모든 mutating API, principal 포함) — 운영 탭에서 열람.
+## 2. Main banking platform
 
-## 3. 실행 통제
-
-| 통제 | 시행 방식 |
+| Control or boundary | Code evidence and limits |
 |---|---|
-| 툴 노출 차단 | 모든 생성-에이전트 호출에 서버가 `allowedTools` 차단 강제 — 클라이언트 우회 불가 |
-| 메모리 격리 | `actorId = agent-{id}-{user}` — 에이전트 간·사용자 간 장기 기억 격리 (Part 7) |
-| 예산 서킷 브레이커 | 에이전트별 토큰 예산(기본 50k), 소진 시 429. 증액은 관리자 전용 + 감사 |
-| 남용 상한 | Lambda 예약 동시성 5, 에이전트 30/스킬 15/데이터소스 15, 메시지 2,000자, 워크플로우 4단계·4루프 |
-| 최소권한 IAM | 역할 4개 분리(사이트 Lambda / Gateway 툴 Lambda(DDB read-only) / Gateway 실행 / Harness 실행) — 전부 리소스 스코프, confused-deputy 조건 포함 |
-| 데이터 레지던시 | Harness 모델 = apac geo CRIS 프로파일 고정 (Part 8/12) |
+| WebSocket identity | `platform/api/ws_handler.py` uses Cognito `GetUser` at `$connect`; later messages use the stored connection. This is not per-message token revalidation |
+| Public ingress | CloudFront serves static web assets; WebSocket is a separate authenticated endpoint. Do not claim CloudFront is the only network entry point |
+| Private data service | `platform/infra/lib/plane-stack.ts`: isolated ECS/RDS, Neptune, bridge, and OpenSearch Serverless VPC access; configuration/readiness must be verified |
+| PR3 MyData | `platform/api/handlers/s2.py`, `api/common/privacy.py`, `privacy/relay/handler.py`: IAM relay to internal NLB/EKS; private model detection, structured tokenization, strict payload checks; no S2 shared-cache read/write |
+| Processor isolation | `platform/infra/lib/privacy-stack.ts` and `privacy/deploy/`: separate existing-cluster integration, restricted CPU gateway and explicit network policy. HTTP and unverified model revisions are not TLS or model-certification claims |
+| Local Registry | `platform/registry/`: versioned lifecycle, audit records, and approved-only consumer API. AgentCore mirror status and CloudTrail evidence are separate |
+| React workspace | `platform/workspace/`: current project membership/action checks, frozen criteria, specific-round approval, private releases, and configured Git targets |
 
-## 4. Residual gaps (정직한 기록)
+Remaining concerns include the WebSocket connection-lifetime model and authorization coverage for legacy Registry actions: `platform/api/handlers/registry.py` receives the connection identity but does not itself enforce a separate approver role. Do not transfer the control room's admin gate to this handler in prose.
 
-1. **승인자 권한의 IAM 분리 미완** — 승인은 admin 그룹 JWT로 게이트되지만, Registry API 호출 자체는 사이트 Lambda 단일 역할. 다음 단계: 승인 전용 역할 분리(AssumeRole) 또는 사용자별 자격 위임(OBO).
-2. **위험 등급 자가 신고** — Tier를 생성자가 선택. 다음 단계: 프롬프트/툴 요구 기반 자동 분류 + Cedar 정책.
-3. **예산 검사 비원자성** — 동시 요청 시 소폭 초과 가능. 다음 단계: DDB 조건부 업데이트 예약.
-4. **평가 게이트의 깊이** — 스모크 1문항. 다음 단계: AgentCore Evaluations(trajectory/goal)를 승인 게이트로.
-5. **Registry Preview 마이그레이션** — `bedrock-agentcore`→`agent-registry` 네임스페이스 변경 예고. IAM·SDK 추적 필요.
-6. **토큰 수명** — SPA가 refresh token 미사용(1시간 후 재로그인). 데모 트레이드오프.
+S2 emits guarded output before internal numeric finalization; discrepancies are returned afterward. That is not a completed numeric suppression gate. The private processor currently reports no independent private NER configuration; later Bedrock Guardrails inspection is a separate check. Effective cluster network policy, deployed model identity, historical cache cleanup, and internal audit retention need operational evidence.
 
-## 5. 운영 계정 (데모)
+SPEC §3-2 requires boundary enforcement and restricted raw-prompt logging. This review does not prove universal compliance across direct SDK, AgentCore, legacy proxies, and all logging paths. Raw questions transit the API/relay and lookup values reach the authenticated UI; private ledger/model placement is not proof that raw data never leaves those private services.
 
-| 계정 | 그룹 | 용도 |
+## 3. Builder control room
+
+`demo/builder-harness/site/lambda_function.py` implements the following:
+
+| Area | Implemented behavior | Limit |
 |---|---|---|
-| demo@atomai.click | platform-admins | 공유 데모 계정 — 비밀번호는 Secrets Manager `bank-platform/demo-user` (SPEC §9: 문서·코드에 기록하지 않는다) |
-| admin@demo.nexus | platform-admins | 플랫폼 운영(승인·예산·감사) |
-| alpha@demo.nexus | team-alpha | 서비스팀 셀프서비스 |
-| beta@demo.nexus | team-beta | 서비스팀 셀프서비스 |
+| Entry and identity | Checks the origin-verification header and reads API Gateway JWT-authorizer claims | Deployed authorizer/origin settings must be checked separately |
+| Admin/ownership | `platform-admins` gates operations; `can_manage` allows owner, same team, or admin for guarded mutations | List/read/chat and linked-resource paths are not uniformly team-scoped; no complete tenant-isolation claim |
+| Agent execution | DynamoDB configs share one Harness with prompt overrides | Creating a catalog config does not create a dedicated runtime |
+| Approval | Background smoke evaluation; Tier 1 + pass sets local `APPROVED`, others remain pending | Probe only checks a minimal response; caller supplies risk tier |
+| Registry | Registers/submits records and mirrors status to AgentCore | Synchronization is best effort after local state changes; remote failure does not revoke local approval |
+| Audit | Application audit entries carry an actor; Registry operations can be correlated with CloudTrail | Audit writes are best effort. AWS API principal is the Lambda role, not delegated human IAM identity |
+| Tool exposure | Generated-agent chat/evaluation/workflow calls request the deny-tools list | Do not generalize this to every builder invocation or claim Gateway tools execute in all chats |
+| Usage/budget | Token counters and a pre-call budget check, default 50,000 tokens | Check and usage update are not an atomic reservation; concurrent calls can exceed the budget |
+| Memory | Actor IDs include agent/user-derived strings | Sanitization/truncation is not collision-proof identity isolation |
+| Personal HR | `emp_block` loads one `EMP` record by verified principal-derived identity for opted-in agents | Synthetic demo scoping, not production HR authorization or a no-model-egress guarantee |
 
-가입 버튼은 존재하지 않는다 — 계정은 `admin-create-user`로만 발급한다. (데모 편의로 비밀번호 최소 길이를 8자로 완화 — 프로덕션은 12자+ 권장)
+Catalog limits are 30 agents, 15 data sources, and 15 skills; messages are capped at 2,000 characters and workflows at four steps/four iterations. These are implemented caps, not a complete abuse-prevention system. Hard-coded cost estimates are not current billing evidence.
 
-> 참고: 일부 AWS 리소스 ID(`nexus-gateway-tools`, `NexusGateway*` 역할, `agentic-nexus-skills-*` 버킷)는 초기 명명이 남아 있다 — 기능과 무관하며 재생성 비용 때문에 유지.
+The control room's PKCE frontend uses transient `sessionStorage` state during login; authentication/session behavior must be described per product. Approval-role IAM separation, stronger evaluation/risk classification, atomic budgets, comprehensive entitlement checks, and reliable audit/sync remain work. Cedar-based policy was a target, not an implemented gate demonstrated here.
 
+## 4. Original UI/UX Studio
 
-## 개인 인사정보 스코핑 (v6)
+`demo/uiux-studio/infra/stack.py` sets Cognito self-registration off and uses an `AWS_IAM` Function URL behind CloudFront OAC. `feedback/auth.py` validates the custom `x-hana-auth` access token with Cognito. Normal POST asset/generation/feedback routes require a designer identity.
 
-에이전트가 "내 잔여 연차" 같은 개인 질문에 답하되 타인 정보는 차단한다.
-- 신원은 **서버가 검증한 JWT의 email 클레임**으로만 판단(클라이언트 입력 불신).
-- `usePersonalHr` 플래그 에이전트에 한해, 그 이메일의 `EMP` 레코드 1건만 시스템 프롬프트에 주입.
-- `EMP`는 공개 쓰기 API가 없다 — HR 마스터에서 동기화(데모는 `demo/builder-harness/seed_employees.py`).
-- 검증: 김데모→본인 5.5일, 이알파→본인 12일, 타인 조회는 거절. 가이드북 Part 9 엔타이틀먼트 스코핑의 시연.
+These facts do not establish full protection:
 
-## 플랫폼 재편 — 종합 서피스 맵 (2026-09-02)
+- `feedback/handler.py` retains a POST compatibility branch without `rawPath` that invokes feedback before the user check. Reachability must be assessed for its callers; it contradicts an unconditional “all writes authenticate” claim.
+- Asset/history/content/job/model reads are not user-scoped, and the generated gallery is served publicly through CloudFront. S3 Block Public Access does not make those CloudFront artifacts private.
+- `harness/publish.py` stores generated HTML directly; the original gallery uses same-origin previews. This is not the main workspace's restricted preview and browser-verification boundary.
+- `infra/stack.py` includes unconditioned wildcard IAM grants. Runtime deployment also handles M2M credentials in configuration. These are security gaps to assess and remediate, not exemptions from least privilege or secret handling.
+- Feedback changes status/copies an approved pattern without enforcing the main workspace's immutable criteria and checks. Manifest updates and memory recording are not transactional approval evidence.
 
-UI/UX 스튜디오 합류를 계기로 전 데모를 하나의 종합 플랫폼으로 재편했다.
+Figma ingestion and remote-font instructions belong to this older external-service PoC. They do not authorize external fetches in the main financial-network workspace. Memory/few-shot references are context reuse, not model training or guaranteed learning.
 
-| 서피스 | URL | Registry 레코드 |
+## 5. Access and historical resources
+
+Get current account assignments and credentials from the demo administrator through the approved credential channel. Use the configured Cognito recovery/admin reset procedure when needed. Never publish a shared password or copy access/refresh tokens into documentation.
+
+| Recorded surface | Historical endpoint identifier | Product |
 |---|---|---|
-| 플랫폼 허브 · 규정 영향 분석(S1) | d15n7n9ypt87h8.cloudfront.net | `surface_bank_regulation_impact` (APPROVED) |
-| UI/UX 스튜디오 | d4zwmnh2s47e9.cloudfront.net | `surface_uiux_studio` (APPROVED) |
-| 에이전트 컨트롤룸 | d1twhttjtzqewp.cloudfront.net | `nexus_platform_gateway` 외 에이전트별 레코드 |
+| Main banking app | `agent.atomai.click`; earlier `d15n7n9ypt87h8.cloudfront.net` | `platform/` |
+| Control room | `d1twhttjtzqewp.cloudfront.net` | `demo/builder-harness/` |
+| Original Studio | `d4zwmnh2s47e9.cloudfront.net` | `demo/uiux-studio/` |
 
-- 거버넌스 정본: AgentCore Agent Registry(us-east-1) — 서피스 편입 승인 사유가 CloudTrail에 기록됨.
-- 상호 내비게이션: 허브 카드 ↔ 컨트롤룸 레일 ↔ 스튜디오 헤더 링크.
-- 신규 서피스(S1)의 WebSocket API는 $connect에서 Cognito access token을 요구하며 무토큰 연결을 거부한다
-  (프론트는 CloudFront+OAC만 공개). 토큰은 브라우저 스토리지에 저장하지 않는다.
+The 2026-09-02 surface-registration notes and later deployment reports are historical evidence. Do not infer current `APPROVED` status, uptime, matching accounts, or a unified authorization policy from these URLs. Old `Nexus`/`Hana` resource names remain identifiers for separate implementations.

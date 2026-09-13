@@ -1,19 +1,27 @@
 # Designer workspace integration contract
 
-2026-09-11. This file fixes interfaces between parallel implementation tasks.
-The product operates without Figma access, including network 3. Uploaded files
-are untrusted data, never agent instructions or executable server programs.
+Current code audit: 2026-09-13. Follow [root instructions](../../AGENTS.md),
+[review context](../../docs/REVIEW_CONTEXT.md), and [SPEC.md](../../SPEC.md), especially
+§7-1. This contract covers shared intake/rules and imported HTML verification;
+[REACT_CONTRACT.md](REACT_CONTRACT.md) defines current React generation and releases.
+The workflow requires no Figma connection. Uploaded files are untrusted data,
+never agent instructions or executable server programs. Paths beginning with
+`workspace/` below are relative to `platform/`.
 
 ## HTTP
 
 Same-origin `/studio-api`, Cognito access token in `Authorization: Bearer`.
 The API Gateway JWT authorizer supplies claims; handler requires `sub` and
-`token_use=access`. Owner is the verified `sub`, never a body field.
-Every resource lookup is owner-scoped. Responses are JSON unless a blob route.
+`token_use=access`. Personal owner is the verified `sub`, never a body field. Optional
+`X-Workspace-Project` requires current membership and selects the server-derived
+`project:<id>` scope; the acting user remains `sub`. Every lookup is scoped. Responses are JSON unless a blob route.
 Errors use HTTP status plus `{error, code}`. No raw exception/prompt/token logs.
 
-- GET `/config`: `{models, defaultModel, maxFileBytes:52428800, chunkBytes:2097152, extensions}`.
-- GET `/assets`: `{assets}` (metadata only, at most100; continuation if needed).
+- GET `/config`: `{models, defaultModel, actorId, componentCatalog, generationModes,
+  variationRange, maxFileBytes:52428800, chunkBytes:2097152, extensions}`.
+- GET `/components`: `{catalog}` for the pinned platform React kit.
+- GET `/assets`: `{assets, cursor?}` (metadata, at most 100 per page).
+  Asset/contract/run/batch/release list routes accept the returned `cursor` query value.
 - POST `/assets`: `{name,size,sha256,purpose,parentId?}` -> `{asset,chunkBytes}`.
   Purpose: `reference|component|token|skill|guide|prototype|archive`.
   Accept HTML/HTM, CSS, PNG/JPG/JPEG, SVG, PDF, FIG, MD/MARKDOWN, TXT, JSON.
@@ -33,15 +41,19 @@ Errors use HTTP status plus `{error, code}`. No raw exception/prompt/token logs.
 - POST `/contracts/:id/approve`: `{version}` -> `{contract}`; approve exact version/hash.
 - POST `/runs`: `{contractId,contractVersion,model,maxRounds,requestId,
   baseRunId?,baseRound?,instruction?,referenceAssetId?,referencePage?,
-  visualTolerance?,variant?,mode?,sourceAssetId?}` ->202 `{job,run}`.
+  visualTolerance?,variant?,mode?,sourceAssetId?,outputType?,generationMode?}` ->202 `{job,run}`.
   mode generate(default) or verify. Verify freezes a selected imported HTML's
   sourceHtmlKey/sourceArtifactSha256, uses one round and makes no generation call.
-  `maxRounds`1..5(default3); variant balanced/dense/emphasis/flow.
+  `maxRounds` 1..5 (default 3); variant
+  `balanced|baseline|layout|dense|emphasis|flow|information`.
+  `outputType` is `react|html`; generation defaults to React for contracts with
+  `catalogHash`, otherwise legacy HTML. `generationMode` is `creative|guided`.
   Contract must be approved, resolved and have at least one asserted rule.
 - GET `/jobs/:id`: `{job}`; GET `/runs`: `{runs}`; GET `/runs/:id`: `{run}`.
 - GET `/runs/:id/blob?kind=html|screenshot|diff|report&round=1&offset=0`: binary chunk.
 - POST `/runs/:id/approve`: `{round,artifactSha256,contractVersion}`:
-  only exact tested artifact with all required gates passed; keep actor/time/hash.
+  only the exact tested artifact with required evidence; keep actor/time/hash.
+  React visual-variation acceptance follows `REACT_CONTRACT.md`, not an automatic pixel pass.
 
 Upload max50MiB, at most20 selected assets, metadata name max180chars, brief4000,
 instruction4000. Frontend uploads sequential parts, can retry without duplicating;
@@ -56,11 +68,14 @@ Use two-MiB HTTP chunks to stay below Lambda proxy payload limits even with base
 get(owner: str, kind: str, id: str) -> dict | None
 put(owner: str, kind: str, item: dict, expected_version: int | None = None) -> dict
 list(owner: str, kind: str, limit: int = 100) -> list[dict]
+list_page(owner: str, kind: str, limit: int = 100, cursor=None) -> dict
 claim_job(owner: str, id: str) -> dict | None
 ```
 
-Kinds `asset`, `job`, `contract`, `run`. Each record has id, version(int),
-createdAt/updatedAt(ms), status. Conditional create/update, owner-partitioned
+Core kinds are `asset`, `job`, `contract`, `run`; collaboration adds `project`,
+`membership`, `product`, `guideline`, `ontology`, `comment`, `batch`, `release`,
+`gitexport`. Records have id, version(int), createdAt/updatedAt(ms), and
+kind-specific status fields. Conditional create/update, owner-partitioned
 query, no whole-table scans. Use private S3 bucket `WORKSPACE_BUCKET` and DynamoDB
 `WORKSPACE_TABLE`. Blob helpers `put_blob(key,data,content_type)`,
 `get_blob(key,offset=0,length=None)->bytes`, `blob_info(key)->{size,contentType,sha256}`.
@@ -75,7 +90,7 @@ Pages are one-based. `importRevision` and `lineageId` describe file intake linea
 Analysis: text (bounded, truncation explicit), format, pages, dimensions, warnings,
 resources (external/missing), parseStatus. FIG is opaque archive/unsupported.
 
-Job: task(finalize/propose/run), input, status(queued/running/completed/failed),
+Job: task(finalize/propose/run/release/git), input, status(queued/running/completed/failed),
 progress, result?, error?. API invokes `WORKSPACE_WORKER_FN` asynchronously with
 `{owner,jobId}`. Worker is sole writer of claimed jobs; duplicate invocation is a no-op.
 Async invocation retries disabled; worker catches errors and persists failed.
@@ -128,7 +143,7 @@ Contract edits reset approval. Every run freezes the exact contract and assets.
 
 `workspace/rules.py`: `validate_contract(data, asset_texts=None)->dict` returns
 normalized contract or raises ValueError; `contract_hash(contract)->str`.
-Host owns this file and AI orchestration; other workers import it.
+Generation and approval import this validator; changing its rules changes the saved contract hash.
 
 ## Extraction and browser worker
 
@@ -153,10 +168,20 @@ visualTolerance?}`, no AWS SDK calls. Browser process gets a minimal environment
 Browser Lambda is placed in isolated subnets, no NAT and no outbound SG rules,
 with only runtime logging permissions. No Bedrock, S3, registry or user credentials.
 
-`workspace/worker.py` (host): completes imports, proposes rules through the existing
-Bedrock gate, generates executable HTML with data-testid bindings, invokes browser
-Lambda, repairs failures against the SAME approved rules up to maxRounds.
+`workspace/worker.py` completes imports, proposes rules through the Bedrock gate,
+generates React (or legacy HTML), invokes the isolated browser Lambda, and repairs
+failures against the SAME approved rules up to `maxRounds`. HTML verification
+uses the frozen imported HTML and makes no generation call. React compilation
+is dispatched as `kind="react"` through `workspace/browser_task.py`.
 No real financial API/auth/transaction calls. Simulated states must be labelled.
 Images/resources are embedded from selected imports; external references fail.
 Artifacts remain private. A real internal React/MCP source is only claimed when
 the configured registry actually supplies it.
+
+## Evidence limits
+
+Sources: `workspace/http.py`, `storage.py`, `rules.py`, `intake.py`, `browser.py`,
+`browser_handler.py`, and `worker.py`. Missing browser dependencies, oversized
+responses or worker errors produce failed/incomplete evidence. No-reference visual
+checks are `not-run`. HTML prototype approval never authorizes a React release.
+Deployment and customer-environment readiness require separate dated evidence.

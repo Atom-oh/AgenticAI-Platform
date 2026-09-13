@@ -1,10 +1,41 @@
-# Private MyData infrastructure handoff
+# Private MyData infrastructure
 
-This additive stack and manifest renderer reuse the existing FSI EKS cluster.
-Application PR #3 is merged. Shared-cluster maintenance was authorized on
-2026-09-13; deployment results must be recorded separately from offline checks.
+Current code audit: 2026-09-13. This runbook covers `lib/privacy-stack.ts`,
+`../privacy/deploy/render.py`, and `../privacy/relay/handler.py`. Follow
+[root instructions](../../AGENTS.md), [review context](../../docs/REVIEW_CONTEXT.md),
+[SPEC.md](../../SPEC.md), and [platform contracts](../docs/CONTRACTS.md).
+Deployment observations below are dated evidence, not current readiness claims.
 
-## Verified existing topology (read-only, 2026-09-12 UTC)
+Shared-cluster maintenance was authorized on 2026-09-13. PR #4 adds startup
+TCP-peer enforcement and shared-cluster prerequisite inputs. See the
+[shared-cluster runbook](../privacy/deploy/shared-cluster/README.md). Authorization
+and merged code do not establish successful deployment.
+
+## Current code
+
+`bin/app.ts` instantiates the additive `BankPlatformPrivacy` stack only when
+`privacyVpcId` is supplied. It imports existing VPC/subnet metadata and creates an
+internal NLB, target group, relay Lambda, ECR repository and scoped SG/IAM rules.
+It does not create an EKS cluster, GPU model, VPC or peering connection.
+
+The request path is authenticated WebSocket S2 → IAM relay → internal NLB →
+CPU gateway → private model service. `api/handlers/s2.py` (under `platform/`)
+requires this path for the free-text question before cloud Guardrails.
+Structured lookup fields instead use internal deterministic tokenization and an
+independent scan. Selecting the `gemma` explanation adapter does not replace EKS
+processing. Missing relay configuration or invalid privacy evidence blocks S2.
+
+The gateway defaults to `qwen` / `Qwen/Qwen3-8B`. Private `gemma4` and `deepseek`
+are disabled placeholders unless configured. `PRIVACY_MODELS_JSON` can supply
+reviewed private endpoints; the checked-in manifest uses the Qwen baseline.
+`/models` verifies the configured ID against the model service. The current
+gateway reports `independentNer="not-configured"`; do not claim a deployed second
+NER model. Source: `../privacy/gateway/models.py` and `../privacy/gateway/engine.py`.
+
+## Historical topology inspection (2026-09-12 UTC)
+
+The following values were recorded by the earlier read-only inspection. They
+are useful deployment inputs only after revalidation; this audit did not query AWS.
 
 | Setting | Observed value |
 | --- | --- |
@@ -22,8 +53,8 @@ Application PR #3 is merged. Shared-cluster maintenance was authorized on
 | LBC | `v3.2.1`, **0/2 ready; both replicas CrashLoopBackOff** |
 | VPC CNI policy agent | Present, **`--enable-network-policy=false`** |
 
-Matching ARM node addresses are `10.0.2.102`, `10.0.3.143`, `10.0.3.178`,
-and `10.0.3.26`. `node-type=system` is amd64, so the former combination of
+Four ARM nodes matched the selector at that historical check. Keep individual
+node addresses in restricted operational evidence, not the maintained runbook. `node-type=system` is amd64, so the former combination of
 `system` and `arm64` matched no node. Both listed subnets disable public-IP
 assignment and use the existing NAT route. The new relay's egress SG still
 permits only TCP 8080 to its NLB SG.
@@ -34,20 +65,21 @@ explicit-context `kubectl get` requests for nodes, the controller, CNI daemonset
 TGB CRD, and the existing model Deployment/Service/NetworkPolicies. No inference
 request, model contents, secrets, or customer data were read.
 
-## Deployment prerequisites
+## Deployment prerequisites to recheck
 
-Do not deploy the gateway while either controller or policy prerequisite is
-unresolved. The cluster owner must restore the LBC and webhook, and establish
+Verify the LBC/webhook and NetworkPolicy enforcement before applying the gateway.
+If either is still unhealthy, the cluster owner must restore it and establish
 working NetworkPolicy enforcement, including startup behavior. Enabling the
 cluster's policy agent can affect existing workloads and belongs to that owner.
 The new namespace policy is ineffective with the observed disabled agent; the
 shared node SG alone does not isolate the gateway from existing cluster pods.
 Privileged or host-network workloads remain part of the trusted cluster boundary.
 
-The parent must also complete latest-HEAD AI review, required CI, merge, and
-content review score >=85 before deployment. Offline assertions are not evidence
-that these external gates passed. Keep the existing GPU service, node groups,
-plane stack, routes, and data unchanged.
+Use the current repository review and deployment policy; the old handoff's
+content-score threshold is not a runtime or universal PR requirement. Offline
+assertions do not prove deployment readiness. Scope gateway operations to the
+additive resources; changes to shared GPU services, node groups, routes or
+cluster policy enforcement need their own explicit operational scope.
 
 ## Offline checks
 
@@ -60,14 +92,17 @@ cd platform/infra
 ./node_modules/.bin/tsc --noEmit
 ```
 
-The checker synthesizes the privacy stack without lookups or Docker builds. It
-also compares the current main stack with HEAD in memory: privacy disabled must
-be identical, and enabled may add only the WebSocket Lambda environment entry
-and exact `lambda:InvokeFunction` permission. Results are in
+The checker synthesizes the privacy stack without lookups or Docker builds.
+The command above uses HEAD as the baseline main-stack source; CI supplies the
+PR base instead. Privacy disabled must match that supplied baseline; enabled may
+add only the WebSocket Lambda environment entry and exact
+`lambda:InvokeFunction` permission. This is a scoped regression check, not a ban
+on separately reviewed main-stack changes. Results are in
 `platform/infra/cdk.out/privacy-check/verified.json`. Existing main-stack runtime
 and CDK deprecation warnings are outside this change.
 
-Use these explicit context values for the future scoped stack operation:
+The historical inspection supplied these context values; verify them before a
+scoped stack operation:
 
 ```text
 CDK_DEFAULT_ACCOUNT=180294183052
@@ -84,6 +119,12 @@ associations immediately before deployment. Scope CloudFormation changes to
 `BankPlatformPrivacy`; review the separate API-stack change with its deployed
 plane/graph contexts preserved. Do not deploy all stacks or substitute the old
 `10.77.0.0/16` plane VPC.
+
+`platform/deploy.sh` does not forward `privacyVpcId` or
+`mydataPrivacyFunctionArn`. Supply reviewed contexts through the CDK operation or
+its context configuration; do not assume the generic script preserves an
+already enabled relay grant. Its default main-stack name is `BankPlatformCore`,
+while direct `bin/app.ts` defaults to `BankPlatform`.
 
 ## SG, IAM, and target binding contract
 
@@ -123,7 +164,7 @@ The main stack accepts the exact same-account Seoul relay ARN using
 identity-policy grant. Existing account-level administrative permissions are not
 rewritten. No new exports, GPU resources, VPCs, or peering are introduced.
 
-## Image and manifest handoff after the gates pass
+## Image and manifest procedure
 
 Build the existing `platform/privacy` Docker context for `linux/arm64`. Its
 entrypoint is `python -m privacy.gateway.server`, port 8080, UID/GID 10001. Resolve
@@ -132,7 +173,7 @@ refuses tags, a different repository, account/region mismatch, and invalid CIDRs
 Record the actual Qwen artifact revision separately from the gateway image.
 `unverified` is an explicit unknown revision, not an artifact-pinning claim.
 
-Save the future privacy stack outputs to `privacy-outputs.json`. Obtain **all**
+Save the privacy stack outputs to `privacy-outputs.json`. Obtain **all**
 NLB ENI private addresses using its output `PrivacyNlbArn`; DNS alone can omit
 an unhealthy AZ. These are read-only commands after that NLB exists:
 
@@ -159,7 +200,7 @@ python3 platform/privacy/deploy/render.py \
 Only resources in `bank-platform-mydata` are emitted. Apply only that rendered
 manifest once prerequisites pass, then check TGB registration, healthy targets,
 gateway `/models` readiness, synthetic `/deidentify` evidence, and failure
-blocking through the authenticated parent API. A passing `/health` alone does
+blocking through the authenticated S2 API. A passing `/health` alone does
 not prove Qwen readiness. Regenerate the policy after NLB replacement or subnet
 changes. Never log or retain raw invocation payloads/errors.
 
@@ -167,13 +208,23 @@ The relay requires `processor=eks-sllm`, `status=pass`, `method=redaction`, matc
 request model, nonempty model/revision/prompt identifiers, integer counts with
 `sum(entityCounts)=total`, matching character lengths, zero residuals, an allowed
 independent-NER status, and finite nonnegative latency. Zero detections must
-preserve text; new `⟨TYPE:32-random-a-to-p-letters⟩` occurrences must match the per-type counts,
-and existing markers must survive. Optional `modelDetections` counts candidate spans before dedup;
+preserve text; new `⟨TYPE:nonce⟩` occurrences must match the per-type counts,
+and existing markers must survive. Current generated nonces encode 128 random bits
+as 32 nonnumeric characters from `a` through `p` (`[a-p]{32}`). Legacy 8- and
+32-hex markers remain accepted by the parser; they are not the current generated form. Optional `modelDetections` counts candidate spans before dedup;
 `ruleSupplements` counts chosen rule-only spans. PASSPORT is supported. Unknown
 receipt fields and all raw errors are excluded; malformed mandatory evidence
 blocks the text. There is no rule-only fallback or readiness rewrite.
 
-References used for the infrastructure review:
+The gateway detector accepts validated JSON entities or compact `TYPE<TAB>original`
+rows; the current prompt requests compact rows and `NONE` for no identifiers.
+Redaction preserves financial facts and replaces exact spans with random tokens;
+malformed output blocks rather than becoming a rule-only success. The relay
+forwards only allowed receipt fields. The API narrows that receipt again before
+publishing events. Optional training preparation is described in the
+[training contract](../privacy/training/README.md); it does not train or deploy models.
+
+References retained from the earlier infrastructure review:
 
 - AWS Lambda VPC permissions: https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html
 - AWS EC2 action/resource/condition reference: https://servicereference.us-east-1.amazonaws.com/v1/ec2/ec2.json

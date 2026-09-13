@@ -3,42 +3,44 @@
 이 책의 개념들이 실제로 동작하는 **단일 페이지 플랫폼**이다. 은행(가상 "아톰은행") 도메인에서
 GraphRAG, 마이데이터 상담 파이프라인, Registry 거버넌스, 경계 계측, Guardrails를 한 앱에서 시연한다.
 
+> 구현 설명은 2026-09-13 저장소 코드 기준이다. 배포·모델 가용성은 시연 전에 별도로 확인한다.
+> 주 플랫폼 요구사항은 루트 `SPEC.md`의 절 번호를 따른다. 가이드북의 교육용 패턴이 모든 데모의 필수 요건이 되는 것은 아니다.
+
 ## 접속 정보
 
 | 항목 | 값 |
 |---|---|
 | **데모 URL** | <https://agent.atomai.click/> |
-| **접속 계정** | ID `demo@atomai.click` / 비밀번호 `!234Qwer` — 데모 전용 계정(합성데이터만 접근). 원본은 Secrets Manager `bank-platform/demo-user` |
+| 계정·접속 | 관리자에게 발급받은 계정을 사용한다. 주 데모 자격 증명은 권한 있는 운영자가 Secrets Manager `bank-platform/demo-user`에서 확인한다. |
 | 가입 | 불가 — 계정은 관리자 초대(admin-create)로만 발급 |
 
-> 전부 **합성데이터**다. 실제 고객 데이터·실제 상품명·실제 내규 조항을 사용하지 않는다.
+> 전부 **합성데이터**다. 실제 고객 데이터·실제 상품명·실제 내규 조항을 사용하지 않는다. 개인정보 탐지 예제에는 검사 목적의 가상 식별자 형식이 포함된다.
+> 2026-09-03 자격 증명 공개 예외는 합성 데모 접속 페이지에만 한정됐다(`SPEC.md` §12 항목 9). 이 안내에서는 기존 공개 값을 제거하고 비공개 조회 방법으로 대체하며 예외 범위를 넓히지 않는다.
 
 ## 15분 시연 순서
 
 | 순서 | 화면 (좌측 레일) | 보여주는 것 | 시간 |
 |---|---|---|---|
-| S1 | 규정 영향 분석 | 동일 질문을 Vector RAG / GraphRAG에 동시에 — 벡터는 청크만, 그래프는 영향 상품 12·화면 39·부서 7·문서 7건을 노드 ID·순회 경로와 함께 | 4분 |
+| S1 | 규정 영향 분석 | 동일 질문을 Vector RAG / GraphRAG에 동시에 — 벡터 검색 청크와 그래프의 실제 영향 대상·노드 ID·순회 경로를 비교 | 4분 |
 | S2 | 마이데이터 상담 | EKS 개인정보 처리 → 정확 조회·결정론적 계산 → 설명 자료 재검사 → 설명 생성·수치 검증 | 4분 |
-| S3 | Agent Registry | 전 서피스 자산의 승인 수명주기 (AgentCore Agent Registry 실물, CloudTrail 감사) | 3분 |
+| S3 | Agent Registry | 주 플랫폼 Registry의 승인·버전 수명주기와 APPROVED 전용 소비 경로 (AgentCore 미러·CloudTrail 증거는 별도 확인) | 3분 |
 | S4 | Single Boundary 뷰 | 요청별 실측 — VPC 잔류 항목·경계 통과 토큰·사용 모델 ID·차단 여부 (§8-3) | 2분 |
 | S5 | Guardrails 로그 | "어떤 상품이 제일 돈 많이 벌어요?" → 실물 Bedrock Guardrails가 차단 | 2분 |
 
-시연 프리셋 버튼이 각 화면에 있다 — 질문을 타이핑할 필요가 없다.
+시연 프리셋 버튼이 각 화면에 있다 — 질문을 타이핑할 필요가 없다. S2는 개인정보 검사 실패 시 중단하며 공용 이벤트 캐시를 읽거나 쓰지 않는다(`SPEC.md` §4-3·§8-5).
 
 ## 함께 통합된 서피스
 
-- **디자인 스튜디오** (레일 메뉴): UI/UX 스튜디오를 iframe이 아니라 **소스 기반 네이티브 통합** —
-  갤러리 시안 승인/반려(AgentCore Memory few-shot 학습), 디자인 자산 등록·버전 이력, 생성 잡.
-  로그인 한 번으로 두 Cognito 풀에 인증되어 사용자 신원이 스튜디오 감사에도 그대로 남는다.
-- **에이전트** (레일 메뉴): 컨트롤룸의 카탈로그·채팅을 사용자 JWT 프록시로 —
-  예산 서킷브레이커·감사·RBAC는 컨트롤룸 백엔드가 그대로 시행한다.
+- **디자인 스튜디오** (레일 메뉴): 주 플랫폼의 React 공동 작업실은 실제 컴포넌트 코드와 고정된 규칙으로 생성·빌드·브라우저 검사·승인·비공개 릴리스를 수행한다(`SPEC.md` §7-1).
+  기존 HTML 시안 루프와 원본 스튜디오 연동도 별도 경로로 남아 있다. HTML 승인이나 Memory/few-shot 참고 문맥 재사용을 React 릴리스 승인 또는 모델 학습으로 표시하지 않는다.
+- **에이전트** (레일 메뉴): `platform/api/handlers/agents.py`가 실제 Harness 리소스를 생성·관리한다. 기존 컨트롤룸 JWT 프록시와 같은 경로가 아니다.
 - 자매 데모: [에이전트 컨트롤룸](https://d1twhttjtzqewp.cloudfront.net/) (한울증권 도메인 — 팀 셀프서비스·개인 HR 스코핑),
-  [UI/UX 스튜디오 원본](https://d4zwmnh2s47e9.cloudfront.net/). 같은 계정으로 로그인.
+  [UI/UX 스튜디오 원본](https://d4zwmnh2s47e9.cloudfront.net/). 각각 별도 제품이며 인증·저장·검수 범위도 다르다. 현재 접속과 계정 연결은 운영자에게 확인한다.
 
 ## 설계 문서
 
 - [아키텍처와 설계 결정](./architecture) — 구성도, SPEC 매핑, 정직한 미완 사항
 - [마이데이터 개인정보 처리 시나리오](./mydata-privacy)
-- [플랫폼 아키텍처 인터랙티브 다이어그램](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html) · [기존 S2 워크플로우](https://www.atomai.click/AgenticAI-Platform/s2-workflow.html) — 새 EKS 개인정보 처리 단계는 위 시나리오 문서를 따른다.
+- [플랫폼 아키텍처 인터랙티브 다이어그램](https://www.atomai.click/AgenticAI-Platform/platform-architecture.html) · [S2 워크플로우](https://www.atomai.click/AgenticAI-Platform/s2-workflow.html) — 저장소의 그림은 개인정보 처리 순서·제품 범위를 반영해 정리했다. 상세 구현·운영 전제는 위 시나리오 문서를 따른다.
 - 요구사항 명세 원문: 저장소 루트 `SPEC.md`
 - 보안·거버넌스: 저장소 `demo/SECURITY-GOVERNANCE.md`

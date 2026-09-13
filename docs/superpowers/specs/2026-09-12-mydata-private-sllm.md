@@ -1,6 +1,9 @@
-# MyData private sLLM de-identification
+# Design record: MyData private sLLM de-identification
 
-The user requested a MyData privacy scenario using an EKS small model, with the existing aws-fsi-demo implementation as reference and optional SageMaker tuning. The actual reference is /home/atomoh/aws-fsi-demo. The existing fsi-demo-cluster currently serves Qwen/Qwen3-8B; Gemma 4 and DeepSeek are model-family candidates, not already deployed detectors.
+Date: 2026-09-12. Status: accepted design, consolidated into `SPEC.md` §4-3.
+Implementation and deployment evidence are separate; see `platform/infra/README-privacy.md`.
+
+The user requested a MyData privacy scenario using an EKS small model, with the existing aws-fsi-demo implementation as reference and optional SageMaker tuning. The reference checkout was `aws-fsi-demo`. At the recorded check, its existing cluster served Qwen/Qwen3-8B; Gemma 4 and DeepSeek are model-family candidates, not already deployed detectors.
 
 ## Required behavior
 
@@ -14,7 +17,7 @@ The user requested a MyData privacy scenario using an EKS small model, with the 
 
 ## Deployment boundary
 
-Reuse the existing GPU model. Add only a dedicated CPU privacy gateway in a separate EKS namespace, a private load balancer/target binding and a VPC Lambda relay callable by the platform's exact API role. No public model endpoint or new GPU fleet is required. No reference-project data or PII caches are copied. Deployment and PR/review/merge are authorized by the user's standing instructions.
+Reuse the existing GPU model. Add only a dedicated CPU privacy gateway in a separate EKS namespace, a private load balancer/target binding and a VPC Lambda relay callable by the platform's exact API role. No public model endpoint or new GPU fleet is required. No reference-project data or PII caches are copied. The original task authorized this scoped deployment. Current operational actions still follow the active user task; this historical record does not authorize unrelated cluster changes.
 
 ## Interface
 

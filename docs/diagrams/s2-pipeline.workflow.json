@@ -2,318 +2,227 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "S2 마이데이터 상담 파이프라인",
-    "output": "../public/s2-workflow.html",
+    "title": "마이데이터 — Bedrock 이전의 프라이빗 개인정보 처리",
+    "locale": "en",
     "quality_profile": "showcase",
     "animation": "trace",
     "views": [
       {
         "id": "happy",
-        "label": "정상 상담",
+        "label": "정상 처리",
         "focus": [
-          "user",
-          "gin",
-          "semantic",
-          "lookup",
-          "calc",
-          "maskgate",
-          "llm",
-          "verify",
+          "privacy",
+          "input_guard",
+          "prepare",
+          "inspect",
+          "explain",
+          "output_guard",
           "reply"
         ],
-        "note": "숫자는 계산엔진이 만들고, 마스킹된 페이로드만 경계를 넘고, 출력은 수치 검증을 통과해야 한다."
+        "note": "개인정보 처리와 설명 생성을 구분하며, 수치 최종화 전에 텍스트가 전송되는 현재 순서를 표시한다."
       },
       {
         "id": "blocked",
-        "label": "S5 차단 경로",
+        "label": "차단",
         "focus": [
-          "user",
-          "gin",
+          "privacy",
+          "input_guard",
+          "inspect",
           "blocked"
         ],
-        "note": "투자권유성 질문은 실물 Bedrock Guardrails가 입력 단계에서 차단한다."
+        "note": "미설정·유효하지 않은 검사·잔여 식별자는 캐시 성공으로 대체하지 않는다."
       },
       {
         "id": "evidence",
-        "label": "계측과 감사",
+        "label": "검증 근거",
         "focus": [
-          "maskgate",
-          "trace",
-          "audit"
+          "privacy",
+          "inspect",
+          "output_guard",
+          "reply"
         ],
-        "note": "경계 통과 PII 실측과 traceId는 모델 호출 플레인에, 프롬프트 원문은 PII VPC에만 남는다."
+        "note": "전처리·페이로드 검사·출력 Guardrails와 수치 최종화의 근거를 각각 확인한다."
       }
     ]
   },
   "lanes": [
     {
-      "id": "ui",
-      "label": "사용자"
+      "id": "request",
+      "label": "요청 순서 — 개인정보 처리·설명"
     },
     {
-      "id": "guard",
-      "label": "안전장치 (Bedrock Guardrails)",
-      "variant": "exception"
-    },
-    {
-      "id": "cloud",
-      "label": "모델 호출 플레인 (익명화 필수)"
-    },
-    {
-      "id": "onprem",
-      "label": "고객 데이터 플레인 (PII VPC · 격리 서브넷 ECS)"
-    }
-  ],
-  "phases": [
-    {
-      "id": "intake",
-      "label": "질의 · 입력 검사",
-      "fromCol": 0,
-      "toCol": 1
-    },
-    {
-      "id": "compute",
-      "label": "정확 조회 · 결정론 계산",
-      "fromCol": 2,
-      "toCol": 3,
-      "variant": "emphasis"
-    },
-    {
-      "id": "explain",
-      "label": "설명 생성 · 검증",
-      "fromCol": 4,
-      "toCol": 5,
-      "variant": "dashed"
-    }
-  ],
-  "groups": [
-    {
-      "id": "onprem_zone",
-      "label": "프롬프트 원문은 여기 밖으로 나가지 않는다",
-      "lane": "onprem",
-      "fromCol": 1,
-      "toCol": 5,
-      "variant": "security"
+      "id": "response",
+      "label": "완료 또는 실패"
     }
   ],
   "mainPath": [
-    "user",
-    "gin",
-    "semantic",
-    "lookup",
-    "calc",
-    "maskgate",
-    "llm",
-    "verify",
+    "privacy",
+    "input_guard",
+    "prepare",
+    "inspect",
+    "explain",
+    "output_guard",
     "reply"
   ],
   "nodes": [
     {
-      "id": "user",
-      "lane": "ui",
+      "id": "privacy",
+      "lane": "request",
       "col": 0,
-      "type": "external",
-      "label": "질문",
-      "sublabel": "우대금리 충족하나요?",
-      "width": 138
+      "type": "security",
+      "label": "프라이빗 EKS",
+      "sublabel": "원문 식별자 제거",
+      "width": 140
+    },
+    {
+      "id": "input_guard",
+      "lane": "request",
+      "col": 1,
+      "type": "security",
+      "label": "입력 Guardrails",
+      "sublabel": "처리된 질문만",
+      "width": 140
+    },
+    {
+      "id": "prepare",
+      "lane": "request",
+      "col": 2,
+      "type": "backend",
+      "label": "프라이빗 데이터",
+      "sublabel": "정확 조회·계산",
+      "width": 140
+    },
+    {
+      "id": "inspect",
+      "lane": "request",
+      "col": 3,
+      "type": "security",
+      "label": "페이로드 검사",
+      "sublabel": "독립 규칙·모델 게이트",
+      "width": 140
+    },
+    {
+      "id": "explain",
+      "lane": "request",
+      "col": 4,
+      "type": "cloud",
+      "label": "설명 생성",
+      "sublabel": "Bedrock 어댑터",
+      "width": 140
+    },
+    {
+      "id": "output_guard",
+      "lane": "request",
+      "col": 5,
+      "type": "security",
+      "label": "출력 Guardrails",
+      "sublabel": "통과 후 텍스트 전송",
+      "width": 140
     },
     {
       "id": "reply",
-      "lane": "ui",
+      "lane": "response",
       "col": 5,
       "type": "frontend",
-      "label": "회신",
-      "sublabel": "재식별 후 표시",
-      "width": 138
-    },
-    {
-      "id": "gin",
-      "lane": "guard",
-      "col": 1,
-      "type": "security",
-      "label": "입력 검사",
-      "sublabel": "투자권유 토픽 DENY",
-      "tag": "실물 · 목 아님",
-      "width": 138
+      "label": "전송 후 최종화",
+      "sublabel": "수치·Semantic 검사",
+      "width": 140
     },
     {
       "id": "blocked",
-      "lane": "guard",
+      "lane": "response",
       "col": 2,
       "type": "security",
       "label": "차단",
-      "sublabel": "S5 시연 경로",
-      "width": 138
-    },
-    {
-      "id": "verify",
-      "lane": "guard",
-      "col": 4,
-      "type": "security",
-      "label": "출력 검사 + 수치 검증",
-      "sublabel": "계산엔진 밖 숫자 거부",
-      "width": 152
-    },
-    {
-      "id": "semantic",
-      "lane": "onprem",
-      "col": 1,
-      "type": "backend",
-      "label": "Semantic Layer",
-      "sublabel": "지표 정의만 신뢰",
-      "width": 138
-    },
-    {
-      "id": "lookup",
-      "lane": "onprem",
-      "col": 2,
-      "type": "database",
-      "label": "정확 조회",
-      "sublabel": "RDS 원장 · 벡터 검색 없음",
-      "width": 138
-    },
-    {
-      "id": "calc",
-      "lane": "onprem",
-      "col": 3,
-      "type": "backend",
-      "label": "계산엔진",
-      "sublabel": "우대금리·한도 (수식)",
-      "tag": "순수 함수 + 단위테스트",
-      "width": 138
-    },
-    {
-      "id": "maskgate",
-      "lane": "onprem",
-      "col": 4,
-      "type": "security",
-      "label": "익명화 게이트",
-      "sublabel": "토큰화 · 재식별 매핑 보관",
-      "width": 148
-    },
-    {
-      "id": "audit",
-      "lane": "onprem",
-      "col": 5,
-      "type": "database",
-      "label": "감사 원문",
-      "sublabel": "VPC 내부 보관",
-      "width": 138
-    },
-    {
-      "id": "llm",
-      "lane": "cloud",
-      "col": 4,
-      "type": "cloud",
-      "label": "Bedrock 설명 생성",
-      "sublabel": "마스킹 페이로드만 수신",
-      "tag": "토큰 스트리밍",
-      "width": 152
-    },
-    {
-      "id": "trace",
-      "lane": "cloud",
-      "col": 5,
-      "type": "database",
-      "label": "경계 계측",
-      "sublabel": "traceId · PII 실측",
-      "width": 138
+      "sublabel": "캐시 성공 대체 금지",
+      "width": 140
     }
   ],
   "edges": [
     {
-      "id": "q-in",
-      "from": "user",
-      "to": "gin",
-      "variant": "security"
+      "id": "step-0",
+      "from": "privacy",
+      "to": "input_guard",
+      "role": "main"
     },
     {
-      "id": "gin-blocked",
-      "from": "gin",
-      "to": "blocked",
-      "label": "투자권유",
-      "variant": "security",
-      "role": "error"
+      "id": "step-1",
+      "from": "input_guard",
+      "to": "prepare",
+      "role": "main"
     },
     {
-      "id": "gin-sem",
-      "from": "gin",
-      "to": "semantic",
-      "label": "통과",
-      "variant": "emphasis"
+      "id": "step-2",
+      "from": "prepare",
+      "to": "inspect",
+      "role": "main"
     },
     {
-      "id": "sem-lookup",
-      "from": "semantic",
-      "to": "lookup",
-      "variant": "default"
+      "id": "step-3",
+      "from": "inspect",
+      "to": "explain",
+      "role": "main"
     },
     {
-      "id": "lookup-calc",
-      "from": "lookup",
-      "to": "calc",
-      "label": "원본 값",
-      "variant": "emphasis"
+      "id": "step-4",
+      "from": "explain",
+      "to": "output_guard",
+      "role": "main"
     },
     {
-      "id": "calc-mask",
-      "from": "calc",
-      "to": "maskgate",
-      "label": "확정 수치",
-      "variant": "emphasis"
-    },
-    {
-      "id": "mask-llm",
-      "from": "maskgate",
-      "to": "llm",
-      "label": "경계 통과 (마스킹됨)",
-      "variant": "security"
-    },
-    {
-      "id": "llm-verify",
-      "from": "llm",
-      "to": "verify",
-      "variant": "default"
-    },
-    {
-      "id": "verify-reply",
-      "from": "verify",
+      "id": "step-5",
+      "from": "output_guard",
       "to": "reply",
-      "label": "재식별",
-      "variant": "emphasis"
+      "role": "main"
     },
     {
-      "id": "mask-audit",
-      "from": "maskgate",
-      "to": "audit",
-      "label": "원문 + 매핑",
-      "variant": "dashed",
-      "role": "branch"
+      "id": "privacy-failed",
+      "from": "privacy",
+      "to": "blocked",
+      "label": "미설정·검증 실패",
+      "role": "error",
+      "variant": "security"
     },
     {
-      "id": "audit-trace",
-      "from": "audit",
-      "to": "trace",
-      "label": "메트릭·traceId만",
-      "variant": "dashed",
-      "role": "branch"
+      "id": "input-blocked",
+      "from": "input_guard",
+      "to": "blocked",
+      "label": "거부",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "payload-blocked",
+      "from": "inspect",
+      "to": "blocked",
+      "label": "잔여 식별자",
+      "role": "error",
+      "variant": "security"
     }
   ],
   "cards": [
     {
       "dot": "amber",
-      "title": "개정된 배치 원칙 (A1)",
+      "title": "서로 다른 모델 역할",
       "items": [
-        "PII는 VPC 내 보관 — 모델 호출 페이로드는 익명화 필수",
-        "개인 금융데이터는 벡터화하지 않는다 — 키 기반 조회만"
+        "프라이빗 모델은 식별자 근거를 찾고 코드가 검증·제거한다.",
+        "Claude·Gemma는 준비된 금융 계산 결과를 설명한다."
       ]
     },
     {
       "dot": "cyan",
-      "title": "관측 가능성",
+      "title": "실패 시 차단",
       "items": [
-        "각 단계가 UI에서 펼쳐지고 VPC 내부/클라우드 색으로 구분",
-        "경계 통과 페이로드는 토글로 원문 확인 가능"
+        "출력 Guardrails → 텍스트 전송 → 프라이빗 수치·Semantic 최종화 순서다.",
+        "숫자의 표시 전 차단은 미구현이며, S2 공유 캐시 조회·저장·재생은 금지된다."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "근거의 범위",
+      "items": [
+        "독립 NER·학습은 별도 설정과 실행 확인이 필요한 선택 기능이다.",
+        "중계·네트워크 전체의 실제 배포 경로는 별도로 검증해야 한다."
       ]
     }
   ]

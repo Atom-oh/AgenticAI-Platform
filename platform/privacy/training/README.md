@@ -1,5 +1,11 @@
 # Optional offline tuning preparation
 
+Current code audit: 2026-09-13. Follow [root instructions](../../../AGENTS.md),
+[review context](../../../docs/REVIEW_CONTEXT.md), [SPEC.md](../../../SPEC.md),
+and the [privacy runbook](../../infra/README-privacy.md). This document defines the
+local preparation contract and requirements for a future approved trainer; it
+does not claim that a trainer or training deployment exists.
+
 Use the private EKS baseline first. Tuning is optional and should only be proposed
 after held-out evaluation identifies a specific deficiency. This stdlib-only utility
 validates local examples and prepares a **CreateTrainingJob request**, without
@@ -28,6 +34,12 @@ anonymity**; retain them under the dataset's access policy.
 The public fixtures are deliberately tiny, synthetic smoke examples using
 `김테스트`, `.invalid` email addresses and invented financial facts. They are not a
 statistically meaningful tuning or evaluation corpus.
+
+The runtime baseline is the private `qwen` / `Qwen/Qwen3-8B` detector configured in
+`privacy/gateway/models.py` (relative to `platform/`). Private `gemma4` and
+`deepseek` are disabled until configured. These training candidate names do not
+enable an inference endpoint. S2's separate `route="gemma"` explanation adapter
+is not the private `gemma4` detector and is not a tuning prerequisite.
 
 ## Dataset contract
 
@@ -163,14 +175,19 @@ become compatible by accepting this JSON.
    files required by the chosen trainer. Model IDs, chat templates, loss masks,
    adapter strategy, accelerator requirements and serialization are
    **family/trainer-specific**. The registry supplies no versions or compatibility
-   claims for Gemma 4 or DeepSeek; its Qwen baseline reference comes from the MyData
-   spec, and does not register a Qwen trainer.
+   claims for Gemma 4 or DeepSeek. `registry.py` records the Qwen baseline
+   reference but registers no Qwen trainer.
 5. Convert each training example into the reviewed detector's input/target format:
    source `text` as untrusted user content; target exactly
    `{"entities":[{"type":"…","original":"…"}]}`. Do not teach a free-form financial
    text rewrite. Include the gateway taxonomy and approved detector prompt in the
    trainer; `id` is bookkeeping, never a target. A trainer requiring another schema
    needs an explicitly reviewed conversion, not a claim of universal JSONL support.
+   This is the proposed trainer target. The current inference prompt in
+   `privacy/gateway/models.py` requests compact `TYPE<TAB>original` rows or
+   `NONE`; `privacy/gateway/engine.py` also validates JSON entity output.
+   Approve the training-to-serving conversion explicitly. JSONL validation alone
+   does not prove compatibility with the deployed prompt or chat template.
 6. Keep logs and `/opt/ml/output/data/` limited to aggregate metrics, digests and
    reviewed metadata. Never emit sample text, IDs, originals, decoded generations,
    training examples, or raw failure payloads. Network isolation does not sanitize
@@ -194,7 +211,7 @@ dependencies or call AWS.
    for gradient updates, early stopping, prompt selection or checkpoint selection.
    Repeatedly using final eval to choose improvements turns it into development
    data; reserve a new untouched final holdout.
-2. Run the actual private EKS baseline through the parent's inference/evaluation
+2. Run the actual private EKS baseline through the configured inference/evaluation
    path, using the frozen examples. Record model artifact/revision, detector prompt
    version, processor and aggregate pass/block metrics. This preparation utility
    does not run those calls. The public fixtures only smoke-test preparation.
@@ -229,7 +246,7 @@ dependencies or call AWS.
 8. Prepared, trained, evaluated, and approved-for-EKS are separate states. Successful
    local preparation proves none of the latter three. Promotion requires a real
    completed job, pinned output-artifact digest, reviewed license/container
-   compatibility and held-out results before the parent registers an EKS model.
+   compatibility and held-out results before the operator registers an EKS model.
 
 ## Verification and AWS references
 
@@ -241,7 +258,7 @@ Tests exercise malformed records and entities, split leakage independent of labe
 bounded parsing, pinning/encryption/network configuration, and the executable CLI
 under Python `-S` (without third-party site packages).
 
-Primary AWS references consulted through the documentation MCP:
+Primary AWS references retained from the original preparation review:
 
 - [CreateTrainingJob request fields and network isolation](https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_CreateTrainingJob.html)
 - [TrainingImage digest format and File mode](https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_AlgorithmSpecification.html)

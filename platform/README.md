@@ -1,273 +1,192 @@
-# Agentic AI Platform — 은행 데모 (SPEC.md 구현)
+# Agentic AI Platform
 
-루트 `SPEC.md`가 정본 요구사항이다. 이 문서는 **실제 배포 상태**와 운영 절차를 적는다 — 코드에 없는 것을
-"완료"라고 쓰지 않는다. 기존 플랫폼의 배포 이력과 아래 React 작업실의 현재 상태를 구분한다.
+Banking scenarios, asset governance, and a collaborative React design workspace.
+This document describes repository code as audited on 2026-09-13; it does not
+attest to the current AWS deployment.
 
-**2026-09-11 React 작업실 — 코드 `7325c72`:** 백엔드 `UPDATE_COMPLETE`.
-라이브 Astra 기준안+변형 2개와 Fable 새 UX 1개가 모두 2라운드에서 React 코드·빌드·접근성·동작 검사를 통과했다.
-이 실행들은 원본 이미지 기준이 없어 시각 비교를 수행하지 않았다. 선택한 Astra 기준안과 Fable 시안은 실제 트랜잭션으로 승인한 뒤,
-AI 호출 없이 같은 소스의 AWS 재빌드·브라우저 검사·승인 화면 대비 2% 비교를 통과했고 비공개 소스/dist 다운로드 해시도 확인했다.
-실제 API에 연결한 새 UI의 FHD/QHD/WQHD 확인은 통과했다. 프런트엔드를 운영에 게시했으며, 실제 인증 API로 공동 프로젝트·Astra/Fable React 미리보기·릴리스 다운로드 상태와 FHD/QHD/WQHD 배치를 확인했다.
-플랫폼 소스의 공개 PR 게시 권한은 승인됐다.
+Read [root instructions](../AGENTS.md), then [review context](../docs/REVIEW_CONTEXT.md)
+and [SPEC.md](../SPEC.md), then the applicable module contract:
+[platform](docs/CONTRACTS.md), [workspace](workspace/CONTRACT.md), or
+[React workspace](workspace/REACT_CONTRACT.md). SPEC section numbers remain stable.
+Guidebooks explain usage; dated plans and deployment reports are evidence for
+their stated scope, not blanket requirements for every module.
 
-## 구조 — Single Boundary — 두 스택, NAT 없음
+## Current architecture
 
-```
-[브라우저] ─ CloudFront(유일한 퍼블릭 진입점) ─ S3(프라이빗)
-     └─ wss:// API Gateway($connect: Cognito access token 검증)
-            └─ WsFn (클라우드 플레인, VPC 밖)  ── Bedrock(Claude·Titan·Guardrails) · Cognito · DynamoDB(연결/트레이스/캐시/Registry)
-                  ├─ ReaderFn (F7 Reader: Bedrock만, 내부 도구 invoke 권한 없음 → AccessDenied 시연)
-                  ├─ GatesFn  (F5 게이트: tsc / eslint / axe-core — Node 20)
-                  └─ lambda:Invoke ─▶ BridgeFn ─────────────────────────────┐   BankPlatformPlane 스택 (VPC 10.77/16)
-                                                                             │   ┌───────────────────────────────────────┐
-                        cloud-isolated 서브넷: BridgeFn · WriterFn · Neptune │   │ onprem-isolated 서브넷 (인터넷 경로 0) │
-                        (Bedrock/Lambda VPC 엔드포인트는 이 SG들만 허용)     ├──▶│ 내부 ALB → ECS Fargate VPC 내부 서비스   │
-                                                                             │   │  정확 조회·계산엔진·마스킹·감사원문·   │
-                                                                             │   │  벡터 인덱스  ── RDS PostgreSQL        │
-                                                                             │   └───────────────────────────────────────┘
-```
+| Path | Current implementation |
+| --- | --- |
+| Web and API | CloudFront serves the SPA from a private S3 origin. The browser also connects directly to the authenticated API Gateway WebSocket endpoint. Workspace HTTP traffic uses `/studio-api/*`. |
+| Internal data plane | `infra/lib/plane-stack.ts` defines an isolated VPC without NAT: bridge, internal ALB/ECS service, RDS, Neptune, and Writer. `onprem/` is the retained source-directory name. |
+| Private MyData processor | Optional `BankPlatformPrivacy` resources reuse a separate existing EKS VPC. An IAM-only Lambda relay reaches an internal NLB and CPU privacy gateway, which invokes a private model service. This VPC's routes are independent of the isolated data plane. |
+| Generation | `engine/gate.py` checks outbound text before the platform LLM adapters. Strands uses its own `agents/boundary_gate.py` hook. Model choices come from `engine/model_catalog.py`; configured IDs do not prove service availability. |
+| Workspace execution | Private S3/DynamoDB hold inputs, approvals and artifacts. A worker generates source; a separate isolated browser Lambda compiles the pinned React kit and verifies its actual bundle. |
 
-- **VPC 내부 플레인 = 실제 네트워크 분리**: NAT·퍼블릭 서브넷이 없고, VPC 내부 태스크 SG는 Bedrock 엔드포인트 SG에 포함되지 않는다.
-  프롬프트 원문과 재식별 매핑은 RDS `audit_log`에만 남는다. 클라우드 트레이스 테이블에는 해시·길이·메트릭만 기록된다(§12.3).
-- **브리지 Lambda가 유일한 입구**: IAM invoke만 가능. Neptune openCypher와 VPC 내부 ALB를 대리 호출하며 AWS API·인터넷을 호출하지 않는다.
-- **관리 작업 분리**: Neptune 적재·Registry 시드·리셋은 `AdminFn`(IAM invoke 전용). WebSocket 사용자 경로에는 없다.
-- **Guardrails는 코드로 정의**(`infra/lib/stack.ts` CfnGuardrail): 투자권유 토픽 차단, PII 탐지/익명화, 근거 점수(표시용), 비속어.
-- **비용가드/오프라인 폴백**: 일일 Bedrock 토큰 상한(DAILY_TOKEN_CAP) 초과·호출 실패 시 캐시 응답을 재생하고 UI에 "캐시 응답" 배지를 띄운다.
+CloudFront is the web entry point, not the only public endpoint: WebSocket API
+Gateway is directly reachable. Private workspace artifacts differ from legacy
+Studio/design artifacts served through CloudFront. Inspect
+`infra/lib/stack.ts`, `infra/lib/workspace.ts`, and the relevant artifact module
+before making an isolation or publication claim.
 
-React 공동 디자인 작업실은 같은 출처의 `/studio-api` HTTP 경로를 사용한다. JWT 사용자와 현재 프로젝트
-참여 권한으로 자료를 구분하고, 게시 지침·온톨로지·승인 소스·검수 근거를 비공개 S3/DynamoDB에 보관한다.
-워커는 허용된 Bedrock 경로로 화면 소스를 생성하고, 데이터 자격 증명이 없는 격리 실행기의 Node/React 빌드와
-브라우저 검사로 같은 번들을 검증한다. 새 작업실은 아래 **React 공동 디자인 작업실 — 2026-09-11**을 참조한다.
+### MyData: privacy processing and explanation are separate
 
-## 에이전트 계층 — AgentCore 네이티브
+`api/handlers/s2.py` implements this sequence:
 
-- **에이전트 = AgentCore Harness** (코드 없는 관리형 에이전트 루프): 모델(`global.anthropic.claude-sonnet-5`)·시스템프롬프트·
-  skills(S3 `SKILL.md`)·tools(Gateway MCP)·managed memory. `agentcore/agent_specs.py`의 시나리오 에이전트 4종을 `AdminFn seed_agents`가
-  멱등 생성하고, 빌더 화면에서 사용자 정의 에이전트를 만든다.
-- **도구 = AgentCore Gateway `bankplatformcore-tools`(MCP, IAM 인바운드)** → Lambda 타깃 `agentcore/gateway_tools.py` 10종
-  (규정 목록·규정 영향 순회·컴포넌트 영향·Semantic 해석·**마스킹 반환 고객 조회**·우대금리/한도 계산·승인 컴포넌트(Consumer API)·화면 게이트·내부 문서 검색).
-  개인데이터 도구는 VPC 내부에서 조회·계산·마스킹한 뒤 **마스킹 결과만** 반환한다 — 에이전트(LLM)는 원본을 보지 못한다 (도구 출력 = 경계).
-- **거버넌스 = 플랫폼 Registry(DynamoDB: 상태기계·감사·유일성·하이브리드 검색) + AgentCore Registry 미러**(`agentcore/registry_mirror.py`,
-  submit-for-approval / update-status 동기화). **APPROVED가 아닌 에이전트는 호출되지 않는다** (Consumer 게이트, `handlers/agents.py`).
-- AgentCore Insights·Evaluations·Policy는 사용하지 않는다(SPEC v2 §11-4). Harness 화면에는 `Tier 0/1 전용` 배지.
+1. Validate the question and model selection. Send free text to
+   `api/common/privacy.py` → `privacy/relay/handler.py` → EKS gateway.
+2. Invoke the selected private detector, redact validated identifier spans with
+   per-request tokens, and validate the receipt. The default configured detector
+   is `qwen` / `Qwen/Qwen3-8B`; private `gemma4` and `deepseek` entries are disabled
+   until configured. `/models` checks model identity; `/health` alone is insufficient.
+3. Run input Guardrails on sanitized text. Resolve semantic definitions, then
+   use `onprem/service.py` for exact lookup and deterministic rate/limit calculations.
+4. Tokenize known structured fields in the internal service. Run the independent
+   strict PII scan on the resulting payload. This step reports
+   `processor="schema-and-independent-scan"`, `method="structured-tokenization"`,
+   and `modelInvoked=false`; it does not send that payload through Qwen again.
+5. Generate the explanation through `engine/gate.py`, buffer it, and apply output
+   Guardrails before emitting answer text. Internal finalization restores known
+   tokens and reports numeric violations; semantic checking compares the answer's
+   `전월실적` value with the calculation engine.
 
-## 디렉토리
+`privacyModel` selects the private detector; `route` selects the explanation
+adapter (`claude` or `gemma`). The Gemma adapter defaults to `google.gemma-4-31b`
+at bedrock-mantle in `us-west-2`. It is not a substitute for the EKS privacy step.
+S2 requires `MYDATA_PRIVACY_FUNCTION_ARN`; missing configuration, invalid evidence,
+residual identifiers or verification failure blocks the request. There is no
+rule-only privacy fallback or shared response-cache replay: S2 calls
+`costguard.guarded(..., cache=False)`.
 
-| 경로 | 내용 |
-|---|---|
-| `api/ws_handler.py` | 진입점(인증·디스패치) — 얇게 유지 |
-| `api/handlers/` | 액션별 핸들러: `core`(허브·탐색·트레이스·리셋), `s1`, `s2`, `registry`, `screengen`, `report` |
-| `api/common/` | `ctx`(이벤트 push), `log`(원문 마스킹 로그), `tracing`(F6 트레이스), `pii`(독립 PII 스캔), `costguard`(예산·캐시), `plane`(VPC 내부 플레인 클라이언트) |
-| `api/admin_handler.py` | 관리자 Lambda(IAM invoke) |
-| `engine/` | GraphRAG · Vector RAG(BM25+dense+RRF+Cohere rerank, 약화 없음) · Bedrock 래퍼(실측 usage) |
-| `graph/store.py` | `GraphStore` 인터페이스, `LocalGraphStore`, `NeptuneGraphStore`(브리지 경유) |
-| `registry/` | F4 Registry: 상태기계·유일성·감사·Consumer API(APPROVED만)·하이브리드 검색·시드 |
-| `agentcore/` | Harness 래퍼·에이전트 명세·Gateway 도구 Lambda·AgentCore Registry 미러 |
-| `screengen/`, `gates/`, `skills/` | 기존 F5 Registry 시연·생성·게이트·지침. 새 React 릴리스는 별도 실제 코드 경로 사용 |
-| `design_loop/`, `seed/design/` | 디자인 스튜디오 검수 루프(상품명세서→PRD→프로세스 화면→리뷰·테스트→재생성 1회→리포트), 합성 상품명세서·SM 모델·체크리스트 |
-| `workspace/`, `web/src/workspace/` | 개인/프로젝트 범위, 상품 지침·온톨로지·의견, React 생성·검수·승인·릴리스·Git 전달 |
-| `react-kit/` | 실제 15종 React 컴포넌트·타입·토큰, 고정 컴파일러와 소스/dist·테스트 패키징 |
-| `privacy/`, `web/src/mydata/` | EKS sLLM 자유문장 비식별 처리, 고정 필드 토큰화·독립 검수, IAM 중계와 선택적 SageMaker 요청 준비 |
-| `infra/lib/workspace.ts` | 작업실 비공개 저장소·인증 HTTP API·워커·격리 브라우저 실행기 구성 |
-| `report/` | F7 Reader/Writer/내부 도구 Lambda 핸들러 |
-| `onprem/` | VPC 내부 컨테이너: 정확 조회(RDS)·계산엔진·마스킹·감사원문·벡터 인덱스 |
-| `bridge/` | 브리지 Lambda |
-| `infra/lib/plane-stack.ts`, `infra/lib/stack.ts` | CDK 두 스택 |
-| `seed/`, `schema/`, `semantic/` | 합성데이터(시드 고정) · 온톨로지 스키마 · Semantic Layer |
-| `web/` | React 18 + Vite + TS + Tailwind, 단일 SPA(레일 내비), Pretendard, 다크 |
-| `tests/` | pytest (오프라인) |
+The gateway currently reports `independentNer="not-configured"`. Rule checks and
+strict downstream verification exist; a second private NER model is not thereby
+implemented. `modelRevision="unverified"` is an explicit unknown. See
+[privacy infrastructure](infra/README-privacy.md) and
+[optional training preparation](privacy/training/README.md).
 
-## 운영
+### Agent and design paths
+
+| Path | Runtime and limits |
+| --- | --- |
+| Scenario agents | `AdminFn seed_agents` prefers AgentCore Runtime/Strands when `AGENTS_RUNTIME_ARN` exists; otherwise it provisions Harness records. There are five specs, including `design_flow_agent`. |
+| Custom agent builder | `api/handlers/agents.py` creates Harness agents. `agentcore/invoke.py` dispatches by record payload; `APPROVED` is required by the platform invocation handler. |
+| Legacy F5 screen generation | `screengen/agent.py` reads approved Registry component schemas and three skills. At most one regeneration. Node gates use synthetic `@atom/ui` declarations and semantic stubs; visual evidence is an HTML structure snapshot. |
+| Process generation | `design_loop/` derives a PRD and checklist, generates step HTML, then reviews it. At most one regeneration, plus one parse retry within each attempt. `api/handlers/design.py` runs locally through the gate unless `DESIGN_USE_RUNTIME=1` and a runtime ARN are set. |
+| Legacy HTML Studio | `studio/loop.py` uses `studio-*.md` skills, DesignSpec checks and up to 20 rounds. This is a separate workflow from F5 and the React workspace. |
+| React workspace | `workspace/` uses an approved rule contract and pinned `react-kit/`, with one to five rounds (default three). HTML verification remains available as a prototype path. |
+
+AgentCore inference is a Tier 0/1 path. Scenario chat memory in the Strands
+container is a process-local LRU of at most 20 sessions, not proof of managed
+durable memory. See [agent runtime](agents/README.md).
+
+## Collaborative React workspace
+
+The deliverable is a real source project plus the static bundle built from it.
+`react-kit/ui/` supplies 15 platform components, TypeScript types and tokens;
+generated code imports `@studio/approved-ui`. This is a platform baseline, not a
+claim that a customer's component package has been supplied.
+
+- `workspace/collaboration.py` stores project membership, roles, product drafts,
+  immutable published guidelines, ontology projections and comments.
+- `workspace/http.py` derives personal/project scope from authenticated identity
+  and checks current membership. Approval freezes exact criteria and artifact hashes.
+- `workspace/batches.py` creates one creative run or a guided baseline plus two
+  to five variations, with independent evidence and failures.
+- `workspace/react_generation.py`, `react_runtime.py` and `browser*.py` generate,
+  compile and verify the actual bundle. Missing build/browser evidence cannot pass.
+- `workspace/releases.py` rebuilds approved source without an AI call, repeats
+  browser checks, and compares with the approved screenshot at tolerance `0.02`.
+  This is distinct from comparison with an original design image.
+- `workspace/git_service.py` and `git_export.py` export verified source to configured
+  Git destinations and feature branches. No destination is inferred from this
+  repository; unconfigured export remains unavailable.
+
+Files are untrusted data. Originals and hashes are retained; imports track
+`importRevision` and `lineageId` separately from metadata `version`. FIG files
+are retained as opaque archives. Imported HTML inspection does not authorize
+a React release. Visual comparison without a selected reference is `not-run`;
+variation acceptance preserves the measured comparison and requires explicit
+review. Figma integration, customer packages and real financial APIs are not
+implied by a passing platform demo.
+
+## Source map
+
+| Directory | Responsibility |
+| --- | --- |
+| `api/`, `web/` | WebSocket handlers, common services and React/Vite/TypeScript SPA |
+| `engine/`, `graph/`, `semantic/` | LLM boundary, GraphRAG, Vector RAG, metric definitions |
+| `registry/`, `agentcore/`, `agents/` | Registry lifecycle, execution dispatch, Gateway tools, Strands image |
+| `onprem/`, `bridge/` | Internal exact lookup, calculations, masking, audit storage and vector search |
+| `report/` | Separate Reader/Writer handlers; structured handoff and DynamoDB streaming relay |
+| `screengen/`, `gates/`, `skills/` | Legacy F5 generation and runtime prompt rules |
+| `design_loop/`, `studio/` | Process and HTML Studio workflows |
+| `workspace/`, `react-kit/` | Project workflow, actual React build, browser verification, release and export |
+| `privacy/` | Private detector gateway, IAM relay, manifest renderer and offline training preparation |
+| `infra/`, `seed/`, `schema/`, `tests/` | CDK, synthetic fixtures, ontology schema and tests |
+
+## Local checks and operations
+
+Run from `platform/`. Install the dependencies and browser assets required by
+each suite as shown in [CI](../.github/workflows/platform-ci.yml); browser tests
+need Chromium and axe. The following commands are available, not results of
+this documentation audit:
 
 ```bash
-cd platform
-python3 -m pytest tests/ -q                       # 오프라인 테스트 (실제 브라우저 테스트는 로컬 실행 환경 필요)
-bash deploy.sh --plane                             # 플레인 스택 + 메인 스택 + 시드 + 프론트 (첫 배포 25~35분, 기본 MAIN_STACK=BankPlatformCore)
-GRAPH_BACKEND=neptune bash deploy.sh               # 시연 표준: Neptune 백엔드 (Neptune 재적재 자동)
-bash deploy.sh --no-web --no-seed                  # 백엔드 코드만 재배포 (시드·Neptune 재적재 생략)
-python3 cli.py admin health                       # 브리지 → VPC 내부 서비스(/health: RDS·벡터·AOSS) · Neptune /status
-python3 cli.py admin seed_agents                  # 시나리오 에이전트 4종 등록(AgentCore Runtime/Strands) + Registry 승인 + AgentCore Registry 미러
-python3 cli.py admin reset_demo                   # 시연 리셋 (UI의 ⟲ 버튼과 동일)
-bash teardown.sh                                  # 시연 후 플레인 스택 삭제 (Neptune·RDS·ECS·AOSS 상시 과금 — §10-1)
-bash teardown.sh --all                            # 메인 스택까지 삭제
+python3 seed/generate.py
+python3 seed/corpus.py
+python3 -m pytest tests/ -q
+(cd gates && npm ci && npm test)
+(cd react-kit && npm ci --ignore-scripts && npm test)
+(cd web && npm ci && npx tsc --noEmit && npm run build && node --test test/*.test.cjs)
+python3 cli.py admin health
+python3 cli.py admin seed_agents
+python3 cli.py admin reset_demo
 ```
 
-- 라이브: **https://agent.atomai.click** (CloudFront `d8f5f6gxuiuxw`, 스택 `BankPlatformCore`). 구 스택 `BankPlatform`(d15n7n9ypt87h8)은
-  롤백 정리 고착 상태로 남아 있는 **구버전 예비 경로**다 — 시연 후 삭제.
-- 데모 계정: `demo@atomai.click`. 비밀번호는 가이드북 `docs/14-demo/index.md` 접속 정보에 적혀 있다(사용자 결정 2026-09-03,
-  데모 전용 계정 — SPEC §12.9 완화, §16 기록). 원본은 Secrets Manager `bank-platform/demo-user`; 코드·로그에는 적지 않는다.
-  Cognito 풀은 초대 전용(`AllowAdminCreateUserOnly=true`), 가입 UI 없음.
-- 관측성: CloudWatch 대시보드 `BankPlatformCore-ops`, 알람(WsFn 오류·스로틀·p95, ReaderFn 오류). 로그는 JSON 1행/이벤트, `traceId` 포함,
-  프롬프트·개인데이터 키는 해시로 치환된다(§12.5). VPC 내부 서비스 로그도 메트릭만.
-- CI: `.github/workflows/platform-ci.yml` — pytest · 웹 타입체크/빌드 · 게이트 node:test · cdk synth · 비밀번호/키 패턴 검사.
-  pytest 잡은 `seed/generate.py`·`seed/corpus.py`로 합성데이터를 재생성하고, Bedrock 호출 없이 돌리기 위해 임베딩 캐시
-  `seed/out/corpus.embeddings.json`만 저장소에 커밋한다(나머지 `seed/out/*`은 무시).
-  (고객 제안은 GitLab CI 전제 — 이 저장소의 GitHub Actions는 같은 파이프라인의 검증용이다. CodeCommit/CodePipeline 미사용.)
+`seed/out/corpus.embeddings.json` is committed; other generated corpus files
+are normally ignored. CI also synthesizes CDK and checks workspace/privacy
+boundaries and secret-like patterns.
 
-## 시연 리허설 체크리스트 (SPEC v2 §8-5·§10-1)
+For an intended deployment, `deploy.sh` assembles Lambda packages, vendors
+boto3/botocore, prepares agent/skill contexts, deploys the main stack, and normally
+seeds data and uploads the web build:
 
-1. `python3 cli.py admin health` → `storeReady:true`, `aossReady:true`(AOSS 177 docs), Neptune `healthy`.
-2. 대시보드 사이드바: **그래프 백엔드 = Neptune Serverless**, **VPC 내부 플레인 = 연결됨**, LLM 경로 = Tier 0/1 Claude global.
-3. S1 프리셋 → GraphRAG 카운트(상품 12·화면 55·컴포넌트 77·부서 7·문서 7·정책규칙 5, Neptune 실측)와 경로 그래프, Vector 패널의 "VPC 내부 벡터 인덱스(AOSS)" 배지.
-4. S2 프리셋 → ⓪추론 경로 배지 → ⑤ 익명화 게이트(페이로드 기본 표시, 식별자 0건) → ⑧ Semantic 검증. Semantic Layer OFF 토글로 "조용히 틀림" 재현.
-5. S5 프리셋 → Guardrails 차단(`investment-solicitation`, STANDARD 티어·APAC 프로파일).
-6. Registry: Button v2 → DEPRECATED, v3 → APPROVED → 화면 생성 재실행 → 게이트 6종(빌드·타입·린트·KWCAG·구조 스냅샷·Registry) 결과와 Button v3 사용 확인.
-7. 에이전트 빌더: 시나리오 에이전트(AgentCore Runtime · Strands) 채팅 → 도구 호출 카드(Gateway MCP) + 경계 계측 이벤트. 새 에이전트 만들기 → PENDING_APPROVAL → 승인 전 호출 거부(Consumer 게이트) → 승인 후 호출.
-8. Single Boundary 뷰: 5개 지표(VPC 잔류 항목·경계 토큰·모델 ID·저장/추론 배지·차단) 모두 실측값. 대시보드 헤더 "데모 대체 표기"(§11) 열어 3개 대체 지점 확인.
-9. 문제 발생 시 ⟲ 시연 리셋 → Registry 기준선 복원; Bedrock 장애 시 "캐시 응답" 배지가 붙은 재생.
+```bash
+bash deploy.sh --plane
+GRAPH_BACKEND=neptune bash deploy.sh
+GRAPH_BACKEND=neptune bash deploy.sh --no-web --no-seed
+```
 
-### e2e 실측 (2026-09-03 08:00 KST, `tests/e2e/ws_e2e.py`, 라이브 백엔드)
+`MAIN_STACK` defaults to `BankPlatformCore` in this script; direct CDK defaults to
+`BankPlatform`. `GRAPH_BACKEND` defaults to `local`. The script does not forward
+privacy contexts: preserve the reviewed `mydataPrivacyFunctionArn` and current
+plane/graph contexts when operating a privacy-enabled main stack. Use the
+[privacy runbook](infra/README-privacy.md) for the optional stack and manifest.
 
-| 시나리오 | 결과 | 실측 |
-|---|---|---|
-| S1 규정 영향 분석 | 통과 | 전체 23s · 첫 토큰 2.9s(토큰 배치 후), Neptune 카운트 상품 12·화면 55·컴포넌트 77·부서 7·문서 7·정책규칙 5, 그래프 노드 186, 벡터 검색 = VPC 내부(AOSS), 근거 검증 위반 0 |
-| S2 마이데이터 상담 | 통과 | 전체 11.4s · 첫 토큰 5.8s, 브리지 경유 VPC 내부 플레인, 마스킹 필드 customerName·customer_id·account_id, 독립 PII 스캔 0건, 수치 검증 위반 0, 출력 가드레일 NONE |
-| S5 Guardrails | 차단 | `investment-solicitation` 토픽 (STANDARD 티어·APAC 프로파일) |
-| S3 화면 생성 | 통과 (2회차, 반전 버튼 ①②·재생성 v3 교차 검증) | 1차 타입 게이트 실패(Badge tone 'danger' 비허용) → 실패 사유 반영 1회 재생성 → 빌드·타입·린트·KWCAG·구조 스냅샷·Registry 승인 전부 통과, 컴포넌트 10종 사용 |
-| 에이전트 빌더 — Strands 런타임 호출 | 통과 | AgentCore Runtime `bank_platform_agents`(READY), 전체 37s · 첫 토큰 25s(microVM 콜드스타트+도구 2회), 도구 list_regulations → analyze_regulation_impact (Gateway MCP), 실측 토큰 7,905/2,504; AgentCore Registry 미러 APPROVED 4건 |
-| UX Asset Portal | 통과 | Components 80 카드, Related = 그래프 순회(computedBy graph-traversal), CMP-Button-v2 영향: 화면 21·패턴 35·정책규칙 45 |
-| Single Boundary 뷰 | 통과 (브라우저 재검 6/6) | VPC 잔류: 벡터 청크 177·감사 원문·온톨로지 3,797(neptune) — 플레인 /health 실측; 모델 ID 집계; 저장/추론 배지; 차단/캐시 건수. 뷰 단위 ErrorBoundary로 한 화면 오류가 앱을 백지화하지 않음 |
-| F7 보고서 Reader/Writer | 통과 | 전체 42s, 인젝션 지시문 탐지, Reader의 내부 도구 호출 1회 IAM AccessDenied(실측), Writer(격리 서브넷·인터넷 경로 없음) 보고서 2,383자 |
+Destructive cleanup commands exist as `bash teardown.sh` and
+`bash teardown.sh --all`. The first destroys `BankPlatformPlane`; `--all`
+currently targets `BankPlatform`, not the deployment script's default
+`BankPlatformCore`, and neither removes `BankPlatformPrivacy`. Inspect the actual
+stack selection before using them. Removing the plane does not automatically
+reconfigure an already deployed API for local fallback.
 
-알려진 한계(정직 표기): S2 LLM 첫 토큰 ~6초(플레인 준비·입력 가드레일 포함 — 단계 이벤트는 1초 내 도착하므로 화면 침묵은 없다), 에이전트 런타임 첫 호출은 microVM 콜드스타트로 20초 이상(리허설 직전 한 번 워밍업 권장). API Gateway
-@connections 프레임 상한으로 토큰 프레임을 32자/60ms 단위로 배치한다(스로틀 시 캐시 응답 폴백이 동작함을 실측).
+## Dated evidence and remaining limits
 
-## 구현 상태 (2026-09-03 새벽 배포 기준 — 코드·배포·e2e로 확인된 것만)
+These are inherited reports, not fresh verification of the current commit:
 
-아래 표는 기존 플랫폼·정적 Studio의 배포 이력이다. 새 React 작업실의 라이브 모델·UI 검증이나
-프런트엔드 게시 완료를 뜻하지 않는다. 현재 작업실 상태는 다음 절을 따른다.
+| Date | Recorded scope |
+| --- | --- |
+| 2026-09-02 | Local Strands container smoke against real Gateway/Bedrock; see the agent README. |
+| 2026-09-03 | S1/S2/S3/S5, Registry, boundary view and Reader/Writer live rehearsal. Reported Neptune 3,797 nodes/11,052 edges and AOSS 177 documents are historical counts. |
+| 2026-09-05 / 2026-09-07 | Process generation and HTML Studio loop rehearsals. These do not verify React releases. |
+| 2026-09-11, `7325c72` | Reported 784 Python and 41 UI tests; four Astra/Fable React runs passed in two rounds. Two selected approvals passed AWS rebuild/browser/release checks and authenticated ZIP hash checks. Original-image comparison was not run; release comparison used the approved screenshot. |
+| 2026-09-12 | Existing EKS topology inspection recorded controller/policy prerequisites. See the privacy runbook; recheck before deployment. |
 
-| 항목 | 상태 | 근거 |
-|---|---|---|
-| S1 규정 영향 분석 (GraphRAG vs Vector RAG, PolicyRule 경로) | 배포 | Neptune v2 3,797/11,052 적재, `impact_of_regulation` 실측 카운트; 벡터 인덱스 AOSS(177 docs) VPC 엔드포인트 |
-| S2 마이데이터 상담 (게이트·배지·Semantic 토글) | 배포 | `api/handlers/s2.py`, `tests/test_s2_v2.py` 31 통과, 가드레일 v3 STANDARD |
-| S3 Registry 상태기계·Consumer API·화면 생성 + 실검증 게이트 | 배포 | `registry/`, `screengen/`, `gates/`(tsc·eslint·axe), 테스트 통과 |
-| S4 Single Boundary 뷰 (§8-3 지표 5종) | 배포 | `handlers/core.py traces.retained`, `Views.tsx` |
-| S5 Guardrails 실차단 | 배포·실측 | `apply-guardrail` 투자권유 질문 → `GUARDRAIL_INTERVENED` (v2 이후) |
-| F7 Reader/Writer IAM 분리 + 인젝션 | 배포 | ReaderFn(권한 없음, AccessDenied 실측) / WriterFn(격리 서브넷, 인터넷 경로 없음) |
-| UX Asset Portal (Related = 그래프 순회) | 배포 | `handlers/portal.py`, `views/Portal.tsx`, `tests/test_portal.py` 27 통과 |
-| 디자인 스튜디오 프로세스 생성 + 검수 루프 | 배포 | `design_loop/`(오프라인 13 통과)·`handlers/design.py`·`web/src/studio/ProcessStudio.tsx`; live e2e(2026-09-05): 축구클럽 우대 적금 8스텝(증빙 입력 분기 포함)·체크리스트 28(기본18+파생10)·리뷰 후 재생성 1회·리포트 pass23/fail1/미판정4·runtime lambda-local(게이트 경유) |
-| 에이전트 계층 (AgentCore Runtime · Strands · Gateway MCP · Registry 미러 · 빌더) | 배포 | `agents/`, `agentcore/`, `handlers/agents.py`; 로컬 컨테이너 스모크에서 Gateway 도구 호출·스트리밍·경계 계측 확인 |
-| Tier 2 Gemma 경로 (bedrock-mantle) | 코드 완료 · 가용성 런타임 확인 | `engine/llm.py GemmaAdapter` — 모델/키 미확인 시 배지에 "미가용" 표기 |
-| 마이데이터 EKS 개인정보 처리 추가 | 구현·합성 검증, 운영 연결 준비 | `privacy/`와 `api/common/privacy.py` — 실제 Qwen 자유문장 탐지, 요청별 임의 토큰, 고정 정형 필드 처리·독립 잔여 검사. 공유 EKS의 선행조건 확인 전 운영 완료로 표시하지 않음 |
-| pgvector | 미사용 (AOSS 확정) | §16 |
-| 디자인 스튜디오 에이전틱 루프 (StudioLoopFn · StudioTable · studio/drafts) | 배포 | 온톨로지 Product→체크리스트(31항목/필수16) → 워커 Lambda 루프(1~20라운드). live e2e(2026-09-07, `tests/e2e` 패턴 WebSocket): 축구사랑 적금 ux-flow 1라운드 90점 통과(FLOW-COND·STEP-ORDER 통과, few-shot 1건 주입) · 기본 적금 1라운드 93점 통과(FLOW-NOCOND 통과) · refine 1라운드 85점(STABLE 0% 변화, CD-02/CD-03 미충족 사실대로) · 모델 실측 global.anthropic.claude-sonnet-5 · 게이트 차단 재발 방지(모델行 프롬프트 식별자 마스킹, 44f4937·19a924c) · §16 |
+The earlier deployment report named `agent.atomai.click` and `BankPlatformCore`;
+current availability and deployment revision require live evidence. Demo
+credentials belong in the configured secret, not this README.
 
-## React 공동 디자인 작업실 — 2026-09-11
-
-최종 전달 단위는 **실제 React 소스 프로젝트와 그 소스에서 만든 검증된 정적 번들**이다.
-기존 `screengen/gates`의 UI 모사·구조 스냅샷이나 HTML 프로토타입 승인을 React 릴리스 검증으로 사용하지 않는다.
-HTML 원본 검사는 참고 자료의 동작을 확인하는 별도 기능으로 유지한다.
-
-### 구현 구조
-
-| 구성 | 역할 |
-|---|---|
-| `react-kit/ui`, `catalog.json` | `@studio/approved-ui`의 실제 코드·타입·토큰과 소스 해시 |
-| `workspace/collaboration.py`, `storage.py` | 프로젝트 참여자·역할, 상품 초안·불변 게시 지침, 영구 저장된 온톨로지, 의견·영향 조회 |
-| `workspace/http.py`, `criteria.py`, `batches.py` | 사용자/프로젝트 범위, 현재 기준 확인, 창의형·기준안/변형안 요청 |
-| `workspace/react_generation.py`, `react_runtime.py`, `browser*.py` | 허용된 화면 소스 생성, 실제 타입·production build·격리 브라우저 검사 |
-| `workspace/react_quality.py`, `releases.py` | 필수 근거와 동일 해시 승인, 승인 소스 재빌드·재검증·비공개 릴리스 |
-| `workspace/git_service.py`, `git_export.py` | 등록된 Git 대상·비밀 참조, 기능 브랜치 생성, 소스 검증·충돌 거부·실제 커밋 기록 |
-| `web/src/workspace` | 프로젝트 선택, 기획·지침/의견/개발 사이드바, 시안 비교와 정확한 라운드 승인 |
-
-기본 패키지는 **Screen, Stack, Grid, Inline, Panel, Text, Button, Input, Checkbox, Select, RadioGroup,
-Alert, Stepper, Summary, AssetImage 15종**이다. **고객 React 패키지는 미제공**이므로 플랫폼 기본 패키지로 표시한다.
-MD·CSS·스킬 문서는 상품·업무·디자인의 참고 자료이며 컴포넌트 코드의 권위를 대신하지 않는다.
-생성 모델은 승인된 패키지·설정·테스트를 변경하지 않고 화면 구성과 상태 로직만 작성한다.
-
-### 고객 라이브러리 도입 전 사용할 샘플
-
-`react-kit/samples/`에 고정 컴포넌트를 사용하는 실행 예제 3개를 제공한다.
-Studio의 **파일 준비 → React 샘플 둘러보기**에서 직접 조작하고 HTML·가이드·React 소스·빌드 ZIP을 내려받는다.
-모든 상품·문구는 가상 예시이며 고객사의 컴포넌트 승인이나 실제 거래를 뜻하지 않는다.
-
-| 샘플 | 실제로 확인하는 동작 |
-|---|---|
-| 납입금액 입력·확인 | 금액 범위·형식 차단, 기간·금액 전달, 원금 합계, 뒤로가기와 수정 |
-| 필수 안내·동의 | 필수 누락 차단, 선택 항목 독립, 필수 일괄 확인, 철회와 초기화 |
-| 상품 비교·선택 | 상품·기간 전달, 카드형/목록형의 상태 유지, 뒤로가기와 재선택 |
-
-디자이너는 HTML과 가이드를 함께 업로드해 반입·규칙 확인·생성을 연습할 수 있다.
-React 소스 ZIP에는 실제 `ui/` 코드, 고정 의존성, `studio.lock.json`, 브라우저 테스트가 들어 있다.
-개발자는 소스 ZIP을 풀어 `npm ci → npm run typecheck → npm run build → npm test`로 재현한다.
-현재 반입 화면에서 React 프로젝트 ZIP을 직접 실행하는 기능은 제공하지 않는다.
-샘플 HTML에서 새로 생성한 React 화면은 별도 검수·승인 대상이다.
-
-샘플 빌드는 `react-kit/build-samples.cjs`가 담당하고 웹의 `predev/prebuild`에서 실행한다.
-최초 개발 환경에서는 `cd platform/react-kit && npm ci --ignore-scripts`도 필요하다.
-산출물은 무시된 `web/public/studio-samples/`에 생성되며 고객 파일이나 작업실 기록을 읽지 않는다.
-CI는 소스 ZIP을 풀어 재빌드한 번들 해시와 원래 번들 해시의 일치 및 필수 브라우저 규칙을 검사한다.
-브라우저 설치는 `cd platform/react-kit && npx playwright install chromium`,
-이미 반입된 브라우저는 `WORKSPACE_CHROMIUM` 환경 변수로 지정할 수 있다.
-
-공동 작업은 `owner/planner/designer/developer` 역할을 사용한다. 모두 읽기·업로드·의견 작성이 가능하며,
-기획/관리자가 상품 지침을 게시하고 디자인/관리자가 시안을 생성·승인한다.
-디자인·개발·관리자는 이미 승인된 소스의 릴리스를 준비할 수 있고 Git 내보내기는 개발·관리자 권한이다.
-개인 파일은 자동 공유하지 않으며, 저장 범위와 행동한 사용자 ID를 분리한다.
-
-게시 지침의 원문·가이드 자산·Product/Condition/PolicyRule/Procedure/ScreenMeta 노드·관계를 비공개로 저장한다.
-생성은 저장된 온톨로지와 지침 revision을 읽는다. 프로젝트의 이 저장 경로를 Neptune 연동으로 표시하지 않는다.
-지침을 새로 게시하면 관련 시안을 재검증 대상으로 표시하고, 과거 승인은 과거 버전의 사실로 보존한다.
-
-### 생성부터 전달까지
-
-1. 조직의 반입 절차를 거친 HTML·CSS·PNG/JPG/SVG와 가이드를 개인 또는 프로젝트 공간에 보관한다.
-   Studio가 Figma·CDN·외부 폰트·누락 리소스를 직접 가져오지 않는다. FIG는 원본 보관만 지원한다.
-2. 상품 게시 지침, 선택한 자산, 실제 컴포넌트 코드와 검증 규칙의 버전·해시를 고정한다.
-3. **Creative:** 새 UX 1개. **Guided:** 기준안 1개 + 변형 2~5개, 총 3~6개.
-   각 안의 상태는 독립이며 필수 업무 규칙과 컴포넌트 기준은 공통이다.
-4. 실제 React 타입·코드 사용 규칙·production build와 브라우저 동작·접근성·오류·외부 요청을 검사한다.
-   실패·미판정은 통과로 바꾸지 않는다. 시작 화면 비교는 전체 전이 상태의 픽셀 검증이 아니다.
-5. 사람의 승인은 선택한 라운드의 소스·번들·기준·보고서에 귀속된다. 의도적인 화면 변형은 별도 검토·수용 대상이다.
-6. 릴리스는 **AI 재생성 없이 같은 승인 소스**를 다시 빌드·검증하고 동일 소스·번들을 확인한다.
-   디자이너가 승인한 시작 화면과의 재비교 허용 차이는 **2%**다.
-7. 비공개 S3에 **소스 ZIP, dist ZIP, 정적 site 파일, manifest, 검수 보고서**를 보관한다.
-   dist는 S3 정적 배포에 사용할 수 있지만 고객 서비스나 공개 웹 버킷으로 자동 게시하지 않는다.
-8. Git은 관리자 등록 대상의 기능 브랜치만 사용한다. 실제 로컬 bare 저장소와 주입된 GitHub/GitLab 전송기 테스트로
-   파일 내용·해시·중복 요청·충돌·허용 경로를 확인했다. **고객 원격 Git 대상은 미설정**이며 원격 성공을 주장하지 않는다.
-
-시안 승인은 규칙 버전을 같은 트랜잭션에서 확인한다. Git 커밋이 실제 완료되면 이후 기준 조회에 실패해도 SHA를 보존하고,
-최신 기준의 변경·확인 불가를 구분한다. 반입 버전 `importRevision`, 내부 수정 번호 `version`, 제작 도구 원본 버전도 구분한다.
-
-### 현재 확인된 배포·검증
-
-| 구분 | 최신 확인 결과 |
-|---|---|
-| 자동 검증 | **Python 784개·UI 41개 통과**, 컨테이너의 실제 React 빌드·브라우저 경로 통과 |
-| 백엔드 | **AWS UPDATE_COMPLETE** |
-| 라이브 공동 지침 | 프로젝트·상품 지침 게시와 저장된 온톨로지 조회 확인. 합성 자료에서 **노드 7개·관계 8개** |
-| 라이브 반입 | **HTML·CSS·SVG·PNG·JPG 5종** 업로드 및 인증 다운로드 후 원본 해시 일치 |
-| 독립 검토 | 승인 경쟁 상태와 Git 커밋 기록 유실 **Major 2건 수정·독립 재현 확인으로 종료** |
-| 라이브 React 모델 | Astra guided **기준안 1개+변형 2개**, Fable creative **1개**, 모두 **2라운드 통과**. 실제 타입·빌드·접근성·동작 5개 규칙과 필수 온톨로지 안내 Screen 확인 |
-| 동일 기준 수정 | 첫 기준안의 정적 pageId 정책 실패 후 같은 기준을 유지한 소스 수정으로 통과 |
-| 모델 실행의 시각 비교 | 원본 이미지 기준을 지정하지 않아 **visual: not-run**. Figma·원본 디자인 픽셀 일치 결과가 아님 |
-| 실제 승인 | 선택한 Astra 기준안과 Fable 시안을 AWS의 실제 트랜잭션으로 승인 |
-| AWS 릴리스 | 두 승인본 모두 **AI 호출 없이 같은 소스 재빌드·실제 브라우저·승인 화면 대비 2% 비교 통과** |
-| 비공개 전달 | 두 릴리스의 source/dist ZIP을 비공개 S3에 저장하고 인증 다운로드 해시 일치 확인 |
-| 사용자 화면 | 실제 프로젝트·상품 API에 연결한 **FHD/QHD/WQHD 스테이징 통과, 페이지 오류 없음** 확인 |
-| 공개 소스 권한 | 플랫폼 소스의 공개 PR 게시 권한 승인. 고객 자료 공개 허용과 별개 |
-
-검증한 릴리스 아카이브의 다운로드 크기는 다음과 같다. 모두 원본 저장 해시와 일치했다.
-
-| 승인 릴리스 | React 소스 ZIP | dist ZIP |
-|---|---:|---:|
-| Astra guided 기준안 | 34,540 B | 53,101 B |
-| Fable creative | 36,664 B | 54,049 B |
-
-이 표는 코드 `7325c72`를 기준으로 한 2026-09-11 통합 점검의 확인 범위다.
-모델 생성 때의 **원본 이미지 비교 미수행**과 릴리스 때의 **승인 화면 재비교 통과**는 다른 결과다.
-이를 Figma 원본 픽셀 일치나 모든 전이 상태의 시각 검증으로 확대하지 않는다.
-
-### 남은 고객 연결과 범위
-
-- 고객 React 패키지와 버전·토큰: 미제공. 현재 플랫폼 기본 패키지의 검증 결과다.
-- 고객 Git 저장소와 연결 권한: 미설정. 연결 전에는 검증한 소스·dist 다운로드를 사용한다.
-- 실제 금융 API·인증·거래와 고객 운영 환경: 제공된 테스트 범위 밖이다.
-- FIG 내부 해석, 임의 패키지의 완전한 파싱, 기존 갤러리·초안의 자동 일괄 이관: 완료 주장 없음.
-- 플랫폼 소스 공개 허용은 고객 원본·산출물의 공개 게시 허용과 별개다.
-
-사용법: [디자이너 가이드](../docs/14-demo/studio-designer-guide.md) ·
-[파일 반입](../docs/14-demo/studio-file-intake.md) · [구현 점검](../docs/14-demo/studio-implementation-review.md).
-개발 계약: `workspace/CONTRACT.md`, `workspace/REACT_CONTRACT.md`.
-완료 체크: `docs/superpowers/plans/2026-09-11-react-design-workspace.md`.
+Known integration gaps: customer React package and Git connection are not bundled;
+optional training has no trainer/image/promotion implementation; privacy deployment
+readiness and model artifact revision need environment verification. The
+[contract audit notes](docs/CONTRACTS.md#8-audit-notes) record source contradictions.
+The [designer guide](../docs/14-demo/studio-designer-guide.md) and
+[file-intake guide](../docs/14-demo/studio-file-intake.md) provide usage context.
