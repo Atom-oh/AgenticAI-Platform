@@ -2,41 +2,23 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "UX Studio 검증 루프 · 목표 흐름",
-    "quality_profile": "showcase",
-    "legend": {
-      "entries": {
-        "frontend": {
-          "label": "UX 담당자"
-        },
-        "backend": {
-          "label": "생성·수정 AI"
-        },
-        "security": {
-          "label": "검증·통과 조건"
-        },
-        "messagebus": {
-          "label": "수정 피드백"
-        },
-        "database": {
-          "label": "승인 자산"
-        }
-      }
-    }
+    "title": "React 작업실 — 검증·수정·승인",
+    "locale": "en",
+    "quality_profile": "showcase"
   },
   "lanes": [
     {
       "id": "delivery",
-      "label": "생성 → 검증 → 승인"
+      "label": "생성·검증·승인"
     },
     {
       "id": "correction",
-      "label": "실패 → 수정 → 재검증",
+      "label": "수정 또는 보류",
       "variant": "exception"
     },
     {
       "id": "standards",
-      "label": "UX 기준의 축적"
+      "label": "버전 관리 지침"
     }
   ],
   "mainPath": [
@@ -94,96 +76,96 @@
       "id": "ux_baseline",
       "lane": "delivery",
       "col": 0,
-      "width": 136,
+      "width": 128,
       "type": "frontend",
-      "label": "UX 기준 확정",
-      "sublabel": "상품·SM·체크리스트",
-      "tag": "기준 버전 고정"
+      "label": "기준 고정",
+      "sublabel": "지침·컴포넌트",
+      "tag": "버전·해시 고정"
     },
     {
       "id": "ai_draft",
       "lane": "delivery",
       "col": 1,
-      "width": 136,
+      "width": 128,
       "type": "backend",
-      "label": "AI 시안 생성",
-      "sublabel": "승인 자산 기반 생성"
+      "label": "소스 생성",
+      "sublabel": "승인 컴포넌트 사용"
     },
     {
       "id": "independent_checks",
       "lane": "delivery",
       "col": 2,
-      "width": 136,
+      "width": 128,
       "type": "security",
-      "label": "독립 리뷰·테스트",
-      "sublabel": "규칙·흐름·화면·변경",
-      "tag": "생성 역할과 분리"
+      "label": "빌드·브라우저",
+      "sublabel": "규칙·동작 확인",
+      "tag": "독립 검증"
     },
     {
       "id": "completion_gate",
       "lane": "delivery",
       "col": 3,
-      "width": 136,
+      "width": 128,
       "type": "security",
-      "label": "완료 조건 판정",
-      "sublabel": "필수 통과·미판정 0",
-      "tag": "범위 밖 변경 없음"
+      "label": "근거 판정",
+      "sublabel": "필수 검사 통과",
+      "tag": "미판정 통과 금지"
     },
     {
       "id": "ux_review",
       "lane": "delivery",
       "col": 4,
-      "width": 136,
+      "width": 128,
       "type": "frontend",
-      "label": "UX 최종 검수",
-      "sublabel": "화면·의도·근거 확인"
+      "label": "사람 검수",
+      "sublabel": "의도·정확한 라운드"
     },
     {
       "id": "approved_output",
       "lane": "delivery",
       "col": 5,
-      "width": 136,
+      "width": 128,
       "type": "database",
-      "label": "승인본 확정",
-      "sublabel": "시안·기준·근거 보관"
+      "label": "승인 라운드",
+      "sublabel": "소스·기준 결합"
     },
     {
       "id": "targeted_fix",
       "lane": "correction",
       "col": 1,
-      "width": 136,
+      "width": 128,
       "type": "backend",
-      "label": "지정 범위만 수정",
-      "sublabel": "통과 영역·배치 보존",
+      "label": "소스 수정",
+      "sublabel": "같은 기준 유지",
       "tag": "기준 완화 금지"
     },
     {
       "id": "feedback",
       "lane": "correction",
       "col": 3,
-      "width": 136,
+      "width": 128,
       "type": "messagebus",
-      "label": "근거 있는 피드백",
-      "sublabel": "규칙·근거·수정 범위"
+      "label": "실패 근거",
+      "sublabel": "규칙·수정 범위"
     },
     {
       "id": "hold_for_ux",
       "lane": "correction",
       "col": 4,
-      "width": 136,
+      "width": 128,
       "type": "security",
-      "label": "미승인 보류",
-      "sublabel": "보류 사유·조치 확인",
-      "tag": "자동 완료 금지"
+      "label": "보류",
+      "sublabel": "상한·기준 충돌",
+      "tag": "자동 승인 금지"
     },
     {
       "id": "approved_assets",
       "lane": "standards",
       "col": 5,
-      "width": 136,
+      "width": 128,
       "type": "database",
-      "label": "승인 자산 축적",
-      "sublabel": "패턴·실패·회귀 기준"
+      "label": "승인 근거",
+      "sublabel": "버전 있는 참조"
     }
   ],
   "edges": [
@@ -191,21 +173,21 @@
       "id": "baseline_to_draft",
       "from": "ux_baseline",
       "to": "ai_draft",
-      "label": "확정 기준",
+      "label": "고정 기준",
       "role": "main"
     },
     {
       "id": "draft_to_checks",
       "from": "ai_draft",
       "to": "independent_checks",
-      "label": "시안",
+      "label": "소스",
       "role": "main"
     },
     {
       "id": "checks_to_gate",
       "from": "independent_checks",
       "to": "completion_gate",
-      "label": "근거·판정",
+      "label": "검사 결과",
       "role": "main"
     },
     {
@@ -228,7 +210,7 @@
       "id": "gate_to_feedback",
       "from": "completion_gate",
       "to": "feedback",
-      "label": "위반·미판정",
+      "label": "실패·미판정",
       "role": "error",
       "variant": "security"
     },
@@ -252,7 +234,7 @@
       "id": "fix_to_checks",
       "from": "targeted_fix",
       "to": "independent_checks",
-      "label": "동일 기준 재검증",
+      "label": "같은 기준",
       "role": "return",
       "variant": "emphasis"
     },
@@ -260,7 +242,7 @@
       "id": "feedback_to_hold",
       "from": "feedback",
       "to": "hold_for_ux",
-      "label": "상한·기준 충돌",
+      "label": "상한·충돌",
       "role": "error",
       "variant": "security"
     },
@@ -268,14 +250,14 @@
       "id": "output_to_assets",
       "from": "approved_output",
       "to": "approved_assets",
-      "label": "사례 등록",
+      "label": "근거 기록",
       "role": "branch"
     },
     {
       "id": "assets_to_baseline",
       "from": "approved_assets",
       "to": "ux_baseline",
-      "label": "UX 승인 후 기준 개정",
+      "label": "새 기준 승인",
       "role": "return",
       "variant": "dashed"
     }
@@ -283,26 +265,26 @@
   "cards": [
     {
       "dot": "emerald",
-      "title": "완료 조건",
+      "title": "승인은 특정 산출물에 귀속",
       "items": [
-        "필수 규칙 통과 · 미판정 0 · 범위 밖 변경 0",
-        "최종 검수한 버전만 승인·자산화"
+        "소스·규칙·컴포넌트·검수 근거가 일치해야 한다.",
+        "지침이 바뀌면 다시 검증한다."
       ]
     },
     {
       "dot": "cyan",
-      "title": "상품 조건이 검증 기준이 된다",
+      "title": "릴리스는 별도 단계",
       "items": [
-        "축구클럽 우대 적금 → 인증 단계 필수",
-        "일반 적금 → 불필요한 인증 단계 금지"
+        "승인된 소스를 AI 재생성 없이 다시 빌드한다.",
+        "동일 산출물·승인 시작 화면 비교 기준을 검사한다."
       ]
     },
     {
       "dot": "amber",
-      "title": "기존 구현과 추가할 조건",
+      "title": "실제 검증 범위",
       "items": [
-        "기존: DOM·문구·LLM 리뷰·수정 반복",
-        "추가: 실제 화면 비교·회귀 차단·승인 차단"
+        "기존 HTML 검수는 React 릴리스 승인이 아니다.",
+        "기준 이미지가 없으면 이미지 일치 통과를 주장하지 않는다."
       ]
     }
   ]

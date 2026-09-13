@@ -1,23 +1,35 @@
 ---
 name: studio-draft-html
-description: 스튜디오 시안 출력 계약 — 자기완결 HTML 1개, 프레임 마킹, 축(밀도/강조/흐름)
+description: "Studio draft output contract: one self-contained HTML document, frame markers and one variation axis"
 ---
 
-# Studio Draft HTML — 출력 계약
+# Studio Draft HTML — Output contract
 
-출력: **자기완결 HTML 문서 1개**를 ```html 펜스 안에 낸다. 설명은 펜스 밖에 한 문장만.
-- 인라인 `<style>`만. 외부 `<script src>`·`fetch`·외부 CSS 금지 — 외부 리소스 없이 시스템 폰트 스택(Noto Sans KR 우선, fallback sans-serif)을 쓴다.
-- 모바일 프레임 폭 390px, 최소 높이 844px. 흰 카드(radius 16px)를 #f4f6f5 바탕 위에 섹션 단위로 배치, 주 CTA 1개를 하단 고정.
-- **프레임 마킹(필수)**: 화면 하나마다 `<section data-step="n" data-screen="SCR-…">`. 단일 화면 시안도 `data-step="1"` 하나를 둔다.
-  ux-flow 는 절차 단계 순서대로 n을 매기고 각 프레임 첫 요소는 `<h2>`로 단계 이름을 쓴다.
-- 가짜 기기 크롬 금지(상태바·시계·배터리·가상 키보드).
-- 한국어 카피, 실제 같은 샘플 데이터(김아톰, 아톰 주거래 통장 …). 상품 조건(금리·기간·한도·우대)은 프롬프트의 DesignSpec 값을 그대로 쓴다.
-- 샘플 식별자(계좌번호·전화번호·주민번호·카드번호)는 마스킹 표기로만 쓴다 — 예: `110-***-******`, `010-****-****`. 전체 자릿수를 그대로 채운 문자열은 절대 금지(익명화 게이트가 재생성/수정 라운드에서 이 값을 다시 보고 거부한다).
-- 터치 타깃 ≥ 44px, 본문 ≥ 13px.
+Runtime skill loaded by `studio/prompts.py`. Return one complete HTML document
+inside one `html` fence, with only one explanatory sentence outside it.
 
-축(axis) — 요청된 축 하나만 움직인다:
-- 밀도: compact ↔ airy — 간격 스케일·카드 패딩.
-- 강조: 어느 섹션이 지배하는가(금액 중심 vs 조건 중심).
-- 흐름: 단일 화면(기본) vs 단계형 위저드.
+- Inline `<style>` only. No external `<script src>`, `fetch` or external CSS.
+  Use local/system fonts, preferring Noto Sans KR with sans-serif fallback;
+  do not download font resources.
+- Mobile frames are 390px wide and at least 844px tall. Place white section cards
+  (16px radius) on #f4f6f5, with one primary CTA fixed at the bottom.
+- Required frame marker: `<section data-step="n" data-screen="SCR-…">` per screen.
+  Even a single-screen draft has `data-step="1"`. For `ux-flow`, number frames in
+  procedure order and make the first element of each frame an `<h2>` step title.
+- No fake device chrome: status bars, clocks, batteries or virtual keyboards.
+- Use Korean copy and realistic synthetic data (`김아톰`, `아톰 주거래 통장 …`).
+  Copy rates, periods, limits and preferential conditions exactly from the prompt's DesignSpec.
+- Account/phone/resident/card identifiers must remain masked, for example
+  `110-***-******` or `010-****-****`. Never fill every digit: the boundary gate
+  scans the prior HTML again during repair/refinement and can refuse those values.
+- Touch targets are at least 44px; body text is at least 13px.
 
-수정(refine) 요청이면: 지시된 요소만 고치고 나머지 마크업·순서·텍스트는 그대로 둔다. 전체 HTML을 다시 낸다.
+Change only the requested axis; keep the other axes at their defaults. Preserve
+the Korean axis keys used by the runtime:
+
+- `밀도` (density): compact ↔ airy, through spacing and card padding.
+- `강조` (emphasis): which section dominates, such as amounts versus conditions.
+- `흐름` (flow): single screen by default, or a step-by-step wizard.
+
+For `refine`, change only the instructed elements. Preserve all other markup,
+order and text, and return the entire HTML document again.

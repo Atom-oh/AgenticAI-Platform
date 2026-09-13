@@ -2,28 +2,27 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Agentic AI Platform — Single Boundary (v2)",
-    "output": "../public/platform-architecture.html",
+    "title": "은행 플랫폼 — 구현 경계와 남은 배포 확인",
+    "locale": "en",
     "quality_profile": "showcase",
     "animation": "trace",
     "views": [
       {
         "id": "request",
-        "label": "요청 경로",
+        "label": "인증된 요청",
         "focus": [
           "users",
-          "spa",
           "cognito",
-          "wsfn",
-          "harness",
-          "gateway"
+          "spa",
+          "wsfn"
         ],
-        "note": "브라우저는 CloudFront와 토큰 검증 WebSocket으로만 들어오고, 에이전트 실행은 관리형 AgentCore Harness가 담당한다."
+        "note": "웹 앱과 API 요청의 인증 경로를 구분한다."
       },
       {
         "id": "boundary",
-        "label": "Single Boundary",
+        "label": "데이터 경계",
         "focus": [
+          "wsfn",
           "bridge",
           "ecs",
           "rds",
@@ -31,18 +30,17 @@
           "gate",
           "bedrock"
         ],
-        "note": "PII 원장·온톨로지·계산·감사 원문은 인터넷 게이트웨이가 없는 VPC 안에 있고, Bedrock으로 나가는 유일한 통과 지점은 익명화 게이트다."
+        "note": "브리지도 데이터 VPC 안에 있다. 외부 IAM 호출과 브리지의 VPC 소속은 별개다."
       },
       {
-        "id": "governance",
-        "label": "도구 · 거버넌스",
+        "id": "privacy",
+        "label": "개인정보 전처리",
         "focus": [
+          "wsfn",
           "harness",
-          "gateway",
-          "bridge",
-          "wsfn"
+          "gateway"
         ],
-        "note": "Harness는 Gateway(MCP·IAM 인바운드)의 도구만 쓸 수 있고, VPC 내부 접근은 브리지 Lambda 하나로 수렴한다."
+        "note": "기존 EKS VPC의 중계·게이트웨이가 S2 자유 입력을 처리한다. 배포 완료는 별도 확인한다."
       }
     ]
   },
@@ -51,7 +49,7 @@
       "id": "users",
       "type": "external",
       "label": "사용자",
-      "sublabel": "심사·기획·UX",
+      "sublabel": "은행 데모",
       "pos": [
         30,
         320
@@ -64,7 +62,7 @@
     {
       "id": "spa",
       "type": "frontend",
-      "label": "단일 SPA",
+      "label": "웹 앱",
       "sublabel": "CloudFront + S3",
       "pos": [
         210,
@@ -74,15 +72,15 @@
         145,
         60
       ],
-      "tag": "유일한 퍼블릭 진입점"
+      "tag": "정적 진입"
     },
     {
       "id": "cognito",
       "type": "security",
       "label": "Cognito",
-      "sublabel": "초대 전용 · 가입 없음",
+      "sublabel": "초대 전용",
       "pos": [
-        210,
+        30,
         130
       ],
       "size": [
@@ -93,8 +91,8 @@
     {
       "id": "wsfn",
       "type": "backend",
-      "label": "WebSocket 오케스트레이터",
-      "sublabel": "$connect 토큰 필수",
+      "label": "플랫폼 API",
+      "sublabel": "인증된 요청",
       "pos": [
         430,
         320
@@ -103,41 +101,43 @@
         175,
         62
       ],
-      "tag": "경계 계측(F6)"
+      "tag": "오케스트레이션"
     },
     {
       "id": "harness",
       "type": "backend",
-      "label": "AgentCore Harness",
-      "sublabel": "관리형 에이전트 실행 · Strands",
+      "label": "개인정보 중계",
+      "sublabel": "IAM 전용 Lambda",
       "pos": [
-        430,
+        210,
         130
       ],
       "size": [
         175,
         62
-      ]
+      ],
+      "tag": "선택 스택"
     },
     {
       "id": "gateway",
       "type": "backend",
-      "label": "AgentCore Gateway",
-      "sublabel": "MCP · IAM 인바운드 · 툴 10종",
+      "label": "EKS 개인정보 처리",
+      "sublabel": "CPU 게이트웨이 + vLLM",
       "pos": [
-        690,
+        430,
         130
       ],
       "size": [
         180,
         62
-      ]
+      ],
+      "tag": "기존 GPU"
     },
     {
       "id": "bridge",
       "type": "security",
-      "label": "브리지 Lambda",
-      "sublabel": "VPC의 유일한 입구",
+      "label": "데이터 브리지",
+      "sublabel": "IAM 호출",
       "pos": [
         690,
         320
@@ -146,13 +146,13 @@
         160,
         60
       ],
-      "tag": "IAM invoke 전용"
+      "tag": "프라이빗 접근"
     },
     {
       "id": "ecs",
       "type": "backend",
-      "label": "플레인 서비스 (ECS)",
-      "sublabel": "정확 조회·계산·감사 원문",
+      "label": "데이터 서비스",
+      "sublabel": "정확 조회·계산",
       "pos": [
         930,
         320
@@ -166,7 +166,7 @@
       "id": "rds",
       "type": "database",
       "label": "RDS PostgreSQL",
-      "sublabel": "PII 원장 (합성·토큰)",
+      "sublabel": "합성 원장",
       "pos": [
         1160,
         320
@@ -180,7 +180,7 @@
       "id": "neptune",
       "type": "database",
       "label": "Neptune",
-      "sublabel": "온톨로지 (여신+UX 자산)",
+      "sublabel": "규정·UX 자산 그래프",
       "pos": [
         930,
         130
@@ -193,8 +193,8 @@
     {
       "id": "gate",
       "type": "security",
-      "label": "익명화 게이트",
-      "sublabel": "유일한 경계 통과 지점",
+      "label": "모델 게이트",
+      "sublabel": "페이로드 검사",
       "pos": [
         930,
         520
@@ -203,13 +203,13 @@
         170,
         62
       ],
-      "tag": "우회 경로 금지"
+      "tag": "우회 금지"
     },
     {
       "id": "bedrock",
       "type": "cloud",
       "label": "Bedrock",
-      "sublabel": "Claude(global) · Gemma(mantle)",
+      "sublabel": "Claude / Gemma",
       "pos": [
         430,
         520
@@ -218,34 +218,26 @@
         190,
         62
       ],
-      "tag": "Guardrails 실물"
+      "tag": "별도 설명 모델"
     }
   ],
   "boundaries": [
     {
-      "kind": "region",
-      "label": "AWS ap-northeast-2",
+      "kind": "security-group",
+      "label": "데이터 서비스 VPC — 격리 서브넷",
       "wraps": [
-        "cognito",
-        "wsfn",
-        "harness",
-        "gateway",
         "bridge",
         "ecs",
         "rds",
-        "neptune",
-        "gate",
-        "bedrock"
+        "neptune"
       ]
     },
     {
       "kind": "security-group",
-      "label": "VPC 프라이빗 서브넷 — 인터넷 게이트웨이 없음",
+      "label": "기존 EKS VPC — 프라이빗 중계·게이트웨이",
       "wraps": [
-        "ecs",
-        "rds",
-        "neptune",
-        "gate"
+        "harness",
+        "gateway"
       ]
     }
   ],
@@ -264,13 +256,13 @@
       "label": "로그인",
       "variant": "security",
       "fromSide": "top",
-      "toSide": "left"
+      "toSide": "bottom"
     },
     {
       "id": "spa-ws",
       "from": "spa",
       "to": "wsfn",
-      "label": "wss + access token",
+      "label": "토큰 인증",
       "variant": "security",
       "labelDy": 55
     },
@@ -278,34 +270,28 @@
       "id": "ws-harness",
       "from": "wsfn",
       "to": "harness",
-      "label": "관리형 실행 위임",
+      "label": "S2 개인정보 전처리",
       "variant": "emphasis",
       "fromSide": "top",
       "toSide": "bottom",
-      "labelDy": -60
+      "labelAt": [
+        408,
+        206
+      ]
     },
     {
       "id": "harness-gw",
       "from": "harness",
       "to": "gateway",
-      "label": "MCP 도구 호출 (IAM)",
+      "label": "프라이빗 HTTP",
       "variant": "emphasis",
       "labelDy": 55
-    },
-    {
-      "id": "gw-bridge",
-      "from": "gateway",
-      "to": "bridge",
-      "label": "도구 Lambda invoke",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 26
     },
     {
       "id": "bridge-ecs",
       "from": "bridge",
       "to": "ecs",
-      "label": "내부 ALB (SG 전용)",
+      "label": "내부 ALB",
       "variant": "emphasis",
       "labelDy": 55
     },
@@ -313,14 +299,14 @@
       "id": "ecs-rds",
       "from": "ecs",
       "to": "rds",
-      "label": "키 기반 정확 조회",
+      "label": "정확 조회",
       "labelDy": 55
     },
     {
       "id": "bridge-nep",
       "from": "bridge",
       "to": "neptune",
-      "label": "openCypher 순회",
+      "label": "openCypher",
       "variant": "dashed",
       "fromSide": "top",
       "toSide": "left"
@@ -329,7 +315,7 @@
       "id": "ecs-gate",
       "from": "ecs",
       "to": "gate",
-      "label": "확정 수치 · 토큰화 페이로드",
+      "label": "준비된 페이로드",
       "fromSide": "bottom",
       "toSide": "top",
       "labelDy": 26
@@ -338,7 +324,7 @@
       "id": "gate-br",
       "from": "gate",
       "to": "bedrock",
-      "label": "익명화된 페이로드만 통과",
+      "label": "검사 후 추론",
       "variant": "security",
       "labelDy": 55
     },
@@ -346,38 +332,41 @@
       "id": "ws-gate",
       "from": "wsfn",
       "to": "gate",
-      "label": "Tier 0/1 생성도 게이트 경유",
+      "label": "게이트 필수",
       "variant": "dashed",
       "fromSide": "bottom",
       "toSide": "left"
+    },
+    {
+      "id": "api-data",
+      "from": "wsfn",
+      "to": "bridge",
+      "label": "IAM 호출"
     }
   ],
   "cards": [
     {
       "dot": "amber",
-      "title": "Single Boundary 원칙",
+      "title": "개인정보 처리와 설명 분리",
       "items": [
-        "경계는 하나 — 익명화 게이트를 지나지 못하면 Bedrock에 닿을 수 없다",
-        "원장은 복제·벡터화·그래프 적재하지 않는다 (조회만)",
-        "프롬프트 원문은 VPC 안에만 — CloudWatch에는 메트릭·traceId만"
+        "S2는 Bedrock 호출 전에 자유 입력 식별자를 제거한다.",
+        "구조화 금융 값은 코드 토큰화와 독립 검사를 거친다."
       ]
     },
     {
       "dot": "cyan",
-      "title": "관리형 에이전트 계층",
+      "title": "구현 범위",
       "items": [
-        "실행: AgentCore Harness(Strands) · 도구: Gateway MCP (IAM 인바운드)",
-        "VPC 접근은 브리지 Lambda 하나로 수렴 — IAM invoke 전용",
-        "자산 승인 수명주기는 Agent Registry — Consumer는 APPROVED만"
+        "AgentCore 거버넌스·React 작업실의 상세 경로는 생략했다.",
+        "중계 코드 구현은 네트워크 배포·정책 집행 완료의 증거가 아니다."
       ]
     },
     {
       "dot": "emerald",
-      "title": "모델 라우팅과 정직한 배지",
+      "title": "확인 가능한 근거",
       "items": [
-        "Tier 0/1: Claude global 프로파일 — 추론 중 국외 이동 가능, 그래서 익명화 필수",
-        "Tier 2 데모: open-weight Gemma 4 31B (운영은 IDC GPU+vLLM — 배지로 명시)",
-        "경계 통과 토큰·모델 ID·차단 여부는 전부 실측 표시"
+        "실제 그래프 백엔드·모델·토큰 계측을 표시한다.",
+        "원장을 벡터·그래프 인덱스로 복제하지 않는다."
       ]
     }
   ]

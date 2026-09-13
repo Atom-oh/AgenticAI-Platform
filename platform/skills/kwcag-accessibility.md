@@ -1,60 +1,69 @@
-# KWCAG 2.2 접근성 필수 규칙 (Skill · 화면 생성 에이전트 필수 준수)
+# KWCAG accessibility rules
 
-한국형 웹 콘텐츠 접근성 지침 2.2(KS X OT0003)의 검사항목 중 화면 생성 코드에서 **자동 검증 게이트(axe-core + 구조 검사)로 확인되는 항목**을 실행 규칙으로 정리했다.
-게이트가 잡지 못하는 항목(명도 대비 등)도 규칙으로 두되, 검증 결과에는 "미판정"으로 정직하게 표시된다.
+Runtime skill for legacy F5 screen generation. These KWCAG 2.2-oriented rules
+remain generation requirements even where the stub/jsdom gate cannot measure
+them. The gate's mapping is indicative, not an official equivalence table or
+accessibility certification. Real React workspace checks use a separate browser path.
 
-## A-1 대체 텍스트 (KWCAG 5.1.1)
+## A-1 Alternative text (KWCAG 5.1.1)
 
-- 모든 `<img>`는 `alt`를 가진다. 의미 있는 이미지는 내용을 설명하는 `alt`, 장식 이미지는 `alt=""`.
-- 아이콘만 있는 버튼은 `aria-label`로 동작을 설명한다 (`aria-label="닫기"`).
-- SVG 아이콘은 `role="img"` + `aria-label` 또는 `aria-hidden="true"` 중 하나를 반드시 지정한다.
+- Every `<img>` has `alt`: describe meaningful images; use `alt=""` for decoration.
+- Give icon-only buttons an action name, such as `aria-label="닫기"`.
+- SVG icons use either `role="img"` with `aria-label`, or `aria-hidden="true"`.
 
-## A-2 레이블 연결 (KWCAG 7.3.2 · 6.5.3)
+## A-2 Labels (KWCAG 7.3.2, 6.5.3)
 
-- 입력 요소(Select, input)는 **FormField**로 감싸고 `htmlFor`가 입력 요소의 `id`와 정확히 일치해야 한다.
-- 자리표시자(placeholder)는 레이블을 대신하지 못한다. 레이블 텍스트를 항상 둔다.
-- 버튼의 접근 가능한 이름은 라벨 텍스트다. 빈 라벨 버튼을 만들지 않는다.
-- 같은 화면에서 `id`는 중복되지 않는다 (8.1.1 마크업 오류 방지).
+- Wrap inputs/Select in FormField; its `htmlFor` must exactly match the input `id`.
+- Always provide visible label text; placeholders do not replace labels.
+- Buttons need nonempty labels that supply their accessible names.
+- IDs must be unique within the screen (8.1.1).
 
-## A-3 명도 대비 (KWCAG 5.4.3)
+## A-3 Contrast (KWCAG 5.4.3)
 
-- 본문 텍스트 대비 4.5:1 이상, 큰 텍스트(18pt 이상) 3:1 이상. 색은 디자인 토큰(`var(--text)`, `var(--muted)`)만 사용하고 hex 코드를 직접 쓰지 않는다.
-- 상태 색(승인/반려)은 배지 `tone`으로만 표현하고 텍스트 라벨을 함께 둔다 (5.4.1 색에 무관한 콘텐츠 인식).
-- 게이트 참고: jsdom 환경은 레이아웃이 없어 대비를 실측하지 못한다 → 결과에 `미판정(incomplete)`으로 표기되며, 통과로 취급하지 않는다.
+- Require at least 4.5:1 for body text and 3:1 for large text (18pt or larger).
+  Use design tokens such as `var(--text)` and `var(--muted)`, not hex literals.
+- Express status through approved Badge `tone` and a text label (5.4.1).
+- jsdom lacks browser layout, so contrast can be `미판정(incomplete)`.
+  Do not describe that item as passed. The current gate's aggregate `ok` checks
+  violations separately and does not imply every incomplete item passed.
 
-## A-4 초점 순서·키보드 (KWCAG 6.1.1 · 6.1.2)
+## A-4 Focus and keyboard (KWCAG 6.1.1, 6.1.2)
 
-- 초점 순서는 DOM 순서와 같아야 한다. `tabIndex`에 **양수 값을 쓰지 않는다**.
-- 클릭 가능한 요소는 `<button>` 또는 Button 컴포넌트다. `<div onClick>`·`<span onClick>` 금지.
-- 표 행 클릭 등 마우스 전용 상호작용을 만들지 않는다. 행 안에 버튼을 둔다.
-- 포커스 표시를 `outline: none`으로 제거하지 않는다.
+- Match focus order to DOM order; never use positive `tabIndex`.
+- Clickable actions use `<button>` or Button, not `<div onClick>` or `<span onClick>`.
+- Avoid mouse-only row actions; put a button inside the row.
+- Do not remove the focus indicator with `outline: none`.
 
-## A-5 표 구성 (KWCAG 5.3.1)
+## A-5 Tables (KWCAG 5.3.1)
 
-- 데이터 표는 DataTable 컴포넌트를 사용하고 **`caption`을 반드시 전달**한다 (예: `caption="여신 심사 결과 목록"`).
-- 직접 `<table>`을 쓰는 경우 `<caption>`, `<thead>`의 `<th scope="col">`을 갖춘다. 레이아웃 목적의 표는 금지.
-- 빈 셀 대신 `-` 또는 `해당없음`을 넣어 스크린리더가 셀을 건너뛰지 않게 한다.
+- Use DataTable with a required `caption`, such as `caption="여신 심사 결과 목록"`.
+- A direct `<table>` needs `<caption>` and `<thead>` with `<th scope="col">`.
+  Never use tables for page layout.
+- Use `-` or `해당없음` for otherwise empty data cells.
 
-## A-6 제목·구조 (KWCAG 6.4.2 · 5.3.2)
+## A-6 Headings and structure (KWCAG 6.4.2, 5.3.2)
 
-- 화면 제목은 PageHeader 1개(`<h1>`)만. 하위 영역 제목은 Card `title`(`<h2>`)로 계층을 지킨다.
-- 목록은 `<ul>/<ol>`로, 문단은 `<p>`로 마크업한다. 줄바꿈용 `<br>` 연속 사용 금지.
-- 시각적 순서와 DOM 순서를 일치시킨다 (CSS로 순서를 뒤집지 않는다).
+- Use one PageHeader (`<h1>`) per screen; section titles use Card `title` (`<h2>`).
+- Mark lists with `<ul>/<ol>` and paragraphs with `<p>`; do not stack `<br>` for spacing.
+- Keep visual and DOM order aligned; do not reverse them through CSS.
 
-## A-7 상태 알림 (KWCAG 8.2.1)
+## A-7 Status announcements (KWCAG 8.2.1)
 
-- 조회 결과 요약·처리 결과 등 변경되는 상태 텍스트는 Badge(`role="status"`) 또는 `role="status"` 영역에 둔다.
-- 오류 안내는 Alert 컴포넌트(`role="alert"`)로 표시한다.
-- 필수 입력은 `required`를 FormField에 전달하고 별표 외에도 텍스트로 안내한다.
+- Put changing result/status text in Badge (`role="status"`) or a `role="status"` region.
+- Use Alert (`role="alert"`) for errors.
+- Mark required inputs and explain the requirement in text, beyond an asterisk.
+  Pass `required` to FormField only when its approved schema supports that prop;
+  otherwise preserve the required semantics on the supported input/markup.
 
-## A-8 언어·문서 (KWCAG 7.1.1)
+## A-8 Language and document (KWCAG 7.1.1)
 
-- 화면 컴포넌트는 `<html lang>`을 직접 다루지 않는다 — 게이트가 `lang="ko"` 문서에 렌더링해 검사한다.
-- 외국어 약어(LTV, DSR)에는 첫 등장 시 한국어 풀이를 병기한다: `LTV(담보인정비율)`.
+- Do not manage `<html lang>` inside the screen component; the gate wraps it in `lang="ko"`.
+- Expand foreign abbreviations in Korean at first use, such as `LTV(담보인정비율)`.
 
-## 게이트가 검사하는 방식 (정직한 범위)
+## What the gate measures
 
-- 생성 코드를 스텁 런타임으로 정적 렌더링 → jsdom 문서 → axe-core `wcag2a`·`wcag2aa` 규칙 실행.
-- axe 규칙 ID → KWCAG 검사항목 매핑은 **참고용(지시적)** 이며 공식 대응표가 아니다.
-- 추가 구조 검사: `<table>` caption 누락, `<th>` scope 누락, 양수 `tabIndex`.
-- 실제 브라우저 렌더링·색 대비·동적 포커스 이동은 이 게이트의 범위 밖이다.
+`gates/a11y.js` statically renders semantic UI stubs into jsdom, then runs axe-core
+`wcag2a`/`wcag2aa` and structural checks for table captions, header associations and
+positive `tabIndex`. `gates/kwcag-map.js` provides the indicative mapping.
+This path does not verify real component implementations, browser contrast or
+dynamic focus movement. Preserve unmet and incomplete findings explicitly.
