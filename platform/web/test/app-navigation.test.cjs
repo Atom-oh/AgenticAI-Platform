@@ -64,6 +64,17 @@ test('asset and component bookmarks mount Portal after login and keep their quer
   }
 });
 
+test('document evidence and saved analysis links preserve their identity after login', async t => {
+  for (const [hash, view] of [
+    ['#/documents?documentId=d-a&revisionId=d-a--r000001&paragraph=p000003&projectId=team-1&textHash=' + 'a'.repeat(64), 'LibraryPage'],
+    ['#/s1?analysisId=ana-1&projectId=team-1', 'S1'],
+  ]) {
+    const page = await authenticatedPage(t, hash);
+    await page.locator(`[data-view="${view}"]`).waitFor({ timeout: 2000 });
+    assert.equal(new URL(page.url()).hash, hash);
+  }
+});
+
 test('same-page asset links keep Portal mounted; browser history retains selection queries', async t => {
   const page = await authenticatedPage(t, '#/portal');
   await page.locator('[data-view="Portal"]').waitFor();
