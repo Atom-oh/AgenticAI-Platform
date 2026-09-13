@@ -7,10 +7,12 @@ export type { PortalDiagram } from './diagram';
 
 type Prepared = { visual: PortalDiagram; dsl: string };
 
-function DiagramSession({ prepared, title, large = false }: { prepared: Prepared; title?: string; large?: boolean }) {
+function DiagramSession({ prepared, title, large = false, onEscape }: { prepared: Prepared; title?: string; large?: boolean; onEscape?: () => void }) {
   const { visual, dsl } = prepared;
   const frame = useRef<HTMLIFrameElement>(null);
   const session = useRef<RenderSession | null>(null);
+  const escapeCallback = useRef(onEscape);
+  escapeCallback.current = onEscape;
   const initialized = useRef(false);
   const [html, setHtml] = useState<string | null>(null);
   const [state, setState] = useState<'loading' | 'rendered' | 'error'>('loading');
@@ -29,8 +31,10 @@ function DiagramSession({ prepared, title, large = false }: { prepared: Prepared
     };
     const timeout = setTimeout(fail, 25_000);
     const receive = (event: MessageEvent) => {
-      if (!session.current || controller.signal.aborted || finished) return;
+      if (!session.current || controller.signal.aborted) return;
       const result = rendererResponse(event, frame.current?.contentWindow ?? null, session.current);
+      if (result === 'escape') { escapeCallback.current?.(); return; }
+      if (finished) return;
       if (result === 'error') { fail(); clearTimeout(timeout); }
       if (result === 'rendered') { finished = true; setState('rendered'); clearTimeout(timeout); }
     };
@@ -88,13 +92,13 @@ function DiagramSession({ prepared, title, large = false }: { prepared: Prepared
     <details style={{ marginTop: 12 }}>
       <summary>출처와 다이어그램 소스</summary>
       <p style={{ overflowWrap: 'anywhere' }}>{visual.source || '출처 미지정'}</p>
-      <p>실선은 순서, 점선은 참조 관계이며 테두리가 점선인 노드는 누락된 참조입니다.</p>
+      <p>실선은 순서, 점선은 참조 관계입니다. 테두리가 점선인 노드는 이름이나 연결을 확인하지 못한 참조 미확인 항목입니다.</p>
       <pre style={{ maxHeight: 260, maxWidth: '100%', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{dsl}</pre>
     </details>
   </section>;
 }
 
-export function DiagramPreview({ visual, title, large = false }: { visual: PortalDiagram; title?: string; large?: boolean }) {
+export function DiagramPreview({ visual, title, large = false, onEscape }: { visual: PortalDiagram; title?: string; large?: boolean; onEscape?: () => void }) {
   const [retry, setRetry] = useState(0);
   let prepared: Prepared;
   try {
@@ -107,7 +111,7 @@ export function DiagramPreview({ visual, title, large = false }: { visual: Porta
   // removes the old browsing context in the selection commit, before effects/fetch.
   const selection = JSON.stringify([prepared.visual, title, retry]);
   return <div style={{ minWidth: 0, maxWidth: '100%' }}>
-    <DiagramSession key={selection} prepared={prepared} title={title} large={large} />
+    <DiagramSession key={selection} prepared={prepared} title={title} large={large} onEscape={onEscape} />
     <button type="button" onClick={() => setRetry(value => value + 1)} style={{ marginTop: 12 }}>다시 불러오기</button>
   </div>;
 }

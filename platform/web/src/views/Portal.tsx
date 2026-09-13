@@ -187,7 +187,7 @@ function FlowPreview({ visual, name }: { visual: PortalDiagram; name: string }) 
     {expanded && <dialog className="portal-wide-dialog" ref={dialog} aria-labelledby={titleId} onClose={() => setExpanded(false)}>
       <header><h2 id={titleId}>{name}</h2><button type="button" className="portal-secondary" onClick={() => dialog.current?.close()}>전체 화면 닫기</button></header>
       <p className="portal-flow-hint">그림 안에서 스크롤해 나머지 항목을 확인하거나, 화면에 맞춤을 선택하세요.</p>
-      <DiagramPreview visual={visual} title={name} large />
+      <DiagramPreview visual={visual} title={name} large onEscape={() => dialog.current?.close()} />
     </dialog>}
   </section>;
 }
@@ -497,6 +497,9 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
 
 /* ---------------- Main portal ---------------- */
 export default function Portal() {
+  const root = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef(false);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const initialId = idFromHash();
   const [cat, setCat] = useState('Components');
   const [componentView, setComponentView] = useState<'react' | 'ontology'>(initialId ? 'ontology' : 'react');
@@ -524,6 +527,21 @@ export default function Portal() {
   const selectedId = useRef<string | null>(null);
   const showCode = cat === 'Components' && componentView === 'react';
   const currentCode = catalog?.components.find(item => item.name === codeName);
+  useEffect(() => {
+    if (!pendingFocus.current || !(showCode ? currentCode : detail)) return;
+    const frame = requestAnimationFrame(() => {
+      const aside = root.current?.querySelector<HTMLElement>('.portal-detail');
+      if (!aside) return;
+      const box = aside.getBoundingClientRect();
+      if (getComputedStyle(aside).position !== 'sticky' || box.top < 0 || box.top >= innerHeight) {
+        aside.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }
+      aside.tabIndex = -1;
+      aside.focus({ preventScroll: true });
+      pendingFocus.current = false;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showCode, currentCode, detail]);
   const changeCategory = useCallback((category: string) => {
     if (category !== catRef.current) {
       ++listRequest.current;
@@ -561,16 +579,26 @@ export default function Portal() {
     } catch (error: any) { setRegErr(error.message); }
   }, []);
   const clearSelection = useCallback(() => {
+    pendingFocus.current = false;
     ++detailRequest.current; selectedId.current = null;
     setDetail(null); setCodeName(null); setDetailErr(''); setBusy('');
     setPublishRes(null); setSyncRes(null); setImpact(null); setImpactErr('');
   }, []);
+  const rememberSelection = useCallback(() => {
+    returnFocus.current = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement : null;
+    pendingFocus.current = true;
+  }, []);
+  const closeSelection = useCallback(() => {
+    clearSelection();
+    requestAnimationFrame(() => { if (returnFocus.current?.isConnected) returnFocus.current.focus(); });
+  }, [clearSelection]);
   const openCode = useCallback((name: string) => {
-    clearSelection(); changeCategory('Components'); setComponentView('react'); setCodeName(name); setQ('');
+    clearSelection(); rememberSelection(); changeCategory('Components'); setComponentView('react'); setCodeName(name); setQ('');
     history.replaceState(null, '', '#/portal?component=' + encodeURIComponent(name));
-  }, [clearSelection, changeCategory]);
+  }, [clearSelection, changeCategory, rememberSelection]);
   const openDetail = useCallback(async (id: string) => {
-    clearSelection(); const request = ++detailRequest.current; selectedId.current = id;
+    clearSelection(); rememberSelection(); const request = ++detailRequest.current; selectedId.current = id;
     setComponentView('ontology'); setBusy('detail');
     history.replaceState(null, '', '#/portal?id=' + encodeURIComponent(id));
     try {
@@ -582,7 +610,7 @@ export default function Portal() {
       if (result.category && result.category !== catRef.current) { setQ(''); changeCategory(result.category); }
     } catch (error: any) { if (request === detailRequest.current) setDetailErr(error.message); }
     finally { if (request === detailRequest.current) setBusy(''); }
-  }, [clearSelection, changeCategory]);
+  }, [clearSelection, changeCategory, rememberSelection]);
 
   useEffect(() => { void loadCards(cat); }, [cat, loadCards]);
   useEffect(() => {
@@ -652,7 +680,7 @@ export default function Portal() {
   const counts: Record<string, number> = listMeta?.categoryCounts || countsRef.current || {};
   const hasDetail = showCode ? !!codeName : !!detail || busy === 'detail' || !!detailErr;
 
-  return <div className="portal-page">
+  return <div className="portal-page" ref={root}>
     <header className="portal-intro">
       <div><p className="portal-eyebrow">DESIGN ASSET LIBRARY</p><h2>그림으로 확인하고, 직접 사용해 보세요.</h2>
         <p>컴포넌트는 실제 React로, 사용자 흐름과 설계 관계는 다이어그램으로 확인합니다.</p></div>
@@ -699,12 +727,12 @@ export default function Portal() {
         <RegistryMap m={regMap} err={regErr} onReload={loadRegMap} />
       </section>
       {showCode && currentCode && catalog && <CodeDetail key={currentCode.name} component={currentCode} catalog={catalog}
-        onClose={clearSelection} onFindDesign={() => { clearSelection(); setComponentView('ontology'); setQ(currentCode.name); }} />}
+        onClose={closeSelection} onFindDesign={() => { clearSelection(); setComponentView('ontology'); setQ(currentCode.name); }} />}
       {showCode && codeName && catalog && !currentCode && <aside className="portal-detail panel portal-error" role="alert">이 React 컴포넌트는 현재 패키지에 없습니다.</aside>}
       {showCode && codeName && !catalog && <aside className="portal-detail panel portal-detail-placeholder" role="status">
         {catalogError || '실제 React 컴포넌트를 준비하고 있습니다…'}</aside>}
       {!showCode && detail && <DetailPanel key={detail.id} d={detail} busy={busy} publishRes={publishRes} syncRes={syncRes}
-        onClose={clearSelection} onOpen={openDetail} onImpact={runImpact} onPublish={runPublish} onSync={runSync}
+        onClose={closeSelection} onOpen={openDetail} onImpact={runImpact} onPublish={runPublish} onSync={runSync}
         onCode={openCode} codeAvailable={!!catalog?.components.some(item => item.name === detail.name)} />}
       {!showCode && !detail && hasDetail && <aside className="portal-detail panel portal-detail-placeholder" aria-live="polite">
         {detailErr ? <p role="alert">상세 조회 실패: {detailErr}</p> : <p role="status">선택한 자산의 미리보기를 불러오는 중…</p>}

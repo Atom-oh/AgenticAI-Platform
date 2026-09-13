@@ -86,6 +86,10 @@ test('response protocol requires the exact source window, opaque origin, nonce a
     { data: { ...data, type: 'ready' } }, { data: { ...data, channel: 'other' } }, { data: null },
   ]) assert.equal(rendererResponse({ ...event, ...altered }, source, session), null);
   assert.equal(rendererResponse({ ...event, data: { ...data, type: 'error' } }, source, session), 'error');
+  const escape = { ...event, data: { ...data, type: 'escape' } };
+  assert.equal(rendererResponse(escape, source, session), 'escape');
+  assert.equal(rendererResponse({ ...escape, source: {} }, source, session), null);
+  assert.equal(rendererResponse({ ...escape, data: { ...escape.data, nonce: 'e'.repeat(64) } }, source, session), null);
 });
 
 test('manifest only accepts the exact version/hash filename without path or URL variants', () => {

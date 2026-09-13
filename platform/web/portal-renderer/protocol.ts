@@ -20,10 +20,10 @@ export function rendererResponse(
   event: Pick<MessageEvent, 'source' | 'origin' | 'data'>,
   source: MessageEventSource | null,
   session: RenderSession,
-): 'rendered' | 'error' | null {
+): 'rendered' | 'error' | 'escape' | null {
   if (!source || event.source !== source || event.origin !== 'null') return null;
   const data = event.data;
   if (!isSession(data) || data.nonce !== session.nonce || data.id !== session.id) return null;
   const message = data as RenderSession & { channel?: unknown; type?: unknown };
-  return message.channel === CHANNEL && (message.type === 'rendered' || message.type === 'error') ? message.type : null;
+  return message.channel === CHANNEL && (message.type === 'rendered' || message.type === 'error' || message.type === 'escape') ? message.type : null;
 }

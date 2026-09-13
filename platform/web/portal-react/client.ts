@@ -91,9 +91,7 @@ export function createReactLoader({ fetcher = fetch, origin }: { fetcher?: typeo
   const manifest = () => manifestPromise ||= readBytes(localURL('index.json'), LIMITS.manifest, 'application/json', fetcher)
     .then(bytes => validateManifest(JSON.parse(decode(bytes))))
     .catch(error => { manifestPromise = undefined; throw error; });
-  return {
-    catalog: () => manifest().then(value => value.catalog),
-    document: () => documentPromise ||= (async () => {
+  const document = () => documentPromise ||= (async () => {
       const { catalog, renderer } = await manifest();
       const bytes = await readBytes(localURL(renderer.file), renderer.bytes, 'text/html', fetcher);
       if (bytes.byteLength !== renderer.bytes) throw new Error('react-renderer-size-mismatch');
@@ -101,6 +99,8 @@ export function createReactLoader({ fetcher = fetch, origin }: { fetcher?: typeo
       const sha = Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
       if (sha !== renderer.sha256) throw new Error('react-renderer-integrity-mismatch');
       return Object.freeze({ html: decode(bytes), catalog });
-    })().catch(error => { documentPromise = undefined; manifestPromise = undefined; throw error; }),
-  };
+    })().catch(error => { documentPromise = undefined; manifestPromise = undefined; throw error; });
+  // Never publish identity from a manifest whose renderer has not been verified.
+  // Once resolved, both callers share the same immutable revision snapshot.
+  return { catalog: () => document().then(value => value.catalog), document };
 }
