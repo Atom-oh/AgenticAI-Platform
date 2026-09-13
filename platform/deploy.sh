@@ -35,7 +35,7 @@ echo "== 1) api-dist 조립 =="
 rm -rf api-dist && mkdir -p api-dist/seed/out
 cp api/*.py api-dist/
 cp -r api/common api/handlers engine graph onprem semantic api-dist/
-for m in registry screengen report agentcore design_loop studio workspace; do [ -d "$m" ] && cp -r "$m" api-dist/; done
+for m in registry screengen report agentcore design_loop studio workspace documents; do [ -d "$m" ] && cp -r "$m" api-dist/; done
 mkdir -p api-dist/react-kit
 cp react-kit/catalog.json api-dist/react-kit/
 cp -r react-kit/ui api-dist/react-kit/

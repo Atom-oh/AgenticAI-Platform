@@ -56,6 +56,9 @@ class ImpactResult:
     path_edges: list[Edge]
     # v2: (r)<-[:DERIVED_FROM]-(pol:PolicyRule)
     policy_rules: list[Node] = field(default_factory=list)
+    # A backend query reached its cap; counts describe fetched nodes, not
+    # necessarily the complete graph. False for the uncapped local traversal.
+    traversal_limit_reached: bool = False
 
     def counts(self) -> dict:
         return {
@@ -127,6 +130,9 @@ class GraphStore(ABC):
 
     @abstractmethod
     def impact_of_regulation(self, reg_code: str) -> ImpactResult: ...
+
+    @abstractmethod
+    def impact_of_regulation_id(self, regulation_id: str) -> ImpactResult: ...
 
     @abstractmethod
     def impact_of_component(self, component_id: str) -> ComponentImpact: ...
@@ -236,7 +242,15 @@ class LocalGraphStore(GraphStore):
         regs = self.find_by_label("Regulation", code=reg_code)
         if not regs:
             return ImpactResult(None, [], [], [], [], [], [], [])
-        reg = regs[0]
+        return self._impact_for_regulation(regs[0])
+
+    def impact_of_regulation_id(self, regulation_id: str) -> ImpactResult:
+        reg = self.get_node(regulation_id)
+        if reg is None or reg.label != "Regulation":
+            return ImpactResult(None, [], [], [], [], [], [], [])
+        return self._impact_for_regulation(reg)
+
+    def _impact_for_regulation(self, reg: Node) -> ImpactResult:
         path: list[Edge] = []
         seen: dict[str, set[str]] = defaultdict(set)
 
@@ -482,36 +496,52 @@ class NeptuneGraphStore(GraphStore):
         regs = self.find_by_label("Regulation", code=reg_code)
         if not regs:
             return ImpactResult(None, [], [], [], [], [], [], [])
-        reg = regs[0]
-        p = {"c": reg_code, "c2": reg.id}
-        base = "MATCH (r:Regulation {code: $c})"
+        return self._impact_for_regulation(regs[0])
+
+    def impact_of_regulation_id(self, regulation_id: str) -> ImpactResult:
+        reg = self.get_node(regulation_id)
+        if reg is None or reg.label != "Regulation":
+            return ImpactResult(None, [], [], [], [], [], [], [])
+        return self._impact_for_regulation(reg)
+
+    def _impact_for_regulation(self, reg: Node) -> ImpactResult:
+        p = {"c": reg.id, "c2": reg.id}
+        limit_reached = False
+
+        def nodes(cypher: str, limit: int) -> list[Node]:
+            nonlocal limit_reached
+            rows = self._nodes(cypher, p)
+            limit_reached = limit_reached or len(rows) >= limit
+            return rows
+
+        base = "MATCH (r:Regulation {id: $c})"
         via_prod = (base + "<-[:DERIVED_FROM]-(:Condition)<-[:HAS_CONDITION]-(pp:Product)-[:SOLD_VIA]->(s:Screen)")
         via_pol = (base + "<-[:DERIVED_FROM]-(pol:PolicyRule)-[:CONSTRAINS]->(s:Screen)")
 
-        conditions = self._nodes(base + "<-[:DERIVED_FROM]-(n:Condition) RETURN DISTINCT n LIMIT 2000", p)
-        products = self._nodes(
-            base + "<-[:DERIVED_FROM]-(:Condition)<-[:HAS_CONDITION]-(n:Product) RETURN DISTINCT n LIMIT 1000", p)
-        policy_rules = self._nodes(base + "<-[:DERIVED_FROM]-(n:PolicyRule) RETURN DISTINCT n LIMIT 500", p)
+        conditions = nodes(base + "<-[:DERIVED_FROM]-(n:Condition) RETURN DISTINCT n LIMIT 2000", 2000)
+        products = nodes(
+            base + "<-[:DERIVED_FROM]-(:Condition)<-[:HAS_CONDITION]-(n:Product) RETURN DISTINCT n LIMIT 1000", 1000)
+        policy_rules = nodes(base + "<-[:DERIVED_FROM]-(n:PolicyRule) RETURN DISTINCT n LIMIT 500", 500)
         # screens = SOLD_VIA 화면 ∪ PolicyRule 제약 화면 (UNION 은 라벨 MATCH 2회로 대신하고 파이썬에서 합친다)
         screens_by_id: dict[str, Node] = {}
         for cy in (via_prod + " RETURN DISTINCT s AS n LIMIT 1000",
                    via_pol + " RETURN DISTINCT s AS n LIMIT 1000"):
-            for n in self._nodes(cy, p):
+            for n in nodes(cy, 1000):
                 screens_by_id.setdefault(n.id, n)
         screens = list(screens_by_id.values())
         comps_by_id: dict[str, Node] = {}
         depts_by_id: dict[str, Node] = {}
         for cy in (via_prod + "-[:USES]->(n:Component) RETURN DISTINCT n LIMIT 1000",
                    via_pol + "-[:USES]->(n:Component) RETURN DISTINCT n LIMIT 1000"):
-            for n in self._nodes(cy, p):
+            for n in nodes(cy, 1000):
                 comps_by_id.setdefault(n.id, n)
         for cy in (base + "<-[:DERIVED_FROM]-(:Condition)<-[:HAS_CONDITION]-(pp:Product)-[:OWNED_BY]->(n:Department) "
                    "RETURN DISTINCT n LIMIT 200",
                    via_prod + "-[:OWNED_BY]->(n:Department) RETURN DISTINCT n LIMIT 200",
                    via_pol + "-[:OWNED_BY]->(n:Department) RETURN DISTINCT n LIMIT 200"):
-            for n in self._nodes(cy, p):
+            for n in nodes(cy, 200):
                 depts_by_id.setdefault(n.id, n)
-        documents = self._nodes(base + "<-[:REFERENCES]-(n:Document) RETURN DISTINCT n LIMIT 1000", p)
+        documents = nodes(base + "<-[:REFERENCES]-(n:Document) RETURN DISTINCT n LIMIT 1000", 1000)
         # 시각화용 경로 엣지 (홉별 쌍 조회)
         path: list[Edge] = []
         for cy, rel in [
@@ -529,9 +559,12 @@ class NeptuneGraphStore(GraphStore):
             (via_pol + "-[:OWNED_BY]->(dp:Department) RETURN DISTINCT s.id AS s, dp.id AS d", "OWNED_BY"),
             (base + "<-[:REFERENCES]-(dc:Document) RETURN DISTINCT dc.id AS s, $c2 AS d", "REFERENCES"),
         ]:
-            path.extend(self._pairs(cy + " LIMIT 3000", p, rel))
+            rows = self._pairs(cy + " LIMIT 3000", p, rel)
+            limit_reached = limit_reached or len(rows) >= 3000
+            path.extend(rows)
         return ImpactResult(reg, conditions, products, screens, list(comps_by_id.values()),
-                            list(depts_by_id.values()), documents, path, policy_rules)
+                            list(depts_by_id.values()), documents, path, policy_rules,
+                            traversal_limit_reached=limit_reached)
 
     # ---------- 컴포넌트 변경 영향 ----------
     def impact_of_component(self, component_id: str) -> ComponentImpact:

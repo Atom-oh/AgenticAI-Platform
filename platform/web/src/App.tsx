@@ -2,6 +2,7 @@ import { Component, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { auth, login } from './lib';
 import S1 from './S1';
+import LibraryPage from './documents/LibraryPage';
 import S2 from './S2';
 import Studio from './Studio';
 import { Agents, Dashboard, Explore, Frame, TwoPlane } from './Views';
@@ -15,6 +16,7 @@ import { loadConfig, sock, WsEvent } from './lib';
 const NAV = [
   { id: 'home', ic: '◈', label: '대시보드' },
   { id: 's1', ic: '⧉', label: '규정 영향 분석', tag: 'S1' },
+  { id: 'documents', ic: '▤', label: '내부 문서함' },
   { id: 's2', ic: '💬', label: '마이데이터 상담', tag: 'S2' },
   { id: 'explore', ic: '🕸', label: '온톨로지 탐색기' },
   { id: 'registry', ic: '🗂', label: 'Agent Registry', tag: 'S3' },
@@ -34,7 +36,8 @@ const ALIAS: Record<string, string> = { twoplane: 'boundary' };
 const resolveView = () => { const h = location.hash.replace('#/', '').split('?')[0] || 'home'; return ALIAS[h] || h; };
 
 const TITLE: Record<string, string> = {
-  home: '플랫폼 대시보드', s1: '규정 영향 분석 — Vector RAG vs GraphRAG',
+  home: '플랫폼 대시보드', s1: '규정 영향 분석 — 원문 근거 · 변경 검토',
+  documents: '내부 문서함 — 원문 · 버전 · 검토',
   s2: '마이데이터 상담 — 숫자는 LLM이 만들지 않는다', explore: '온톨로지 탐색기',
   registry: 'Agent Registry — 자산 승인 거버넌스', screengen: '화면 생성 — 승인된 컴포넌트만, 실검증 게이트',
   portal: 'UX Asset Portal — AI-Readable 화면 · 에셋 관리 (P1)',
@@ -181,6 +184,7 @@ export default function App() {
           <ViewErrorBoundary viewKey={view}>
           {view === 'home' && <Dashboard go={go} />}
           {view === 's1' && <S1 />}
+          {view === 'documents' && <LibraryPage />}
           {view === 's2' && <S2 />}
           {view === 'explore' && <Explore />}
           {view === 'registry' && <RegistryView />}

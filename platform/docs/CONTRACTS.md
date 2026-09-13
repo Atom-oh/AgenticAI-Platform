@@ -9,6 +9,10 @@ additional requirements unless the current task explicitly adopts them.
 Paths below are relative to `platform/`. Workspace interfaces are defined in
 [CONTRACT.md](../workspace/CONTRACT.md) and
 [REACT_CONTRACT.md](../workspace/REACT_CONTRACT.md).
+The internal library and source-bound S1 HTTP workflow are specified in
+[documents/CONTRACT.md](../documents/CONTRACT.md). Their private document kinds
+are separate from ordinary workspace assets, and their analyses never use the
+legacy shared WebSocket event cache.
 
 ## 1. WebSocket handlers
 

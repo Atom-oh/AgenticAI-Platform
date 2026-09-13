@@ -495,6 +495,35 @@ Keep detailed operational evidence in `platform/README.md`,
 `platform/infra/README-privacy.md` and `docs/14-demo/`. Do not convert a historical test
 count, a local Git test or a staging result into a claim about today's deployment.
 
+## Amendment: internal documents and source-bound S1 (2026-09-13)
+
+This scoped amendment follows the user's request for commercial-level source
+traceability and their choice to start with an internal document library.
+It replaces the primary S1 comparison-screen requirement only. Existing
+Vector/Graph comparison engines remain legacy technical interfaces and are not
+consumers of private library content.
+
+- The primary S1 workflow selects a regulation, resolves currently accessible
+  approved originals, records exact document/extraction versions and opens
+  citations at their source paragraphs. Missing originals remain missing.
+- Reuse canonical workspace JWT identity, personal/project membership and private
+  storage. Document permissions apply to metadata, original/paragraph reads,
+  search, model context, asynchronous publication and result reads.
+- Do not use the shared S1 event cache for private analyses. Failures cannot
+  replay another user's result or silently substitute a document version.
+- Source hashes and reference-ID validation establish integrity and linkage,
+  not semantic or legal correctness. Results remain impact candidates for
+  human review; authorized owner/planner decisions are separately recorded.
+- Original intake, extraction completeness, immutable revisions, approval,
+  source-role changes and history follow
+  `platform/documents/CONTRACT.md`. Incomplete text cannot be approved for AI use.
+- Synthetic examples are explicitly labelled, server-owned and initially
+  drafts. Normal uploads cannot claim that provenance or replace sample
+  originals. No example is represented as a real banking policy.
+
+This amendment defines required behavior; source code, tests, review and live
+deployment evidence must establish its implementation separately.
+
 ## Appendix: access
 
 Use the URLs and authorized account setup in `docs/14-demo/index.md`. Cognito remains

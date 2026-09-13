@@ -238,14 +238,40 @@ class Worker:
             elif task == "git":
                 from workspace.git_service import process_export
                 result = process_export(self, owner, job)
+            elif task == "document-finalize":
+                from documents.intake import finalize
+                result = finalize(self, owner, job)
+            elif task == "document-analysis":
+                from documents.analysis import process_analysis
+                result = process_analysis(self, owner, job)
             else:
                 raise ValueError("지원하지 않는 작업입니다.")
-            self._update(owner, "job", identifier, status="completed", progress=100, result=result)
+            # Document tasks commit their result and terminal job state under
+            # the same authority fence; do not add a later unfenced write.
+            if task.startswith("document-"):
+                current_job = self.storage.get(owner, "job", identifier)
+                if not current_job or current_job.get("status") != "completed":
+                    raise ValueError("문서 작업의 원자적 완료 기록을 확인하지 못했습니다.")
+            else:
+                self._update(owner, "job", identifier, status="completed", progress=100, result=result)
             return {"status": "completed", "jobId": identifier}
         except Exception as error:
             # Known validation messages are bounded and contain no SDK secrets.
             from engine.gate import GateRefused, GateUnsupported
             message = str(error)[:300] if isinstance(error, (ValueError, GateRefused, GateUnsupported)) else f"작업 처리 실패: {type(error).__name__}"
+            if job.get("task") in ("document-finalize", "document-analysis"):
+                from documents.errors import DocumentError
+                from documents.jobs import fail_work
+                message = error.message if isinstance(error, DocumentError) else "문서 작업을 완료하지 못했습니다. 권한과 원문 상태를 확인하세요."
+                persisted = False
+                try:
+                    persisted = fail_work(self, owner, job, message)
+                except Exception:
+                    # Lost authority or unavailable storage cannot justify an
+                    # unfenced fallback write. Authorized reads can reconcile
+                    # stale work later; no result is published.
+                    pass
+                return {"status": "failed", "jobId": identifier, "failurePersisted": persisted}
             self._update(owner, "job", identifier, status="failed", error=message)
             if job["task"] == "release":
                 release = self.storage.get(owner, "release", job["input"]["releaseId"])
