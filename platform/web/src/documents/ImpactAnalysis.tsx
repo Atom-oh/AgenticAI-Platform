@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { resource, WorkspaceError } from '../workspace/client';
 import { documentHref, newRequest, sourceHref } from './client';
 import { analysisHref, libraryHref, Notice, revisionHref, useDocumentQuery, useDocumentScope, usePrivateTask } from './DocumentScope';
@@ -26,13 +26,18 @@ export default function ImpactAnalysis({ preset }: { preset: string }) {
   const pagination = usePrivateTask();
   const [more, setMore] = useState<Analysis[]>([]);
   const [cursor, setCursor] = useState<string>();
-  useEffect(() => { setMore([]); setCursor(stored.data?.cursor); }, [stored.data]);
+  const listGeneration = useRef(0);
+  const resetPages = useCallback(() => {
+    listGeneration.current += 1; pagination.cancel(); setMore([]); setCursor(undefined);
+  }, [pagination.cancel]);
+  const reloadStored = () => { resetPages(); stored.reload(); };
+  useEffect(() => { resetPages(); setCursor(stored.data?.cursor); }, [stored.data, resetPages]);
   const analyses = [...stored.data?.analyses || [], ...more].filter((item, index, all) => all.findIndex(row => row.id === item.id) === index);
   return <div className="doc-stack">
     <Notice>현재 관계 목록은 공유 시연용입니다. 고객사의 실제 관계망으로 확인된 구성이 아닙니다. 관계로 찾은 항목은 영향 후보이며, 원문 근거와 담당자 검토가 필요합니다.</Notice>
     <div className="doc-grid doc-analysis-grid">
       <aside className="doc-panel doc-stack" aria-label="저장된 분석">
-        <div className="doc-row doc-between"><h3>저장된 분석</h3><button onClick={stored.reload}>분석 목록 새로 조회</button></div>
+        <div className="doc-row doc-between"><h3>저장된 분석</h3><button onClick={reloadStored}>분석 목록 새로 조회</button></div>
         <a className="doc-button" href={analysisHref(undefined, route.projectId)}>새 분석 작성</a>
         <p className="doc-muted">현재 문서함에서 본인이 요청하고 접근 가능한 분석을 표시합니다.</p>
         {stored.busy && <p role="status">저장된 분석을 불러오고 있습니다…</p>}
@@ -43,8 +48,11 @@ export default function ImpactAnalysis({ preset }: { preset: string }) {
           <div className="doc-row"><Status value={analysis.status} /><span className="doc-muted">{dateLabel(analysis.createdAt)}</span></div>
         </li>)}</ul>
         {cursor && <button disabled={pagination.busy} onClick={() => void pagination.run(async (signal, current) => {
+          const generation = listGeneration.current;
           const page = await client.get<{ analyses: Analysis[]; cursor?: string }>('/impact-analyses?cursor=' + encodeURIComponent(cursor), signal);
-          if (current()) { setMore(rows => [...rows, ...page.analyses]); setCursor(page.cursor === cursor ? undefined : page.cursor); }
+          if (current() && generation === listGeneration.current) {
+            setMore(rows => [...rows, ...page.analyses]); setCursor(page.cursor === cursor ? undefined : page.cursor);
+          }
         })}>분석 더 보기</button>}
         {pagination.error && <Notice error>{pagination.error}</Notice>}
         <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId })}>내부 문서함 열기</a>

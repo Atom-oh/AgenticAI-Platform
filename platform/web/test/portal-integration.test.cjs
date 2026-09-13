@@ -570,7 +570,14 @@ test('Escape closes fullscreen after the trusted diagram iframe receives keyboar
   await viewport.waitFor();
   await viewport.focus();
   await page.keyboard.press('End');
+  const fullscreenFrame = await (await dialog.locator('iframe[data-portal-diagram]').elementHandle()).contentFrame();
+  assert(fullscreenFrame);
+  assert.deepEqual(await fullscreenFrame.evaluate(() => window.portalUnhandled || []), []);
+  const detached = page.waitForEvent('framedetached', {
+    predicate: frame => frame === fullscreenFrame, timeout: 6000,
+  });
   await page.keyboard.press('Escape');
+  await detached;
   await page.waitForFunction(() => !document.querySelector('dialog[open]'), undefined, { timeout: 6000 });
   assert.equal(await opener.evaluate(element => element === document.activeElement), true);
 });

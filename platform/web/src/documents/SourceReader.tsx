@@ -31,7 +31,7 @@ export default function SourceReader({ references, onChanged }: { references: Re
   const root = '/documents/' + resource(route.documentId!);
   useEffect(() => () => { for (const url of urls.current) URL.revokeObjectURL(url); urls.current.clear(); }, []);
   useEffect(() => {
-    setState(undefined); setJob(undefined); setActivity([]); setActivityLoaded(false); setUpload(false);
+    setState(undefined); setJob(undefined); setActivity([]); setActivityCursor(undefined); setActivityLoaded(false); setUpload(false);
     pageTask.cancel(); activityTask.cancel(); download.cancel();
     void task.run(async (signal, current) => {
       const load = async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { DocumentBoundary, Notice, analysisHref, libraryHref, useDocumentQuery, useDocumentScope, usePrivateTask } from './DocumentScope';
 import { newRequest } from './client';
 import type { DocumentRecord, Reference } from './types';
@@ -22,7 +22,12 @@ function Library() {
   const samples = usePrivateTask();
   const [sampleRequest] = useState(newRequest);
   const [sampleNotice, setSampleNotice] = useState('');
-  useEffect(() => { setMore([]); setCursor(list.data?.cursor); }, [list.data]);
+  const listGeneration = useRef(0);
+  const resetPages = useCallback(() => {
+    listGeneration.current += 1; pagination.cancel(); setMore([]); setCursor(undefined);
+  }, [pagination.cancel]);
+  const reloadList = () => { resetPages(); list.reload(); };
+  useEffect(() => { resetPages(); setCursor(list.data?.cursor); }, [list.data, resetPages]);
   const documents = [...list.data?.documents || [], ...more].filter((item, index, all) => all.findIndex(row => row.id === item.id) === index);
   return <div className="doc-stack">
     <div className="doc-row doc-between">
@@ -31,8 +36,11 @@ function Library() {
     </div>
     <div className="doc-grid doc-library-grid">
       <section className="doc-panel doc-stack" aria-label="문서 목록">
-        <div className="doc-row doc-between"><h3>문서 목록</h3><button onClick={() => { list.reload(); }}>목록 새로 조회</button></div>
-        <form className="doc-stack" onSubmit={event => { event.preventDefault(); pagination.cancel(); setMore([]); setSearch(query.trim()); }}>
+        <div className="doc-row doc-between"><h3>문서 목록</h3><button onClick={reloadList}>목록 새로 조회</button></div>
+        <form className="doc-stack" onSubmit={event => {
+          event.preventDefault(); resetPages();
+          if (query.trim() === search) list.reload(); else setSearch(query.trim());
+        }}>
           <label>문서 검색<input value={query} onChange={event => setQuery(event.target.value)} placeholder="제목 또는 연결 대상" maxLength={240} /></label>
           <button type="submit">검색</button>
         </form>
@@ -48,9 +56,12 @@ function Library() {
           </li>)}
         </ul>
         {cursor && <button disabled={pagination.busy} onClick={() => void pagination.run(async (signal, current) => {
+          const generation = listGeneration.current;
           const params = new URLSearchParams({ cursor, ...(search ? { q: search } : {}) });
           const page = await client.get<{ documents: DocumentRecord[]; cursor?: string }>('/documents?' + params, signal);
-          if (current()) { setMore(rows => [...rows, ...page.documents]); setCursor(page.cursor === cursor ? undefined : page.cursor); }
+          if (current() && generation === listGeneration.current) {
+            setMore(rows => [...rows, ...page.documents]); setCursor(page.cursor === cursor ? undefined : page.cursor);
+          }
         })}>문서 더 보기</button>}
         {pagination.error && <Notice error>{pagination.error}</Notice>}
         <button className="doc-primary" onClick={() => {
@@ -62,14 +73,14 @@ function Library() {
           <div><p>실제 은행 자료가 아닌 예제입니다. 본문 추출 후 검토 전 상태로 남으며 자동 승인되지 않습니다.</p>
             <button disabled={samples.busy} onClick={() => void samples.run(async (signal, current) => {
               await client.post('/documents/samples', { requestId: sampleRequest }, signal);
-              if (current()) { setSampleNotice('합성 예제를 등록했습니다. 각 문서의 처리 결과를 확인하고 별도로 검토하세요.'); list.reload(); }
+              if (current()) { setSampleNotice('합성 예제를 등록했습니다. 각 문서의 처리 결과를 확인하고 별도로 검토하세요.'); reloadList(); }
             })}>{samples.busy ? '예제 등록 중…' : '합성 예제 등록'}</button></div>
         </details>}
         {samples.error && <Notice error>{samples.error}</Notice>}
         {sampleNotice && <Notice>{sampleNotice}</Notice>}
       </section>
       <div className="doc-stack">
-        {route.documentId ? <SourceReader references={references.data?.references || []} onChanged={list.reload} />
+        {route.documentId ? <SourceReader references={references.data?.references || []} onChanged={reloadList} />
           : upload ? <UploadForm references={references.data?.references || []} onCancel={() => setUpload(false)} />
           : <section className="doc-panel doc-stack"><h3>원문에서 근거까지</h3>
             <p>문서를 선택하면 버전별 원문, 검토 의견과 읽기 권한을 확인할 수 있습니다.</p>

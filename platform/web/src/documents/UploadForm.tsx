@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { newRequest, uploadDocument } from './client';
 import type { DocumentUpload } from './client';
 import type { DocumentRecord, Reference } from './types';
@@ -13,6 +13,12 @@ export default function UploadForm({ document, references, onCancel }: {
   const [title, setTitle] = useState('');
   const [kind, setKind] = useState('regulation');
   const [graphRef, setGraphRef] = useState(references.some(ref => ref.id === route.ref) ? route.ref! : '');
+  const referenceChosen = useRef(false);
+  useEffect(() => {
+    if (!referenceChosen.current && route.ref && references.some(ref => ref.id === route.ref)) {
+      setGraphRef(route.ref);
+    }
+  }, [route.ref, references]);
   const [versionLabel, setVersionLabel] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [checkpoint, setCheckpoint] = useState<DocumentUpload>();
@@ -51,7 +57,9 @@ export default function UploadForm({ document, references, onCancel }: {
           <option value="specification">화면·기능 명세</option><option value="notice">공문·안내</option><option value="guide">가이드</option>
           <option value="reference">참고 자료</option>
         </select></label>
-        <label>관계 목록의 연결 대상<select aria-label="관계 목록의 연결 대상" value={graphRef} onChange={event => setGraphRef(event.target.value)}>
+        <label>관계 목록의 연결 대상<select aria-label="관계 목록의 연결 대상" value={graphRef} onChange={event => {
+          referenceChosen.current = true; setGraphRef(event.target.value);
+        }}>
           <option value="">연결하지 않음</option>
           {references.map(ref => <option key={ref.id} value={ref.id}>{ref.label === 'Regulation' ? '규정' : '문서'} · {ref.title}</option>)}
         </select></label>
