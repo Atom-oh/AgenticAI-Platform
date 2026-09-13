@@ -128,3 +128,49 @@ test('an analysis return parameter never certifies the selected document as its 
     assert.deepEqual(ui.errors, []);
   } finally { await ui.browser.close(); }
 });
+
+for (const scenario of ['personal-list-failed', 'shared-index-missing', 'personal-list-pending']) {
+  test(`canonical document authority survives optional discovery: ${scenario}`, { timeout: 15000 }, async () => {
+    const held = [];
+    const shared = scenario === 'shared-index-missing';
+    const ui = await openUI('documents/LibraryPage', {
+      hash: shared ? '#/documents?projectId=team-a' : '#/documents',
+      route: async ({ target, json, state }) => {
+        if (shared) state.document.projectId = 'team-a';
+        if (target !== '/projects') return false;
+        if (scenario === 'personal-list-pending') held.push(() => json({ projects: [] }));
+        else if (scenario === 'personal-list-failed') await json({ error: '합성 목록 장애', code: 'unavailable' }, 503);
+        else await json({ projects: [] });
+        return true;
+      },
+    });
+    try {
+      const { page } = ui;
+      await page.getByRole('heading', { name: '문서 목록', exact: true }).waitFor();
+      await page.getByRole('link', { name: '합성 담보 기준', exact: true }).waitFor();
+      assert.equal(await page.getByLabel('문서함 범위', { exact: true }).inputValue(), shared ? 'team-a' : '');
+      for (const release of held) await release();
+      if (scenario === 'personal-list-failed') await page.getByRole('button', { name: '프로젝트 목록 다시 조회', exact: true }).waitFor();
+      assert.deepEqual(ui.errors, []);
+    } finally { await ui.browser.close(); }
+  });
+}
+
+test('late optional discovery cannot restore a prior identity after logout', { timeout: 15000 }, async () => {
+  const held = [];
+  const ui = await openUI('documents/LibraryPage', { hash: '#/documents', ignoreAbort: true,
+    route: async ({ target, json }) => {
+      if (target !== '/projects') return false;
+      held.push(() => json({ projects: [{ id: 'team-secret', name: 'OLD_PRIVATE_PROJECT_NAME', members: {}, version: 1 }] }));
+      return true;
+    } });
+  try {
+    await ui.page.getByRole('heading', { name: '문서 목록', exact: true }).waitFor();
+    await ui.page.evaluate(() => window.expire());
+    for (const release of held) await release();
+    await ui.page.getByText(/로그인이 필요하거나 만료되었습니다/).waitFor();
+    assert.equal(await ui.page.getByText('OLD_PRIVATE_PROJECT_NAME', { exact: true }).count(), 0);
+    assert.equal(await ui.page.getByRole('heading', { name: '문서 목록', exact: true }).count(), 0);
+    assert.deepEqual(ui.errors, []);
+  } finally { await ui.browser.close(); }
+});

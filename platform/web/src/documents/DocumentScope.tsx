@@ -107,29 +107,40 @@ function CollectionSession({ identity, route, view, children }: {
   const [config, setConfig] = useState<LibraryConfig>();
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
+  const [discoveryError, setDiscoveryError] = useState('');
+  const [discoveryAttempt, setDiscoveryAttempt] = useState(0);
   const mounted = useRef(false);
+  const discoveryGeneration = useRef(0);
   const current = useCallback(() => mounted.current && snapshot() === identity, [identity]);
   const deny = useCallback((reason: unknown) => {
     if (!current()) return;
+    discoveryGeneration.current += 1;
     setConfig(undefined); setProjects([]); setError(documentMessage(reason));
   }, [current]);
   useEffect(() => {
     mounted.current = true;
     const controller = new AbortController();
     setConfig(undefined); setError('');
-    Promise.all([
-      listAll<Project>(makeLibraryClient(), 'projects', controller.signal),
-      client.get<LibraryConfig>('/documents/config', controller.signal),
-    ]).then(([items, value]) => {
+    client.get<LibraryConfig>('/documents/config', controller.signal).then(value => {
       if (controller.signal.aborted || !current()) return;
-      if ((value.projectId || undefined) !== route.projectId ||
-          route.projectId && !items.some(item => item.id === route.projectId)) {
+      if ((value.projectId || undefined) !== route.projectId) {
         throw new WorkspaceError('현재 참여 중인 프로젝트를 확인할 수 없습니다. 개인 문서함 또는 참여 프로젝트를 다시 선택하세요.', 403);
       }
-      setProjects(items); setConfig(value);
+      setConfig(value);
     }).catch(reason => { if (!controller.signal.aborted) deny(reason); });
     return () => { mounted.current = false; controller.abort(); };
   }, [attempt, client, current, deny, route.projectId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const generation = ++discoveryGeneration.current;
+    setDiscoveryError('');
+    listAll<Project>(makeLibraryClient(), 'projects', controller.signal).then(items => {
+      if (!controller.signal.aborted && current() && generation === discoveryGeneration.current) setProjects(items);
+    }).catch(reason => {
+      if (!controller.signal.aborted && current() && generation === discoveryGeneration.current) setDiscoveryError(documentMessage(reason));
+    });
+    return () => controller.abort();
+  }, [attempt, current, discoveryAttempt]);
   const scope = useMemo(() => config ? { client, config, route, current, deny } : null, [client, config, route, current, deny]);
   const title = view === 'documents' ? '내부 문서함' : '규정 영향 분석';
   return <div className="doc-app">
@@ -146,10 +157,14 @@ function CollectionSession({ identity, route, view, children }: {
       }}>
         <option value="">개인 문서함</option>
         {route.projectId && !projects.some(project => project.id === route.projectId) &&
-          <option value={route.projectId}>선택한 프로젝트 · 확인 필요</option>}
+          <option value={route.projectId}>{config ? '선택한 프로젝트' : '선택한 프로젝트 · 확인 필요'}</option>}
         {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
       </select></label>
     </header>
+    {discoveryError && <Notice>프로젝트 목록을 불러오지 못했습니다. 현재 문서함의 권한은 별도로 확인합니다.
+      <span className="doc-muted">{discoveryError}</span>
+      <button onClick={() => setDiscoveryAttempt(value => value + 1)}>프로젝트 목록 다시 조회</button>
+    </Notice>}
     {error ? <Notice error>{error} <button onClick={() => setAttempt(value => value + 1)}>참여 권한 다시 조회</button></Notice>
       : !scope ? <Notice>문서함과 참여 권한을 확인하고 있습니다…</Notice>
       : <Context.Provider value={scope}>{children}</Context.Provider>}

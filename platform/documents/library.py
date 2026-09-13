@@ -18,6 +18,7 @@ MAX_FILE_BYTES = 20 * 1024 * 1024
 CHUNK_BYTES = 2 * 1024 * 1024
 MAX_DOCUMENTS = 200
 MAX_REVISIONS = 100
+MAX_LIST_SCAN = 5000
 MAX_PAGES = 200
 MAX_TEXT_CHARS = 400_000
 MAX_PARAGRAPH_CHARS = 2_000
@@ -360,3 +361,23 @@ def authorize_job(host, scope, job):
         # The analysis owner supplies source/result validation in its own module.
         from documents.analysis import authorize_analysis
         authorize_analysis(host, scope, data.get("analysisId"))
+
+
+def visible_page(library, kind, select, limit, cursor=None):
+    """A continuation exists only after finding a further authorized match."""
+    visible, scanned, seen = [], 0, set()
+    while True:
+        page = library.storage.list_page(library.owner, kind, limit=min(50, MAX_LIST_SCAN - scanned), cursor=cursor)
+        for row in page["items"]:
+            scanned += 1
+            item = select(row)
+            if item is not None:
+                visible.append(item)
+                if len(visible) > limit:
+                    return visible, library.storage.cursor_after(library.owner, kind, visible[limit - 1]["id"])
+        cursor = page.get("cursor")
+        if not cursor:
+            return visible, None
+        if scanned >= MAX_LIST_SCAN or cursor in seen:
+            raise DocumentError(503, "list-scan-limit", "목록을 한 번에 확인하지 못했습니다. 범위를 줄이거나 다시 조회하세요.")
+        seen.add(cursor)

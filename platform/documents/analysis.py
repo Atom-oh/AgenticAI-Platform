@@ -115,6 +115,8 @@ def _read_result(library, analysis):
 
 
 def _view(host, scope, analysis_id):
+    from documents.jobs import reconcile_analysis
+    reconcile_analysis(host, scope, analysis_id)
     authorized = authorize_analysis(host, scope, analysis_id)
     library, analysis = authorized["library"], authorized["analysis"]
     payload = {"analysis": _public(analysis), "staleSources": authorized["staleSources"],
@@ -154,6 +156,8 @@ def _create(host, scope, body):
     if existing:
         if existing.get("requestHash") != digest:
             raise DocumentError(409, "request-changed", "같은 요청 ID에 다른 분석 조건을 사용할 수 없습니다.")
+        from documents.jobs import reconcile_analysis
+        existing = reconcile_analysis(host, scope, aid)
         authorized = authorize_analysis(host, scope, aid)
         job = library.storage.get(library.owner, "job", existing["jobId"])
         if not job:
@@ -215,20 +219,21 @@ def handle(host, scope, method, parts, event, query):
     if parts == ["impact-analyses"] and method == "POST":
         return _json(202, _create(host, scope, _body(event)))
     if parts == ["impact-analyses"] and method == "GET":
+        from documents.library import visible_page
+        from documents.jobs import reconcile_analysis
         library = _library(host, scope)
-        page = library.storage.list_page(library.owner, "docanalysis", limit=20, cursor=query.get("cursor"))
-        visible = []
-        for row in page["items"]:
+        def select(row):
             if row.get("createdBy") != library.scope["actor"]:
-                continue
+                return None
             try:
-                authorized = authorize_analysis(host, scope, row["id"])
-                visible.append(_public(authorized["analysis"]))
+                return _public(reconcile_analysis(host, scope, row["id"]))
             except DocumentError as error:
                 if error.status not in (403, 404, 409):
                     raise
+                return None
+        visible, cursor = visible_page(library, "docanalysis", select, 20, query.get("cursor"))
         library.assert_current()
-        return _json(200, {"analyses": visible, **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+        return _json(200, {"analyses": visible[:20], **({"cursor": cursor} if cursor else {})})
     if len(parts) == 2 and method == "GET":
         return _json(200, _view(host, scope, parts[1]))
     if len(parts) == 3 and parts[2] == "decisions" and method == "POST":

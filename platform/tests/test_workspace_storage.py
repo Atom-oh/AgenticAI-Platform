@@ -475,3 +475,32 @@ def test_release_lifecycle_records_support_owner_scoped_transactions_and_keys(st
         for kind, record in zip(kinds, created)
     ])
     assert all(row["version"] == 2 and row["status"] == "completed" and "ttl" not in row for row in updated)
+
+
+def test_cursor_after_resumes_at_the_named_item_and_keeps_scope(storage):
+    for identifier in ("doc-a--r1", "doc-a--r2", "doc-b--r1"):
+        storage.put("alice", "docrevision", {"id": identifier})
+    cursor = storage.cursor_after("alice", "docrevision", "doc-a--r1", prefix="doc-a--")
+    assert [row["id"] for row in storage.list_page(
+        "alice", "docrevision", cursor=cursor, prefix="doc-a--")["items"]] == ["doc-a--r2"]
+    for owner, kind, prefix in (("bob", "docrevision", "doc-a--"),
+                                ("alice", "document", "doc-a--"),
+                                ("alice", "docrevision", ""), ("alice", "docrevision", "doc-b--")):
+        with pytest.raises(ValueError):
+            storage.list_page(owner, kind, cursor=cursor, prefix=prefix)
+    with pytest.raises(ValueError):
+        storage.cursor_after("alice", "docrevision", "doc-b--r1", prefix="doc-a--")
+
+
+def test_missing_record_check_fences_an_orphan_update(storage):
+    from workspace.storage import Conflict
+    target = storage.put("alice", "docanalysis", {"id": "target", "status": "queued"})
+    write = {"owner": "alice", "kind": "docanalysis",
+             "item": {**target, "status": "failed"}, "expected_version": target["version"]}
+    missing = {"owner": "alice", "kind": "job", "id": "expired", "version": None}
+    storage.table().before_transaction = lambda: storage.put("alice", "job", {"id": "expired"})
+    with pytest.raises(Conflict):
+        storage.put_many([write], checks=[missing])
+    assert storage.get("alice", "docanalysis", "target")["status"] == "queued"
+    storage.put_many([write], checks=[{**missing, "id": "actually-missing"}])
+    assert storage.get("alice", "docanalysis", "target")["status"] == "failed"

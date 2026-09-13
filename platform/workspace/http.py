@@ -186,8 +186,13 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Resource not found")
         return record
 
-    def _expire_job(self, owner, job):
+    def _expire_job(self, owner, job, scope=None):
         """One CAS attempt per read; a concurrent heartbeat or completion wins."""
+        if job.get("task") in ("document-finalize", "document-analysis"):
+            from documents.jobs import expire_raw_job
+            if scope is None:
+                raise HTTPError(403, "forbidden", "Document scope is required")
+            return expire_raw_job(self, scope, job)
         updated = job.get("updatedAt")
         now = self.storage.clock()
         if (job.get("status") not in ("queued", "running") or type(updated) is not int
@@ -284,9 +289,11 @@ class WorkspaceAPI:
                     from documents.library import authorize_job
                     try:
                         authorize_job(self, scope, record)
+                        record = self._expire_job(owner, record, scope=scope)
                     except DocumentError as error:
                         return _json(error.status, {"error": error.message, "code": error.code})
-                record = self._expire_job(owner, record)
+                else:
+                    record = self._expire_job(owner, record)
             payload = {kind: record}
             if kind == "asset" and record.get("analysisKey"):
                 key = self._blob_key(owner, record["analysisKey"])

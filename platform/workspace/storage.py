@@ -190,18 +190,22 @@ class Storage:
             transactions.append({"Put": put})
         for check in checks:
             if (not isinstance(check, dict) or set(check) != {"owner", "kind", "id", "version"}
-                    or type(check["version"]) is not int or check["version"] < 1):
+                    or check["version"] is not None and (type(check["version"]) is not int or check["version"] < 1)):
                 raise ValueError("Invalid transactional version check")
             keys = self._key(check["owner"], check["kind"], check["id"])
             identity = keys["pk"], keys["sk"]
             if identity in seen:
                 raise ValueError("A transaction cannot operate on the same record twice")
             seen.add(identity)
-            transactions.append({"ConditionCheck": {
+            condition = {
                 "TableName": table.name, "Key": keys, "ConditionExpression": "#version = :version",
                 "ExpressionAttributeNames": {"#version": "version"},
                 "ExpressionAttributeValues": {":version": check["version"]},
-            }})
+            }
+            if check["version"] is None:
+                condition.update(ConditionExpression="attribute_not_exists(#pk)", ExpressionAttributeNames={"#pk": "pk"})
+                condition.pop("ExpressionAttributeValues")
+            transactions.append({"ConditionCheck": condition})
         try:
             table.meta.client.transact_write_items(TransactItems=transactions)
         except table.meta.client.exceptions.TransactionCanceledException as error:
@@ -257,6 +261,14 @@ class Storage:
 
     def list(self, owner: str, kind: str, limit: int = 100) -> list[dict]:
         return self.list_page(owner, kind, limit)["items"]
+
+    def cursor_after(self, owner, kind, identifier, *, prefix=""):
+        if (not isinstance(identifier, str) or not isinstance(prefix, str)
+                or prefix and not _ID.fullmatch(prefix) or not identifier.startswith(prefix)):
+            raise ValueError("Invalid cursor prefix")
+        key = self._key(owner, kind, identifier)
+        value = {"key": key, "prefix": prefix} if prefix else key
+        return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode()
 
     def claim_job(self, owner: str, id: str) -> dict | None:
         job = self.get(owner, "job", id)

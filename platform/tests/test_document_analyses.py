@@ -359,3 +359,104 @@ def test_output_policy_variants_are_enforced_before_persistence(api, prose, acce
     assert (value["summary"] == prose) is accepted
     assert bool(value["findings"]) is accepted
     assert value["evidence"]
+
+
+def seed_list_analysis(api, pid, identifier, *, actor="bob", bindings=()):
+    return api.storage.put("project:" + pid, "docanalysis", {
+        "id": identifier, "createdBy": actor, "projectId": pid, "status": "failed",
+        "query": "Synthetic request", "regulationRef": "REG-1", "modelId": "test",
+        "bindings": list(bindings), "jobId": "job-" + identifier, "decisionCount": 0,
+    })
+
+
+@pytest.mark.parametrize("hidden_kind", ["another-creator", "forbidden-source"])
+def test_hidden_analysis_pages_never_return_continuations(api, hidden_kind):
+    from test_documents_library import seed_list_document
+    pid = project(api)
+    hidden = seed_list_document(api, pid, "private-source", ("owner",))
+    binding = {"documentId": hidden["id"], "revisionId": hidden["id"] + "--r1",
+               "sha256": "a" * 64, "textHash": "b" * 64}
+    for i in range(51):
+        seed_list_analysis(api, pid, f"hidden-analysis-{i:03}",
+                           actor="alice" if hidden_kind == "another-creator" else "bob",
+                           bindings=() if hidden_kind == "another-creator" else [binding])
+    status, payload, _ = call(api, "GET", "/impact-analyses", actor="bob", project=pid)
+    assert status == 200 and payload == {"analyses": []}
+
+
+def test_analysis_continuations_use_the_last_returned_own_authorized_item(api):
+    import base64
+    pid = project(api)
+    for i in range(60):
+        seed_list_analysis(api, pid, f"page-{i:03}", actor="bob" if i % 2 == 0 else "alice")
+    api.storage.table().page_size = 6
+    found, cursor = [], None
+    while True:
+        status, payload, _ = call(api, "GET", "/impact-analyses", actor="bob", project=pid,
+                                  query={"cursor": cursor} if cursor else {})
+        assert status == 200
+        ids = [a["id"] for a in payload["analyses"]]
+        if not found:
+            assert len(ids) == 20
+        found.extend(ids)
+        cursor = payload.get("cursor")
+        if not cursor:
+            break
+        decoded = json.loads(base64.urlsafe_b64decode(cursor))
+        assert decoded.get("key", decoded)["sk"] == "docanalysis#" + ids[-1]
+    assert found == [f"page-{i:03}" for i in range(0, 60, 2)]
+
+
+@pytest.mark.parametrize("entry", ["detail", "list", "repost", "job"])
+def test_stale_analysis_reads_and_repost_return_terminal_failure(api, entry):
+    catalog(api); source(api, "REG-1")
+    created = start(api)
+    job = api.storage.claim_job("alice", created["job"]["id"])
+    target = api.storage.get("alice", "docanalysis", created["analysis"]["id"])
+    api.storage.put("alice", "docanalysis", {**target, "status": "running"}, target["version"])
+    api.storage.clock = lambda: job["updatedAt"] + 17 * 60_000
+    if entry == "repost":
+        status, payload, _ = call(api, "POST", "/impact-analyses", {
+            "requestId": "analysis", "query": "담보 기준 변경 시 검토할 문서는?", "regulationRef": "REG-1"})
+        assert status == 202 and payload["analysis"]["status"] == payload["job"]["status"] == "failed"
+    else:
+        endpoint = "/jobs/" + job["id"] if entry == "job" else "/impact-analyses" if entry == "list" else "/impact-analyses/" + target["id"]
+        assert call(api, "GET", endpoint)[0] == 200
+    assert api.storage.get("alice", "job", job["id"])["status"] == "failed"
+    assert api.storage.get("alice", "docanalysis", target["id"])["status"] == "failed"
+    invocations = len(api.lambda_client.calls)
+    replay = start(api)
+    assert replay["analysis"]["status"] == replay["job"]["status"] == "failed"
+    done, calls = run(api, created)
+    assert done["status"] == "duplicate-or-unavailable" and calls == []
+    assert len(api.lambda_client.calls) == invocations
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["legacy-timeout", "expired-job"])
+def test_analysis_repairs_pending_target_for_terminal_or_missing_job(api, missing):
+    catalog(api); created = start(api)
+    job = api.storage.get("alice", "job", created["job"]["id"])
+    if missing:
+        key = api.storage._key("alice", "job", job["id"])
+        del api.storage.table().items[(key["pk"], key["sk"])]
+    else:
+        api.storage.put("alice", "job", {**job, "status": "failed", "errorCode": "job-timeout",
+                                        "stopReason": "timeout"}, job["version"])
+    status, payload, _ = result(api, created)
+    assert status == 200 and payload["analysis"]["status"] == "failed"
+    if missing:
+        assert api.storage.get("alice", "job", job["id"]) is None
+        status, _, _ = call(api, "POST", "/impact-analyses", {
+            "requestId": "analysis", "query": "담보 기준 변경 시 검토할 문서는?", "regulationRef": "REG-1"})
+        assert status == 409
+
+
+def test_missing_analysis_job_recovery_is_fenced_against_a_new_job(api):
+    catalog(api); created = start(api)
+    job = api.storage.get("alice", "job", created["job"]["id"])
+    key = api.storage._key("alice", "job", job["id"])
+    del api.storage.table().items[(key["pk"], key["sk"])]
+    api.storage.table().before_transaction = lambda: api.storage.put("alice", "job", {
+        **job, "status": "queued"})
+    assert result(api, created)[0] == 409
+    assert api.storage.get("alice", "docanalysis", created["analysis"]["id"])["status"] == "queued"

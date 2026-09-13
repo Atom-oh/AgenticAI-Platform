@@ -31,6 +31,15 @@ files. Unlinked records must remain explicitly unlinked.
 - Records and source bytes remain private. No static website upload, public
   source URL, arbitrary URL fetch, model-generated URL, shared event-cache replay
   or browser local storage is permitted for document content.
+- Document and own-analysis listings paginate authorized matches, with one
+  authorized lookahead. A cursor resumes after the last returned match; hidden
+  records never supply a public continuation key. A bounded scan that cannot
+  complete returns `list-scan-limit` without rows or cursor. Document lookahead
+  participates in the final permission fence.
+- Canonical `/documents/config` authorization is independent of project-discovery
+  indexes. Missing or unavailable discovery cannot veto an otherwise authorized
+  personal collection or shared link; scope mismatch and actual authorization
+  failures still block private content.
 
 ## Library records
 
@@ -159,6 +168,12 @@ analysis URL once source bindings exist and every current source-access check
 passes. Before binding, only its requester can read the analysis; raw job
 records are also requester-only. The generic workspace API has no public job
 retry route.
+Stale document work reconciles its job and matching pending target to terminal
+failure in one version/authority-fenced transaction. Reads and same-request
+reposts expose that failure; they do not automatically rerun timed-out work.
+Completed/approved targets and fresh heartbeats are preserved. An expired,
+missing job fails its pending target under a transactional absence check,
+without inventing another job record.
 
 At most 20 approved, authorized source documents and 36,000 context characters
 enter a model call. Record excluded/unlinked/truncated coverage explicitly.
@@ -183,6 +198,10 @@ unconfirmed. This conservative indicator does not assert an exact omitted total.
 
 The result contains `regulation`, `counts`, `candidates`, `sources`, `evidence`,
 `findings`, `summary`, `coverage`, `verification`, `model`, `decisions`.
+Prose reference checks apply bounded compatibility/encoding normalization before
+matching evidence aliases and platform/supplied node-ID namespaces. Structured
+IDs remain exact and displayed prose/quotes are not rewritten. This is reference
+linkage checking, not semantic classification of arbitrary natural-language terms.
 Evidence is `{id:"E1",documentId,revisionId,paragraphId,title,revision,
 versionLabel,originalSha256,textHash,quote,page,provenance}`. The UI constructs
 same-app links from these fields. Models never supply URLs or storage paths.

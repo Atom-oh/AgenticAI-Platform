@@ -671,3 +671,150 @@ def test_trusted_sample_owner_check_is_fenced_against_mid_create_downgrade(api, 
                       {"body": json.dumps(body)}, {}, trusted_sample=True)
     assert response["statusCode"] in (403, 409)
     assert api.storage.list(owner, "document") == []
+
+
+def seed_list_document(api, project_id, identifier, roles=("owner", "planner")):
+    """Valid metadata-only registration for paging/authority tests."""
+    return api.storage.put("project:" + project_id, "document", {
+        "id": identifier, "title": "Matching synthetic source", "kind": "policy",
+        "graphRef": None, "createdBy": "alice", "projectId": project_id,
+        "readRoles": list(roles), "aclVersion": 1, "status": "active",
+        "latestRevisionId": identifier + "--r1", "approvedRevisionId": None,
+        "provenance": "uploaded", "revisionCount": 1,
+    })
+
+
+def test_hidden_only_document_listing_has_no_cursor(api):
+    pid = project(api)
+    for i in range(61):
+        seed_list_document(api, pid, f"hidden-{i:03}", ("owner",))
+    status, payload, _ = call(api, "GET", "/documents", actor="bob", project=pid)
+    assert status == 200 and payload == {"documents": []}
+
+
+def test_document_paging_uses_only_returned_visible_ids(api):
+    pid = project(api)
+    for i in range(120):
+        seed_list_document(api, pid, f"page-{i:03}", ("owner",) if i % 2 else ("owner", "planner"))
+    api.storage.table().page_size = 7
+    seen, cursor = [], None
+    while True:
+        status, payload, _ = call(api, "GET", "/documents", actor="bob", project=pid,
+                                  query={"q": "matching", **({"cursor": cursor} if cursor else {})})
+        assert status == 200
+        ids = [row["id"] for row in payload["documents"]]
+        if not seen:
+            assert len(ids) == 50
+        seen.extend(ids)
+        cursor = payload.get("cursor")
+        if not cursor:
+            break
+        decoded = json.loads(base64.urlsafe_b64decode(cursor))
+        assert decoded.get("key", decoded)["sk"] == "document#" + ids[-1]
+    assert seen == [f"page-{i:03}" for i in range(0, 120, 2)]
+
+
+def test_document_lookahead_is_in_the_final_permission_fence(api):
+    pid = project(api)
+    for i in range(51):
+        seed_list_document(api, pid, f"visible-{i:03}")
+    def restrict_lookahead():
+        row = api.storage.get("project:" + pid, "document", "visible-050")
+        api.storage.put("project:" + pid, "document", {**row, "readRoles": ["owner"]}, row["version"])
+    api.storage.table().before_transaction = restrict_lookahead
+    status, payload, _ = call(api, "GET", "/documents", actor="bob", project=pid)
+    assert status in (403, 409) and "cursor" not in payload and "documents" not in payload
+
+
+def test_document_scan_bound_fails_without_exposing_hidden_continuation(api, monkeypatch):
+    import documents.library as library
+    pid = project(api)
+    for i in range(6):
+        seed_list_document(api, pid, f"secret-{i}", ("owner",))
+    monkeypatch.setattr(library, "MAX_LIST_SCAN", 3, raising=False)
+    status, payload, _ = call(api, "GET", "/documents", actor="bob", project=pid)
+    assert status == 503 and payload["code"] == "list-scan-limit"
+    assert "secret-" not in repr(payload) and "cursor" not in payload
+
+
+@pytest.mark.parametrize("first_read", ["job", "source", "detail"])
+def test_stale_document_intake_reconciles_job_and_revision_atomically(api, first_read):
+    result = upload(api)
+    job = api.storage.claim_job("alice", result["job"]["id"])
+    before = api.storage.get("alice", "docrevision", result["revision"]["id"])
+    api.storage.clock = lambda: job["updatedAt"] + 17 * 60_000
+    endpoint = "/jobs/" + job["id"] if first_read == "job" else path(result) if first_read == "source" else "/documents/" + result["document"]["id"]
+    status, _, _ = call(api, "GET", endpoint)
+    assert status == 200
+    saved_job = api.storage.get("alice", "job", job["id"])
+    saved_revision = api.storage.get("alice", "docrevision", before["id"])
+    assert saved_job["status"] == saved_revision["status"] == "failed"
+    assert saved_job["errorCode"] == "job-timeout"
+    assert saved_revision["parseStatus"] == "failed"
+    assert any({entry["Put"]["Item"]["sk"] for entry in tx["TransactItems"] if "Put" in entry}
+               == {"job#" + job["id"], "docrevision#" + before["id"]}
+               for tx in api.storage.table().transactions)
+    invocations = len(api.lambda_client.calls)
+    status, replay, _ = call(api, "POST", path(result) + "/complete", {})
+    assert status == 202 and replay["job"]["status"] == replay["revision"]["status"] == "failed"
+    assert len(api.lambda_client.calls) == invocations
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["legacy-timeout", "expired-job"])
+def test_source_read_repairs_pending_target_after_job_expiry(api, missing):
+    result = upload(api)
+    job = api.storage.get("alice", "job", result["job"]["id"])
+    if missing:
+        key = api.storage._key("alice", "job", job["id"])
+        del api.storage.table().items[(key["pk"], key["sk"])]
+    else:
+        api.storage.put("alice", "job", {**job, "status": "failed", "errorCode": "job-timeout",
+                                        "stopReason": "timeout"}, job["version"])
+    status, source, _ = call(api, "GET", path(result))
+    assert status == 200 and source["revision"]["status"] == "failed"
+    if missing:
+        assert call(api, "GET", "/jobs/" + job["id"])[0] == 404
+        assert call(api, "POST", path(result) + "/complete", {})[0] == 409
+        assert api.storage.get("alice", "job", job["id"]) is None
+
+
+def test_document_expiry_loses_to_a_fresh_heartbeat(api):
+    result = upload(api)
+    job = api.storage.claim_job("alice", result["job"]["id"])
+    api.storage.clock = lambda: job["updatedAt"] + 17 * 60_000
+    def heartbeat():
+        current = api.storage.get("alice", "job", job["id"])
+        api.storage.put("alice", "job", {**current, "progress": 75}, current["version"])
+    api.storage.table().before_transaction = heartbeat
+    status, _, _ = call(api, "GET", "/jobs/" + job["id"])
+    assert status in (200, 409)
+    assert api.storage.get("alice", "job", job["id"])["status"] == "running"
+    assert api.storage.get("alice", "docrevision", result["revision"]["id"])["status"] == "processing"
+    assert call(api, "GET", "/jobs/" + job["id"])[1]["job"]["status"] == "running"
+
+
+def test_document_expiry_never_overwrites_a_concurrent_completion(api):
+    from documents.intake import finalize as process
+    result = upload(api)
+    job = api.storage.claim_job("alice", result["job"]["id"])
+    api.storage.clock = lambda: job["updatedAt"] + 17 * 60_000
+    api.storage.table().before_transaction = lambda: process(
+        SimpleNamespace(storage=api.storage, collaboration=api.collaboration), "alice", job)
+    status, _, _ = call(api, "GET", "/jobs/" + job["id"])
+    assert status in (200, 409)
+    assert api.storage.get("alice", "job", job["id"])["status"] == "completed"
+    assert api.storage.get("alice", "docrevision", result["revision"]["id"])["status"] == "draft"
+
+
+def test_timeout_job_get_keeps_creator_and_source_access_checks(api):
+    pid = project(api)
+    result = upload(api, actor="bob", project=pid)
+    owner = "project:" + pid
+    job = api.storage.get(owner, "job", result["job"]["id"])
+    api.storage.clock = lambda: job["updatedAt"] + 17 * 60_000
+    assert call(api, "GET", "/jobs/" + job["id"], project=pid)[0] == 403
+    assert api.storage.get(owner, "job", job["id"]) == job
+    doc = api.storage.get(owner, "document", result["document"]["id"])
+    api.storage.put(owner, "document", {**doc, "readRoles": ["owner"]}, doc["version"])
+    assert call(api, "GET", "/jobs/" + job["id"], actor="bob", project=pid)[0] == 403
+    assert api.storage.get(owner, "job", job["id"]) == job

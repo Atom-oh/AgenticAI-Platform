@@ -138,6 +138,11 @@ def _upload_part(library, document, revision, index, data):
 def _complete(library, document, revision):
     host = library.host
     if revision.get("jobId"):
+        initial = library.storage.get(library.owner, "job", revision["jobId"])
+        if initial:
+            authorize_job(host, library.scope, initial)
+        from documents.jobs import reconcile
+        revision = reconcile(host, library.scope, "docrevision", revision, library=library, documents=[document])
         job = library.storage.get(library.owner, "job", revision["jobId"])
         if not job:
             raise DocumentError(409, "job-unavailable", "The retained revision cannot replay an expired job")
@@ -261,10 +266,13 @@ def _archive(library, document, body):
 
 
 def _detail(library, document):
+    from documents.jobs import reconcile
     revisions, cursor = [], None
     while True:
         page = library.storage.list_page(library.owner, "docrevision", cursor=cursor, prefix=document["id"] + "--")
-        revisions.extend(public_revision(row) for row in page["items"] if row.get("documentId") == document["id"])
+        revisions.extend(public_revision(reconcile(library.host, library.scope, "docrevision", row,
+                         library=library, documents=[document]))
+                         for row in page["items"] if row.get("documentId") == document["id"])
         cursor = page.get("cursor")
         if not cursor or len(revisions) >= MAX_REVISIONS:
             break
@@ -275,6 +283,8 @@ def _detail(library, document):
 
 
 def _source(library, document, revision, query):
+    from documents.jobs import reconcile
+    revision = reconcile(library.host, library.scope, "docrevision", revision, library=library, documents=[document])
     if revision.get("textHash"):
         projection = library.projection(document, revision)
         paragraphs = projection["paragraphs"]
@@ -328,21 +338,22 @@ def _download(library, document, revision, query):
 
 
 def _list(library, query):
+    from documents.library import visible_page
     term = text(query.get("q", ""), "search", 240, empty=True).casefold()
-    page = library.storage.list_page(library.owner, "document", limit=50, cursor=query.get("cursor"))
-    documents = []
-    for row in page["items"]:
+    def select(row):
         try:
             document = library.document(row["id"])
         except DocumentError as error:
             if error.status in (403, 404):
-                continue
+                return None
             raise
         if not term or term in (document["title"] + " " + (document.get("graphRef") or "")).casefold():
-            documents.append(document)
+            return document
+        return None
+    documents, cursor = visible_page(library, "document", select, 50, query.get("cursor"))
     library.assert_current(documents)
-    return _json(200, {"documents": [public_document(d) for d in documents],
-                       **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+    return _json(200, {"documents": [public_document(d) for d in documents[:50]],
+                       **({"cursor": cursor} if cursor else {})})
 
 
 def _references(library):
