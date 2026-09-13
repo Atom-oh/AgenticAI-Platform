@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resource, WorkspaceError } from '../workspace/client';
-import { documentHref, newRequest, sourceHref } from './client';
+import { newRequest, sourceHref } from './client';
 import { analysisHref, libraryHref, Notice, revisionHref, useDocumentQuery, useDocumentScope, usePrivateTask } from './DocumentScope';
 import type { Analysis, AnalysisView, Candidate, DocumentRecord, Evidence, Job, Reference } from './types';
 import { dateLabel, Details, Progress, roleLabel, Sample, Status } from './presentation';
@@ -120,7 +120,7 @@ function AnalysisForm({ preset, references }: { preset: string; references: Refe
             <Sample provenance={source.provenance} /> <a href={revisionHref(source.id, source.approvedRevisionId!, route)}>규정 승인본 확인</a></Notice>
           : <Notice>현재 조회 목록에서 승인된 규정 원문을 찾지 못했습니다. 원문을 등록하고 검토·승인하세요.
             {readiness.data?.cursor && <> 목록의 다음 페이지에 연결 문서가 있을 수 있습니다.</>}
-            <a href={documentHref(undefined, route.projectId, regulation)}>규정 원문 등록·찾기</a>
+            <CandidateSourceLink candidateId={regulation} label="규정 원문 등록·찾기" />
             <p>승인된 규정 원문이 없으면 AI 내용 분석 없이 관계에 따른 영향 후보만 조회합니다.</p></Notice>}
         {readiness.error && <Notice error>{readiness.error}</Notice>}
       </div>}
@@ -163,17 +163,19 @@ function StoredAnalysis() {
       const value = await load();
       if (!value || !current()) return;
       if (['queued', 'running'].includes(value.analysis.status)) {
+        let finished: Job;
         try {
-          const finished = await watchDocumentJob(client, value.analysis.jobId, signal, next => { if (current()) setJob(next); });
-          if (current()) {
-            await load();
-            if (current() && finished.status === 'failed') throw new WorkspaceError('분석 작업을 완료하지 못했습니다. 저장된 상태를 확인하고 새 분석을 요청하세요.');
-          }
+          finished = await watchDocumentJob(client, value.analysis.jobId, signal, next => { if (current()) setJob(next); });
         } catch (error) {
           if (!(error instanceof WorkspaceError) || ![403, 404].includes(error.status)) throw error;
           if (!current()) return;
           setJob(undefined);
           await watchAuthorizedResource(load, value => ['queued', 'running'].includes(value.analysis.status), signal);
+          return;
+        }
+        if (current()) {
+          await load();
+          if (current() && finished.status === 'failed') throw new WorkspaceError('분석 작업을 완료하지 못했습니다. 저장된 상태를 확인하고 새 분석을 요청하세요.');
         }
       }
     });
@@ -340,10 +342,10 @@ function SourceLink({ source }: { source: NonNullable<AnalysisView['result']>['s
   catch { return <span>원문 버전 연결 확인 필요</span>; }
   return <a href={href}>{source.title} · 사용한 원문 버전</a>;
 }
-function CandidateSourceLink({ candidateId }: { candidateId: string }) {
+function CandidateSourceLink({ candidateId, label = '원문 등록·문서함 검색' }: { candidateId: string; label?: string }) {
   const { route } = useDocumentScope();
   try {
-    return <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId, ref: candidateId })}>원문 등록·문서함 검색</a>;
+    return <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId, ref: candidateId })}>{label}</a>;
   } catch {
     return <span>원문 연결 확인 필요</span>;
   }

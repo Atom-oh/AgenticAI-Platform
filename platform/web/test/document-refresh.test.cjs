@@ -250,3 +250,46 @@ test('an unsupported graph reference or malformed model catalog cannot crash S1'
     assert.deepEqual(ui.errors, []);
   } finally { await ui.browser.close(); }
 });
+
+for (const source of [false, true]) {
+  test(`resource denial after successful job polling never enters fallback (${source})`, { timeout: 15000 }, async () => {
+    let jobComplete = false, deniedReads = 0;
+    const ui = await openUI(source ? 'documents/LibraryPage' : 'S1', {
+      hash: source ? '#/documents?documentId=doc-1&revisionId=doc-1--r1' : '#/s1?analysisId=ana-1',
+      route: async ({ target, state, json }) => {
+        state.document.title = 'PRIVATE_SOURCE_SENTINEL';
+        state.revision.status = 'processing'; state.revision.jobId = 'job-1';
+        state.analysis.status = 'running'; state.analysis.query = 'PRIVATE_ANALYSIS_SENTINEL';
+        if (target === '/jobs/job-1') { jobComplete = true; await json({ job: { id: 'job-1', status: 'completed', progress: 100 } }); return true; }
+        if (jobComplete && target === (source ? '/documents/doc-1' : '/impact-analyses/ana-1')) {
+          deniedReads++;
+          await json({ error: deniedReads === 1 ? '실제 원문 접근 권한이 회수되었습니다.' : '추가 요청 실패', code: deniedReads === 1 ? 'forbidden' : 'unavailable' },
+            deniedReads === 1 ? 403 : 503);
+          return true;
+        }
+        return false;
+      },
+    });
+    try {
+      await ui.page.getByText('실제 원문 접근 권한이 회수되었습니다.', { exact: false }).waitFor();
+      await ui.page.getByRole('button', { name: '참여 권한 다시 조회', exact: true }).waitFor();
+      assert.equal(deniedReads, 1);
+      assert.equal(await ui.page.getByText(source ? 'PRIVATE_SOURCE_SENTINEL' : 'PRIVATE_ANALYSIS_SENTINEL', { exact: true }).count(), 0);
+      assert.deepEqual(ui.errors, []);
+    } finally { await ui.browser.close(); }
+  });
+}
+
+test('unsupported regulation reference leaves the creation form readable', { timeout: 15000 }, async () => {
+  const ui = await openUI('S1', { hash: '#/s1', route: async ({ target, json }) => {
+    if (target !== '/documents/references') return false;
+    await json({ references: [{ id: 'regulation:external', label: 'Regulation', title: 'Unsupported synthetic regulation' }], backend: 'local' });
+    return true;
+  } });
+  try {
+    await ui.page.getByLabel('분석할 규정', { exact: true }).selectOption('regulation:external');
+    await ui.page.getByText('원문 연결 확인 필요', { exact: true }).waitFor();
+    await ui.page.getByRole('heading', { name: '변경할 규정과 원문 확인', exact: true }).waitFor();
+    assert.deepEqual(ui.errors, []);
+  } finally { await ui.browser.close(); }
+});

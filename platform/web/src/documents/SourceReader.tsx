@@ -66,12 +66,9 @@ export default function SourceReader({ references, onChanged }: { references: Re
       if (!current() || !loaded) return;
       const revision = loaded.source.revision;
       if (revision.status === 'processing' && revision.jobId) {
+        let finalJob: Job;
         try {
-          const finalJob = await watchDocumentJob(client, revision.jobId, signal, next => { if (current()) setJob(next); });
-          if (current()) {
-            await load();
-            if (current() && finalJob.status === 'failed') setMessage('본문 추출을 완료하지 못했습니다. 처리 결과를 확인하고 지원하는 원문으로 새 버전을 등록하세요.');
-          }
+          finalJob = await watchDocumentJob(client, revision.jobId, signal, next => { if (current()) setJob(next); });
         } catch (error) {
           if (!(error instanceof WorkspaceError) || ![403, 404].includes(error.status)) throw error;
           if (!current()) return;
@@ -79,6 +76,11 @@ export default function SourceReader({ references, onChanged }: { references: Re
           // A shared source can be readable while its creator's raw job is not.
           // The source endpoint rechecks actual access on every refresh.
           await watchAuthorizedResource(load, value => value.source.revision.status === 'processing', signal);
+          return;
+        }
+        if (current()) {
+          await load();
+          if (current() && finalJob.status === 'failed') setMessage('본문 추출을 완료하지 못했습니다. 처리 결과를 확인하고 지원하는 원문으로 새 버전을 등록하세요.');
         }
       }
     });
