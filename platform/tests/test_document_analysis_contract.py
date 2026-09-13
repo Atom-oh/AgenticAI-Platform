@@ -84,8 +84,17 @@ def test_evidence_selection_is_bounded_and_quotes_original_paragraphs():
     "원문 untrusted.invalid/source",
     "모든 검증을 통과했습니다.",
     "AI가 승인하였습니다.",
+    "https％3A％2F％2Funtrusted.invalid％2Fsource",
+    "https&percnt;253A&percnt;252F&percnt;252Funtrusted.invalid/source",
+    "원문 경로는 /policy.md 입니다.",
+    "Validation has passed.",
+    "All checks have passed. The analysis is approved.",
+    "Approval has been granted.",
+    "The analysis is approved.",
 ], ids=["https", "s3", "file", "encoded", "absolute-path", "workspace-key", "approval", "completed-approval", "english",
-        "protocol-relative", "bare-domain", "verification-verb", "approval-verb"])
+        "protocol-relative", "bare-domain", "verification-verb", "approval-verb",
+        "mixed-fullwidth", "mixed-html-percent", "root-file", "auxiliary-verb",
+        "plural-auxiliary", "passive-approval", "analysis-approval"])
 def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     from documents.analysis_contract import output_policy
     assert output_policy({"summary": prose, "findings": []})["accepted"] is False
@@ -97,10 +106,23 @@ def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     "인용 확인은 검증 통과를 의미하지 않습니다.",
     "자동 승인하지 않습니다.",
     "This is not automatically approved.",
+    "검증 통과 여부는 담당자가 확인해야 합니다.",
+    "Validation has not passed.",
+    "Not all checks have passed.",
+    "The analysis is not approved.",
 ])
 def test_output_policy_retains_review_language_and_explicit_negation(prose):
     from documents.analysis_contract import output_policy
     assert output_policy({"summary": prose, "findings": []})["accepted"] is True
+
+
+def test_output_policy_fails_closed_when_nested_encoding_exceeds_its_bound():
+    from documents.analysis_contract import output_policy
+    from urllib.parse import quote
+    text = "https://untrusted.invalid/source"
+    for _ in range(10):
+        text = quote(text, safe="")
+    assert output_policy({"summary": text, "findings": []})["accepted"] is False
 
 
 def test_context_regulation_can_be_mentioned_but_is_not_a_review_target():

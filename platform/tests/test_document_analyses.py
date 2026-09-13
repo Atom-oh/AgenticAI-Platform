@@ -278,3 +278,32 @@ def test_selected_regulation_is_context_not_an_unreviewable_finding(api):
     payload = result(api, created)[1]
     assert payload["result"]["findings"] == []
     assert payload["result"]["verification"]["references"] == "failed"
+
+
+@pytest.mark.parametrize("prose,accepted", [
+    ("https％3A％2F％2Funtrusted.invalid％2Fsource", False),
+    ("원문 경로는 /policy.md 입니다.", False),
+    ("Validation has passed.", False),
+    ("All checks have passed. The analysis is approved.", False),
+    ("검증 통과 여부는 담당자가 확인해야 합니다.", True),
+    ("Validation has not passed.", True),
+])
+def test_output_policy_variants_are_enforced_before_persistence(api, prose, accepted):
+    catalog(api); source(api, "REG-1")
+    created = start(api)
+
+    def answer(system, user):
+        return json.dumps({"summary": prose, "findings": [
+            {"nodeId": "DOC-1", "reason": "원문을 비교하여 검토하세요.", "citationIds": ["E1"]},
+        ]}), {}, {}
+
+    done, _ = run(api, created, model=answer)
+    assert done["status"] == "completed"
+    status, payload, _ = result(api, created)
+    assert status == 200 and payload["analysis"]["status"] == "needs_review"
+    value = payload["result"]
+    assert value["verification"]["references"] == "checked"
+    assert value["verification"]["outputPolicy"] == ("passed" if accepted else "failed")
+    assert (value["summary"] == prose) is accepted
+    assert bool(value["findings"]) is accepted
+    assert value["evidence"]

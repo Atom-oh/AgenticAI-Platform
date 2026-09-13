@@ -83,7 +83,7 @@ _LOCATION = re.compile(
     r"|(?:^|[\s`'\"(])//[^\s/]+"
     r"|\b(?:[a-z0-9-]+\.)+[a-z]{2,63}/[^\s]*"
     r"|\[[^\]\n]{0,200}\]\(\s*[^)\s]+\s*\)"
-    r"|(?:^|[\s`'\"(])(?:[a-z]:[\\/]|\\\\[^\s\\]+\\|\.{1,2}[\\/]|/?workspace[\\/]|/(?:[^/\s]+/)+))",
+    r"|(?:^|[\s`'\"(])(?:[a-z]:[\\/]|\\\\[^\s\\]+\\|\.{1,2}[\\/]|/?workspace[\\/]|/[^\s/\\<>]+))",
     re.IGNORECASE,
 )
 _CLAIMS = re.compile(
@@ -94,9 +94,9 @@ _CLAIMS = re.compile(
     r"|수정(?:\s*(?:대상|범위|여부|필요))?(?:[이가은는])?\s*(?:확정|완료|승인)"
     r"|실제\s*(?:은행|금융사)\s*(?:정책|규정|내규)[^.!?\n]{0,20}(?:적용|시행|인증|확정)"
     r"|(?:automatically|auto[- ]?)\s*approved"
-    r"|(?:verification|validation|checks?)\s+(?:passed|complete|successful)"
-    r"|approval\s+(?:complete|granted|confirmed)"
-    r"|changes?\s+(?:confirmed|approved|finalized)"
+    r"|(?:verification|validation|checks?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already|successfully)\s+){0,4}(?:passed|complete|successful)"
+    r"|approval\s+(?:(?:has|have|had|is|was|been|now|already)\s+){0,4}(?:complete|granted|confirmed)"
+    r"|(?:changes?|analysis|results?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already)\s+){0,4}(?:confirmed|approved|finalized)"
     r"|official\s+(?:bank(?:ing)?\s+)?(?:policy|regulation))",
     re.IGNORECASE,
 )
@@ -104,6 +104,21 @@ _NEGATIVE_SUFFIX = re.compile(
     r"^\s*(?:[을를은는이가]\s*)?(?:(?:의미|뜻|선언)(?:하지|하지는)\s*(?:않|못)"
     r"|(?:상태|결과)(?:가|는)?\s*아니|(?:하지|되지|되지는)\s*(?:않|못)|아니|아닙|불가|금지)"
 )
+_REVIEW_SUFFIX = re.compile(
+    r"^\s*여부(?:는|를|가|에)?[^.!?\n]{0,40}(?:확인|검토)(?:해야|하세요|해\s*주세요)"
+)
+
+
+def _normalize_prose(prose):
+    """Resolve mixed encoding to a fixed point; excess nesting is not a pass."""
+    for _ in range(4):
+        normalized = unicodedata.normalize("NFKC", prose)
+        normalized = html.unescape(unquote(normalized))
+        normalized = "".join(c for c in normalized if unicodedata.category(c) != "Cf")
+        if normalized == prose:
+            return normalized
+        prose = normalized
+    return None
 
 
 def output_policy(value):
@@ -113,8 +128,9 @@ def output_policy(value):
     required even for prose that passes it.
     """
     prose = "\n".join([value["summary"], *(row["reason"] for row in value["findings"])])
-    normalized = unicodedata.normalize("NFKC", html.unescape(unquote(unquote(prose))))
-    normalized = re.sub("[\u200b\u200c\u200d\ufeff]", "", normalized)
+    normalized = _normalize_prose(prose)
+    if normalized is None:
+        return {"accepted": False, "violations": ["ambiguous-encoding"]}
     violations = []
     if _LOCATION.search(normalized):
         violations.append("model-location")
@@ -122,7 +138,8 @@ def output_policy(value):
         prefix = normalized[max(0, match.start() - 40):match.start()]
         suffix = normalized[match.end():match.end() + 60]
         if (_NEGATIVE_SUFFIX.match(suffix)
-                or re.search(r"\b(?:not|never|no)(?:\s+(?:claim|imply|mean|declare))?\s+$", prefix, re.IGNORECASE)):
+                or _REVIEW_SUFFIX.match(suffix)
+                or re.search(r"\b(?:not|never|no)(?:\s+(?:claim|imply|mean|declare|all))?\s+$", prefix, re.IGNORECASE)):
             continue
         violations.append("automatic-authority")
         break
