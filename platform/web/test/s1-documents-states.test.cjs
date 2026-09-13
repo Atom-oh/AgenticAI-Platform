@@ -2,6 +2,50 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { openUI } = require('./s1-documents.test.cjs');
 
+test('source coverage separates unavailable from unchecked originals and discloses graph limits', { timeout: 20000 }, async () => {
+  const ui = await openUI('S1', { hash: '#/s1?analysisId=ana-1', route: async ({ state }) => {
+    state.analysis.status = 'needs_sources'; state.canDecide = false;
+    state.result = { ...state.result, sources: [], evidence: [], findings: [],
+      model: { invoked: false }, coverage: { ...state.result.coverage,
+        linkedSources: 0, unavailableSources: 1, uncheckedSources: 1,
+        graphTraversalLimited: true, graphCountsExact: false,
+        sourceResolution: [
+          { graphRef: 'REG-1', status: 'unavailable', reason: 'approved_source_unavailable' },
+          { graphRef: 'DOC-missing', status: 'not_checked', reason: 'regulation_source_required' },
+        ] } };
+    return false;
+  } });
+  try {
+    const { page } = ui;
+    await page.getByText('확인하지 않은 원문: 1개', { exact: true }).waitFor();
+    await page.getByText(/관계 조회 한도에 도달했습니다/).waitFor();
+    await page.getByText('원문 연결·제외 내역', { exact: true }).click();
+    await page.getByText(/승인 원문 사용 불가 · 연결·승인·접근 권한·원문 상태/).waitFor();
+    await page.getByText(/원문 확인하지 않음 · 규정 원문이 준비되지 않아/).waitFor();
+    const links = page.getByRole('link', { name: '원문 연결·권한 확인', exact: true });
+    assert.equal(await links.count(), 2);
+    const href = await links.first().getAttribute('href');
+    assert.match(href, /ref=REG-1/); assert(!href.includes('documentId='));
+    await page.getByText('분석 범위와 기술 정보', { exact: true }).click();
+    await page.getByText('관계 조회 범위: 조회 한도 도달 · 전체 개수 미확인', { exact: true }).waitFor();
+    await ui.capture('s1-source-coverage');
+    assert.deepEqual(ui.errors, []); assert.deepEqual(ui.external, []);
+  } finally { await ui.browser.close(); }
+});
+
+test('unfamiliar historical source-coverage values do not become an approval', { timeout: 15000 }, async () => {
+  const ui = await openUI('S1', { hash: '#/s1?analysisId=ana-1', route: async ({ state }) => {
+    state.result.coverage.sourceResolution = [{ graphRef: 'REG-1', status: 'constructor', reason: '__proto__' }];
+    return false;
+  } });
+  try {
+    await ui.page.getByText('원문 연결·제외 내역', { exact: true }).click();
+    await ui.page.getByText('원문 상태 확인 필요', { exact: true }).waitFor();
+    assert.equal(await ui.page.getByText('승인 원문 연결됨', { exact: true }).count(), 0);
+    assert.deepEqual(ui.errors, []);
+  } finally { await ui.browser.close(); }
+});
+
 test('checked citations still surface output-policy failure while source quote URLs remain literal', { timeout: 20000 }, async () => {
   const fallback = 'AI 응답에 허용되지 않은 출처 주소 또는 자동 판정 표현이 포함되어 본문을 표시하지 않았습니다. 원문과 영향 후보를 직접 검토하거나 다시 분석하세요.';
   const quote = '합성 원문에 기록된 주소: https://source.example.invalid/policy 및 s3://synthetic-source/policy.txt';

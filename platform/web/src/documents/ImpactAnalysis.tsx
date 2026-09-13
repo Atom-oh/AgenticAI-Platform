@@ -18,6 +18,14 @@ const outputPolicyLabels: Record<string, string> = {
 };
 const outputPolicyLabel = (value?: string) => value === undefined ? '기록 없음'
   : Object.hasOwn(outputPolicyLabels, value) ? outputPolicyLabels[value] : '상태 확인 필요';
+const sourceCoverageLabels: Record<string, string> = {
+  selected: '승인 원문 연결됨', unavailable: '승인 원문 사용 불가', not_checked: '원문 확인하지 않음',
+};
+const sourceCoverageReasons: Record<string, string> = {
+  approved_source_unavailable: '연결·승인·접근 권한·원문 상태를 확인하세요. 접근할 수 없는 원본의 상세 정보는 제공하지 않습니다.',
+  regulation_source_required: '규정 원문이 준비되지 않아 아직 확인하지 않았습니다.',
+  source_limit: '이번 분석의 원문 수 한도로 확인하지 않았습니다.',
+};
 
 export default function ImpactAnalysis({ preset }: { preset: string }) {
   const { route, client } = useDocumentScope();
@@ -206,12 +214,29 @@ function StoredAnalysis() {
             <div className="doc-stat"><strong>{result.coverage.unavailableSources}</strong>사용하지 못한 원문</div>
             <div className="doc-stat"><strong>{result.coverage.evidenceParagraphs ?? result.evidence.length}</strong>선택된 근거 문단</div>
           </div>
+          {result.coverage.uncheckedSources !== undefined && <p>확인하지 않은 원문: {result.coverage.uncheckedSources}개</p>}
           <p>관계 조회 백엔드: {result.coverage.graphBackend} · 공유 시연 관계 목록</p>
+          {result.coverage.graphTraversalLimited && <Notice>관계 조회 한도에 도달했습니다. 표시된 개수는 조회된 범위이며 전체 영향 대상의 수가 아닙니다. 조회되지 않은 관계와 대상을 추가로 검토해야 합니다.</Notice>}
           {result.coverage.truncated && <Notice>원문의 일부 문단만 분석 범위에 포함되었습니다. 문서 전체를 검토한 결과가 아닙니다.</Notice>}
           {result.coverage.sourceLimitReached && <Notice>사용할 수 있는 원문 수의 상한에 도달했습니다. 제외된 자료를 별도로 검토하세요.</Notice>}
           {!!result.coverage.candidateContextsOmitted && <p>AI 입력에서 제외된 영향 후보: {result.coverage.candidateContextsOmitted}개</p>}
+          {result.coverage.sourceResolution && <Details title="원문 연결·제외 내역">
+            <p>사용 불가와 아직 확인하지 않은 원문을 구분합니다. 연결된 원문도 실제 AI 입력에는 선택된 근거 문단만 포함됩니다.</p>
+            <ul className="doc-list">{result.coverage.sourceResolution.map((row, index) => {
+              const label = Object.hasOwn(sourceCoverageLabels, row.status) ? sourceCoverageLabels[row.status] : '원문 상태 확인 필요';
+              const reason = row.reason && Object.hasOwn(sourceCoverageReasons, row.reason) ? sourceCoverageReasons[row.reason] : '';
+              let href: string | undefined;
+              try { href = libraryHref({ projectId: route.projectId, analysisId: route.analysisId, ref: row.graphRef }); } catch { /* Unknown historical reference remains non-navigable. */ }
+              return <li key={`${row.graphRef}:${index}`} className="doc-stack">
+                <strong>{row.graphRef === result.regulation.id ? result.regulation.title : nodes.find(node => node.id === row.graphRef)?.name || row.graphRef}</strong>
+                <p>{label}{reason && <> · {reason}</>}</p>
+                {href && row.status !== 'selected' && <a href={href}>원문 연결·권한 확인</a>}
+              </li>;
+            })}</ul>
+          </Details>}
           <Details title="분석 범위와 기술 정보">
             <p>가용 문단: {result.coverage.availableParagraphs ?? '기록 없음'} · 입력 문자: {result.coverage.contextCharacters ?? '기록 없음'}</p>
+            <p>관계 조회 범위: {result.coverage.graphCountsExact === false ? '조회 한도 도달 · 전체 개수 미확인' : result.coverage.graphCountsExact === true ? '설정된 조회 한도 내 결과' : '한도 기록 없음'}</p>
             <p>원문 확인: {result.verification.sourceIntegrity === 'verified_at_analysis' ? '분석 당시 확인됨' : '확인되지 않음'}</p>
             <p>인용 연결: {result.verification.references === 'checked' ? '연결 확인됨 · 내용 검토는 별도' : '미확인'}</p>
             <p>AI 응답 표현 검사: {outputPolicyLabel(result.verification.outputPolicy)}</p>

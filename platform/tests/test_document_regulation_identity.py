@@ -63,3 +63,27 @@ def test_neptune_impact_queries_use_the_selected_id_not_its_shared_code():
     assert value.regulation.id == "REG-selected"
     assert [node.id for node in value.documents] == ["DOC-selected"]
     assert len(graph.calls) > 10
+    assert value.traversal_limit_reached is False
+
+
+@pytest.mark.parametrize("edge_limit", [False, True], ids=["node-query", "edge-query"])
+def test_neptune_reports_reaching_a_node_or_path_query_limit(edge_limit):
+    class CappedNeptune(NeptuneGraphStore):
+        def __init__(self):
+            pass
+
+        def get_node(self, identifier):
+            return Node(identifier, "Regulation", {})
+
+        def _nodes(self, cypher, params):
+            if not edge_limit and "<-[:REFERENCES]-(n:Document)" in cypher:
+                return [Node(f"DOC-{index}", "Document", {}) for index in range(1000)]
+            return []
+
+        def _pairs(self, cypher, params, rel):
+            if edge_limit and rel == "REFERENCES":
+                return [Edge(f"DOC-{index}", rel, "REG-1") for index in range(3000)]
+            return []
+
+    value = CappedNeptune().impact_of_regulation_id("REG-1")
+    assert value.traversal_limit_reached is True

@@ -166,6 +166,20 @@ Required regulation source absent: return `needs_sources` with relationship
 candidates and no model call; offer document registration. Exclude missing,
 unapproved, inaccessible, malformed and changed sources from prompts. An access
 failure never falls back to another user's cache or another document version.
+Coverage includes the required regulation and each displayed document candidate
+in `sourceResolution`: `selected`, `unavailable`, or `not_checked`.
+Unavailable originals share the opaque reason `approved_source_unavailable`;
+the result must not reveal denied document IDs, titles, existence or detailed
+errors. The library provides details only after its own access checks.
+Skipped candidates use `regulation_source_required` or `source_limit`.
+`unavailableSources` includes an unavailable required regulation;
+`uncheckedSources` counts candidates whose original was not inspected.
+
+Neptune retains bounded queries. When any node or path query reaches its cap,
+`ImpactResult.traversal_limit_reached` is true and the result records
+`graphTraversalLimited: true`, `graphCountsExact: false`. Counts then describe
+only fetched candidates; the UI must warn that the whole impact scope is
+unconfirmed. This conservative indicator does not assert an exact omitted total.
 
 The result contains `regulation`, `counts`, `candidates`, `sources`, `evidence`,
 `findings`, `summary`, `coverage`, `verification`, `model`, `decisions`.

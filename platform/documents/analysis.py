@@ -38,6 +38,8 @@ The selected regulation is context only, not a finding target; use candidate IDs
 Use review language such as 검토가 필요합니다 or 확인해야 합니다. An approved
 source is a source attribute, not permission to declare this analysis approved.
 Do not claim the entire original was reviewed: only listed excerpts are supplied.
+Respect the supplied coverage limits; never claim the whole graph was examined
+when graphTraversalLimited is true.
 If evidence is insufficient, state the limitation and do not invent a finding."""
 
 
@@ -321,18 +323,26 @@ def process_analysis(worker, owner, job):
            "article": regulation.props.get("article"), "registryVersion": regulation.props.get("version"),
            "effectiveDate": regulation.props.get("effectiveDate")}
     first = _source(library, regulation.id, analysis["query"])
-    sources, unavailable, limited = [], 0, False
+    sources, unavailable, limited = [], 0 if first else 1, False
+    resolution = [{"graphRef": regulation.id, "status": "selected"} if first else
+                  {"graphRef": regulation.id, "status": "unavailable", "reason": "approved_source_unavailable"}]
     if first:
         sources.append(first)
-        for row in candidates["documents"]:
-            if len(sources) >= MAX_MODEL_SOURCES:
-                limited = True
-                break
-            source = _source(library, row["id"], analysis["query"])
-            if source:
-                sources.append(source)
-            else:
-                unavailable += 1
+    for row in candidates["documents"]:
+        if not first or len(sources) >= MAX_MODEL_SOURCES:
+            limited = limited or bool(first)
+            resolution.append({"graphRef": row["id"], "status": "not_checked",
+                               "reason": "source_limit" if first else "regulation_source_required"})
+            continue
+        source = _source(library, row["id"], analysis["query"])
+        if source:
+            sources.append(source)
+            resolution.append({"graphRef": row["id"], "status": "selected"})
+        else:
+            unavailable += 1
+            # Do not expose a denied original's existence, UUID, title or error.
+            resolution.append({"graphRef": row["id"], "status": "unavailable",
+                               "reason": "approved_source_unavailable"})
     bindings = [entry["snapshot"] for entry in sources]
     current_job = worker.storage.get(owner, "job", job["id"])
     if not current_job or current_job.get("status") != "running" or current_job.get("input") != data:
@@ -346,6 +356,10 @@ def process_analysis(worker, owner, job):
               "sources": bindings, "evidence": [], "findings": [], "summary": "",
               "coverage": {"graphBackend": store.name, "candidateOmissions": omitted,
                            "linkedSources": len(sources), "unavailableSources": unavailable,
+                           "uncheckedSources": sum(row["status"] == "not_checked" for row in resolution),
+                           "sourceResolution": resolution,
+                           "graphTraversalLimited": impact.traversal_limit_reached,
+                           "graphCountsExact": not impact.traversal_limit_reached,
                            "sourceLimitReached": limited, "sharedCatalog": True},
               "verification": {"sourceIntegrity": "not_checked", "references": "not_run", "outputPolicy": "not_run",
                                "semantic": "requires_human_review"},
@@ -359,7 +373,10 @@ def process_analysis(worker, owner, job):
     for key in ("documents", "policyRules", "products", "departments", "screens", "components"):
         prompt_nodes.extend(candidates[key][:15])
     prompt_nodes = prompt_nodes[:80]
-    base = {"question": analysis["query"], "regulation": reg, "candidates": prompt_nodes}
+    base = {"question": analysis["query"], "regulation": reg, "candidates": prompt_nodes,
+            "coverage": {"graphTraversalLimited": impact.traversal_limit_reached,
+                         "sourceLimitReached": limited,
+                         "uncheckedSourceCandidates": result["coverage"]["uncheckedSources"]}}
     remaining = MAX_CONTEXT_CHARS - len(canonical(base)) - 64
     windows = [{**entry["snapshot"], "paragraphs": entry["paragraphs"],
                 "totalParagraphs": entry["totalParagraphs"]} for entry in sources]

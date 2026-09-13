@@ -49,7 +49,9 @@ export type AnalysisResult = {
   evidence: Evidence[]; findings: { nodeId: string; reason: string; citationIds: string[] }[];
   summary: string; coverage: { graphBackend: string; linkedSources: number; unavailableSources: number;
     sourceLimitReached: boolean; contextCharacters?: number; evidenceParagraphs?: number;
-    availableParagraphs?: number; truncated?: boolean; candidateContextsOmitted?: number; candidateOmissions?: Record<string, number> };
+    availableParagraphs?: number; truncated?: boolean; candidateContextsOmitted?: number; candidateOmissions?: Record<string, number>;
+    uncheckedSources?: number; sourceResolution?: { graphRef: string; status: string; reason?: string }[];
+    graphTraversalLimited?: boolean; graphCountsExact?: boolean };
   verification: { sourceIntegrity: string; references: string; semantic: string; outputPolicy?: string };
   model: { invoked: boolean; requestedId?: string; modelId?: string | null; usage?: { inputTokens?: number; outputTokens?: number } };
 };

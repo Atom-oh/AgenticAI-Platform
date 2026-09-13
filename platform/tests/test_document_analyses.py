@@ -105,6 +105,39 @@ def test_missing_regulation_original_returns_candidates_without_model(api):
     assert payload["result"]["counts"]["documents"] == 1
     assert payload["result"]["model"]["invoked"] is False
     assert payload["result"]["findings"] == []
+    coverage = payload["result"]["coverage"]
+    assert coverage["unavailableSources"] == 1
+    assert coverage["uncheckedSources"] == 1
+    assert coverage["sourceResolution"] == [
+        {"graphRef": "REG-1", "status": "unavailable", "reason": "approved_source_unavailable"},
+        {"graphRef": "DOC-1", "status": "not_checked", "reason": "regulation_source_required"},
+    ]
+
+
+def test_source_limit_marks_skipped_originals_unchecked_instead_of_unavailable(api, monkeypatch):
+    import documents.analysis as analysis
+    catalog(api); source(api, "REG-1"); source(api, "DOC-1")
+    monkeypatch.setattr(analysis, "MAX_MODEL_SOURCES", 1)
+    created = start(api); run(api, created)
+    coverage = result(api, created)[1]["result"]["coverage"]
+    assert coverage["linkedSources"] == 1 and coverage["unavailableSources"] == 0
+    assert coverage["sourceLimitReached"] is True and coverage["uncheckedSources"] == 1
+    assert coverage["sourceResolution"][-1] == {
+        "graphRef": "DOC-1", "status": "not_checked", "reason": "source_limit",
+    }
+
+
+def test_graph_query_limit_is_preserved_in_the_private_result(api):
+    catalog(api); source(api, "REG-1")
+    original = api.graph_store.impact_of_regulation_id
+    def capped(identifier):
+        impact = original(identifier)
+        impact.traversal_limit_reached = True
+        return impact
+    api.graph_store.impact_of_regulation_id = capped
+    created = start(api); run(api, created)
+    coverage = result(api, created)[1]["result"]["coverage"]
+    assert coverage["graphTraversalLimited"] is True and coverage["graphCountsExact"] is False
 
 
 def test_approved_sources_have_exact_private_paragraph_references_and_no_auto_approval(api):
@@ -134,8 +167,8 @@ def test_approved_sources_have_exact_private_paragraph_references_and_no_auto_ap
 def test_forbidden_doc_is_absent_from_model_context_and_private_result(api):
     catalog(api); team = project(api)
     source(api, "REG-1", project_id=team)
-    source(api, "DOC-1", data=b"SECRET-CONTENT", project_id=team,
-           title="SECRET-TITLE", readRoles=["owner"])
+    hidden = source(api, "DOC-1", data=b"SECRET-CONTENT", project_id=team,
+                    title="SECRET-TITLE", readRoles=["owner"])
     created = start(api, actor="bob", project_id=team)
     done, calls = run(api, created, owner="project:" + team)
     assert done["status"] == "completed"
@@ -143,6 +176,10 @@ def test_forbidden_doc_is_absent_from_model_context_and_private_result(api):
     status, payload, _ = result(api, created, actor="bob", project_id=team)
     assert status == 200 and "SECRET-" not in repr(payload)
     assert len(payload["result"]["sources"]) == 1
+    assert hidden["document"]["id"] not in repr(payload)
+    assert payload["result"]["coverage"]["sourceResolution"][-1] == {
+        "graphRef": "DOC-1", "status": "unavailable", "reason": "approved_source_unavailable",
+    }
 
 
 def test_revocation_during_model_call_blocks_result_publication(api):
