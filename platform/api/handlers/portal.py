@@ -3,7 +3,7 @@
 요청/응답형(액션명 = 응답 type):
   portal_list         {category}  category ∈ Foundation|Components|Patterns|Screens|Procedures|Policies|UXWriting
                       → {cards[{id,label,name,status,rawStatus,version,owner,related{Label:n},computedBy,...}], count, backend, note}
-  portal_detail       {id}        → {node, props, related, versionChain, neighbors, screenMeta?, registry?, mapping}
+  portal_detail       {id}        → {node, props, related, versionChain, neighbors, visual, screenMeta?, registry?, mapping}
   portal_impact       {id}        → {counts, screens[], patterns[], policyRules[], departments[], products[], procedures[],
                                      graph{nodes,edges}}   (Component · Pattern · PolicyRule 만)
   portal_publish      {id}        → Registry 레코드 생성/조회 (DRAFT) — Component(기존 CUSTOM/COMPONENT 레코드) ·
@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from common.ctx import Ctx
 from common.log import log_event
 from handlers.core import GRAPH_BACKEND, lazy_store
+from handlers.portal_visual import build_visual
 
 COMPUTED_BY = "graph-traversal"
 TIER_BADGE = "Tier 0/1 전용"
@@ -282,13 +283,13 @@ def portal_list(ctx: Ctx, body: dict) -> None:
               "computedBy": COMPUTED_BY, "backend": store.name, "graphBackend": GRAPH_BACKEND, "elapsedMs": _elapsed(t0)})
 
 
-def _neighbors_sample(store, node_id: str, per_rel: int = 8, total: int = 80) -> List[dict]:
-    """방향·관계별 이웃 표본 [{rel, direction, count, nodes[{id,label,name}]}]."""
+def _neighbors_sample(neighborhood: dict, per_rel: int = 8, total: int = 80) -> List[dict]:
+    """Group already-fetched neighbors without adding graph queries."""
     out = []
     n_total = 0
     for direction in ("out", "in"):
         by_rel: Dict[str, list] = defaultdict(list)
-        for e, other in store.neighbors(node_id, direction=direction):
+        for e, other in neighborhood[direction]:
             by_rel[e.rel].append(other)
         for rel in sorted(by_rel):
             nodes = by_rel[rel]
@@ -298,6 +299,33 @@ def _neighbors_sample(store, node_id: str, per_rel: int = 8, total: int = 80) ->
             if n_total >= total:
                 return out
     return out
+
+
+def screen_reference_nodes(store, current_id: str, meta: dict | None) -> dict:
+    """Resolve displayed screen names; one bounded query rather than per-node Neptune calls."""
+    if not meta:
+        return {}
+    ids = []
+    for key in ("prevScreens", "nextScreens"):
+        refs = meta.get(key)
+        if not isinstance(refs, list):
+            continue
+        for ref in refs:
+            if (isinstance(ref, str) and 0 < len(ref) <= 64 and ref == ref.strip()
+                    and ref != current_id and ref not in ids):
+                ids.append(ref)
+            if len(ids) == 24:
+                break
+        if len(ids) == 24:
+            break
+    if not ids:
+        return {}
+    if _is_neptune(store):
+        rows = store._q("MATCH (n:Screen) WHERE n.id IN $ids RETURN n LIMIT 24", {"ids": ids})
+        nodes = [store._node(row["n"]) for row in rows]
+    else:
+        nodes = [store.get_node(node_id) for node_id in ids]
+    return {node.id: node for node in nodes if node is not None and node.label == "Screen" and node.id in ids}
 
 
 def portal_detail(ctx: Ctx, body: dict) -> None:
@@ -323,8 +351,16 @@ def portal_detail(ctx: Ctx, body: dict) -> None:
             screen_meta = {"metaId": metas[0].id, "purpose": pp.get("purpose"), "entryCondition": pp.get("entryCondition"),
                            "prevScreens": pp.get("prevScreens") or [], "nextScreens": pp.get("nextScreens") or []}
     card = _card(n, related, owner, screen_meta)
-    payload = {"type": "portal_detail", "ok": True, **card, "props": parsed_props(n.props),
-               "versionChain": chain, "neighbors": _neighbors_sample(store, n.id),
+    # Reuse full, bounded detail reads; the eight-card sample loses exact names and steps.
+    neighborhood = {direction: store.neighbors(n.id, direction=direction) for direction in ("out", "in")}
+    props = parsed_props(n.props)
+    # NeptuneGraphStore.neighbors returns at most 200 rows per direction. At the
+    # limit, uniqueness and complete coverage cannot be established from this read.
+    neighbors_complete = not _is_neptune(store) or all(len(rows) < 200 for rows in neighborhood.values())
+    payload = {"type": "portal_detail", "ok": True, **card, "props": props,
+               "versionChain": chain, "neighbors": _neighbors_sample(neighborhood),
+               "visual": build_visual(n, props, neighborhood, screen_meta, neighbors_complete=neighbors_complete,
+                                      reference_nodes=screen_reference_nodes(store, n.id, screen_meta)),
                "impactSupported": n.label in IMPACT_LABELS, "publishable": n.label in PUBLISHABLE,
                "publishTarget": ({"recordType": PUBLISHABLE[n.label][0], "subtype": PUBLISHABLE[n.label][1]}
                                  if n.label in PUBLISHABLE else None),

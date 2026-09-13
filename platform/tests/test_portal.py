@@ -28,7 +28,7 @@ from handlers import portal  # noqa: E402
 from registry import api as registry_api  # noqa: E402
 from registry import seed as seedmod  # noqa: E402
 
-SEED_DIR = ROOT / "seed" / "out"
+SEED_DIR = Path(os.environ.get("SEED_DIR") or (ROOT / "seed" / "out"))
 ACTOR = "demo@atomai.click"
 HERO = "CMP-Button-v2"
 
@@ -96,6 +96,7 @@ def test_category_maps_to_label(store, category, label, flt):
     expected = sorted(n.id for n in store.find_by_label(label, **flt))
     assert [c["id"] for c in ev["cards"]] == expected and ev["count"] == len(expected) > 0
     assert all(c["label"] == label for c in ev["cards"])
+    assert all("visual" not in c for c in ev["cards"])
     assert ev["categoryCounts"][category] == len(expected)
     assert ev["backend"] == "local"
     if category == "Foundation":
@@ -189,6 +190,24 @@ def test_detail_screen_meta_and_missing(store):
     assert ev2["ok"] and ev2["category"] == "UXWriting" and ev2["publishable"] is False and ev2["impactSupported"] is False
     assert _call(portal.portal_detail, {"id": "NOPE-1"})["code"] == 404
     assert _call(portal.portal_detail, {})["ok"] is False
+
+
+def test_seed_procedure_visual_matches_actual_steps_and_unique_screen_names(store):
+    for procedure in store.find_by_label("Procedure"):
+        steps = json.loads(procedure.props["steps"])
+        ev = _call(portal.portal_detail, {"id": procedure.id})
+        visual = ev["visual"]
+        assert visual["kind"] == "diagram" and visual["source"] == "procedure-steps"
+        assert [n["label"] for n in visual["nodes"]] == steps[:25]
+        included = defaultdict(set)
+        for _, screen in store.neighbors(procedure.id, "INCLUDES"):
+            if screen.label == "Screen":
+                included[screen.props["name"]].add(screen.id)
+        for step, node in zip(steps, visual["nodes"]):
+            matches = included[step]
+            assert node.get("assetId") == (next(iter(matches)) if len(matches) == 1 else None)
+        assert len(visual["edges"]) == len(visual["nodes"]) - 1
+        assert ev["props"]["steps"] == steps and ev["related"] == store.related_counts(procedure.id)
 
 
 # ---------------- 영향 분석 ----------------
