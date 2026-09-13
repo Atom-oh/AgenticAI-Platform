@@ -40,7 +40,7 @@ Its section exposes `data-diagram-state="loading|rendered|error"` for parent CSS
 and browser assertions; the loading/error status remains available.
 The graph is a relationship view, not executable UI or UX validation.
 Metadata `source`, `assetId`, `type`, `title`, and `note` never cause navigation,
-network requests, module imports, or code execution. Missing nodes get a dashed
+network requests, module imports, or code execution. Unverified references get a dashed
 border; sequence edges are solid and reference edges dashed.
 
 Procedure-step graphs use top-to-bottom orientation without changing nodes or
@@ -71,6 +71,10 @@ The iframe uses `sandbox="allow-scripts"` and no `allow-same-origin`.
 The client receives status only and never inserts SVG into the parent DOM.
 The runtime also removes links, images, HTML, scripts and animation elements
 before mounting its SVG.
+
+Escape from the focused diagram emits a window/session-bound dismissal signal
+to the optional `onEscape` callback. The Portal's full-window dialog uses it to
+close and restore focus without granting same-origin access to the frame.
 
 Every selection/source revision or retry mounts a fresh frame. The parent
 removes the old frame during React's commit, before the next fetch effect.

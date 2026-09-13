@@ -25,7 +25,7 @@ mermaid.initialize({
   flowchart: { useMaxWidth: false, curve: 'linear', rankSpacing: 24 },
 });
 
-function send(type: 'rendered' | 'error') {
+function send(type: 'rendered' | 'error' | 'escape') {
   if (session) window.parent.postMessage({ channel: CHANNEL, type, nonce: session.nonce, id: session.id },
     session.origin === 'null' ? '*' : session.origin);
 }
@@ -74,6 +74,12 @@ function control(command: ViewCommand) {
   resize();
 }
 new ResizeObserver(() => resize()).observe(viewport);
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && session) {
+    event.preventDefault();
+    send('escape');
+  }
+});
 
 window.addEventListener('message', async event => {
   // Source authentication precedes examining any supplied graph or command.
