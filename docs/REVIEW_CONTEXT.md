@@ -13,6 +13,8 @@ This file maps requirements to evidence; it does not waive defects or certify de
 | `platform/docs/CONTRACTS.md` | API/module integration |
 | `platform/workspace/REACT_CONTRACT.md` | React generation, approval, release, and export |
 | `platform/workspace/CONTRACT.md` | Imported-file/HTML workspace validation |
+| `platform/infra/README-privacy.md` | MyData relay/gateway configuration and operational prerequisites |
+| `docs/14-demo/mydata-privacy.md` | Korean MyData user instructions and verification limits |
 | `demo/*/README.md`, `demo/SECURITY-GOVERNANCE.md` | Separate demo implementations and governance |
 | `docs/decisions/` | Explicit repository decisions, with status and scope |
 | Dated `plans/`, `specs/`, `.superpowers/` records | Historical feature context; follow their current-contract pointers |
@@ -31,7 +33,7 @@ report the documentation conflict instead of choosing whichever statement is str
 | Anonymization is unimplemented, or is legally complete | Rule-based tokenization and EKS free-text removal are implemented. Reversible trusted-plane identity restoration is distinct from irreversible free-text removal. No legal/full-anonymization claim follows. |
 | Every request must stream unverified tokens within five seconds or use a cache | Those were demo UX goals. S2 buffers explanation output for verification and disables shared-cache writes/replay. Privacy failure blocks; it must not become a cached success. |
 | Everything is already inside one deployed VPC | The target is a private data boundary. `BankPlatform`, `BankPlatformPlane`, and optional `BankPlatformPrivacy` are distinct IaC stacks. The privacy stack reuses an existing EKS VPC; code merge does not prove relay/network deployment. |
-| Every occurrence of `onprem` or `Two-Plane` is forbidden | The presentation rule rejects misleading user-facing topology/residency claims. Existing module names, event values, and historical records are compatibility identifiers, not claims of physical deployment. |
+| Every occurrence of `onprem`, `idc_vllm` or `Two-Plane` is forbidden | The presentation rule rejects misleading user-facing topology/residency claims. Existing module names, event values, and historical records are compatibility identifiers, not claims of physical deployment. |
 | GitLab is mandatory for this repository's CI | GitLab is the proposed customer's source/CI system. This repository uses GitHub Actions. The React export implementation supports configured GitHub/GitLab targets; customer credentials and targets are not implied. |
 | All generated screens use the same gate | Legacy Registry/stub checks and imported HTML checks are scoped separately from real React compilation/browser verification and release approval. |
 | Every ontology is persisted in Neptune | The bank impact graph has local/Neptune backends. Published workspace product guidelines persist project-scoped JSON nodes/edges; this is not Neptune integration. |
@@ -74,6 +76,14 @@ Bedrock and where verification occurs. Conversely, a document calling a componen
 Record reviewer identity, base and HEAD SHA, changed-file coverage, and unresolved
 findings. Revalidate after each push. A missing Kiro/bot response or failed review
 is an incomplete review, even when CI is green.
+
+## Publication and language
+
+English development documents in `docs/` are intentionally public build inputs;
+there is no confidentiality or exclusion rule implied by their audience. Korean
+technical chapters, demo instructions, homepage and navigation keep their language.
+See ADR-001 for this distinction. A reviewer must not infer a missing exclusion
+requirement solely from the directory or language.
 
 ## Automation in this repository
 

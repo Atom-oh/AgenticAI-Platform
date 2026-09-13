@@ -32,6 +32,7 @@ old test counts, screenshots, or a successful merge.
 | `demo/builder-harness/` | its `README.md`, `demo/SECURITY-GOVERNANCE.md` |
 | Guidebook content | `docs/13-appendix/vitepress-conventions.md` |
 | Documentation decisions | `docs/decisions/README.md` |
+| PR-review inputs and invocation | `docs/REVIEW_CONTEXT.md`, `docs/pr-review.md` |
 
 ## Invariants
 

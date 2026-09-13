@@ -149,7 +149,13 @@ The HTTP gateway also checks the actual TCP peer against verified NLB addresses 
 `PRIVACY_ALLOWED_CLIENT_IPS` before reading model-bound input. `/health` is a
 non-sensitive probe exception. Forwarded headers cannot override peer checks; this
 mitigates the CNI standard-mode startup window without claiming strict-mode or host
-isolation. Keep NLB client-IP preservation disabled for this contract.
+isolation. Keep NLB client-IP preservation disabled for this contract. The current
+gateway accepts exactly 2–4 distinct IPv4 peer addresses inside `10.0.0.0/8`;
+other counts or address ranges require an explicit implementation/contract change.
+The platform privacy client uses a Seoul Lambda ARN and accepts `query|payload`,
+with an 8,192-byte UTF-8 text limit. The gateway caps the JSON body at 65,536 bytes
+and, like the IAM relay, additionally supports internal `evaluation` requests.
+The platform client does not expose that purpose as a selectable S2 operation. HTTP health, evaluation and model readiness are distinct paths.
 
 ## 5. Ontology
 

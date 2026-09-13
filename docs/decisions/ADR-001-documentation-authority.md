@@ -29,6 +29,15 @@ live verification, and publication.
 Review the actual latest HEAD with complete applicable coverage. Missing reviewers
 and incomplete checks remain failures to complete the review process.
 
+## Publication scope
+
+This is a language and authority distinction, not a confidentiality boundary.
+Development documents under `docs/` remain public VitePress inputs, including review
+context, ADRs and historical plans; they may be rendered and indexed in English.
+The existing Korean guidebook chapters (`docs/00-intro/` through `docs/14-demo/`),
+homepage and navigation retain Korean. No private-document exclusion is promised,
+and confidential material must not be placed in this public repository or build.
+
 ## Consequences
 
 Agents load a small shared entry point and only relevant contracts. Documentation

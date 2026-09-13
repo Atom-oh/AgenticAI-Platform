@@ -1,6 +1,7 @@
 # PR review invocation
 
-This repository does not contain an automatic Kiro review workflow. The shared agent
+At the baseline recorded in `docs/REVIEW_CONTEXT.md`, this repository does not
+contain an automatic Kiro review workflow. The shared agent
 instructions govern review completion; an external panel still needs the correct
 inputs. Adding a steering file does not install a GitHub check.
 
