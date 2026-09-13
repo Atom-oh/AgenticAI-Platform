@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 import time
 from decimal import Decimal
@@ -206,13 +207,25 @@ class Storage:
                 condition.update(ConditionExpression="attribute_not_exists(#pk)", ExpressionAttributeNames={"#pk": "pk"})
                 condition.pop("ExpressionAttributeValues")
             transactions.append({"ConditionCheck": condition})
-        try:
-            table.meta.client.transact_write_items(TransactItems=transactions)
-        except table.meta.client.exceptions.TransactionCanceledException as error:
-            reasons = error.response.get("CancellationReasons", [])
-            if any(reason.get("Code") in ("ConditionalCheckFailed", "TransactionConflict") for reason in reasons):
-                raise Conflict("The resource has changed") from error
-            raise
+        for attempt in range(5):
+            try:
+                table.meta.client.transact_write_items(TransactItems=copy.deepcopy(transactions))
+                break
+            except table.meta.client.exceptions.TransactionCanceledException as error:
+                reasons = error.response.get("CancellationReasons", [])
+                codes = [reason.get("Code") if isinstance(reason, dict) else None
+                         for reason in reasons] if isinstance(reasons, list) else []
+                # A canceled transaction wrote nothing. Retry only proven
+                # contention, with the same data, versions and authority checks.
+                # Actual predicate failures must never be refreshed or bypassed.
+                contention = (len(codes) == len(transactions) and "TransactionConflict" in codes
+                              and all(code in ("None", "TransactionConflict") for code in codes))
+                if contention and attempt < 4:
+                    time.sleep(random.uniform(.025 * 2 ** attempt, .05 * 2 ** attempt))
+                    continue
+                if any(code in ("ConditionalCheckFailed", "TransactionConflict") for code in codes):
+                    raise Conflict("The resource has changed") from error
+                raise
         return [_plain(data) for data, _, _ in prepared]
 
     def list_page(self, owner: str, kind: str, limit: int = 100, cursor: str | None = None, *, prefix: str = "") -> dict:
