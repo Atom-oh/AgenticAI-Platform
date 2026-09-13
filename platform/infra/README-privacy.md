@@ -54,7 +54,7 @@ plane stack, routes, and data unchanged.
 Run from the repository root with the already installed dependencies:
 
 ```sh
-python3 -m pytest -q platform/tests/test_privacy_relay.py platform/tests/test_privacy_deploy.py
+python3 -m pytest -q platform/tests/test_privacy_http.py platform/tests/test_privacy_relay.py platform/tests/test_privacy_deploy.py platform/tests/test_privacy_canary.py
 git show HEAD:platform/infra/lib/stack.ts | node platform/privacy/deploy/check-infra.cjs
 cd platform/infra
 ./node_modules/.bin/tsc --noEmit

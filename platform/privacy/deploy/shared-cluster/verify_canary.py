@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic TCP checks; distinguish a disabled baseline from active enforcement."""
 import argparse
+import ipaddress
 import json
 import subprocess
 
@@ -26,14 +27,37 @@ def connected(name, host, port):
         " s=socket.create_connection((sys.argv[1],int(sys.argv[2])),3)\n"
         " s.close()\n"
         " print('OPEN')\n"
+        "except TimeoutError:\n"
+        " print('TIMEOUT')\n"
         "except OSError:\n"
-        " print('CLOSED')\n"
+        " print('ERROR')\n"
     )
     r = subprocess.run(K + ["exec", name, "-c", "probe", "--", "python", "-c",
                            script, host, str(port)], text=True, capture_output=True, timeout=20)
-    if r.returncode or r.stdout.strip() not in ("OPEN", "CLOSED"):
+    if r.returncode or r.stdout.strip() not in ("OPEN", "TIMEOUT"):
         raise RuntimeError("Probe execution failed; not evidence of network denial")
     return r.stdout.strip() == "OPEN"
+
+
+def service_address():
+    r = subprocess.run(K + ["get", "service", "mydata-np-target", "-o", "json"],
+                       text=True, capture_output=True, timeout=20, check=True)
+    return str(ipaddress.IPv4Address(json.loads(r.stdout)["spec"]["clusterIP"]))
+
+
+def resolved(name, host, expected):
+    script = (
+        "import socket,sys,json\n"
+        "try:\n"
+        " print(json.dumps(sorted({r[4][0] for r in socket.getaddrinfo("
+        "sys.argv[1],18080,socket.AF_INET,socket.SOCK_STREAM)})))\n"
+        "except OSError:\n"
+        " print('ERROR')\n"
+    )
+    r = subprocess.run(K + ["exec", name, "-c", "probe", "--", "python", "-c",
+                           script, host], text=True, capture_output=True, timeout=20)
+    if r.returncode or r.stdout.strip() != json.dumps([expected]):
+        raise RuntimeError("Source DNS did not resolve the current canary Service")
 
 
 def main():
@@ -43,12 +67,23 @@ def main():
     names = {role: pod(role) for role in ("target", "allowed", "denied")}
     assert connected(names["target"], "127.0.0.1", 18081), "Target listener is not running"
     host = "mydata-np-target.bank-platform-mydata.svc.cluster.local"
+    address = service_address()
+    for role in ("allowed", "denied"):
+        resolved(names[role], host, address)
+    # Both negative-test sources first prove a working path to this destination.
+    assert connected(names["allowed"], address, 18080), "Allowed source control failed"
+    assert connected(names["denied"], address, 18081), "Denied source control failed"
     results = [
-        ("allowed ingress", connected(names["allowed"], host, 18080), True),
-        ("denied ingress", connected(names["denied"], host, 18080), args.expect == "disabled"),
-        ("denied egress", connected(names["allowed"], host, 18081), args.expect == "disabled"),
-        ("allowed path remains healthy", connected(names["allowed"], host, 18080), True),
+        ("allowed ingress", connected(names["allowed"], address, 18080), True),
+        ("denied ingress", connected(names["denied"], address, 18080), args.expect == "disabled"),
+        ("denied egress", connected(names["allowed"], address, 18081), args.expect == "disabled"),
+        ("allowed source remains healthy", connected(names["allowed"], address, 18080), True),
+        ("denied source remains healthy", connected(names["denied"], address, 18081), True),
     ]
+    for role in ("allowed", "denied"):
+        resolved(names[role], host, address)
+    if service_address() != address:
+        raise RuntimeError("Canary Service changed during verification")
     for name, actual, expected in results:
         print(name + ": " + ("PASS" if actual == expected else "FAIL"))
     if any(actual != expected for _, actual, expected in results):

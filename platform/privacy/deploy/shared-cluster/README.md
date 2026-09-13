@@ -44,7 +44,7 @@ artifacts and credentials. A warm inference request does not prove that path.
 Resolve these dependencies before applying the one-key add-on update.
 
 `network-policy-canary.yaml` creates three small CPU-only Deployments, a Service,
-and two policies in the existing `bank-platform-mydata` namespace. It uses unique
+and three policies in the existing `bank-platform-mydata` namespace. It uses unique
 labels, a digest-pinned image, no credentials, no GPU and no persistent volume.
 It does not impersonate production Service labels.
 
@@ -57,10 +57,12 @@ python3 verify_canary.py --expect enabled
 ```
 
 The disabled baseline expects all three paths to connect. The enabled check
-expects allowed ingress to connect, denied ingress and denied egress to fail,
-then rechecks the allowed path. A separate loopback probe proves the denied
-egress target is actually listening. Probe execution failure is never counted
-as a network-policy denial. Repeat on affected nodes and availability zones;
+expects allowed ingress to connect and both negative paths to time out. Each
+client must resolve the current Service IP and prove its own positive connection
+before and after the negative checks. The denied client uses port 18081 as its
+positive control; the allowed client remains denied on that port. A separate
+loopback check proves the second listener is running. DNS, routing, refusal and
+probe execution errors fail verification. Repeat on affected nodes and availability zones;
 one pair is not evidence of cluster-wide coverage.
 
 Standard mode has a startup allow window. The MyData HTTP server separately

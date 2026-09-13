@@ -257,3 +257,25 @@ spec:
       protocol: TCP
     - port: 53
       protocol: UDP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mydata-np-denied-control
+  namespace: bank-platform-mydata
+  labels:
+    app.kubernetes.io/part-of: mydata-network-policy-verification
+spec:
+  podSelector:
+    matchLabels:
+      mydata-prerequisite: denied
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          mydata-prerequisite: target
+    ports:
+    - port: 18081
+      protocol: TCP
