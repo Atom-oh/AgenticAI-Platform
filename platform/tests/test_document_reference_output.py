@@ -32,7 +32,9 @@ def test_unknown_normalized_reference_is_rejected_before_persisted_checked_statu
 @pytest.mark.parametrize("claim", ["Approved.", "Verified!", "분석 결과는 승인입니다.",
                                   "분석은 승인된 상태입니다.", "분석 결과는 검증된 상태입니다.",
                                   "Verification succeeded.", "Approval succeeded.",
-                                  "Verification finished.", "분석은 승인을 받았습니다.", "분석은 검증을 마쳤습니다."])
+                                  "Verification finished.", "분석은 승인을 받았습니다.", "분석은 검증을 마쳤습니다.",
+                                  "Verification is not required because it already succeeded.",
+                                  "Verification is pending. It already succeeded."])
 def test_standalone_authority_claims_are_not_persisted_as_model_explanations(api, claim):
     catalog(api); source(api, "REG-1")
     created = start(api)
@@ -42,5 +44,7 @@ def test_standalone_authority_claims_are_not_persisted_as_model_explanations(api
         ]}), {}, {}
     run(api, created, model=response)
     value = result(api, created)[1]["result"]
-    assert value["verification"]["outputPolicy"] == "failed"
-    assert value["findings"] == [] and value["summary"] != claim
+    assert value["verification"]["outputPolicy"] == "controlled"
+    assert value["summary"] != claim
+    assert len(value["findings"]) == 1
+    assert value["findings"][0]["reason"] == "인용된 원문 문단을 대조하여 변경 여부를 검토하세요."

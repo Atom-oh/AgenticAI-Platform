@@ -15,6 +15,7 @@ const candidateOrder = ['documents', 'products', 'screens', 'components', 'depar
 const groupLabel = (key: string) => Object.hasOwn(groups, key) ? groups[key] : '기타 영향 후보';
 const outputPolicyLabels: Record<string, string> = {
   passed: '통과 · 내용 검토는 별도', failed: '실패 · AI 응답 사용 중단', not_run: '실행하지 않음',
+  controlled: '고정된 검토 안내 · AI 자유 서술 제외',
 };
 const outputPolicyLabel = (value?: string) => value === undefined ? '기록 없음'
   : Object.hasOwn(outputPolicyLabels, value) ? outputPolicyLabels[value] : '상태 확인 필요';
@@ -209,6 +210,9 @@ function StoredAnalysis() {
       {result && <>
         <section className="doc-panel doc-stack"><h3>검토 요약</h3><p className="doc-literal">{result.summary || '아직 작성된 검토 요약이 없습니다.'}</p>
           <Notice>인용 연결 확인은 내용의 타당성 검증이 아닙니다. AI 의견과 실제 적용 여부는 담당자가 원문을 대조하여 검토해야 합니다.</Notice>
+          {result.verification.outputPolicy === 'controlled' && <Notice>
+            AI는 검토 대상과 근거 문단의 연결을 제안합니다. 안내 문구는 서비스가 정한 형식으로 작성하며, AI의 자유 서술이나 승인 선언은 표시하지 않습니다.
+          </Notice>}
           {result.verification.references === 'failed' && <Notice error>AI 응답의 인용 연결을 확인하지 못했습니다. 영향 후보와 원문을 직접 검토하거나 다시 분석하세요.</Notice>}
           {result.verification.outputPolicy === 'failed' && <Notice error>
             <strong>AI 응답 표현 검사 실패</strong>
@@ -252,7 +256,7 @@ function StoredAnalysis() {
             <p>관계 조회 범위: {result.coverage.graphCountsExact === false ? '조회 한도 도달 · 전체 개수 미확인' : result.coverage.graphCountsExact === true ? '설정된 조회 한도 내 결과' : '한도 기록 없음'}</p>
             <p>원문 확인: {result.verification.sourceIntegrity === 'verified_at_analysis' ? '분석 당시 확인됨' : '확인되지 않음'}</p>
             <p>인용 연결: {result.verification.references === 'checked' ? '연결 확인됨 · 내용 검토는 별도' : '미확인'}</p>
-            <p>AI 응답 표현 검사: {outputPolicyLabel(result.verification.outputPolicy)}</p>
+            <p>{result.verification.outputPolicy === 'controlled' ? '검토 안내 방식' : 'AI 응답 표현 검사'}: {outputPolicyLabel(result.verification.outputPolicy)}</p>
             <p>모델 호출: {result.model.invoked ? '호출됨' : '호출하지 않음'}</p>
             {result.model.modelId && <p>사용 모델: <code>{result.model.modelId}</code></p>}
             {result.model.usage && <p>기록된 입력 / 출력 토큰: {result.model.usage.inputTokens ?? '없음'} / {result.model.usage.outputTokens ?? '없음'}</p>}

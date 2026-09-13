@@ -112,9 +112,14 @@ def test_evidence_selection_is_bounded_and_quotes_original_paragraphs():
         "standalone-approved", "standalone-verified", "korean-nominal-approval",
         "participial-approval", "participial-verification",
         "verification-succeeded", "approval-succeeded", "verification-finished", "approval-received", "verification-finished-korean"])
-def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
-    from documents.analysis_contract import output_policy
-    assert output_policy({"summary": prose, "findings": []})["accepted"] is False
+def test_model_prose_is_replaced_by_controlled_review_copy(prose):
+    from documents.analysis_contract import materialize_answer
+    raw = {"summary": prose, "findings": [{"nodeId": "DOC-1", "reason": prose, "citationIds": ["E1"]}]}
+    value = materialize_answer(raw)
+    assert value["summary"] != prose and value["findings"][0]["reason"] != prose
+    assert value["findings"][0]["nodeId"] == "DOC-1" and value["findings"][0]["citationIds"] == ["E1"]
+    assert "검토" in value["summary"] and "검토" in value["findings"][0]["reason"]
+    assert raw["summary"] == raw["findings"][0]["reason"] == prose
 
 
 @pytest.mark.parametrize("prose", [
@@ -140,18 +145,20 @@ def test_output_policy_blocks_locations_and_automatic_authority_claims(prose):
     "검증 기준을 확인해야 합니다.",
     "미승인 원문을 검토하세요.",
 ])
-def test_output_policy_retains_review_language_and_explicit_negation(prose):
-    from documents.analysis_contract import output_policy
-    assert output_policy({"summary": prose, "findings": []})["accepted"] is True
+def test_controlled_review_does_not_depend_on_the_models_wording(prose):
+    from documents.analysis_contract import materialize_answer
+    value = materialize_answer({"summary": prose, "findings": []})
+    assert value["summary"] == materialize_answer({"summary": "arbitrary model prose", "findings": []})["summary"]
+    assert value["findings"] == [] and "검토" in value["summary"]
 
 
-def test_output_policy_fails_closed_when_nested_encoding_exceeds_its_bound():
-    from documents.analysis_contract import output_policy
+def test_reference_validation_fails_closed_when_nested_encoding_exceeds_its_bound():
+    from documents.analysis_contract import validate_answer
     from urllib.parse import quote
     text = "https://untrusted.invalid/source"
     for _ in range(10):
         text = quote(text, safe="")
-    assert output_policy({"summary": text, "findings": []})["accepted"] is False
+    assert validate_answer({"summary": text, "findings": []}, {"DOC-1"}, {"E1"})["accepted"] is False
 
 
 def test_context_regulation_can_be_mentioned_but_is_not_a_review_target():

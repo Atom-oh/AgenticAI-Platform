@@ -98,6 +98,7 @@ test('optional output-policy status distinguishes passed, not run, absent and un
     const { page } = ui;
     for (const [value, label] of [
       ['passed', '통과 · 내용 검토는 별도'],
+      ['controlled', '고정된 검토 안내 · AI 자유 서술 제외'],
       ['not_run', '실행하지 않음'],
       [undefined, '기록 없음'],
       ['constructor', '상태 확인 필요'],
@@ -105,7 +106,8 @@ test('optional output-policy status distinguishes passed, not run, absent and un
       policy = value;
       await page.getByRole('button', { name: '분석 상태 다시 조회', exact: true }).click();
       await page.getByText('분석 범위와 기술 정보', { exact: true }).click();
-      await page.getByText('AI 응답 표현 검사: ' + label, { exact: true }).waitFor();
+      await page.getByText((value === 'controlled' ? '검토 안내 방식: ' : 'AI 응답 표현 검사: ') + label, { exact: true }).waitFor();
+      if (value === 'controlled') await page.getByText(/AI는 검토 대상과 근거 문단의 연결을 제안합니다/).waitFor();
       assert.equal(await page.getByRole('alert').count(), 0);
       assert.equal(await page.getByRole('region', { name: '분석 결과', exact: true }).getByText('담당자 검토 필요', { exact: true }).isVisible(), true);
     }

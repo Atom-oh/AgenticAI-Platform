@@ -86,41 +86,13 @@ def validate_answer(value, allowed_nodes, evidence_ids, *, context_nodes=()):
     return {"accepted": True, "answer": value}
 
 
-_LOCATION = re.compile(
-    r"(?:\b[a-z][a-z0-9+.-]{1,24}\s*:\s*[/\\]{2}|\b(?:www\.|javascript:|data:|vbscript:)"
-    r"|\barn:[a-z0-9-]+:(?:s3|dynamodb|secretsmanager):"
-    r"|(?:^|[\s`'\"(])//[^\s/]+"
-    r"|\b(?:[a-z0-9-]+\.)+[a-z]{2,63}/[^\s]*"
-    r"|\[[^\]\n]{0,200}\]\(\s*[^)\s]+\s*\)"
-    r"|(?:^|[\s`'\"(])(?:[a-z]:[\\/]|\\\\[^\s\\]+\\|\.{1,2}[\\/]|/?workspace[\\/]|/[^\s/\\<>]+))",
-    re.IGNORECASE,
-)
-_CLAIMS = re.compile(
-    r"(?:(?:검증|검수|검사)(?:[이가은는을를에])?\s*(?:통과|완료|성공|되었|됐|됨)"
-    r"|승인(?:\s*(?:절차|처리|검토))?(?:[이가은는])?\s*(?:완료|확정|성공|됨|되었|됐)"
-    r"|자동(?:으로)?\s*승인"
-    r"|승인\s*(?:했|하였|합니다)"
-    r"|승인(?:[이가은는])?\s*(?:입니다|이다|이에요|상태입니다)"
-    r"|(?:승인|검증|검수|검사)(?:[이가은는])?\s*된\s*(?:상태|결과|분석|것)"
-    r"|수정(?:\s*(?:대상|범위|여부|필요))?(?:[이가은는])?\s*(?:확정|완료|승인)"
-    r"|실제\s*(?:은행|금융사)\s*(?:정책|규정|내규)[^.!?\n]{0,20}(?:적용|시행|인증|확정)"
-    r"|(?:automatically|auto[- ]?)\s*approved"
-    r"|(?:verification|validation|checks?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already|successfully)\s+){0,4}(?:passed|complete|successful)"
-    r"|approval\s+(?:(?:has|have|had|is|was|been|now|already)\s+){0,4}(?:complete|granted|confirmed)"
-    r"|(?:changes?|analysis|results?|findings?)\s+(?:(?:has|have|had|is|are|was|were|been|now|already)\s+){0,4}(?:confirmed|approved|finalized|verified|validated)"
-    r"|\b(?:approved|verified|validated)\b"
-    r"|official\s+(?:bank(?:ing)?\s+)?(?:policy|regulation)"
-    r"|\b(?:approval|verification|validation)\b|승인|검증)",
-    re.IGNORECASE,
-)
-_NEGATIVE_SUFFIX = re.compile(
-    r"^\s*(?:[을를은는이가]\s*)?(?:(?:의미|뜻|선언)(?:하지|하지는)\s*(?:않|못)"
-    r"|(?:상태|결과)(?:가|는)?\s*아니|(?:하지|되지|되지는)\s*(?:않|못)|아니|아닙|불가|금지)"
-)
-_REVIEW_SUFFIX = re.compile(
-    r"^\s*여부(?:는|를|가|에)?[^.!?\n]{0,40}(?:확인|검토)(?:해야|하세요|해\s*주세요)"
-)
-
+def materialize_answer(value):
+    """After ID validation, retain selections only; never retain model prose."""
+    findings = [{"nodeId": row["nodeId"], "citationIds": list(row["citationIds"]),
+                 "reason": "인용된 원문 문단을 대조하여 변경 여부를 검토하세요."}
+                for row in value["findings"]]
+    return {"summary": f"원문 문단과 연결된 검토 후보 {len(findings)}건입니다. 실제 변경 여부는 담당자가 검토해야 합니다.",
+            "findings": findings}
 
 def _normalize_prose(prose):
     """Resolve mixed encoding to a fixed point; excess nesting is not a pass."""
@@ -132,45 +104,6 @@ def _normalize_prose(prose):
             return normalized
         prose = normalized
     return None
-
-
-def output_policy(value):
-    """Reject explicit model-created locations/authority claims, not source quotes.
-
-    This bounded policy does not certify semantic truth; human review remains
-    required even for prose that passes it.
-    """
-    prose = "\n".join([value["summary"], *(row["reason"] for row in value["findings"])])
-    normalized = _normalize_prose(prose)
-    if normalized is None:
-        return {"accepted": False, "violations": ["ambiguous-encoding"]}
-    violations = []
-    if _LOCATION.search(normalized):
-        violations.append("model-location")
-    for match in _CLAIMS.finditer(normalized):
-        prefix = normalized[max(0, match.start() - 40):match.start()]
-        suffix = normalized[match.end():match.end() + 60]
-        word = match.group().lower()
-        if word in {"approval", "verification", "validation"} and re.match(
-                r"^\s+(?:(?:is|are|has|have|been)\s+)*(?:not|never|required|needed|pending|criteria|steps?|process|requests?)\b",
-                suffix, re.IGNORECASE):
-            continue
-        if word in {"승인", "검증"} and (
-                re.search(r"(?:미|비|불)$", prefix) or re.match(
-                    r"^\s*(?:된\s*(?:원문|문서|자료)|기준|절차|방법|항목|범위|계획|요청|필요|대기|여부|전(?:에|에는|까지|\s|$))",
-                    suffix)):
-            continue
-        if match.group().lower() == "approved" and re.match(r"^\s+(?:sources?|originals?|documents?|references?)\b", suffix, re.IGNORECASE):
-            # Approval is an input-source attribute, not an analysis verdict.
-            continue
-        if (_NEGATIVE_SUFFIX.match(suffix)
-                or _REVIEW_SUFFIX.match(suffix)
-                or re.search(r"\b(?:not|never|no)(?:\s+(?:claim|imply|mean|declare|all|been|be|being|yet|fully|successfully)){0,5}\s+$", prefix, re.IGNORECASE)):
-            continue
-        violations.append("automatic-authority")
-        break
-    return {"accepted": not violations, "violations": violations}
-
 
 def _tokens(text):
     words = re.findall(r"[가-힣A-Za-z0-9]+", text.casefold())

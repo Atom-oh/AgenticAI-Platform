@@ -213,20 +213,26 @@ The result contains `regulation`, `counts`, `candidates`, `sources`, `evidence`,
 `findings`, `summary`, `coverage`, `verification`, `model`, `decisions`.
 Prose reference checks apply bounded compatibility/encoding normalization before
 matching evidence aliases and platform/supplied node-ID namespaces. Structured
-IDs remain exact and displayed prose/quotes are not rewritten. This is reference
+IDs remain exact and original source quotes are never rewritten. This is reference
 linkage checking, not semantic classification of arbitrary natural-language terms.
 Evidence is `{id:"E1",documentId,revisionId,paragraphId,title,revision,
 versionLabel,originalSha256,textHash,quote,page,provenance}`. The UI constructs
 same-app links from these fields. Models never supply URLs or storage paths.
 
-Model output is strict JSON `{summary,findings:[{nodeId,reason,citationIds}]}`.
+Model output is strict JSON `{summary,findings:[{nodeId,reason,citationIds}]}`;
+the model is instructed to use `"review"` placeholders for its prose fields.
 Reject unknown node/citation IDs and findings without citations. Source integrity
 and citation existence are checked separately from a human's content judgment.
 The regulation is context only; finding/decision targets come from the candidate
-groups. Before persistence, reject model-provided location patterns and explicit
-automatic approval/verification declarations even when reference IDs are valid.
-Record `verification.outputPolicy` separately; discard rejected prose and use a
-server-authored review message. This bounded output policy is not semantic proof.
+groups. After validation, retain only node IDs and citation IDs. **Never persist
+or display the model's summary or reason strings**, regardless of wording.
+`materialize_answer` constructs both fields from fixed server review templates
+and an integer candidate count; arbitrary model URLs or approval/verification
+declarations have no path into those fields. This replaces heuristic expression
+filtering with controlled output construction rather than weakening the gate.
+Record `verification.outputPolicy: "controlled"` and explain that AI proposes
+target/evidence associations while the service supplies review guidance.
+The associations still require human content review; existence is not semantic proof.
 The result remains `needs_review`, never automatically "수정 확정" or "검증 통과".
 Owner/planner decisions and their notes/actor/timestamp are separately audited.
 No original text, query, output or credentials go into application logs.

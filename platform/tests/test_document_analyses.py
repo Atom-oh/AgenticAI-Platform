@@ -307,8 +307,8 @@ def test_valid_ids_cannot_publish_model_urls_or_approval_declarations(api):
     assert done["status"] == "completed"
     payload = result(api, created)[1]
     assert payload["analysis"]["status"] == "needs_review"
-    assert payload["result"]["findings"] == []
-    assert payload["result"]["verification"]["outputPolicy"] == "failed"
+    assert len(payload["result"]["findings"]) == 1
+    assert payload["result"]["verification"]["outputPolicy"] == "controlled"
     assert "untrusted.invalid" not in repr(payload)
     assert "s3://private" not in repr(payload)
     assert "수정 확정" not in payload["result"]["summary"]
@@ -329,7 +329,7 @@ def test_selected_regulation_is_context_not_an_unreviewable_finding(api):
     assert payload["result"]["verification"]["references"] == "failed"
 
 
-@pytest.mark.parametrize("prose,accepted", [
+@pytest.mark.parametrize("prose,formerly_accepted", [
     ("https％3A％2F％2Funtrusted.invalid％2Fsource", False),
     ("원문 경로는 /policy.md 입니다.", False),
     ("Validation has passed.", False),
@@ -340,7 +340,7 @@ def test_selected_regulation_is_context_not_an_unreviewable_finding(api):
     ("분석이 검증되었습니다.", False),
     ("The analysis has not been verified.", True),
 ])
-def test_output_policy_variants_are_enforced_before_persistence(api, prose, accepted):
+def test_model_free_text_is_never_persisted_even_with_valid_references(api, prose, formerly_accepted):
     catalog(api); source(api, "REG-1")
     created = start(api)
 
@@ -355,9 +355,9 @@ def test_output_policy_variants_are_enforced_before_persistence(api, prose, acce
     assert status == 200 and payload["analysis"]["status"] == "needs_review"
     value = payload["result"]
     assert value["verification"]["references"] == "checked"
-    assert value["verification"]["outputPolicy"] == ("passed" if accepted else "failed")
-    assert (value["summary"] == prose) is accepted
-    assert bool(value["findings"]) is accepted
+    assert value["verification"]["outputPolicy"] == "controlled"
+    assert value["summary"] != prose
+    assert value["findings"][0]["reason"] == "인용된 원문 문단을 대조하여 변경 여부를 검토하세요."
     assert value["evidence"]
 
 
