@@ -57,6 +57,19 @@ Reindex permitted source material and recreate affected derivatives from
 currently authorized content; do not reconstruct historical permissions from
 a newer, broader source policy.
 
+The separate parent-scope checkpoint identified the same historical-audience
+obligation for reports with direct knowledge evidence. That branch now
+authorizes its persisted evidence before current-document lookup, covering
+document reads, lists, overview counts and idempotent replay. A private-to-public
+revision regression also verifies that the original reader retains access and
+new readers can create reports from the new public content.
+
+Following the user's renewed request, the original core-review channel was
+asked to review `cf37503` under unchanged safeguards. It again returned the
+safety error. It was not rerouted to another channel. Neither the interrupted
+parent checkpoint nor these regression fixes closes the required complete
+latest-HEAD review.
+
 ## Current local checks
 
 | Check | Result |
@@ -131,9 +144,10 @@ part of the publication.
 
 ## Remaining review gate
 
-The independent core AI review **did not complete**: its attempt ended with a
-safety/high-risk-cyber error. That coverage remains pending. It was not retried,
-reassigned, substituted with the content review, or treated as approval.
+The independent core AI review **did not complete**: its initial attempt ended
+with a safety/high-risk-cyber error. No retry or reassignment occurred in that
+initial handoff. The later request through the same original channel is recorded
+above and also failed. Neither attempt nor the content review is approval.
 
 Parent/business review findings were checked locally after their fixes.
 The planning shortcut now retains product context while requiring an actual

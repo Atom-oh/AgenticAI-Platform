@@ -487,6 +487,9 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
     for reference in report["sourceRefs"]:
         if reference["kind"] == "knowledge":
             from workbench.api import route as core_route
+            from workbench.service import Service
+            from workbench.knowledge import authorize_refs
+            authorize_refs(Service(api, scope, claims), [reference.get("evidence") or {}])
             _, value = core_route(api, scope, claims, "GET", ["knowledge", reference["id"]], {}, {})
             document = value.get("document") or {}
             text = document.get("content", document.get("text", ""))

@@ -179,6 +179,30 @@ def test_change_reports_enforce_transitive_source_acl_on_every_read_and_approval
                      {"version": report["version"], "contentHash": report["contentHash"]})
 
 
+def test_direct_knowledge_report_preserves_historical_audience_after_public_revision(wb):
+    src = source(wb)
+    original = [{"id": "policy", "title": "Policy", "revision": "1",
+                 "content": "Historical restricted marker", "allowedRoles": ["owner"]}]
+    run(wb, queue(wb, src, original))
+    identifier = project_call(wb, "GET", "knowledge")["items"][0]["id"]
+    body = {"requestId": "historical-direct", "type": "regulation",
+            "title": "Historical report", "evidenceIds": [identifier]}
+    report = project_call(wb, "POST", "reports", body)["report"]
+    public = [{"id": "policy", "title": "Policy", "revision": "2",
+               "content": "Current shared guidance", "allowedRoles": ["owner", "designer"]}]
+    run(wb, queue(wb, src, public, request="publish-current"))
+    assert project_call(wb, "GET", f"knowledge/{identifier}", actor="carol")["document"]["content"] == "Current shared guidance"
+    with pytest.raises(CollaborationError):
+        project_call(wb, "GET", f"reports/{report['id']}/document", actor="carol")
+    with pytest.raises(CollaborationError):
+        project_call(wb, "POST", "reports", body, actor="carol")
+    assert project_call(wb, "GET", "reports", actor="carol")["items"] == []
+    assert project_call(wb, "GET", "overview", actor="carol")["stats"]["reports"] == 0
+    assert "Historical restricted marker" in project_call(wb, "GET", f"reports/{report['id']}/document")["markdown"]
+    fresh = project_call(wb, "POST", "reports", {**body, "requestId": "current-direct"}, actor="carol")["report"]
+    assert "Current shared guidance" in project_call(wb, "GET", f"reports/{fresh['id']}/document", actor="carol")["markdown"]
+
+
 def test_approval_fences_a_source_changed_during_commit(monkeypatch):
     route, api, scope = setup()
     session = call(route, api, scope, "POST", "pension/sessions",
