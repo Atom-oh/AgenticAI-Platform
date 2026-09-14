@@ -29,6 +29,11 @@ export type DocumentDetail = {
   capabilities: { read: boolean; edit: boolean; review: boolean; manage: boolean };
 };
 export type SourceView = { document: DocumentRecord; revision: Revision; paragraphs: Paragraph[]; cursor?: string; totalParagraphs: number };
+export type DocumentTemplate = {
+  graphRef: string; title: string; kind: string; name: string; versionLabel: string; sha256: string;
+  sections: { title: string; text: string }[];
+};
+export type TemplateCatalog = { schemaVersion: 1; notice: string; samples: DocumentTemplate[] };
 export type Evidence = {
   id: string; documentId: string; revisionId: string; paragraphId: string; title: string;
   revision: number; versionLabel: string; originalSha256: string; textHash: string;
