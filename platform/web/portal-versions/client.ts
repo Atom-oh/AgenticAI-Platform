@@ -79,7 +79,8 @@ export function createVersionLoader({ fetcher = fetch, origin }: { fetcher?: typ
     if (bytes.byteLength !== renderer.bytes || await hash(bytes) !== renderer.sha256) throw new Error('version-renderer-integrity');
     return { html: decode(bytes), catalog };
   })().catch(error => { pending = undefined; throw error; });
-  return { document };
+  return { document, reset: () => { pending = undefined; } };
 }
 const loader = createVersionLoader();
 export const loadVersionDocument = loader.document;
+export const resetVersionDocument = loader.reset;

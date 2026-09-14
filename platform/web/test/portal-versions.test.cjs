@@ -89,3 +89,27 @@ test('exact API identity must match source package, version, export and hash', a
     assert.throws(() => matchBinding(manifest.catalog, { ...binding, [field]: 'wrong' }));
   }
 });
+
+test('explicit retry refreshes a cached deployment snapshot without mutating the old document', async () => {
+  const { manifest, html } = await assets();
+  const { createVersionLoader } = source('portal-versions/client.ts');
+  let currentHtml = html, calls = 0;
+  const fetcher = async url => {
+    calls++;
+    const m = structuredClone(manifest);
+    m.renderer = { sha256: hash(currentHtml), file: `versions-${hash(currentHtml)}.html`, bytes: Buffer.byteLength(currentHtml) };
+    return new Response(url.endsWith('.json') ? JSON.stringify(m) : currentHtml, {
+      headers: { 'content-type': url.endsWith('.json') ? 'application/json' : 'text/html' },
+    });
+  };
+  const loader = createVersionLoader({ fetcher, origin: 'https://portal.test' });
+  const first = await loader.document();
+  currentHtml += '\n';
+  assert.equal(await loader.document(), first);
+  assert.equal(typeof loader.reset, 'function', 'Retry must be able to discard a stale deployment snapshot');
+  loader.reset();
+  const second = await loader.document();
+  assert.equal(first.html, html);
+  assert.equal(second.html, html + '\n');
+  assert.equal(calls, 4);
+});

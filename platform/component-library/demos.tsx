@@ -78,7 +78,7 @@ function DemoCardV1() {
 
 function DemoCardV2() {
 
-  return <div className="apc-demo"><CardV2 title="가상 상품 요약" elevated footer={<button type="button">상품 조건 확인</button>}><p>합성 상품의 설명을 표시하는 영역입니다.</p></CardV2></div>;
+  return <div className="apc-demo"><CardV2 title="가상 상품 요약" elevated footer={<p>가상 상품 조건을 표시하는 하단 영역입니다.</p>}><p>합성 상품의 설명을 표시하는 영역입니다.</p></CardV2></div>;
 }
 
 function DemoTabsV1() {

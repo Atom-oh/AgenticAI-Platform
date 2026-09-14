@@ -299,6 +299,15 @@ def test_generated_component_is_explicit_placeholder(detail):
     assert "더미" in ev["visual"]["reason"]
 
 
+@pytest.mark.parametrize("node_id,props", [
+    ("CMP-GEN-00", {"name": "Widget0", "version": "1.0.0"}),
+    ("CMP-GEN-99", {"name": "Widget99", "version": "1.0.0"}),
+    ("CMP-GEN-22", {"name": "Widget22", "version": "2.0.0"}),
+])
+def test_unrecognized_generated_identity_remains_unlinked(detail, node_id, props):
+    assert detail([Node(node_id, "Component", props)])["implementationStatus"] == "unlinked"
+
+
 def test_every_named_seed_component_has_source_coverage(tmp_path):
     from handlers.component_sources import binding
     generator = runpy.run_path(str(ROOT / "seed/generate.py"))

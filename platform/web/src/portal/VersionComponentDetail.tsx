@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { loadVersionDocument, matchBinding, type Binding, type VersionComponent, type VersionDocument } from '../../portal-versions/client';
+import { loadVersionDocument, resetVersionDocument, matchBinding, type Binding, type VersionComponent, type VersionDocument } from '../../portal-versions/client';
 import { CHANNEL, isSession, newSession, type Session } from '../../portal-versions/protocol';
 
 function download(name: string, contents: string, type: string) {
@@ -112,6 +112,6 @@ export default function VersionComponentDetail({ binding }: { binding: Binding }
   const [retry, setRetry] = useState(0);
   return <div>
     <VersionSession key={`${JSON.stringify(binding)}:${retry}`} binding={binding} />
-    <button type="button" className="portal-secondary" onClick={() => setRetry(n => n + 1)}>구현 다시 불러오기</button>
+    <button type="button" className="portal-secondary" onClick={() => { resetVersionDocument(); setRetry(n => n + 1); }}>구현 다시 불러오기</button>
   </div>;
 }

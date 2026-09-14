@@ -68,6 +68,8 @@ def binding(node_id: str, props: dict) -> dict | None:
 def implementation_status(node_id: str, props: dict) -> str:
     if binding(node_id, props):
         return "reference"
-    if re.fullmatch(r"CMP-GEN-\d{2}", node_id) and props.get("name") == f"Widget{int(node_id[-2:])}":
+    if (re.fullmatch(r"CMP-GEN-\d{2}", node_id) and 22 <= int(node_id[-2:]) < 80
+            and props.get("name") == f"Widget{int(node_id[-2:])}"
+            and props.get("version") == "1.0.0"):
         return "placeholder"
     return "unlinked"
