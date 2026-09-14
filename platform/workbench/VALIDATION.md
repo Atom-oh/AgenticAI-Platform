@@ -27,6 +27,36 @@ Production was inspected read-only: the existing stack was `UPDATE_COMPLETE`.
 Any eventual deployment must preserve its configured private MyData relay.
 No production mutation or Confluence connection was performed.
 
+## Recorded finding remediation — 2026-09-14
+
+A partial local core-review report was recovered. It contains three reproduced
+Major findings, but its coverage tables are unfinished and its review attempt
+ended with the previously recorded safety error. Recovering its findings does
+not turn that attempt into a completed review or a latest-HEAD approval.
+
+The reported cases were retained as ordinary repository regression tests and
+fixed:
+
+- Snapshot replacement requires the current project owner or a source creator
+  who retains access. Evidence now binds its validated historical audience;
+  new public revisions do not disclose older restricted derivatives. Skill
+  deprecation also checks read authorization before returning its record.
+- Impact reads recheck membership, source access, change identity and the active
+  manifest after blob I/O, rejecting a changed result before returning it.
+- Skill numeric extraction handles adjacent Korean units and normalized Unicode
+  digits, preserves signs, and excludes validated citation identifiers.
+
+The original six recorded cases reproduced five failures and one passing
+control before remediation. Eleven focused regressions now pass, including
+authorized source refresh and preservation of historical readership. All 89
+Workbench tests and the full 1,518-test Python suite plus 119 subtests passed.
+No blocked review was retried, reassigned or substituted with these tests.
+
+Compatibility: bindings without the newly pinned audience fail closed.
+Reindex permitted source material and recreate affected derivatives from
+currently authorized content; do not reconstruct historical permissions from
+a newer, broader source policy.
+
 ## Current local checks
 
 | Check | Result |

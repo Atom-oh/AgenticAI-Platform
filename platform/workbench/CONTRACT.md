@@ -89,6 +89,15 @@ versions, extraction state and actual counts. Publish vector and graph projectio
 together through a versioned manifest only after both writes/verification succeed.
 Permission/tombstone checks remain independent of rollback.
 
+Snapshot replacement is limited to the current project owner or its source
+creator who retains read access to the existing source policy. Evidence binds
+the validated `allowedRoles` audience in addition to source/content versions.
+Historical derivative reads require both that bound audience and current source
+access. A newer public revision does not disclose an older restricted Skill.
+Bindings missing the audience fail closed. Reindex authorized sources and
+recreate affected derivative artifacts from their currently permitted content;
+do not infer a historical audience from a newer, broader source policy.
+
 Initial private artifact indexes are actual numeric-vector and typed-graph
 projections with explicit backend/embedding labels. Provide a deterministic local
 embedding adapter for offline tests and an injectable approved model adapter.

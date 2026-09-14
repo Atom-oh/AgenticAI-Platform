@@ -183,6 +183,13 @@ def start_batch(ctx, source_id, body, dispatch=True):
     fields(body, {"requestId", "documents"})
     ctx.fresh()
     source = ctx.get("wb_source", source_id)
+    if source["kind"] == "snapshot" and ctx.scope["role"] != "owner":
+        # Project membership alone cannot replace another author's source or
+        # turn an unreadable historical document into newly readable metadata.
+        if (source.get("createdBy") != ctx.actor
+                or any(ctx.scope["role"] not in entry.get("allowedRoles", [])
+                       for entry in source.get("access", {}).values())):
+            fail(403, "source-write-forbidden", "이 원본을 교체할 권한이 없습니다.")
     if source["kind"] != "snapshot":
         ctx.fresh(operator=True)
         profile = connection(ctx.host, source["connectionId"], ctx.project_id, source["kind"])
@@ -244,7 +251,8 @@ def evidence(source, document, generation):
     return {"sourceId": source["id"], "documentId": document["id"],
             "revision": document["revision"], "contentHash": document["contentHash"],
             "sourceVersion": source["sourceVersion"], "permissionVersion": source["permissionVersion"],
-            "generation": generation, "accessExpiresAt": source["accessExpiresAt"]}
+            "generation": generation, "accessExpiresAt": source["accessExpiresAt"],
+            "allowedRoles": list(document["allowedRoles"])}
 
 
 def visible(ctx, source, ref):
@@ -252,6 +260,7 @@ def visible(ctx, source, ref):
         return False
     access = source.get("access", {}).get(ref.get("documentId"), {})
     return (access.get("tombstone") is False and ctx.scope["role"] in access.get("allowedRoles", [])
+            and ref.get("allowedRoles") == access.get("allowedRoles")
             and all(access.get(k) == ref.get(k) for k in ("revision", "contentHash")))
 
 
@@ -275,7 +284,7 @@ def verify_refs(ctx, refs):
 
 
 def authorize_refs(ctx, refs):
-    """Permit revision repair only while the current source ACL still permits reading.
+    """Require both the bound historical audience and the current source audience.
 
     This does not assert freshness of historical evidence and is never sufficient
     for approval, execution, task completion, or publication.
@@ -288,7 +297,9 @@ def authorize_refs(ctx, refs):
         source = ctx.get("wb_source", ref.get("sourceId"))
         access = source.get("access", {}).get(ref.get("documentId"), {})
         if (not source_current(ctx, source) or access.get("tombstone") is not False
-                or ctx.scope["role"] not in access.get("allowedRoles", [])):
+                or ctx.scope["role"] not in access.get("allowedRoles", [])
+                or not isinstance(ref.get("allowedRoles"), list)
+                or ctx.scope["role"] not in ref["allowedRoles"]):
             fail(403, "source-forbidden", "이 근거 자료를 읽을 현재 권한이 없습니다.")
 
 

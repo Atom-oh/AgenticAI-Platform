@@ -112,7 +112,18 @@ def read_impact(ctx, identifier):
     manifest = ctx.storage.get(ctx.owner, "wb_index", "current") or {}
     if manifest.get("generation") != change.get("generation"):
         fail(409, "stale-impact", "그래프가 변경되어 재분석이 필요합니다.")
-    return ctx.read_json(change["impactKey"], change["impactSha"])
+    result = ctx.read_json(change["impactKey"], change["impactSha"])
+    ctx.fresh()
+    current = ctx.get("wb_change", identifier)
+    knowledge.verify_refs(ctx, current["sourceRefs"])
+    active = ctx.storage.get(ctx.owner, "wb_index", "current") or {}
+    if (current["version"] != change["version"]
+            or current.get("impactHash") != change.get("impactHash")
+            or current.get("impactSha") != change.get("impactSha")
+            or active.get("generation") != change.get("generation")
+            or active.get("version") != manifest.get("version")):
+        fail(409, "stale-impact", "조회 중 영향 분석 또는 게시 버전이 변경되었습니다.")
+    return result
 
 
 def update_task(ctx, identifier, body):

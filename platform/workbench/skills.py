@@ -182,6 +182,7 @@ def deprecate(ctx, identifier, body):
     fields(body, {"version", "reason"})
     ctx.fresh({"owner", "planner"})
     skill = ctx.get("wb_skill", identifier)
+    knowledge.authorize_refs(ctx, skill.get("sourceRefs", []))
     if _version(body.get("version")) != skill["version"]:
         fail(409, "conflict", "Skill 버전이 변경되었습니다.")
     reason = text(body.get("reason"), "deprecation reason", 2000)

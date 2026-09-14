@@ -40,6 +40,15 @@ def normalize(value):
     return " ".join(unicodedata.normalize("NFKC", value).split())
 
 
+def numeric_tokens(value, evidence_ids=()):
+    """Korean suffixes are word characters, so Unicode word boundaries are unsafe."""
+    value = unicodedata.normalize("NFKC", value).replace("\u2212", "-")
+    if evidence_ids:
+        aliases = "|".join(re.escape(identifier) for identifier in evidence_ids)
+        value = re.sub(r"(?<![A-Za-z0-9_])(?:" + aliases + r")(?![A-Za-z0-9_])", "", value)
+    return set(re.findall(r"[+-]?\d+(?:[,.]\d+)*", value))
+
+
 class Runtime:
     def __init__(self, host):
         self.host = host
@@ -121,10 +130,9 @@ class Runtime:
         if (not isinstance(citations, list) or len(citations) > len(sources)
                 or any(not isinstance(x, str) or x not in {s["id"] for s in sources} for x in citations)):
             fail(422, "model-output-invalid", "제공되지 않은 문서 근거를 사용할 수 없습니다.")
-        number = r"(?<!\w)\d+(?:[,.]\d+)*(?!\w)"
-        known_numbers = set(re.findall(number, input + "\n" + skill["instructions"] + "\n" +
-                                       "\n".join(s["content"] for s in sources)))
-        if set(re.findall(number, answer)) - known_numbers:
+        known_numbers = numeric_tokens(input + "\n" + skill["instructions"] + "\n" +
+                                       "\n".join(s["content"] for s in sources))
+        if numeric_tokens(answer, [source["id"] for source in sources]) - known_numbers:
             fail(422, "model-output-invalid", "근거에 없는 숫자가 포함되어 표시를 중단했습니다.")
         context.fresh()
         knowledge.verify_refs(context, skill["sourceRefs"])
