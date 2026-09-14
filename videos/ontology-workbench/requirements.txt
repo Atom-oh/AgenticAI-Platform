@@ -1,0 +1,3 @@
+boto3==1.43.92
+fonttools==4.65.0
+brotli==1.2.0

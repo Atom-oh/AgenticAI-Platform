@@ -6,6 +6,7 @@ export default withMermaid(defineConfig({
   lang: 'ko-KR',
   title: 'Agentic AI 플랫폼 엔지니어링',
   description: 'AgentCore 기반 메타플랫폼 설계·운영 레퍼런스',
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/AgenticAI-Platform/favicon.svg' }]],
 
   themeConfig: {
     nav: [
@@ -201,6 +202,7 @@ export default withMermaid(defineConfig({
         collapsed: false,
         items: [
           { text: '데모 안내 · 접속 정보', link: '/14-demo/' },
+          { text: '업무별 작업실 · 4분 영상', link: '/14-demo/ontology-workbench' },
           { text: '아키텍처와 설계 결정', link: '/14-demo/architecture' },
           { text: '마이데이터 개인정보 처리', link: '/14-demo/mydata-privacy' },
           { text: '내부 문서함 · 원문 기반 영향 분석', link: '/14-demo/internal-documents' },

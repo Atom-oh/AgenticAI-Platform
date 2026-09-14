@@ -1,0 +1,1016 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-09-13T12:49:54.012Z",
+  "origin": "http://127.0.0.1:18766",
+  "data": "Synthetic project data; actual WorkspaceAPI and Worker; FakeS3/FakeDDB in the loopback-only test helper.",
+  "browser": {
+    "tool": "Playwright",
+    "reason": "Browser plugin not available",
+    "viewport": {
+      "width": 1440,
+      "height": 960
+    },
+    "deviceScaleFactor": 2
+  },
+  "authentication": "Only Cognito InitiateAuth is intercepted with the test-helper synthetic identity.",
+  "assertions": [
+    {
+      "name": "page identity",
+      "passed": true
+    },
+    {
+      "name": "only synthetic Cognito login is intercepted",
+      "passed": true
+    },
+    {
+      "name": "planning: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "synthetic example persisted a populated product",
+      "passed": true
+    },
+    {
+      "name": "product publication persisted an immutable guideline",
+      "passed": true
+    },
+    {
+      "name": "planning: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "planning: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "planning: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "role navigation displays planning, design and development work groups",
+      "passed": true
+    },
+    {
+      "name": "planning: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "roles: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "changes: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "planning shortcut keeps product context without inventing a graph mapping",
+      "passed": true
+    },
+    {
+      "name": "change target is obtained from the real dependency API",
+      "passed": true
+    },
+    {
+      "name": "human-readable target selection uses the actual graph identity",
+      "passed": true
+    },
+    {
+      "name": "saved change retains distinct product context and chosen graph target",
+      "passed": true
+    },
+    {
+      "name": "saved impact has source-bound witness paths and actual work items",
+      "passed": true
+    },
+    {
+      "name": "impact produces planner, designer and developer worklists",
+      "passed": true
+    },
+    {
+      "name": "declared flow, guide, screen and API dependencies appear in actual analysis",
+      "passed": true
+    },
+    {
+      "name": "impact readback retains exact saved analysis hash",
+      "passed": true
+    },
+    {
+      "name": "changes: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "changes-proposal: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "changes: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "changes: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "development worklist renders saved task identities",
+      "passed": true
+    },
+    {
+      "name": "components: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "component catalog is the real pinned platform package",
+      "passed": true
+    },
+    {
+      "name": "components: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "components: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "knowledge: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "synthetic ETL published knowledge and labelled its actual backend",
+      "passed": true
+    },
+    {
+      "name": "knowledge document renders actual stored content and provenance",
+      "passed": true
+    },
+    {
+      "name": "knowledge: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "knowledge: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "skills: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "manual Skill format validation is real and behavior remains honestly not-run",
+      "passed": true
+    },
+    {
+      "name": "package endpoint returns exact saved Skill instructions and source binding",
+      "passed": true
+    },
+    {
+      "name": "skills: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "skills: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "pension: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "feedback choices come from server-owned metadata",
+      "passed": true
+    },
+    {
+      "name": "pension calculator persists exact submitted assumptions and deterministic facts",
+      "passed": true
+    },
+    {
+      "name": "insight opens the matching planning topic",
+      "passed": true
+    },
+    {
+      "name": "pension response is persisted and labelled baseline without a model call",
+      "passed": true
+    },
+    {
+      "name": "capture feedback sends a structured code without free text",
+      "passed": true
+    },
+    {
+      "name": "employee feedback persists against the actual answer and current session",
+      "passed": true
+    },
+    {
+      "name": "pension: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "pension: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "pension: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "pension-chat: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "report contains saved pension evidence without fabricated sources",
+      "passed": true
+    },
+    {
+      "name": "report approval pins the exact content hash and version",
+      "passed": true
+    },
+    {
+      "name": "approved report readback verifies document bytes",
+      "passed": true
+    },
+    {
+      "name": "reports: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "reports: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "reports: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "reports: mobile 390px has no horizontal page overflow",
+      "passed": true,
+      "widths": {
+        "viewport": 390,
+        "document": 390,
+        "mainClient": 390,
+        "mainScroll": 390,
+        "workbenchClient": 358,
+        "workbenchScroll": 358
+      }
+    },
+    {
+      "name": "reports: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "reports-mobile: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "sources: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "operator sources show the actual synthetic fixture source",
+      "passed": true
+    },
+    {
+      "name": "sources: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "sources: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "batches: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "operator batch shows actual completed ETL counts",
+      "passed": true
+    },
+    {
+      "name": "batches: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "batches: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "knowledge: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "knowledge: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "knowledge: mobile 390px has no horizontal page overflow",
+      "passed": true,
+      "widths": {
+        "viewport": 390,
+        "document": 390,
+        "mainClient": 390,
+        "mainScroll": 390,
+        "workbenchClient": 358,
+        "workbenchScroll": 358
+      }
+    },
+    {
+      "name": "knowledge: rendered without framework error",
+      "passed": true
+    },
+    {
+      "name": "knowledge-mobile: meaningful rendered workbench",
+      "passed": true
+    },
+    {
+      "name": "overview keeps server-confirmed role and operator capability",
+      "passed": true
+    },
+    {
+      "name": "no API endpoints failed",
+      "passed": true
+    },
+    {
+      "name": "no browser runtime errors",
+      "passed": true
+    },
+    {
+      "name": "no console errors",
+      "passed": true
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/studio-api/projects",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/projects",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/products",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/examples",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/products",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/products/product-2136134b8744edf4e20bb259dd6e9da4713d4025742218c4",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/products/product-2136134b8744edf4e20bb259dd6e9da4713d4025742218c4/publish",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/products",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/products/product-2136134b8744edf4e20bb259dd6e9da4713d4025742218c4/ontology",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/products/product-2136134b8744edf4e20bb259dd6e9da4713d4025742218c4/impact",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/changes",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/dependencies",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/dependencies",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/changes",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/changes",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/changes/change-3214197cdb231e8d0f4ea0dc82a959d3956e9a93/analyze",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/changes",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/changes/change-3214197cdb231e8d0f4ea0dc82a959d3956e9a93/impact",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/changes/change-3214197cdb231e8d0f4ea0dc82a959d3956e9a93/impact",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/tasks",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/runs",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/releases",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/components",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/components",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/knowledge",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/dependencies",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/knowledge",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/knowledge/d-b0e3f14180faecba6e7b7e6bf46b809d316afb5c",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/knowledge/d-b0e3f14180faecba6e7b7e6bf46b809d316afb5c",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/skills",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/skills",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/skills",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/skills/skill-509799dd1c71440e11735ee89e64cd5fdc360bfa/validate",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/skills",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/skills/skill-509799dd1c71440e11735ee89e64cd5fdc360bfa/package",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/pension/personas",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/pension/personas",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/pension/sessions",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/pension/sessions/pension-c2443ce1c33e3947a4eb2a75999ac24d",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/pension/sessions/pension-c2443ce1c33e3947a4eb2a75999ac24d/calculate",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/pension/sessions/pension-c2443ce1c33e3947a4eb2a75999ac24d/ask",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/pension/sessions/pension-c2443ce1c33e3947a4eb2a75999ac24d/feedback",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/pension/sessions/pension-c2443ce1c33e3947a4eb2a75999ac24d",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/pension/sessions/pension-c2443ce1c33e3947a4eb2a75999ac24d",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/reports",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/changes",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/knowledge",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/reports",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/reports/report-96d27d4e92409cdd0b2fa4c3ee7b5332/document",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/reports",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/studio-api/workbench/reports/report-96d27d4e92409cdd0b2fa4c3ee7b5332/approve",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/reports/report-96d27d4e92409cdd0b2fa4c3ee7b5332/document",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/reports/report-96d27d4e92409cdd0b2fa4c3ee7b5332/document",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/reports",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/sources",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/sources",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/batches",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/sources",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/batches",
+      "status": 200,
+      "readback": true
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/projects/p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/knowledge",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/dependencies",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/studio-api/workbench/overview",
+      "status": 200,
+      "readback": true
+    }
+  ],
+  "endpointFailures": [],
+  "browserErrors": [],
+  "consoleErrors": [],
+  "screenshots": [
+    {
+      "file": "planning.png",
+      "sha256": "cb54232174fec1c7b2b3cf0c236da83e718a47ccda18dbbe2b2407281330f8cc",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-planning",
+      "stage": "planning"
+    },
+    {
+      "file": "roles.png",
+      "sha256": "9bf9dfc43e117683fbc2b52fda435732dac37e2ded566780abbb81c402dadd26",
+      "cssWidth": 1440,
+      "cssHeight": 960,
+      "pixelWidth": 2880,
+      "pixelHeight": 1920,
+      "route": "#/wb-planning",
+      "stage": "planning"
+    },
+    {
+      "file": "changes-proposal.png",
+      "sha256": "300dc1b40fd1d4414f695193b421a897cab199a8425223ccfd23b490cc66ffa4",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-changes",
+      "stage": "changes"
+    },
+    {
+      "file": "changes.png",
+      "sha256": "d31cb831fddb8b9a453540865314b2f1587b3ec6dac992d72b5d59bbed4cf12e",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-changes",
+      "stage": "changes"
+    },
+    {
+      "file": "components.png",
+      "sha256": "365126aa55d1e8af808c8440e7de3599d182a5dc36053cfa53bec97a796aca44",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-components",
+      "stage": "components"
+    },
+    {
+      "file": "knowledge.png",
+      "sha256": "18c58692392ed54806a50fd0d5b09073150672edab4b0a09e2ec00c32546224f",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-knowledge",
+      "stage": "knowledge"
+    },
+    {
+      "file": "skills.png",
+      "sha256": "59789cbacc3ad069cac7c515060628182d0275f585f01ea84ed67efd7fc7bd78",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-skills",
+      "stage": "skills"
+    },
+    {
+      "file": "pension.png",
+      "sha256": "90d1451b40832334493cd8b879c017747b4d60e842ee8cd29417131054e3dd1a",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-pension",
+      "stage": "pension"
+    },
+    {
+      "file": "pension-chat.png",
+      "sha256": "91a9cf401db61c5a2ec90a479a4d6692e9185c028e051440d622fe6a46f8e0b5",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-pension",
+      "stage": "pension"
+    },
+    {
+      "file": "reports.png",
+      "sha256": "3a722b0e688edeaa7b3f15a92058995a19fefd4d62a606bc6f2e524ccdf29aa5",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-reports",
+      "stage": "reports"
+    },
+    {
+      "file": "reports-mobile.png",
+      "sha256": "8c0fd737d286cbf3e3f2b975bd1e3e2695fb6080b1a1ba560201fc0b9ec1be88",
+      "cssWidth": 390,
+      "cssHeight": 844,
+      "pixelWidth": 780,
+      "pixelHeight": 1688,
+      "route": "#/wb-reports",
+      "stage": "reports"
+    },
+    {
+      "file": "sources.png",
+      "sha256": "7a8b1e23b75f3fe7bf9178309d993122f05e258f8e2be575fffff7ffb8c40dc7",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-sources",
+      "stage": "sources"
+    },
+    {
+      "file": "batches.png",
+      "sha256": "6c4b314fadb38debf252622df48cf3ef8004e23a85aaa62638fa2d91ffce4a71",
+      "cssWidth": 1184,
+      "cssHeight": 960,
+      "pixelWidth": 2368,
+      "pixelHeight": 1920,
+      "route": "#/wb-batches",
+      "stage": "batches"
+    },
+    {
+      "file": "knowledge-mobile.png",
+      "sha256": "62271a6d49786a0969d2f51fb89a086761f3c5d86246c3ea563e2d16d9762d3b",
+      "cssWidth": 390,
+      "cssHeight": 844,
+      "pixelWidth": 780,
+      "pixelHeight": 1688,
+      "route": "#/wb-knowledge",
+      "stage": "knowledge"
+    }
+  ],
+  "artifacts": {
+    "projectId": "p-dd08c9410daa7b15ead8f1e4a9fee79aa1658a8d083449f2",
+    "productId": "product-2136134b8744edf4e20bb259dd6e9da4713d4025742218c4",
+    "changeId": "change-3214197cdb231e8d0f4ea0dc82a959d3956e9a93",
+    "impact": {
+      "hash": "38814f12b793bf73b6c422904f4fcbfd363b0a871dd9c8cc12e23657df99e1e5",
+      "targetId": "example-product",
+      "taskCount": 5,
+      "roles": [
+        "planner",
+        "developer",
+        "designer"
+      ],
+      "coverage": {
+        "complete": false,
+        "indexedSources": 1,
+        "unavailableSources": 0,
+        "scope": "declared-or-connector-extracted-dependencies",
+        "truncated": false,
+        "unknown": [
+          "unmapped-dependencies"
+        ],
+        "conflictingNodeIds": 0
+      }
+    },
+    "componentCatalog": {
+      "id": "studio-ui",
+      "version": "1.0.0",
+      "hash": "3a9fc2a35f70886f7da3fe10abed88dd276644d59f885794df2d7c292c3e29d3"
+    },
+    "knowledge": {
+      "generation": "cb9e6d4087f5015669a115c986ab057932ea3197afaee41a1c92bc496c430372",
+      "backend": {
+        "vector": "private-artifact-exact-cosine",
+        "graph": "private-artifact-typed-graph",
+        "embedding": "local-hashing-256-v1"
+      },
+      "documentId": "d-b0e3f14180faecba6e7b7e6bf46b809d316afb5c"
+    },
+    "skill": {
+      "id": "skill-509799dd1c71440e11735ee89e64cd5fdc360bfa",
+      "version": 2,
+      "contentHash": "e6b7434c2569b34696a849a05b6db6dde66822fc35f0f12390058934c25b522e",
+      "packageStatus": "passed",
+      "behaviorStatus": "not-run",
+      "status": "PENDING_APPROVAL"
+    },
+    "pension": {
+      "sessionId": "pension-c2443ce1c33e3947a4eb2a75999ac24d",
+      "version": 4,
+      "factHash": "4339b6097821561f5e662f06184e3b376af0ce242ef6c804ae9a4ab59bc4ed6d",
+      "calculationVersion": "illustrative-pension-v1",
+      "mode": "baseline",
+      "feedbackCount": 1
+    },
+    "report": {
+      "id": "report-96d27d4e92409cdd0b2fa4c3ee7b5332",
+      "contentHash": "692a208311634d1c315a7e29ee0d44272aaac611e9007cf47d85aed7cb6f755c",
+      "version": 2,
+      "status": "approved"
+    },
+    "batch": {
+      "id": "batch-2136134b8744edf4e20bb259dd6e9da4713d4025",
+      "sourceId": "source-2136134b8744edf4e20bb259dd6e9da4713d4025",
+      "status": "completed",
+      "generation": "6d5858c9bf75f6a79ab7664ed9062471df047e0c2a1692ae90d947b769e4e357",
+      "counts": {
+        "documents": 2,
+        "vectors": 2,
+        "nodes": 7,
+        "edges": 7
+      }
+    },
+    "stats": {
+      "sources": 1,
+      "batches": 1,
+      "changes": 1,
+      "tasks": 5,
+      "skills": 1,
+      "reports": 1
+    }
+  },
+  "server": {
+    "managedForThisRun": true,
+    "helper": "platform/tests/workbench_preview.py",
+    "python": "/tmp/mydata-venv/bin/python",
+    "port": 18766
+  },
+  "status": "passed"
+}

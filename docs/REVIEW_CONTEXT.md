@@ -13,6 +13,7 @@ This file maps requirements to evidence; it does not waive defects or certify de
 | `platform/docs/CONTRACTS.md` | API/module integration |
 | `platform/workspace/REACT_CONTRACT.md` | React generation, approval, release, and export |
 | `platform/workspace/CONTRACT.md` | Imported-file/HTML workspace validation |
+| `platform/workbench/CONTRACT.md`, `platform/workbench/README.md` | Project-scoped knowledge/impact/skills and synthetic pension/report workflow; SPEC §17 |
 | `platform/infra/README-privacy.md` | MyData relay/gateway configuration and operational prerequisites |
 | `docs/14-demo/mydata-privacy.md` | Korean MyData user instructions and verification limits |
 | `demo/*/README.md`, `demo/SECURITY-GOVERNANCE.md` | Separate demo implementations and governance |
@@ -42,8 +43,10 @@ report the documentation conflict instead of choosing whichever statement is str
 
 ## Requirements that remain gaps
 
-Shared Registry reset/seeding must remain IAM-admin-only. The current authenticated
-`reset` and `registry_seed(reset=true)` routes do not satisfy that boundary. Likewise,
+Shared Registry reset/seeding must remain IAM-admin-only. Explicit authenticated
+`reset` and `registry_seed` routes have been removed in the workbench change. Legacy
+list/bootstrap behavior still needs separate review; route removal does not certify
+all legacy Registry writes. Likewise,
 component guidance is required to map to `SKILL`, while current Registry records use
 `CUSTOM/COMPONENT` and the portal marks the deviation. These are not exemptions.
 
@@ -101,3 +104,14 @@ The installed external panel inspected during this reconciliation invokes Kiro i
 isolated directory with no trusted tools and an embedded diff. That mode cannot follow
 repository file pointers. Include the applicable context text in the caller-owned lens
 prompt; a steering file alone is insufficient. See [review invocation](pr-review.md).
+
+## Workbench scope amendment
+
+SPEC §17 applies only to the new `/studio-api/workbench` module. Its private
+feature-hash vector and typed-graph artifacts are an explicit initial backend,
+not a claim that OpenSearch/Neptune are deployed for this module. MCP registration
+publishes internal tool declarations, not an automatically provisioned Gateway.
+The synthetic pension workflow is separate from legacy S2; trace its own
+privacy, numeric substitution and output validation path before reusing an S2
+finding. The Skill Creator governs exact private content; it does not retroactively
+change every legacy Registry component record into a Skill.

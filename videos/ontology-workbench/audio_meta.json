@@ -1,0 +1,74 @@
+[
+  {
+    "id": "01-change",
+    "path": "assets/voice/01-change.mp3",
+    "duration": 26.64,
+    "marks": "assets/voice/01-change.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  },
+  {
+    "id": "02-roles",
+    "path": "assets/voice/02-roles.mp3",
+    "duration": 27.336,
+    "marks": "assets/voice/02-roles.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  },
+  {
+    "id": "03-impact",
+    "path": "assets/voice/03-impact.mp3",
+    "duration": 32.208,
+    "marks": "assets/voice/03-impact.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  },
+  {
+    "id": "04-design",
+    "path": "assets/voice/04-design.mp3",
+    "duration": 34.104,
+    "marks": "assets/voice/04-design.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  },
+  {
+    "id": "05-knowledge",
+    "path": "assets/voice/05-knowledge.mp3",
+    "duration": 33.384,
+    "marks": "assets/voice/05-knowledge.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  },
+  {
+    "id": "06-skills",
+    "path": "assets/voice/06-skills.mp3",
+    "duration": 32.232,
+    "marks": "assets/voice/06-skills.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  },
+  {
+    "id": "07-pension",
+    "path": "assets/voice/07-pension.mp3",
+    "duration": 36.312,
+    "marks": "assets/voice/07-pension.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  },
+  {
+    "id": "08-reports",
+    "path": "assets/voice/08-reports.mp3",
+    "duration": 26.88,
+    "marks": "assets/voice/08-reports.json",
+    "voice": "Seoyeon",
+    "engine": "neural",
+    "provider": "Amazon Polly"
+  }
+]

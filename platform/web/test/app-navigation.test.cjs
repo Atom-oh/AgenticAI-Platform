@@ -20,7 +20,7 @@ before(async () => {
       name: 'explicit-page-and-service-doubles',
       setup(plugin) {
         plugin.onResolve({ filter: /^\.\// }, args => {
-          if (args.importer === path.join(web, 'src/App.tsx')) {
+          if (args.importer === path.join(web, 'src/App.tsx') && args.path !== './navigation') {
             return { path: args.path, namespace: 'app-double' };
           }
         });
@@ -75,6 +75,17 @@ test('document evidence and saved analysis links preserve their identity after l
   }
 });
 
+test('workbench menus retain the selected project when opening documents and S1', async t => {
+  const page = await authenticatedPage(t, '#/wb-planning?projectId=team-1&productId=product-1');
+  await page.locator('[data-view="Workbench"]').waitFor();
+  await page.getByRole('button', { name: '내부 문서함', exact: true }).click();
+  await page.locator('[data-view="LibraryPage"]').waitFor();
+  assert.equal(new URL(page.url()).hash, '#/documents?projectId=team-1');
+  await page.getByRole('button', { name: '규정 영향 검토', exact: true }).click();
+  await page.locator('[data-view="S1"]').waitFor();
+  assert.equal(new URL(page.url()).hash, '#/s1?projectId=team-1');
+});
+
 test('same-page asset links keep Portal mounted; browser history retains selection queries', async t => {
   const page = await authenticatedPage(t, '#/portal');
   await page.locator('[data-view="Portal"]').waitFor();
@@ -82,6 +93,7 @@ test('same-page asset links keep Portal mounted; browser history retains selecti
   await page.waitForFunction(() => location.hash === '#/portal?id=PRC-000');
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.locator('[data-view="Portal"]').waitFor({ timeout: 2000 });
+  await page.getByText('기술 데모 · 이전 시나리오', { exact: true }).click();
   await page.getByRole('button', { name: '대시보드', exact: false }).click();
   await page.locator('[data-view="Dashboard"]').waitFor();
   await page.goBack();
@@ -90,9 +102,11 @@ test('same-page asset links keep Portal mounted; browser history retains selecti
   assert.equal(new URL(page.url()).hash, '#/portal?id=PRC-000');
 });
 
-test('legacy route aliases and the empty home route remain supported', async t => {
+test('legacy aliases remain supported and new sessions start in the planning workbench', async t => {
   const legacy = await authenticatedPage(t, '#/twoplane?source=bookmark');
   await legacy.locator('[data-view="TwoPlane"]').waitFor({ timeout: 2000 });
   const home = await authenticatedPage(t, '');
-  await home.locator('[data-view="Dashboard"]').waitFor({ timeout: 2000 });
+  await home.locator('[data-view="Workbench"]').waitFor({ timeout: 2000 });
+  assert.equal(await home.getByText('기획자', { exact: true }).count() > 0, true);
+  assert.equal(await home.getByText('운영 센터', { exact: true }).count(), 0);
 });

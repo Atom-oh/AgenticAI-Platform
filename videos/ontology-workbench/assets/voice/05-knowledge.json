@@ -1,0 +1,61 @@
+{"time":0,"type":"sentence","start":28,"end":90,"value":"사내 설치형 컨플루언스는 지식의 원본입니다."}
+{"time":137,"type":"word","start":28,"end":34,"value":"사내"}
+{"time":450,"type":"word","start":35,"end":44,"value":"설치형"}
+{"time":1000,"type":"word","start":45,"end":63,"value":"컨플루언스는"}
+{"time":1937,"type":"word","start":64,"end":73,"value":"지식의"}
+{"time":2437,"type":"word","start":74,"end":89,"value":"원본입니다"}
+{"time":3792,"type":"sentence","start":91,"end":251,"value":"운영자가 수집 범위와 승인된 연결을 등록하면, 배치가 원본과 권한을 확인하고 검색용 벡터와 관계 그래프를 만듭니다."}
+{"time":3930,"type":"word","start":91,"end":103,"value":"운영자가"}
+{"time":4505,"type":"word","start":104,"end":110,"value":"수집"}
+{"time":4830,"type":"word","start":111,"end":120,"value":"범위와"}
+{"time":5355,"type":"word","start":121,"end":130,"value":"승인된"}
+{"time":5830,"type":"word","start":131,"end":140,"value":"연결을"}
+{"time":6292,"type":"word","start":141,"end":153,"value":"등록하면"}
+{"time":7080,"type":"word","start":155,"end":164,"value":"배치가"}
+{"time":7680,"type":"word","start":165,"end":174,"value":"원본과"}
+{"time":8230,"type":"word","start":175,"end":184,"value":"권한을"}
+{"time":8730,"type":"word","start":185,"end":197,"value":"확인하고"}
+{"time":9417,"type":"word","start":198,"end":207,"value":"검색용"}
+{"time":10117,"type":"word","start":208,"end":217,"value":"벡터와"}
+{"time":10605,"type":"word","start":218,"end":224,"value":"관계"}
+{"time":10980,"type":"word","start":225,"end":237,"value":"그래프를"}
+{"time":11480,"type":"word","start":238,"end":250,"value":"만듭니다"}
+{"time":12697,"type":"sentence","start":252,"end":326,"value":"두 결과가 준비된 뒤 같은 세대의 인덱스로 게시합니다."}
+{"time":12722,"type":"word","start":252,"end":255,"value":"두"}
+{"time":12947,"type":"word","start":256,"end":265,"value":"결과가"}
+{"time":13510,"type":"word","start":266,"end":279,"value":"준비된 뒤"}
+{"time":14135,"type":"word","start":280,"end":286,"value":"같은"}
+{"time":14447,"type":"word","start":287,"end":296,"value":"세대의"}
+{"time":14960,"type":"word","start":297,"end":309,"value":"인덱스로"}
+{"time":15485,"type":"word","start":310,"end":325,"value":"게시합니다"}
+{"time":16765,"type":"sentence","start":327,"end":403,"value":"에이전트는 게시된 검색과 근거 조회 도구를 사용합니다."}
+{"time":16952,"type":"word","start":327,"end":342,"value":"에이전트는"}
+{"time":17577,"type":"word","start":343,"end":352,"value":"게시된"}
+{"time":18015,"type":"word","start":353,"end":362,"value":"검색과"}
+{"time":18702,"type":"word","start":363,"end":369,"value":"근거"}
+{"time":19152,"type":"word","start":370,"end":376,"value":"조회"}
+{"time":19452,"type":"word","start":377,"end":386,"value":"도구를"}
+{"time":19890,"type":"word","start":387,"end":402,"value":"사용합니다"}
+{"time":21207,"type":"sentence","start":404,"end":524,"value":"이번 구현의 인덱스는 비공개 파일 기반이며, 외부 위키가 연결됐다고 표시하지 않습니다."}
+{"time":21345,"type":"word","start":404,"end":410,"value":"이번"}
+{"time":21620,"type":"word","start":411,"end":420,"value":"구현의"}
+{"time":22145,"type":"word","start":421,"end":433,"value":"인덱스는"}
+{"time":22832,"type":"word","start":434,"end":443,"value":"비공개"}
+{"time":23432,"type":"word","start":444,"end":450,"value":"파일"}
+{"time":23770,"type":"word","start":451,"end":463,"value":"기반이며"}
+{"time":24520,"type":"word","start":465,"end":471,"value":"외부"}
+{"time":25032,"type":"word","start":472,"end":481,"value":"위키가"}
+{"time":25457,"type":"word","start":482,"end":497,"value":"연결됐다고"}
+{"time":26282,"type":"word","start":498,"end":510,"value":"표시하지"}
+{"time":26832,"type":"word","start":511,"end":523,"value":"않습니다"}
+{"time":27987,"type":"sentence","start":525,"end":625,"value":"실제 사내망 연결과 권한 매핑이 준비되면 해당 환경에서 추가 검증합니다."}
+{"time":28112,"type":"word","start":525,"end":531,"value":"실제"}
+{"time":28487,"type":"word","start":532,"end":541,"value":"사내망"}
+{"time":28925,"type":"word","start":542,"end":551,"value":"연결과"}
+{"time":29450,"type":"word","start":552,"end":558,"value":"권한"}
+{"time":29837,"type":"word","start":559,"end":568,"value":"매핑이"}
+{"time":30300,"type":"word","start":569,"end":581,"value":"준비되면"}
+{"time":31050,"type":"word","start":582,"end":588,"value":"해당"}
+{"time":31475,"type":"word","start":589,"end":601,"value":"환경에서"}
+{"time":32112,"type":"word","start":602,"end":608,"value":"추가"}
+{"time":32400,"type":"word","start":609,"end":624,"value":"검증합니다"}

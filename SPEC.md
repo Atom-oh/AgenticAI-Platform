@@ -495,6 +495,38 @@ Keep detailed operational evidence in `platform/README.md`,
 `platform/infra/README-privacy.md` and `docs/14-demo/`. Do not convert a historical test
 count, a local Git test or a staging result into a claim about today's deployment.
 
+## 17. Project workbench amendment (2026-09-13)
+
+This amendment scopes the new `/studio-api/workbench` module. Existing scenarios,
+React release requirements and MyData privacy requirements retain their own
+contracts. The implementation interfaces are in `platform/workbench/CONTRACT.md`.
+
+- Present planner, designer, developer and business work areas separately.
+  Platform operations are a separate capability derived from verified groups;
+  project ownership and menu preferences do not grant operator access.
+- Treat installed Confluence as a knowledge source. Batch collection produces
+  private, versioned vector and typed-graph projections with source provenance,
+  effective permission checks, deletion handling and joint publication.
+  The initial module uses numeric feature hashing and private artifact indexes.
+  This is an explicit module baseline, not OpenSearch/Neptune or semantic model
+  integration, and does not supersede the other platform backends.
+- Trace registered product/rule/flow/guide/screen/component/icon dependencies
+  into role-specific work items. Show the witness path and version. Claim
+  completeness only within verified indexed scope; report unmapped coverage.
+- Store actual Skill instructions and references. Editing invalidates prior
+  validation/approval. Distinguish package checks from behavior evaluation.
+  Consumers resolve exact approved content; declared tools do not grant access.
+- Use synthetic pension personas, deterministic calculations, separate baseline
+  and model explanations, private free-text processing, independent output checks
+  and feedback bound to actual answers. Do not claim production MyData or legal
+  anonymization approval.
+- Generate private internal underwriting/management/regulation review drafts
+  from supplied evidence. Missing inputs remain unresolved. Freeze source
+  versions and content hashes; human approval does not replace source checks.
+- Explain the implementation in Korean with an approximately four-minute video.
+  Use synthetic captures and evidence; development/review documents stay English.
+  Customer source material must not be republished as a public walkthrough.
+
 ## Amendment: internal documents and source-bound S1 (2026-09-13)
 
 This scoped amendment follows the user's request for commercial-level source

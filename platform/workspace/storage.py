@@ -19,6 +19,8 @@ from decimal import Decimal
 
 KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership",
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
+                   "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
+                   "wb_artifact", "wb_pension", "wb_report", "wb_tool",
                    "document", "docrevision", "docbinding", "docaudit", "docanalysis", "docdecision"})
 MAX_BLOB_BYTES = 50 * 1024 * 1024
 MAX_RECORD_BYTES = 350_000

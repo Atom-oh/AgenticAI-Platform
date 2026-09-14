@@ -20,6 +20,7 @@ their stated scope, not blanket requirements for every module.
 | Private MyData processor | Optional `BankPlatformPrivacy` resources reuse a separate existing EKS VPC. An IAM-only Lambda relay reaches an internal NLB and CPU privacy gateway, which invokes a private model service. This VPC's routes are independent of the isolated data plane. |
 | Generation | `engine/gate.py` checks outbound text before the platform LLM adapters. Strands uses its own `agents/boundary_gate.py` hook. Model choices come from `engine/model_catalog.py`; configured IDs do not prove service availability. |
 | Workspace execution | Private S3/DynamoDB hold inputs, approvals and artifacts. A worker generates source; a separate isolated browser Lambda compiles the pinned React kit and verifies its actual bundle. |
+| Role workbench | Project planning, impact worklists, private knowledge projections, Skill content governance and synthetic pension/report flows extend the Workspace API. Read `workbench/README.md`; external source readiness is explicit. |
 | Internal documents and S1 | `documents/` stores private immutable originals, extracted paragraphs and revision-bound review. S1 uses accessible approved sources and the existing demonstration graph; evidence links open the exact source revision/paragraph. Missing sources and human review remain explicit. See [contract](documents/CONTRACT.md) and [user guide](../docs/14-demo/internal-documents.md). |
 
 CloudFront is the web entry point, not the only public endpoint: WebSocket API
@@ -120,6 +121,7 @@ implied by a passing platform demo.
 | `screengen/`, `gates/`, `skills/` | Legacy F5 generation and runtime prompt rules |
 | `design_loop/`, `studio/` | Process and HTML Studio workflows |
 | `workspace/`, `react-kit/` | Project workflow, actual React build, browser verification, release and export |
+| `workbench/` | Knowledge ETL, versioned private projections, impact tasks, Skill Creator, synthetic pension and report workspace |
 | `privacy/` | Private detector gateway, IAM relay, manifest renderer and offline training preparation |
 | `infra/`, `seed/`, `schema/`, `tests/` | CDK, synthetic fixtures, ontology schema and tests |
 

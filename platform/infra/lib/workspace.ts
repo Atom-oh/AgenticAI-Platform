@@ -23,6 +23,7 @@ export interface StudioWorkspaceProps {
   cacheTable: dynamodb.ITable;
   guardrailId: string;
   guardrailVersion: string;
+  mydataPrivacyFunctionArn?: string;
 }
 
 export class StudioWorkspace extends Construct {
@@ -45,6 +46,40 @@ export class StudioWorkspace extends Construct {
     }
     const gitConfiguration = JSON.stringify(gitConnections);
     if (Buffer.byteLength(gitConfiguration) > 2500) throw new Error('Workspace Git connection configuration exceeds the environment budget.');
+    const configuredKnowledge = this.node.tryGetContext('workbenchConnections') ?? {};
+    const knowledgeConnections = typeof configuredKnowledge === 'string' ? JSON.parse(configuredKnowledge) : configuredKnowledge;
+    const knowledgeFields = new Set(['kind', 'baseUrl', 'approved', 'allowedProjectIds', 'allowedRoles',
+      'spaceKey', 'secretRef', 'maxPages', 'label', 'provider', 'repository', 'ref', 'paths']);
+    if (!knowledgeConnections || Array.isArray(knowledgeConnections) || typeof knowledgeConnections !== 'object' ||
+        Object.keys(knowledgeConnections).length > 10 ||
+        Object.entries(knowledgeConnections).some(([key, raw]) => {
+          const profile = raw as Record<string, unknown>;
+          return !/^[A-Za-z0-9_-]{1,80}$/.test(key) || !profile || typeof profile !== 'object' ||
+            Object.keys(profile).some(field => !knowledgeFields.has(field)) ||
+            !['confluence', 'git'].includes(String(profile.kind)) || profile.approved !== true ||
+            typeof profile.baseUrl !== 'string' || !/^https:\/\/[^/?#@]+(?:\/[^?#]*)?$/.test(profile.baseUrl) ||
+            !Array.isArray(profile.allowedProjectIds) || !profile.allowedProjectIds.length ||
+            profile.allowedProjectIds.some(value => typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value)) ||
+            !Array.isArray(profile.allowedRoles) || !profile.allowedRoles.length ||
+            profile.allowedRoles.some(value => !['owner', 'planner', 'designer', 'developer'].includes(String(value))) ||
+            (profile.kind === 'confluence' && !/^[A-Za-z0-9_-]{1,80}$/.test(String(profile.spaceKey || ''))) ||
+            (profile.maxPages !== undefined && (!Number.isInteger(profile.maxPages) ||
+              Number(profile.maxPages) < 1 || Number(profile.maxPages) > 10)) ||
+            (profile.kind === 'git' && (!['github', 'gitlab'].includes(String(profile.provider)) ||
+              !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/.test(String(profile.repository || '')) ||
+              !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(String(profile.ref || '')) ||
+              !Array.isArray(profile.paths) || profile.paths.length < 1 || profile.paths.length > 50 ||
+              new Set(profile.paths).size !== profile.paths.length ||
+              profile.paths.some(value => typeof value !== 'string' || value.length > 300 ||
+                value.startsWith('/') || value.split('/').some(part => ['', '.', '..'].includes(part)) ||
+                !/^[A-Za-z0-9_./-]+\.(md|txt|json|tsx|ts|jsx|js|css)$/.test(value)))) ||
+            typeof profile.secretRef !== 'string' ||
+            !/^arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+$/.test(profile.secretRef);
+        })) throw new Error('Workbench connections require approved project scopes and Secrets Manager references.');
+    const knowledgeConfiguration = JSON.stringify(knowledgeConnections);
+    if (Buffer.byteLength(knowledgeConfiguration) + Buffer.byteLength(gitConfiguration) > 2600) {
+      throw new Error('Connection configuration exceeds the Lambda environment budget.');
+    }
     const bucket = new s3.Bucket(this, 'PrivateFiles', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -128,6 +163,7 @@ export class StudioWorkspace extends Construct {
         GEN_MODEL: 'global.anthropic.claude-sonnet-5',
         BEDROCK_READ_TIMEOUT: '240',
         WORKSPACE_GIT_CONNECTIONS: gitConfiguration,
+        WORKBENCH_CONNECTIONS_JSON: knowledgeConfiguration,
       },
       description: 'Private file extraction and frozen-guide generation/verification loop',
     });
@@ -160,6 +196,11 @@ export class StudioWorkspace extends Construct {
     if (gitSecrets.length) workerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['secretsmanager:GetSecretValue'], resources: gitSecrets,
     }));
+    const knowledgeSecrets = [...new Set<string>(Object.values(knowledgeConnections)
+      .map(raw => (raw as Record<string, string>).secretRef))];
+    if (knowledgeSecrets.length) workerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'], resources: knowledgeSecrets,
+    }));
     workerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:ApplyGuardrail'],
       resources: [
@@ -180,9 +221,16 @@ export class StudioWorkspace extends Construct {
       code: props.apiCode, role: apiRole, memorySize: 1024, timeout: cdk.Duration.seconds(28),
       reservedConcurrentExecutions: 10, logGroup: apiLogs,
       environment: { ...commonEnv, WORKSPACE_WORKER_FN: worker.functionName,
-        WORKSPACE_USER_POOL_ID: props.cognitoUserPoolId, WORKSPACE_GIT_CONNECTIONS: gitConfiguration },
+        WORKSPACE_USER_POOL_ID: props.cognitoUserPoolId, WORKSPACE_GIT_CONNECTIONS: gitConfiguration,
+        WORKBENCH_CONNECTIONS_JSON: knowledgeConfiguration },
       description: 'JWT-owned private file chunks, contracts, runs and approvals',
     });
+    if (props.mydataPrivacyFunctionArn) {
+      apiFn.addEnvironment('MYDATA_PRIVACY_FUNCTION_ARN', props.mydataPrivacyFunctionArn);
+      apiRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'], resources: [props.mydataPrivacyFunctionArn],
+      }));
+    }
     apiRole.addToPolicy(new iam.PolicyStatement({
       actions: ['s3:GetObject', 's3:PutObject', 's3:PutObjectTagging'],
       resources: [bucket.arnForObjects('workspace/*')],

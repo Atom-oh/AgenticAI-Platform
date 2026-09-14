@@ -1,0 +1,58 @@
+{"time":0,"type":"sentence","start":28,"end":139,"value":"스킬 제작실에서는 반복할 업무의 목적, 지시문, 사용할 근거와 도구를 작성합니다."}
+{"time":137,"type":"word","start":28,"end":34,"value":"스킬"}
+{"time":500,"type":"word","start":35,"end":53,"value":"제작실에서는"}
+{"time":1487,"type":"word","start":54,"end":63,"value":"반복할"}
+{"time":2125,"type":"word","start":64,"end":73,"value":"업무의"}
+{"time":2562,"type":"word","start":74,"end":80,"value":"목적"}
+{"time":3137,"type":"word","start":82,"end":91,"value":"지시문"}
+{"time":4000,"type":"word","start":93,"end":102,"value":"사용할"}
+{"time":4562,"type":"word","start":103,"end":112,"value":"근거와"}
+{"time":5075,"type":"word","start":113,"end":122,"value":"도구를"}
+{"time":5562,"type":"word","start":123,"end":138,"value":"작성합니다"}
+{"time":6855,"type":"sentence","start":140,"end":235,"value":"직접 초안을 만들거나, 구성된 모델에 초안 작성을 요청할 수 있습니다."}
+{"time":6980,"type":"word","start":140,"end":146,"value":"직접"}
+{"time":7355,"type":"word","start":147,"end":156,"value":"초안을"}
+{"time":7792,"type":"word","start":157,"end":169,"value":"만들거나"}
+{"time":8480,"type":"word","start":171,"end":180,"value":"구성된"}
+{"time":9117,"type":"word","start":181,"end":190,"value":"모델에"}
+{"time":9542,"type":"word","start":191,"end":197,"value":"초안"}
+{"time":9917,"type":"word","start":198,"end":207,"value":"작성을"}
+{"time":10430,"type":"word","start":208,"end":221,"value":"요청할 수"}
+{"time":11042,"type":"word","start":222,"end":234,"value":"있습니다"}
+{"time":12110,"type":"sentence","start":236,"end":356,"value":"저장되는 것은 이름만 있는 설정이 아니라 실제 지시문과 참고 자료를 가진 패키지입니다."}
+{"time":12210,"type":"word","start":236,"end":255,"value":"저장되는 것은"}
+{"time":13235,"type":"word","start":256,"end":265,"value":"이름만"}
+{"time":13672,"type":"word","start":266,"end":272,"value":"있는"}
+{"time":13860,"type":"word","start":273,"end":282,"value":"설정이"}
+{"time":14372,"type":"word","start":283,"end":292,"value":"아니라"}
+{"time":14960,"type":"word","start":293,"end":299,"value":"실제"}
+{"time":15397,"type":"word","start":300,"end":312,"value":"지시문과"}
+{"time":16060,"type":"word","start":313,"end":319,"value":"참고"}
+{"time":16422,"type":"word","start":320,"end":329,"value":"자료를"}
+{"time":16860,"type":"word","start":330,"end":336,"value":"가진"}
+{"time":17147,"type":"word","start":337,"end":355,"value":"패키지입니다"}
+{"time":18590,"type":"sentence","start":357,"end":456,"value":"내용이 바뀌면 버전과 해시가 달라지고 이전 검증과 승인은 무효화됩니다."}
+{"time":18652,"type":"word","start":357,"end":366,"value":"내용이"}
+{"time":19090,"type":"word","start":367,"end":376,"value":"바뀌면"}
+{"time":19652,"type":"word","start":377,"end":386,"value":"버전과"}
+{"time":20152,"type":"word","start":387,"end":396,"value":"해시가"}
+{"time":20527,"type":"word","start":397,"end":409,"value":"달라지고"}
+{"time":21440,"type":"word","start":410,"end":416,"value":"이전"}
+{"time":21777,"type":"word","start":417,"end":426,"value":"검증과"}
+{"time":22315,"type":"word","start":427,"end":436,"value":"승인은"}
+{"time":22715,"type":"word","start":437,"end":455,"value":"무효화됩니다"}
+{"time":24120,"type":"sentence","start":457,"end":604,"value":"승인된 정확한 내용만 조회하는 경로를 제공하며, 스킬에 도구 이름을 적었다고 새 권한이 생기지는 않습니다."}
+{"time":24257,"type":"word","start":457,"end":466,"value":"승인된"}
+{"time":24832,"type":"word","start":467,"end":476,"value":"정확한"}
+{"time":25370,"type":"word","start":477,"end":486,"value":"내용만"}
+{"time":25895,"type":"word","start":487,"end":499,"value":"조회하는"}
+{"time":26495,"type":"word","start":500,"end":509,"value":"경로를"}
+{"time":26995,"type":"word","start":510,"end":522,"value":"제공하며"}
+{"time":28007,"type":"word","start":524,"end":533,"value":"스킬에"}
+{"time":28432,"type":"word","start":534,"end":540,"value":"도구"}
+{"time":28832,"type":"word","start":541,"end":550,"value":"이름을"}
+{"time":29120,"type":"word","start":551,"end":563,"value":"적었다고"}
+{"time":30020,"type":"word","start":564,"end":567,"value":"새"}
+{"time":30370,"type":"word","start":568,"end":577,"value":"권한이"}
+{"time":30757,"type":"word","start":578,"end":590,"value":"생기지는"}
+{"time":31382,"type":"word","start":591,"end":603,"value":"않습니다"}

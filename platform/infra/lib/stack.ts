@@ -558,6 +558,7 @@ export class BankPlatformStack extends cdk.Stack {
       apiCode, distribution: dist, cognitoUserPoolId: props.cognitoUserPoolId,
       cognitoClientId: props.cognitoClientId, cacheTable, guardrailId: guardrail.attrGuardrailId,
       guardrailVersion: guardrailVersion.attrVersion,
+      mydataPrivacyFunctionArn: props.mydataPrivacyFunctionArn,
     });
 
     // ---------- 관측성: 알람 + 대시보드 (§10) ----------

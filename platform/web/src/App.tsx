@@ -1,4 +1,4 @@
-import { Component, useEffect, useState } from 'react';
+import { Component, Suspense, lazy, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { auth, login } from './lib';
 import S1 from './S1';
@@ -12,28 +12,14 @@ import Report from './views/Report';
 import Portal from './views/Portal';
 import AgentBuilder from './views/AgentBuilder';
 import { loadConfig, sock, WsEvent } from './lib';
+import { MENU_GROUPS, WORKBENCH_TITLES, WORKBENCH_VIEWS } from './navigation';
+import type { WorkbenchView, Overview } from './workbench/types';
 
-const NAV = [
-  { id: 'home', ic: '◈', label: '대시보드' },
-  { id: 's1', ic: '⧉', label: '규정 영향 분석', tag: 'S1' },
-  { id: 'documents', ic: '▤', label: '내부 문서함' },
-  { id: 's2', ic: '💬', label: '마이데이터 상담', tag: 'S2' },
-  { id: 'explore', ic: '🕸', label: '온톨로지 탐색기' },
-  { id: 'registry', ic: '🗂', label: 'Agent Registry', tag: 'S3' },
-  { id: 'screengen', ic: '⌨', label: '화면 생성', tag: 'S3' },
-  { id: 'portal', ic: '🧩', label: 'UX Asset Portal', tag: 'P1' },
-  { id: 'report', ic: '📄', label: '보고서 생성', tag: 'F7' },
-  { id: 'boundary', ic: '⇄', label: 'Single Boundary 뷰', tag: 'S4' },
-  { id: 'guardrails', ic: '🛡', label: 'Guardrails 로그', tag: 'S5' },
-  { id: 'agents', ic: '🤖', label: '에이전트 빌더', tag: 'AC' },
-  { id: 'controlroom', ic: '🛰', label: '컨트롤룸 (레거시)' },
-  { id: 'studio', ic: '🎨', label: '디자인 스튜디오' },
-  { id: 'guide', ic: '📖', label: '가이드북' },
-];
+const Workbench = lazy(() => import('./workbench/Workbench'));
 // 구 해시 호환 — 북마크·문서의 #/twoplane 은 Single Boundary 뷰로 연다
 const ALIAS: Record<string, string> = { twoplane: 'boundary' };
 // Query parameters identify an asset inside a view, not a different app menu.
-const resolveView = () => { const h = location.hash.replace('#/', '').split('?')[0] || 'home'; return ALIAS[h] || h; };
+const resolveView = () => { const h = location.hash.replace('#/', '').split('?')[0] || 'wb-planning'; return ALIAS[h] || h; };
 
 const TITLE: Record<string, string> = {
   home: '플랫폼 대시보드', s1: '규정 영향 분석 — 원문 근거 · 변경 검토',
@@ -115,27 +101,23 @@ export default function App() {
     window.addEventListener('hashchange', h);
     return () => window.removeEventListener('hashchange', h);
   }, []);
-  const go = (v: string) => { location.hash = '#/' + v; };
+  const go = (v: string) => {
+    const current = new URLSearchParams(location.hash.split('?')[1] || '');
+    const projectId = current.get('projectId') || current.get('project');
+    location.hash = '#/' + v + (projectId && (v.startsWith('wb-') || ['studio', 'documents', 's1'].includes(v))
+      ? '?projectId=' + encodeURIComponent(projectId) : '');
+  };
   const [cfg, setCfg] = useState<{ graphBackend?: string; planeDeployed?: boolean } | null>(null);
   const [route, setRoute] = useState<WsEvent | null>(null);   // traces(limit 1, 플레인 호출 없음) → llmRoute · genModel · plane
   const [legend, setLegend] = useState(false);
-  const [resetting, setResetting] = useState(false);
-  const [resetMsg, setResetMsg] = useState('');
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [focus, setFocus] = useState('all');
+  const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => { loadConfig().then(c => setCfg(c)).catch(() => {}); }, []);
   useEffect(() => {
-    if (!authed) return;
+    if (!authed || WORKBENCH_VIEWS.has(view)) return;
     sock.request('traces', { limit: 1, withRetained: false }).then(setRoute).catch(() => {});
-  }, [authed]);
-  const doReset = async () => {
-    if (resetting) return;
-    if (!confirm('시연 상태를 초기화합니다. Registry 시연 레코드(Button v2/v3)를 기준선으로 되돌리고 화면을 새로 고칩니다.')) return;
-    setResetting(true); setResetMsg('');
-    try {
-      const r = await sock.request('reset');
-      setResetMsg(r.registry?.error ? '리셋 일부 실패: ' + r.registry.error : '리셋 완료');
-      setTimeout(() => location.reload(), 600);
-    } catch (e: any) { setResetMsg('리셋 실패: ' + e.message); setResetting(false); }
-  };
+  }, [authed, view]);
   if (!authed) return <Login onDone={() => setAuthed(true)} />;
 
   const routeLine = !route ? '…'
@@ -144,20 +126,37 @@ export default function App() {
 
   return (
     <div className="flex h-full">
-      <nav className="w-56 shrink-0 border-r border-slate-200 p-3 flex flex-col gap-1 overflow-y-auto">
+      {menuOpen && <button aria-label="메뉴 닫기" className="fixed inset-0 z-30 bg-slate-900/30 md:hidden" onClick={() => setMenuOpen(false)} />}
+      <nav aria-label="업무 메뉴" className={`${menuOpen ? 'flex' : 'hidden'} md:flex fixed md:static inset-y-0 left-0 z-40 bg-white w-64 shrink-0 border-r border-slate-200 p-3 flex-col gap-1 overflow-y-auto`}>
         <div className="px-2 py-3">
           <div className="font-bold tracking-tight">아톰은행 <span className="text-[#008485]">Agentic AI</span></div>
           <div className="text-[10px] text-slate-500">ONE PLATFORM · SINGLE BOUNDARY</div>
         </div>
-        {NAV.map(n => (
-          <button key={n.id} onClick={() => go(n.id)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left
-              ${view === n.id ? 'bg-teal-50 text-teal-900' : 'text-slate-400 hover:bg-slate-100'}`}>
-            <span className="w-5 text-center">{n.ic}</span>{n.label}
-            {n.tag && <span className="chip text-[9px] ml-auto">{n.tag}</span>}
-          </button>
+        <label className="px-2 text-xs text-slate-600">자주 쓰는 작업 영역
+          <select aria-label="자주 쓰는 작업 영역" value={focus} onChange={e => setFocus(e.target.value)}
+            className="mt-1 mb-2 w-full border border-slate-300 rounded-lg bg-white p-2">
+            <option value="all">전체 업무</option>
+            {MENU_GROUPS.filter(g => !['reference', 'common', 'operator'].includes(g.id)).map(g =>
+              <option key={g.id} value={g.id}>{g.label}</option>)}
+          </select>
+        </label>
+        {MENU_GROUPS.filter(group => !group.operator || overview?.operator).filter(group =>
+          focus === 'all' || ['common', 'operator', 'reference', focus].includes(group.id)).map(group => (
+          <details key={group.id} open={group.id !== 'reference' || group.items.some(item => item.id === view)} className="mb-1">
+            <summary className="cursor-pointer px-2 py-2 text-xs font-semibold text-slate-500">{group.label}</summary>
+            {group.items.map(n => <button key={n.id} onClick={() => { go(n.id); setMenuOpen(false); }}
+              aria-current={view === n.id ? 'page' : undefined}
+              className={`w-full px-3 py-2 rounded-lg text-sm text-left ${view === n.id ? 'bg-teal-50 font-semibold text-teal-900' : 'text-slate-600 hover:bg-slate-100'}`}>
+              {n.label}
+            </button>)}
+          </details>
         ))}
         <div className="mt-auto px-2 py-2 text-[10px] text-slate-500 space-y-1">
+          {WORKBENCH_VIEWS.has(view) ? <>
+            <div>작업실 지식: <b className="text-teal-700">{overview ? '비공개 Vector·Graph 파일' : '프로젝트 선택 후 확인'}</b></div>
+            <div>원본 연결과 게시 상태는 소스별로 확인합니다.</div>
+            <div>연금 시나리오: 합성 자료 · 실계좌 미연동</div>
+          </> : <>
           <div>그래프 백엔드: <b className={cfg?.graphBackend === 'neptune' ? 'text-teal-700' : 'text-amber-700'}>
             {cfg?.graphBackend === 'neptune' ? 'Neptune Serverless' : 'Local (개발용 인메모리)'}</b></div>
           <div>VPC 내부 플레인: <b className={cfg?.planeDeployed ? 'text-amber-700' : 'text-[#E90061]'}>
@@ -165,23 +164,27 @@ export default function App() {
           <div>추론 경로: <b className={route?.llmRoute === 'gemma' ? 'text-[#E90061]' : 'text-teal-700'}>{routeLine}</b>
             {route?.genModel && <div className="font-mono text-slate-400 break-all">{route.genModel}</div>}</div>
           <div className="text-slate-400">합성데이터 · 실계정 미사용</div>
+          </>}
         </div>
       </nav>
       <main className="app-main flex-1 overflow-y-auto relative">
         <div className="app-toolbar flex items-center gap-3 py-4 border-b border-slate-200/70 sticky top-0 backdrop-blur z-10" style={{ background: 'rgba(255,255,255,.88)' }}>
-          <h1 className="font-bold">{TITLE[view] || ''}</h1>
+          <button className="chip md:hidden" aria-label="업무 메뉴 열기" onClick={() => setMenuOpen(true)}>메뉴</button>
+          <h1 className="font-bold">{WORKBENCH_TITLES[view] || TITLE[view] || ''}</h1>
           <div className="flex-1" />
-          {resetMsg && <span className="text-xs text-slate-400">{resetMsg}</span>}
-          <button className={`chip hover:border-amber-500 ${legend ? 'text-amber-200 border-amber-500' : 'text-amber-700'}`}
+          {!WORKBENCH_VIEWS.has(view) && <button className={`chip hover:border-amber-500 ${legend ? 'text-amber-200 border-amber-500' : 'text-amber-700'}`}
             title="SPEC §11 — 운영 구성을 대체한 지점 (필수 표기)" onClick={() => setLegend(l => !l)}>⚠ 데모 대체 표기</button>
-          <button className="chip hover:border-amber-500 text-amber-700" title="시연 리셋 (SPEC §8-5) — Registry 기준선 복원 + 화면 초기화"
-            onClick={doReset} disabled={resetting}>{resetting ? '리셋 중…' : '⟲ 시연 리셋'}</button>
+          }
           <span className="chip text-slate-400">{auth.email}</span>
           <button className="chip hover:border-slate-400" onClick={() => { auth.logout(); location.reload(); }}>로그아웃</button>
         </div>
-        {legend && <DemoLegend route={route} onClose={() => setLegend(false)} />}
+        {legend && !WORKBENCH_VIEWS.has(view) && <DemoLegend route={route} onClose={() => setLegend(false)} />}
         <div className="app-content">
           <ViewErrorBoundary viewKey={view}>
+          {WORKBENCH_VIEWS.has(view) && <Suspense fallback={<p role="status" className="p-6 text-slate-500">작업실을 여는 중…</p>}>
+            <Workbench view={view.slice(3) as WorkbenchView} onOverview={setOverview}
+              onNavigate={target => { location.hash = '#/' + (target.startsWith('wb-') || target.startsWith('studio') || target.startsWith('portal') ? target : 'wb-' + target); }} />
+          </Suspense>}
           {view === 'home' && <Dashboard go={go} />}
           {view === 's1' && <S1 />}
           {view === 'documents' && <LibraryPage />}
@@ -196,7 +199,7 @@ export default function App() {
           {view === 'agents' && <AgentBuilder />}
           {view === 'controlroom' && <Agents />}
           {view === 'studio' && <Studio />}
-          {view === 'guide' && <Frame src="https://www.atomai.click/AgenticAI-Platform/" note="Agentic AI 플랫폼 엔지니어링 가이드북 (임베드)" />}
+          {view === 'guide' && <Frame src="https://www.atomai.click/AgenticAI-Platform/14-demo/ontology-workbench" note="업무별 작업실과 지식·영향 분석 — 4분 설명 영상" />}
           </ViewErrorBoundary>
         </div>
       </main>

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
+const { assertMainPrivacyDelta } = require('./check-main-privacy-delta.cjs');
 const root = path.resolve(__dirname, '../..');
 const infra = path.join(root, 'infra');
 // Existing stack assets are relative to the CDK project working directory.
@@ -144,10 +145,10 @@ for (const resource of Object.values(json.Resources)) {
 }
 scope.synth();
 
-// Compile HEAD in memory, using the original directory for relative imports.
+// Compile the supplied PR-base source in memory, using the original import directory.
 // No shared file is temporarily replaced while the parent works in this tree.
 const sourcePath = path.join(infra, 'lib/stack.ts');
-// Supply `git show HEAD:platform/infra/lib/stack.ts` on stdin. Keeping Git outside
+// Supply `git show "$PR_BASE_SHA":platform/infra/lib/stack.ts` on stdin. Keeping Git outside
 // Node also works in runners which prohibit nested subprocesses.
 const oldSource = fs.readFileSync(0, 'utf8');
 assert.ok(oldSource.includes('export class BankPlatformStack'), 'HEAD stack source required on stdin');
@@ -169,29 +170,10 @@ const baseline = mainTemplate(oldModule.exports.BankPlatformStack, 'baseline');
 const disabled = mainTemplate(BankPlatformStack, 'disabled');
 assert.deepEqual(disabled, baseline, 'default main stack changed with privacy disabled');
 const enabled = mainTemplate(BankPlatformStack, 'enabled', arn);
-assert.deepEqual(Object.keys(enabled.Resources), Object.keys(baseline.Resources),
-  'existing main stack logical IDs changed');
-const changed = Object.keys(baseline.Resources).filter(
-  id => JSON.stringify(enabled.Resources[id]) !== JSON.stringify(baseline.Resources[id]));
-assert.equal(changed.length, 2, `unexpected changed resources: ${changed}`);
-assert.ok(changed.some(id => /^WsFn[A-F0-9]+$/.test(id)));
-assert.ok(changed.some(id => /^WsFnServiceRoleDefaultPolicy/.test(id)));
-const fn = enabled.Resources[changed.find(id => /^WsFn[A-F0-9]+$/.test(id))];
-assert.equal(fn.Properties.Environment.Variables.MYDATA_PRIVACY_FUNCTION_ARN, arn);
-const policy = enabled.Resources[changed.find(id => /^WsFnServiceRoleDefaultPolicy/.test(id))];
-assert.ok(policy.Properties.PolicyDocument.Statement.some(s =>
-  s.Action === 'lambda:InvokeFunction' && s.Resource === arn));
-const restored = structuredClone(enabled);
-delete restored.Resources[changed.find(id => /^WsFn[A-F0-9]+$/.test(id))]
-  .Properties.Environment.Variables.MYDATA_PRIVACY_FUNCTION_ARN;
-const restoredPolicy = restored.Resources[changed.find(id => /^WsFnServiceRoleDefaultPolicy/.test(id))]
-  .Properties.PolicyDocument;
-restoredPolicy.Statement = restoredPolicy.Statement.filter(s =>
-  !(s.Action === 'lambda:InvokeFunction' && s.Resource === arn));
-assert.deepEqual(restored, baseline, 'enabled main stack changed beyond exact privacy env/invoke grant');
+const changed = assertMainPrivacyDelta(baseline, enabled, arn);
 fs.writeFileSync(path.join(out, 'verified.json'), JSON.stringify({
   privacyResources: Object.keys(json.Resources).length,
   existingMainResources: Object.keys(baseline.Resources).length,
   defaultMainUnchanged: true, enabledMainChangedResources: changed,
 }, null, 2));
-console.log('PASS private stack security assertions; default main unchanged; enabled main changes only WS env/policy.');
+console.log('PASS private stack assertions; default main unchanged; enabled main changes only exact WS and Workspace API privacy env/policy.');

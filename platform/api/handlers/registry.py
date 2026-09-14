@@ -108,5 +108,4 @@ def registry_seed(ctx: Ctx, body: dict) -> None:
 ROUTES = {
     "registry_list": registry_list, "registry_get": registry_get, "registry_transition": registry_transition,
     "registry_search": registry_search, "registry_consumer": registry_consumer, "registry_create": registry_create,
-    "registry_seed": registry_seed,
 }

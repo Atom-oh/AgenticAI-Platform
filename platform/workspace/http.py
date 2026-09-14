@@ -113,6 +113,8 @@ class WorkspaceAPI:
         self.collaboration = collaboration if collaboration is not None else Collaboration(self.storage, directory=directory)
         from workspace.git_service import configured_connections
         self.git_connections = git_connections or configured_connections
+        from workbench.runtime import install
+        install(self)
 
     def rules(self):
         if self._rules is None:
@@ -154,6 +156,12 @@ class WorkspaceAPI:
                 if response is not None:
                     return _json(response[0], response[1])
             scope = self.collaboration.resolve_scope(owner, project_id)
+            if segments[0] == "workbench":
+                from workbench.api import route
+                scope = self.collaboration.require(scope, "read")
+                result = route(self, scope, claims, method, segments[1:],
+                               _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
+                return _json(result[0], result[1])
             action = "read"
             if method != "GET":
                 if segments[0] == "assets":

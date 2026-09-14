@@ -7,8 +7,8 @@ files. Unlinked records must remain explicitly unlinked.
 ## Authority and storage
 
 - Reuse the committed workspace HTTP API, Cognito access-token `sub`, canonical
-  project membership, private S3 bucket and DynamoDB records. Do not depend on
-  the separate unmerged ontology-workbench branch.
+  project membership, private S3 bucket and DynamoDB records. Document-library
+  authorization and storage remain independent of workbench knowledge indexes.
 - `X-Workspace-Project` selects an existing project; absence means the caller's
   personal collection. A request never supplies a storage owner or S3 key.
 - Roles are `owner`, `planner`, `designer`, `developer`. Document `readRoles`
