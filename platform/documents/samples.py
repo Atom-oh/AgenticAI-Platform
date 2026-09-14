@@ -31,6 +31,30 @@ SAMPLES = (
      "교육 담당자는 변경된 기준, 화면 안내와 업무 절차가 교육 자료에 반영되어야 하는지 검토합니다.",
      "교육 자료에는 확인한 원문 버전과 관련 화면을 연결하고, 미확인 사항을 별도로 남깁니다."),
 )
+SAMPLE_NOTICE = (
+    "이 파일은 문서함과 검토 흐름의 동작 확인을 위한 합성 자료입니다. "
+    "실제 은행 내규, 상품 조건 또는 법률 자문이 아닙니다."
+)
+
+
+def _definition(sample):
+    ref, title, kind, paragraph1, paragraph2 = sample
+    data = (
+        f"# [합성 예제] {title}\n\n{SAMPLE_NOTICE}\n\n"
+        f"## 검토 항목\n\n{paragraph1}\n\n## 확인 원칙\n\n{paragraph2}\n"
+    ).encode()
+    return {
+        "graphRef": ref, "title": "[합성 예제] " + title, "kind": kind,
+        "name": ref + "-sample.md", "versionLabel": "검증 예제 1",
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "sections": [{"title": "검토 항목", "text": paragraph1}, {"title": "확인 원칙", "text": paragraph2}],
+    }, data
+
+
+def sample_catalog():
+    """Public template descriptions, not a list of a collection's private files."""
+    return {"schemaVersion": 1, "notice": SAMPLE_NOTICE,
+            "samples": [_definition(sample)[0] for sample in SAMPLES]}
 
 
 def _invoke(host, scope, method, parts, body, *, trusted=False):
@@ -54,21 +78,17 @@ def install_samples(host, scope, body):
     if len(request) > 70:
         raise DocumentError(400, "invalid-input", "예제 등록 요청 ID가 너무 깁니다.")
     documents, jobs = [], []
-    for ref, title, kind, paragraph1, paragraph2 in SAMPLES:
+    for sample in SAMPLES:
+        template, data = _definition(sample)
+        ref = template["graphRef"]
         library = Library(host, scope)
         library.fresh()
         if library.scope["role"] != "owner":
             raise DocumentError(403, "forbidden", "문서함 소유자만 합성 예제를 등록할 수 있습니다.")
-        data = (
-            f"# [합성 예제] {title}\n\n"
-            "이 파일은 문서함과 검토 흐름의 동작 확인을 위한 합성 자료입니다. "
-            "실제 은행 내규, 상품 조건 또는 법률 자문이 아닙니다.\n\n"
-            f"## 검토 항목\n\n{paragraph1}\n\n## 확인 원칙\n\n{paragraph2}\n"
-        ).encode()
         created = _invoke(host, library.scope, "POST", ["documents"], {
-            "requestId": request + ":" + ref, "title": "[합성 예제] " + title, "kind": kind,
-            "graphRef": ref, "name": ref + "-sample.md", "size": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(), "versionLabel": "검증 예제 1",
+            "requestId": request + ":" + ref, "title": template["title"], "kind": template["kind"],
+            "graphRef": ref, "name": template["name"], "size": len(data),
+            "sha256": template["sha256"], "versionLabel": template["versionLabel"],
         }, trusted=True)
         doc, revision = created["document"], created["revision"]
         root = ["documents", doc["id"], "revisions", revision["id"]]

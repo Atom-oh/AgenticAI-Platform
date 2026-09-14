@@ -10,6 +10,11 @@ const statuses: Record<string, string> = {
   change_required: '수정 필요', unaffected: '영향 없음', completed: '처리 완료',
 };
 export function statusLabel(value: string) { return Object.hasOwn(statuses, value) ? statuses[value] : '상태 확인 필요'; }
+const kinds: Record<string, string> = {
+  regulation: '규정', policy: '업무 기준', report: '보고서', specification: '화면·기능 명세',
+  notice: '공문·안내', guide: '가이드', reference: '참고 자료',
+};
+export function kindLabel(value: string) { return Object.hasOwn(kinds, value) ? kinds[value] : '기타 문서'; }
 const roleLabels: Record<Role, string> = { owner: '소유자', planner: '기획 담당자', designer: '디자인 담당자', developer: '개발 담당자' };
 export function roleLabel(value: string) { return Object.hasOwn(roleLabels, value) ? roleLabels[value as Role] : '역할 확인 필요'; }
 export function Status({ value }: { value: string }) { return <span className="doc-chip" data-status={value}>{statusLabel(value)}</span>; }

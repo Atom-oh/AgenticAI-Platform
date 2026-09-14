@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { resource, WorkspaceError } from '../workspace/client';
 import { downloadOriginal, sourceHref } from './client';
 import { libraryHref, Notice, revisionHref, useDocumentScope, usePrivateTask } from './DocumentScope';
-import type { DocumentDetail, Job, Reference, Role, SourceView } from './types';
-import { dateLabel, Details, Progress, roleLabel, Sample, Status, statusLabel } from './presentation';
+import type { DocumentDetail, Job, Reference, Role, SourceView, TemplateCatalog } from './types';
+import { dateLabel, Details, kindLabel, Progress, roleLabel, Sample, Status, statusLabel } from './presentation';
 import { watchAuthorizedResource, watchDocumentJob } from './useDocumentJob';
 import UploadForm from './UploadForm';
+import { matchingTemplate, TemplateOverview } from './SampleCatalog';
 
 type ReaderState = { detail: DocumentDetail; source: SourceView };
 type Activity = { id: string; action: string; actorId: string; createdAt?: number; revisionId?: string };
@@ -15,7 +16,9 @@ const activityLabels: Record<string, string> = {
   'intake-queued': '본문 추출 요청', 'intake-failed': '본문 추출 실패', extracted: '본문 추출 완료',
 };
 
-export default function SourceReader({ references, onChanged }: { references: Reference[]; onChanged: () => void }) {
+export default function SourceReader({ references, onChanged, templates }: {
+  references: Reference[]; onChanged: () => void; templates?: TemplateCatalog;
+}) {
   const { client, route } = useDocumentScope();
   const task = usePrivateTask(), action = usePrivateTask(), download = usePrivateTask(), pageTask = usePrivateTask(), activityTask = usePrivateTask();
   const [state, setState] = useState<ReaderState>();
@@ -85,9 +88,11 @@ export default function SourceReader({ references, onChanged }: { references: Re
       }
     });
   }, [client, root, route, refresh, task.run, pageTask.cancel, activityTask.cancel, download.cancel]);
+  const source = state?.source, document = source?.document, revision = source?.revision;
+  const template = matchingTemplate(templates, document, revision);
   useEffect(() => {
     if (route.paragraph && state) selectedParagraph.current?.scrollIntoView({ block: 'nearest' });
-  }, [route.paragraph, state?.source.revision.id]);
+  }, [route.paragraph, state?.source.revision.id, template?.sha256]);
   const reload = () => { setState(undefined); setRefresh(value => value + 1); };
   const mutate = (path: string, body: unknown, method: 'post' | 'put' = 'post') => {
     if (action.busy) return;
@@ -97,7 +102,6 @@ export default function SourceReader({ references, onChanged }: { references: Re
       if (current()) { setMessage('변경 사항을 저장했습니다. 기록된 최신 상태를 확인하세요.'); onChanged(); reload(); }
     });
   };
-  const source = state?.source, document = source?.document, revision = source?.revision;
   return <section className="doc-stack" aria-label="원문과 검토">
     <div className="doc-row doc-between"><h3>원문과 검토</h3><button onClick={reload} disabled={action.busy}>원문 다시 조회</button></div>
     {task.error && <Notice error>{task.error} <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId })}>문서함에서 찾기</a></Notice>}
@@ -106,15 +110,17 @@ export default function SourceReader({ references, onChanged }: { references: Re
     {task.busy && !state && <Notice>선택한 원문 버전을 불러오고 있습니다…</Notice>}
     {state && document && revision && <>
       <div className="doc-panel doc-stack">
-        <div className="doc-stack"><h3>{document.title}</h3>
-          <div className="doc-row"><Sample provenance={document.provenance} /><Status value={document.status} /><Status value={revision.status} /></div>
+        <div className="doc-stack"><h3 className="doc-document-title">{document.title}</h3>
+          <div className="doc-row"><span className="doc-chip">{kindLabel(document.kind)}</span>
+            <Sample provenance={document.provenance} /><Status value={document.status} /><Status value={revision.status} /></div>
+          {template && <TemplateOverview template={template} />}
           <p><strong>{revision.versionLabel || `반입 ${revision.revision}차`}</strong> · 반입 {revision.revision}차
             {revision.effectiveDate && <> · 시행일 {revision.effectiveDate}</>}</p>
         </div>
         {document.status === 'archived' && <Notice>보관 처리된 문서입니다. 새 분석에는 사용할 수 없으며, 접근 권한이 있는 기존 원문과 검토 이력은 유지됩니다.</Notice>}
         {route.analysisId && document.approvedRevisionId !== revision.id && <Notice>현재 승인된 원문이 아니거나 승인본과 다른 버전입니다. 분석에 사용된 버전은 분석 결과의 근거 링크에서 확인하세요.</Notice>}
-        {document.provenance === 'synthetic_sample' && <Notice>동작 확인을 위한 합성 자료입니다. 실제 은행 내규가 아니며 원본 교체는 지원하지 않습니다.
-          <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId, register: true })}>별도 문서 등록</a></Notice>}
+        {document.provenance === 'synthetic_sample' && <Notice>문서 검토 흐름을 연습하는 합성 예제입니다.
+          <a href={libraryHref({ projectId: route.projectId, analysisId: route.analysisId })}>합성 예제 구성 보기</a></Notice>}
         <label>원문 버전<select aria-label="원문 버전" value={revision.id} onChange={event => {
           const selected = state.detail.revisions.find(row => row.id === event.target.value);
           if (selected) window.location.hash = revisionHref(document.id, selected.id, { ...route, textHash: selected.textHash || undefined });
@@ -163,6 +169,10 @@ export default function SourceReader({ references, onChanged }: { references: Re
         {!source.paragraphs.length && <p>표시할 본문이 없습니다. 스캔·암호화·빈 파일 여부를 확인하세요.</p>}
         <ol className="doc-paragraphs">{source.paragraphs.map(paragraph => <li className="doc-paragraph" key={paragraph.id}
           ref={paragraph.id === route.paragraph ? selectedParagraph : undefined} aria-current={paragraph.id === route.paragraph ? true : undefined}>
+          {paragraph.id === route.paragraph && <div className="doc-source-identity">
+            <strong>{document.title}</strong><span>{kindLabel(document.kind)} · {revision.versionLabel || `반입 ${revision.revision}차`} · 선택한 근거 문단</span>
+            {template && <p>{template.sections[0].text}</p>}
+          </div>}
           <div className="doc-row"><strong>{paragraph.id}</strong><span>{paragraph.page == null ? '쪽 정보 없음' : `${paragraph.page}쪽`}</span>
             {revision.textHash && <a href={sourceHref({ documentId: document.id, revisionId: revision.id,
               paragraphId: paragraph.id, textHash: revision.textHash }, route)}>이 문단 링크</a>}
