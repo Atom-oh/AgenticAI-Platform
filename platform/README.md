@@ -171,10 +171,12 @@ reconfigure an already deployed API for local fallback.
 
 ## Visual design-asset portal
 
-The `#/portal` view previews the real platform React kit in isolated frames and
-renders recorded UX steps and relationships with a locally bundled Mermaid
-renderer. Legacy ontology entries without source code remain explicitly
-unlinked. See the [preview contract and workflow](docs/PORTAL_PREVIEWS.md);
+The `#/portal` view previews the Studio React kit and exact-ID reference
+implementations for the 22 named seed component versions. Source files,
+version changes, and interactive examples share verified source hashes.
+Recorded UX steps and relationships use a locally bundled Mermaid renderer.
+Generated volume-test widgets are explicit placeholders; other entries without
+matching source remain unlinked. See the [preview contract and workflow](docs/PORTAL_PREVIEWS.md);
 rendering alone is not customer approval or UX execution validation.
 
 ## Dated evidence and remaining limits

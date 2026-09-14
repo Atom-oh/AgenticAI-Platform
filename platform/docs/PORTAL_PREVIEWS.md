@@ -5,15 +5,20 @@ metadata. A visible preview is not an approval or a successful UX execution test
 
 ## Designer workflow
 
-- **Components → Actual React:** browse the current platform kit, select a
+- **Components → Studio UI kit:** browse the current platform kit, select a
   component and change its example controls. Inputs, selections and callbacks
   execute the original `platform/react-kit/ui` code. The kit is a platform sample,
   not an approved customer package. Its version and source hash identify the
   implementation being displayed.
-- **Components → Design metadata:** inspect existing ontology entries and their
-  relationships. A name such as `Button` is not evidence that a legacy
-  `@atom/ui` entry is implemented by `studio-ui`. Matching names provide a
-  discovery link only; missing source remains explicitly unlinked.
+- **Components → Versioned components:** inspect existing ontology entries and their
+  relationships. The 22 named seed versions have exact-ID reference implementations
+  in `platform/component-library`, under `@atom/portal-components`. Each version
+  has a separate export, interactive example, source files, props, and change notes.
+  These newly authored platform references are not historical customer `@atom/ui`
+  package contents. Existing Registry approvals are not changed or applied to
+  these implementations. The 58 generated volume-test widgets remain explicit
+  metadata placeholders. Unknown or mismatched identities remain unlinked;
+  matching a Studio kit component name alone never creates a binding.
 - **User flows:** view recorded procedure steps in their stored order. Exact,
   unique screen-name matches may link to the corresponding screen asset.
 - **Screens:** view registered previous/next screen relationships. An unresolved
@@ -40,8 +45,9 @@ disclosure. Sync refreshes the selected detail and its visual projection.
 
 ## Data contract
 
-`portal_detail` adds `visual`; `portal_list` and existing actions keep their
-interfaces. Diagram projections are bounded to 25 nodes and 50 edges:
+`portal_detail` adds `visual`; component cards also expose `implementationStatus`
+(`reference`, `placeholder`, or `unlinked`). Diagram projections are bounded to
+25 nodes and 50 edges:
 
 ```ts
 type Visual =
@@ -54,7 +60,11 @@ type Visual =
       note: string;
       truncated: { nodes: number; edges: number };
     }
-  | { kind: 'empty'; reason: string; note: string };
+  | { kind: 'empty'; reason: string; note: string }
+  | {
+      kind: 'react-component'; id: string; name: string; version: string;
+      package: '@atom/portal-components'; exportName: string; sourceHash: string;
+    };
 ```
 
 The backend reuses the existing detail neighborhood reads. Screen names use at
@@ -72,13 +82,27 @@ both metadata and previews use that same cached revision snapshot.
 Examples are local, synthetic and reset on selection; they do not initiate
 transactions or update approved assets.
 
+Versioned references use a separate catalog and renderer. API bindings require
+exact node ID, name, and semantic version. The source hash is SHA-256 of compact
+UTF-8 JSON in this key order:
+`{id,version,package,exportName,files:[{path,sha256}]}`.
+Files comprise the entry and catalog `sharedFiles`, deduplicated and sorted by
+path. Both the API deployment and web build hash their actual file bytes. The
+browser verifies each downloadable source, aggregate identity, catalog hash,
+and HTML hash, then requires a match to the API binding before displaying it.
+A stale or mismatched deployment produces an error, not a name-based fallback.
+Source JSON downloads retain paths and hashes; individual files are also
+available as text. The local package is not claimed to be published on npm.
+
 ## Rendering boundary
 
 React and Mermaid are bundled locally into separate immutable HTML files under
-`public/portal-renderers/{react,mermaid}/`. Build commands run automatically
+`public/portal-renderers/{react,mermaid,versions}/`. Build commands run automatically
 through the web package's `predev` and `prebuild` scripts. Deploy their manifests
 and referenced HTML before publishing the new web index; retain older hashes
 for existing clients.
+The API package must include `component-library/catalog.json` and `component-library/ui/`.
+Do not reseed Registry or graph data to deploy a source binding.
 
 Preview frames use `sandbox="allow-scripts"` without `allow-same-origin`.
 Restrictive CSP blocks network connections, child frames, objects, forms and

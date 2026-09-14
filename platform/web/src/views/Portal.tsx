@@ -8,6 +8,8 @@ import { sock, WsEvent } from '../lib';
 import DiagramPreview from '../portal/DiagramPreview';
 import type { PortalDiagram } from '../portal/diagram';
 import ReactComponentPreview from '../portal/ReactComponentPreview';
+import VersionComponentDetail from '../portal/VersionComponentDetail';
+import type { Binding } from '../../portal-versions/client';
 import { loadReactCatalog, usageSnippet, type ReactCatalog } from '../portal/reactCatalog';
 import ImagePreview from '../portal/ImagePreview';
 import { imageSource } from '../portal/image-source';
@@ -20,6 +22,7 @@ type Card = {
   id: string; label: string; category: string | null; name: string; status: Status; rawStatus?: string | null;
   version?: string | null; owner?: string | null; brief?: string; related: Related; computedBy: string;
   termCategory?: string | null; meta?: ScreenMeta | null;
+  implementationStatus?: 'reference' | 'placeholder' | 'unlinked';
 };
 type ChainItem = { id: string; label: string; name: string; version?: string | null; status: string; rawStatus?: string | null; current: boolean };
 type NeighborGroup = { rel: string; direction: 'in' | 'out'; count: number; nodes: GNode[] };
@@ -29,7 +32,7 @@ type Detail = Card & {
   props: Record<string, any>; versionChain: ChainItem[]; neighbors: NeighborGroup[]; impactSupported: boolean;
   publishable: boolean; publishTarget: { recordType: string; subtype: string } | null; mapping: Mapping | null;
   registry: RegistryInfo | null; backend: string; alsoIn?: string[]; elapsedMs?: number;
-  visual?: PortalDiagram | { kind: 'empty'; reason: string; note: string };
+  visual?: PortalDiagram | Binding | { kind: 'empty'; reason: string; note: string };
 };
 type ScreenNode = GNode & { channel?: string | null };
 type Impact = {
@@ -219,6 +222,9 @@ function AssetCard({ c, active, onOpen }: { c: Card; active: boolean; onOpen: (i
           {c.version ? `v${c.version}` : 'v —'}</span>
       </div>
       <div className="text-sm font-semibold truncate" title={c.name}>{c.name}</div>
+      {c.implementationStatus && <span className={`portal-implementation-status is-${c.implementationStatus}`}>
+        {c.implementationStatus === 'reference' ? 'React 소스 연결' : c.implementationStatus === 'placeholder' ? '볼륨 테스트용 더미' : '소스 미연결'}
+      </span>}
       <div className="text-[11px] text-slate-500 truncate" title={c.brief}>{c.brief || ' '}</div>
       <div className="text-[11px] text-slate-500">Owner <span className="text-slate-700">{c.owner || '—'}</span></div>
       <RelatedChips rel={c.related} />
@@ -392,7 +398,13 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
         <ImagePreview props={props} name={d.name} />
         {d.label === 'Screen' && !imageSource(props, d.name) &&
           <p className="portal-preview-note">화면 원본 이미지가 아직 연결되지 않았습니다. 아래 다이어그램은 등록된 화면 이동 관계입니다.</p>}
-        {!isTerm && (d.visual?.kind === 'diagram' ? <FlowPreview visual={d.visual} name={d.name} /> :
+        {d.visual?.kind === 'react-component' && d.versionChain.length > 1 &&
+          <nav className="portal-version-tabs" aria-label="컴포넌트 버전 선택">
+            {d.versionChain.map(c => <button type="button" key={c.id} aria-current={c.current ? 'page' : undefined}
+              aria-pressed={c.current} onClick={() => onOpen(c.id)}>v{c.version}</button>)}
+          </nav>}
+        {!isTerm && (d.visual?.kind === 'react-component' ? <VersionComponentDetail binding={d.visual} /> :
+          d.visual?.kind === 'diagram' ? <FlowPreview visual={d.visual} name={d.name} /> :
           !imageSource(props, d.name) && <section className="portal-unlinked" aria-label="미리보기 연결 상태">
             <h3>{d.visual?.kind === 'empty' ? d.visual.reason : '이 자산의 미리보기를 아직 확인하지 못했습니다.'}</h3>
             <p>{d.visual?.kind === 'empty' ? d.visual.note : '자산의 그림·순서 데이터가 없거나 이전 API 응답입니다. 속성만으로 화면을 임의 생성하지 않습니다.'}</p>
@@ -756,8 +768,8 @@ export default function Portal() {
             <input placeholder="이름 · 설명 · ID 검색" value={q} onChange={event => setQ(event.target.value)} /></label>
           <span className="portal-count">{showCode ? catalog ? `${shownCode.length}개` : '불러오는 중…' : loading ? '불러오는 중…' : `${shown.length}개`}</span>
           {cat === 'Components' && <div className="portal-view-switch" role="group" aria-label="컴포넌트 보기 방식">
-            <button type="button" aria-pressed={showCode} onClick={() => { clearSelection(); setComponentView('react'); setCodeName('Button'); setQ(''); }}>실제 React</button>
-            <button type="button" aria-pressed={!showCode} onClick={() => { clearSelection(); setComponentView('ontology'); setQ(''); }}>설계 메타데이터 <span>{counts.Components ?? '…'}</span></button>
+            <button type="button" aria-pressed={showCode} onClick={() => { clearSelection(); setComponentView('react'); setCodeName('Button'); setQ(''); }}>Studio UI 키트</button>
+            <button type="button" aria-pressed={!showCode} onClick={() => { clearSelection(); setComponentView('ontology'); setQ(''); }}>버전별 컴포넌트 <span>{counts.Components ?? '…'}</span></button>
           </div>}
         </div>
         {showCode ? <>
@@ -768,7 +780,7 @@ export default function Portal() {
           {catalog && !shownCode.length && <p className="portal-empty">검색 결과가 없습니다.</p>}
         </> : <>
           <p className="portal-source-note">등록된 온톨로지 · {listMeta?.backend === 'neptune' ? 'Neptune' : 'Local 개발 데이터'}
-            {cat === 'Components' && ' · 코드가 연결되지 않은 항목도 포함됩니다.'}</p>
+            {cat === 'Components' && ` · React 소스 연결 ${cards.filter(c => c.implementationStatus === 'reference').length}개 · 더미 ${cards.filter(c => c.implementationStatus === 'placeholder').length}개 · 코드가 연결되지 않은 항목도 포함됩니다.`}</p>
           {listMeta?.note && <p className="portal-source-note">{listMeta.note}</p>}
           {err && <div className="portal-error" role="alert">{err} <button type="button" onClick={() => loadCards(cat)}>다시 조회</button></div>}
           {impactErr && <p className="portal-error" role="alert">{impactErr}</p>}

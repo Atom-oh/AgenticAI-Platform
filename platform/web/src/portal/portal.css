@@ -135,3 +135,17 @@
   .portal-code-thumbnail { height: 224px; }
   .portal-code-thumbnail iframe { height: 224px; }
 }
+.portal-implementation-status { display: inline-flex; align-self: flex-start; padding: 2px 6px; border-radius: 4px; background: #edf2ef; font-size: 11px; color: #52685e; }
+.portal-implementation-status.is-reference { background: #e2f3ea; color: #156143; }
+.portal-implementation-status.is-placeholder { background: #f3eee7; color: #795c38; }
+.portal-version-detail { margin: 14px 0; min-width: 0; }
+.portal-version-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.portal-version-tabs button, .portal-version-source button { border: 1px solid #c3d7cc; padding: 6px 10px; border-radius: 6px; background: white; color: #315744; font-size: 12px; }
+.portal-version-tabs button[aria-pressed="true"] { background: #155e47; color: white; border-color: #155e47; }
+.portal-version-source { min-width: 0; }
+.portal-version-source label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.portal-version-source select { max-width: 100%; padding: 6px; border: 1px solid #c3d7cc; border-radius: 5px; }
+.portal-version-source pre { max-height: 480px; overflow: auto; }
+.portal-version-source button { margin: 8px 8px 0 0; }
+.portal-version-detail table { width: 100%; border-collapse: collapse; font-size: 12px; overflow-wrap: anywhere; }
+.portal-version-detail th, .portal-version-detail td { padding: 6px; text-align: left; border-bottom: 1px solid #e2e9e5; vertical-align: top; }

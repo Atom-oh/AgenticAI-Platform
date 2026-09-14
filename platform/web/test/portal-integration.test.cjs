@@ -203,7 +203,7 @@ function requestKey(action, payload) { return `${action}:${payload.id || payload
 async function flushUi(page) {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
-async function mount(t) {
+async function mount(t, versionRenderer) {
   const assets = await prepare();
   const browser = await chromium.launch({
     headless: true, executablePath: process.env.WORKSPACE_CHROMIUM,
@@ -225,6 +225,12 @@ async function mount(t) {
     if (url.pathname === '/test-app.js') return route.fulfill({ contentType: 'text/javascript', body: assets.script });
     if (url.pathname === '/test-app.css') return route.fulfill({ contentType: 'text/css', body: assets.css });
     if (url.pathname === '/test-react-catalog.json') return route.fulfill({ contentType: 'application/json', body: JSON.stringify(CATALOG) });
+    if (versionRenderer && url.pathname === '/portal-renderers/versions/index.json') return route.fulfill({
+      contentType: 'application/json', body: JSON.stringify(versionRenderer.manifest),
+    });
+    if (versionRenderer && url.pathname === `/portal-renderers/versions/${versionRenderer.manifest.renderer.file}`) return route.fulfill({
+      contentType: 'text/html', body: versionRenderer.html,
+    });
     if (url.pathname === '/portal-renderers/mermaid/index.json') return route.fulfill({
       contentType: 'application/json', body: JSON.stringify(assets.renderer.manifest),
     });
@@ -304,6 +310,39 @@ async function openAsset(page, id) {
   return aside;
 }
 
+test('ontology detail displays its exact React implementation and source through the shipped Portal', { timeout: 60_000 }, async t => {
+  const versionRenderer = await require('../portal-versions/build.cjs').buildRenderer({ write: false });
+  const { page, hold } = await mount(t, versionRenderer);
+  await library(page).getByRole('button', { name: /^버전별 컴포넌트/ }).click();
+  const held = hold('portal_detail', { id: 'CMP-Button-v2' });
+  await assetCard(page, 'CMP-Button-v2').click();
+  await held.seen;
+  const c = versionRenderer.manifest.catalog.components.find(c => c.id === 'CMP-Button-v2');
+  const value = detail(c.id);
+  value.version = c.version;
+  value.implementationStatus = 'reference';
+  value.visual = { kind: 'react-component', id: c.id, name: c.name, version: c.version,
+    exportName: c.exportName, sourceHash: c.sourceHash, package: versionRenderer.manifest.catalog.package };
+  await held.release(value);
+  await page.locator('[data-version-state="rendered"]').waitFor();
+  assert.equal(new URL(page.url()).hash, '#/portal?id=CMP-Button-v2');
+  const frame = page.frameLocator('iframe[data-portal-version]');
+  await frame.getByRole('button', { name: '가상 신청 확인', exact: true }).click();
+  await frame.getByText('확인 횟수: 1', { exact: true }).waitFor();
+  if (process.env.PORTAL_QA_ARTIFACT_DIR) {
+    await fs.mkdir(process.env.PORTAL_QA_ARTIFACT_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.PORTAL_QA_ARTIFACT_DIR, 'component-desktop.png'), fullPage: true });
+  }
+  await page.getByRole('button', { name: /^React 소스/ }).click();
+  assert.equal(await page.locator('.portal-version-source pre').textContent(), c.files.find(f => f.path === c.entry).content);
+  assert.equal(await page.locator('.portal-unlinked').count(), 0);
+  if (process.env.PORTAL_QA_ARTIFACT_DIR) {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.portal-version-detail').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(process.env.PORTAL_QA_ARTIFACT_DIR, 'component-mobile-source.png'), fullPage: true });
+  }
+});
+
 test('Korean category navigation and explicit React catalog route to separate details', { timeout: 60_000 }, async t => {
   const { page, calls } = await mount(t);
   assert.equal(await page.title(), 'Portal integration fixture');
@@ -312,7 +351,7 @@ test('Korean category navigation and explicit React catalog route to separate de
   assert.equal(await navigation(page).getByRole('button').count(), CATEGORIES.length);
   for (const [, name] of CATEGORIES) assert.equal(await navigation(page).getByRole('button', { name: new RegExp('^' + name) }).count(), 1);
   assert.equal(await library(page).locator('.portal-code-card').count(), 15);
-  assert.equal(await library(page).getByRole('button', { name: '실제 React', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await library(page).getByRole('button', { name: 'Studio UI 키트', exact: true }).getAttribute('aria-pressed'), 'true');
   await library(page).getByRole('button', { name: /입력 필드.*Input/ }).click();
   const code = page.getByRole('complementary', { name: 'Input React 컴포넌트 상세' });
   await code.waitFor();
@@ -336,7 +375,7 @@ test('Korean category navigation and explicit React catalog route to separate de
 
 test('legacy Component metadata stays code-unlinked until explicitly opening the same-name platform example', { timeout: 45_000 }, async t => {
   const { page, calls } = await mount(t);
-  await library(page).getByRole('button', { name: /^설계 메타데이터/ }).click();
+  await library(page).getByRole('button', { name: /^버전별 컴포넌트/ }).click();
   const legacy = await openAsset(page, 'CMP-Button-v2');
   await legacy.getByRole('heading', { name: LEGACY.reason }).waitFor();
   await legacy.getByText(LEGACY.note, { exact: true }).waitFor();
@@ -429,16 +468,16 @@ test('late category and detail responses cannot replace a newer selection or reo
 
 test('late detail failures do not overwrite actual-code mode or the current design asset', { timeout: 45_000 }, async t => {
   const { page, hold } = await mount(t);
-  await library(page).getByRole('button', { name: /^설계 메타데이터/ }).click();
+  await library(page).getByRole('button', { name: /^버전별 컴포넌트/ }).click();
   const lateFailure = hold('portal_detail', { id: 'CMP-Button-v2' });
   await assetCard(page, 'CMP-Button-v2').click(); await lateFailure.seen;
-  await library(page).getByRole('button', { name: '실제 React', exact: true }).click();
+  await library(page).getByRole('button', { name: 'Studio UI 키트', exact: true }).click();
   const code = page.getByRole('complementary', { name: 'Button React 컴포넌트 상세' });
   await code.waitFor();
   await lateFailure.release({ type: 'error', ok: false, error: '이전 요청 오류는 표시되면 안 됩니다' });
   assert.equal(await code.isVisible(), true);
   assert.equal(await page.getByRole('alert').count(), 0);
-  await library(page).getByRole('button', { name: /^설계 메타데이터/ }).click();
+  await library(page).getByRole('button', { name: /^버전별 컴포넌트/ }).click();
   const lateSuccess = hold('portal_detail', { id: 'CMP-Button-v2' });
   await assetCard(page, 'CMP-Button-v2').click(); await lateSuccess.seen;
   const input = await openAsset(page, 'CMP-Input-v3');
