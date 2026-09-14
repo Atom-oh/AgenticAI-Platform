@@ -43,7 +43,7 @@ export function validateManifest(input: unknown): Manifest {
   return { schemaVersion: 1, catalog, renderer: { file: r.file as string, sha256: r.sha256, bytes: r.bytes } };
 }
 
-async function readBytes(url: string, maximum: number, mime: string, fetcher: typeof fetch): Promise<Uint8Array> {
+export async function readBytes(url: string, maximum: number, mime: string, fetcher: typeof fetch): Promise<Uint8Array> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LIMITS.timeout);
   try {

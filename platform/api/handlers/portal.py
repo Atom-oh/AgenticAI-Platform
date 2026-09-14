@@ -33,6 +33,7 @@ from common.ctx import Ctx
 from common.log import log_event
 from handlers.core import GRAPH_BACKEND, lazy_store
 from handlers.portal_visual import build_visual
+from handlers.component_sources import implementation_status
 
 COMPUTED_BY = "graph-traversal"
 TIER_BADGE = "Tier 0/1 전용"
@@ -186,6 +187,8 @@ def _card(n, related: Dict[str, int], owner: Optional[str], meta: Optional[dict]
             "owner": owner, "brief": _brief(n), "related": related, "computedBy": COMPUTED_BY}
     if n.label == "UXTerm":
         card["termCategory"] = p.get("category")
+    if n.label == "Component":
+        card["implementationStatus"] = implementation_status(n.id, p)
     if meta is not None:
         card["meta"] = meta
     return card

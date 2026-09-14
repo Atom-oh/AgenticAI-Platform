@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "predev": "node ../react-kit/build-samples.cjs && node portal-renderer/build.cjs && node portal-react/build.cjs",
+    "predev": "node ../react-kit/build-samples.cjs && node portal-renderer/build.cjs && node portal-react/build.cjs && node portal-versions/build.cjs",
     "dev": "vite",
-    "prebuild": "node ../react-kit/build-samples.cjs && node portal-renderer/build.cjs && node portal-react/build.cjs",
+    "prebuild": "node ../react-kit/build-samples.cjs && node portal-renderer/build.cjs && node portal-react/build.cjs && node portal-versions/build.cjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },

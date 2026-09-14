@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from hashlib import sha256
+from handlers.component_sources import binding, implementation_status
 
 MAX_NODES = 25
 MAX_EDGES = 50
@@ -207,6 +208,12 @@ def build_visual(node, props: dict, neighborhood: dict, screen_meta: dict | None
     if node.label in _RELATIONS:
         return _relations(node, neighborhood, neighbors_complete)
     if node.label == "Component":
+        implementation = binding(node.id, props)
+        if implementation:
+            return implementation
+        if implementation_status(node.id, props) == "placeholder":
+            return _empty("볼륨 테스트용 더미 컴포넌트입니다.",
+                          "그래프 규모 검증을 위한 메타데이터입니다. React 구현이나 배포 패키지가 없습니다.")
         return _empty("실제 React 컴포넌트 코드가 연결되지 않았습니다.",
                       "기존 @atom/ui 메타데이터는 실제 패키지 구현이 아닙니다. 다른 컴포넌트 패키지로 자동 대체하지 않습니다.")
     return _empty("이 자산 유형의 시각 미리보기는 지원하지 않습니다.",

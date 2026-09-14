@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import runpy
 from pathlib import Path
 
 import pytest
@@ -258,6 +259,81 @@ def test_component_legacy_metadata_is_explicitly_code_unlinked(detail, monkeypat
     assert "@studio/approved-ui" not in json.dumps(ev, ensure_ascii=False)
     assert ev["registry"]["record"] == record
     assert ev["status"] == "APPROVED" and ev["publishTarget"] == {"recordType": "CUSTOM", "subtype": "COMPONENT"}
+
+
+def test_named_component_version_has_exact_source_binding_without_changing_approval(detail, monkeypatch):
+    record = {"payload": {"module": "@atom/ui/select"}, "status": "PENDING_APPROVAL"}
+    monkeypatch.setattr(portal, "_registry_view", lambda n: {"record": record, "available": True})
+    ev = detail([Node("CMP-Select-v2", "Component", {
+        "name": "Select", "version": "2.0.0", "approvalStatus": "DRAFT",
+    })])
+    visual = ev["visual"]
+    assert visual["kind"] == "react-component"
+    assert visual["id"] == "CMP-Select-v2"
+    assert visual["version"] == "2.0.0"
+    assert visual["package"] == "@atom/portal-components"
+    assert visual["exportName"] == "SelectV2"
+    assert len(visual["sourceHash"]) == 64
+    assert ev["implementationStatus"] == "reference"
+    assert ev["status"] == "DRAFT"
+    assert ev["registry"]["record"] == record
+
+
+@pytest.mark.parametrize("node_id,name,version", [
+    ("CMP-Select-v2", "Select", "1.0.0"),
+    ("CMP-Select-v2", "Button", "2.0.0"),
+    ("CMP-Select-v99", "Select", "99.0.0"),
+    ("CMP-external", "Select", "2.0.0"),
+    ("CMP-Select-v2", "Select", None),
+])
+def test_component_source_never_falls_back_by_name(detail, node_id, name, version):
+    ev = detail([Node(node_id, "Component", {"name": name, "version": version})])
+    assert ev["visual"]["kind"] == "empty"
+    assert ev["implementationStatus"] == "unlinked"
+
+
+def test_generated_component_is_explicit_placeholder(detail):
+    ev = detail([Node("CMP-GEN-22", "Component", {"name": "Widget22", "version": "1.0.0"})])
+    assert ev["implementationStatus"] == "placeholder"
+    assert ev["visual"]["kind"] == "empty"
+    assert "더미" in ev["visual"]["reason"]
+
+
+@pytest.mark.parametrize("node_id,props", [
+    ("CMP-GEN-00", {"name": "Widget0", "version": "1.0.0"}),
+    ("CMP-GEN-99", {"name": "Widget99", "version": "1.0.0"}),
+    ("CMP-GEN-22", {"name": "Widget22", "version": "2.0.0"}),
+])
+def test_unrecognized_generated_identity_remains_unlinked(detail, node_id, props):
+    assert detail([Node(node_id, "Component", props)])["implementationStatus"] == "unlinked"
+
+
+def test_every_named_seed_component_has_source_coverage(tmp_path):
+    from handlers.component_sources import binding
+    generator = runpy.run_path(str(ROOT / "seed/generate.py"))
+    generator["main"].__globals__["OUT"] = tmp_path
+    generator["main"]()
+    nodes = [json.loads(line) for line in (tmp_path / "nodes.jsonl").read_text().splitlines()]
+    named = [n for n in nodes if n["label"] == "Component" and not n["id"].startswith("CMP-GEN-")]
+    assert named
+    assert all(binding(n["id"], n["props"]) for n in named)
+
+
+def test_source_binding_fails_closed_when_packaged_source_is_missing(tmp_path, monkeypatch):
+    import shutil
+    from handlers import component_sources
+    original = component_sources._root()
+    shutil.copytree(original, tmp_path / "library")
+    monkeypatch.setattr(component_sources, "_root", lambda: tmp_path / "library")
+    component_sources.catalog.cache_clear()
+    try:
+        props = {"name": "Select", "version": "2.0.0"}
+        assert component_sources.binding("CMP-Select-v2", props)
+        (tmp_path / "library/ui/Select/v2.tsx").unlink()
+        component_sources.catalog.cache_clear()
+        assert component_sources.binding("CMP-Select-v2", props) is None
+    finally:
+        component_sources.catalog.cache_clear()
 
 
 @pytest.mark.parametrize("label", ["UXTerm", "Department"])

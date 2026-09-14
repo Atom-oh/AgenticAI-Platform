@@ -1,0 +1,359 @@
+{
+  "schemaVersion": 1,
+  "package": "@atom/portal-components",
+  "sharedFiles": [
+    "ui/shared.tsx",
+    "ui/styles.css"
+  ],
+  "components": [
+    {
+      "id": "CMP-Button-v1",
+      "name": "Button",
+      "version": "1.0.0",
+      "exportName": "ButtonV1",
+      "entry": "ui/Button/v1.tsx",
+      "description": "Platform reference implementation of Button version 1.",
+      "changes": "Initial label, primary/ghost appearance, and size contract.",
+      "props": {
+        "label": "string (required)",
+        "variant": "'primary' | 'ghost' (optional)",
+        "size": "'sm' | 'md' | 'lg' (optional)",
+        "onClick": "() => void (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { ButtonV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [count, setCount] = useState(0);const [variant, setVariant] = useState<'primary'|'ghost'>('primary');\n  return (<div><ButtonV1 label=\"가상 신청 확인\" variant={variant} onClick={()=>setCount(n=>n+1)}/><div className=\"apc-demo-controls\"><label>버튼 표현 <select value={variant} onChange={e=>setVariant(e.target.value as typeof variant)}><option value=\"primary\">기본</option><option value=\"ghost\">고스트</option></select></label></div><output>확인 횟수: {count}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Button-v2",
+      "name": "Button",
+      "version": "2.0.0",
+      "exportName": "ButtonV2",
+      "entry": "ui/Button/v2.tsx",
+      "description": "Platform reference implementation of Button version 2.",
+      "changes": "Replaces variant with kind; adds secondary/danger actions and disabled state.",
+      "props": {
+        "label": "string (required)",
+        "kind": "'primary' | 'secondary' | 'danger' (required)",
+        "disabled": "boolean (optional)",
+        "onClick": "() => void (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { ButtonV2 } from '@atom/portal-components';\n\nexport function Example() {\n  const [count, setCount] = useState(0);const [disabled, setDisabled] = useState(false);\n  return (<div><ButtonV2 label=\"가상 신청 확인\" kind=\"primary\" disabled={disabled} onClick={()=>setCount(n=>n+1)}/><div className=\"apc-demo-controls\"><label><input type=\"checkbox\" checked={disabled} onChange={e=>setDisabled(e.target.checked)}/>버튼 비활성화</label></div><output>확인 횟수: {count}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Button-v3",
+      "name": "Button",
+      "version": "3.0.0",
+      "exportName": "ButtonV3",
+      "entry": "ui/Button/v3.tsx",
+      "description": "Platform reference implementation of Button version 3.",
+      "changes": "Separates visual variant from semantic tone; restores explicit size control.",
+      "props": {
+        "label": "string (required)",
+        "variant": "'solid' | 'outline' | 'ghost' (required)",
+        "tone": "'brand' | 'neutral' | 'critical' (required)",
+        "size": "'sm' | 'md' | 'lg' (optional)",
+        "disabled": "boolean (optional)",
+        "onClick": "() => void (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { ButtonV3 } from '@atom/portal-components';\n\nexport function Example() {\n  const [count, setCount] = useState(0);const [disabled, setDisabled] = useState(false);\n  return (<div><ButtonV3 label=\"가상 신청 확인\" variant=\"outline\" tone=\"brand\" size=\"md\" disabled={disabled} onClick={()=>setCount(n=>n+1)}/><div className=\"apc-demo-controls\"><label><input type=\"checkbox\" checked={disabled} onChange={e=>setDisabled(e.target.checked)}/>버튼 비활성화</label></div><output>확인 횟수: {count}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Input-v1",
+      "name": "Input",
+      "version": "1.0.0",
+      "exportName": "InputV1",
+      "entry": "ui/Input/v1.tsx",
+      "description": "Platform reference implementation of Input version 1.",
+      "changes": "Controlled text value and change callback.",
+      "props": {
+        "label": "string (required)",
+        "value": "string (required)",
+        "onChange": "(value: string) => void (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { InputV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [value, setValue] = useState('');\n  return (<div><InputV1 label=\"가상 신청명\" value={value} onChange={setValue} /><div className=\"apc-demo-controls\"></div><output>현재 입력: {value}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Input-v2",
+      "name": "Input",
+      "version": "2.0.0",
+      "exportName": "InputV2",
+      "entry": "ui/Input/v2.tsx",
+      "description": "Platform reference implementation of Input version 2.",
+      "changes": "Adds placeholder and text, number, or password input types.",
+      "props": {
+        "label": "string (required)",
+        "value": "string (required)",
+        "onChange": "(value: string) => void (required)",
+        "placeholder": "string (optional)",
+        "type": "'text' | 'number' | 'password' (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { InputV2 } from '@atom/portal-components';\n\nexport function Example() {\n  const [value, setValue] = useState('');\n  return (<div><InputV2 label=\"가상 신청명\" value={value} onChange={setValue} placeholder=\"합성 신청명을 입력하세요\" type=\"text\"/><div className=\"apc-demo-controls\"></div><output>현재 입력: {value}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Input-v3",
+      "name": "Input",
+      "version": "3.0.0",
+      "exportName": "InputV3",
+      "entry": "ui/Input/v3.tsx",
+      "description": "Platform reference implementation of Input version 3.",
+      "changes": "Adds telephone input, visible prefix, and accessible error text.",
+      "props": {
+        "label": "string (required)",
+        "value": "string (required)",
+        "onChange": "(value: string) => void (required)",
+        "placeholder": "string (optional)",
+        "type": "'text' | 'number' | 'password' | 'tel' (optional)",
+        "error": "string (optional)",
+        "prefix": "string (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { InputV3 } from '@atom/portal-components';\n\nexport function Example() {\n  const [value, setValue] = useState('');const [error, setError] = useState(false);\n  return (<div><InputV3 label=\"가상 신청명\" value={value} onChange={setValue} placeholder=\"합성 신청명을 입력하세요\" type=\"text\" prefix=\"신청\" error={error ? \"입력 내용을 다시 확인하세요.\" : undefined}/><div className=\"apc-demo-controls\"><label><input type=\"checkbox\" checked={error} onChange={e=>setError(e.target.checked)}/>오류 표시</label></div><output>현재 입력: {value}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Table-v1",
+      "name": "Table",
+      "version": "1.0.0",
+      "exportName": "TableV1",
+      "entry": "ui/Table/v1.tsx",
+      "description": "Platform reference implementation of Table version 1.",
+      "changes": "Renders declared columns and row values.",
+      "props": {
+        "columns": "{ key: string, header: string }[] (required)",
+        "rows": "{  }[] (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { TableV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [empty, setEmpty] = useState(false);\n  return (<div><TableV1 columns={[{key:\"name\",header:\"항목\"},{key:\"amount\",header:\"금액\"}]} rows={empty ? [] : [{name:\"가상 A\",amount:20000},{name:\"가상 B\",amount:10000}]} /><label><input type=\"checkbox\" checked={empty} onChange={e=>setEmpty(e.target.checked)}/>빈 목록 보기</label></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Table-v2",
+      "name": "Table",
+      "version": "2.0.0",
+      "exportName": "TableV2",
+      "entry": "ui/Table/v2.tsx",
+      "description": "Platform reference implementation of Table version 2.",
+      "changes": "Adds stable column sorting and explicit empty-state text.",
+      "props": {
+        "columns": "{ key: string, header: string }[] (required)",
+        "rows": "{  }[] (required)",
+        "sortable": "boolean (optional)",
+        "emptyText": "string (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { TableV2 } from '@atom/portal-components';\n\nexport function Example() {\n  const [empty, setEmpty] = useState(false);\n  return (<div><TableV2 columns={[{key:\"name\",header:\"항목\"},{key:\"amount\",header:\"금액\"}]} rows={empty ? [] : [{name:\"가상 A\",amount:20000},{name:\"가상 B\",amount:10000}]} sortable emptyText=\"등록된 가상 항목이 없습니다.\"/><label><input type=\"checkbox\" checked={empty} onChange={e=>setEmpty(e.target.checked)}/>빈 목록 보기</label></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Modal-v1",
+      "name": "Modal",
+      "version": "1.0.0",
+      "exportName": "ModalV1",
+      "entry": "ui/Modal/v1.tsx",
+      "description": "Platform reference implementation of Modal version 1.",
+      "changes": "Controlled modal visibility, keyboard dismissal, and focus return.",
+      "props": {
+        "open": "boolean (required)",
+        "title": "string (required)",
+        "onClose": "() => void (required)",
+        "children": "node (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { ModalV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [open, setOpen] = useState(false);\n  return (<div><button type=\"button\" onClick={()=>setOpen(true)}>대화상자 열기</button><ModalV1 open={open} title=\"가상 신청 확인\" onClose={()=>setOpen(false)} ><p>합성 예제입니다. 실제 신청은 실행하지 않습니다.</p><input aria-label=\"가상 확인 메모\"/><button type=\"button\" onClick={()=>setOpen(false)}>확인 후 닫기</button></ModalV1></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Modal-v2",
+      "name": "Modal",
+      "version": "2.0.0",
+      "exportName": "ModalV2",
+      "entry": "ui/Modal/v2.tsx",
+      "description": "Platform reference implementation of Modal version 2.",
+      "changes": "Adds small, medium, and large dialog sizes.",
+      "props": {
+        "open": "boolean (required)",
+        "title": "string (required)",
+        "onClose": "() => void (required)",
+        "children": "node (optional)",
+        "size": "'sm' | 'md' | 'lg' (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { ModalV2 } from '@atom/portal-components';\n\nexport function Example() {\n  const [open, setOpen] = useState(false);\n  return (<div><button type=\"button\" onClick={()=>setOpen(true)}>대화상자 열기</button><ModalV2 open={open} title=\"가상 신청 확인\" onClose={()=>setOpen(false)} size=\"lg\"><p>합성 예제입니다. 실제 신청은 실행하지 않습니다.</p><input aria-label=\"가상 확인 메모\"/><button type=\"button\" onClick={()=>setOpen(false)}>확인 후 닫기</button></ModalV2></div>);\n}\n"
+    },
+    {
+      "id": "CMP-DatePicker-v1",
+      "name": "DatePicker",
+      "version": "1.0.0",
+      "exportName": "DatePickerV1",
+      "entry": "ui/DatePicker/v1.tsx",
+      "description": "Platform reference implementation of DatePicker version 1.",
+      "changes": "Controlled native date input with ISO value.",
+      "props": {
+        "label": "string (required)",
+        "value": "string (required)",
+        "onChange": "(iso: string) => void (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { DatePickerV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [value, setValue] = useState('2026-09-14');\n  return (<div><DatePickerV1 label=\"가상 검토일\" value={value} onChange={setValue} /><output>검토일: {value}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-DatePicker-v2",
+      "name": "DatePicker",
+      "version": "2.0.0",
+      "exportName": "DatePickerV2",
+      "entry": "ui/DatePicker/v2.tsx",
+      "description": "Platform reference implementation of DatePicker version 2.",
+      "changes": "Adds native minimum and maximum date constraints.",
+      "props": {
+        "label": "string (required)",
+        "value": "string (required)",
+        "onChange": "(iso: string) => void (required)",
+        "min": "string (optional)",
+        "max": "string (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { DatePickerV2 } from '@atom/portal-components';\n\nexport function Example() {\n  const [value, setValue] = useState('2026-09-14');\n  return (<div><DatePickerV2 label=\"가상 검토일\" value={value} onChange={setValue} min=\"2026-01-01\" max=\"2026-12-31\"/><output>검토일: {value}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Select-v1",
+      "name": "Select",
+      "version": "1.0.0",
+      "exportName": "SelectV1",
+      "entry": "ui/Select/v1.tsx",
+      "description": "Platform reference implementation of Select version 1.",
+      "changes": "Controlled native select with labeled options.",
+      "props": {
+        "label": "string (required)",
+        "options": "{ value: string, label: string }[] (required)",
+        "value": "string (required)",
+        "onChange": "(value: string) => void (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { SelectV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [value, setValue] = useState('');\n  return (<div><SelectV1 label=\"가상 업무\" value={value} onChange={setValue} options={[{value:\"savings\",label:\"저축\"},{value:\"pension\",label:\"연금\"},{value:\"loan\",label:\"대출\"}]} /><output>선택한 업무: {value || \"미선택\"}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Select-v2",
+      "name": "Select",
+      "version": "2.0.0",
+      "exportName": "SelectV2",
+      "entry": "ui/Select/v2.tsx",
+      "description": "Platform reference implementation of Select version 2.",
+      "changes": "Adds option search and placeholder; filtering preserves the selected value.",
+      "props": {
+        "label": "string (required)",
+        "options": "{ value: string, label: string }[] (required)",
+        "value": "string (required)",
+        "onChange": "(value: string) => void (required)",
+        "searchable": "boolean (optional)",
+        "placeholder": "string (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { SelectV2 } from '@atom/portal-components';\n\nexport function Example() {\n  const [value, setValue] = useState('');\n  return (<div><SelectV2 label=\"가상 업무\" value={value} onChange={setValue} options={[{value:\"savings\",label:\"저축\"},{value:\"pension\",label:\"연금\"},{value:\"loan\",label:\"대출\"}]} searchable placeholder=\"업무를 선택하세요\"/><output>선택한 업무: {value || \"미선택\"}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Card-v1",
+      "name": "Card",
+      "version": "1.0.0",
+      "exportName": "CardV1",
+      "entry": "ui/Card/v1.tsx",
+      "description": "Platform reference implementation of Card version 1.",
+      "changes": "Titled content section.",
+      "props": {
+        "title": "string (required)",
+        "children": "node (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { CardV1 } from '@atom/portal-components';\n\nexport function Example() {\n  \n  return (<CardV1 title=\"가상 상품 요약\" ><p>합성 상품의 설명을 표시하는 영역입니다.</p></CardV1>);\n}\n"
+    },
+    {
+      "id": "CMP-Card-v2",
+      "name": "Card",
+      "version": "2.0.0",
+      "exportName": "CardV2",
+      "entry": "ui/Card/v2.tsx",
+      "description": "Platform reference implementation of Card version 2.",
+      "changes": "Adds optional elevation and footer content.",
+      "props": {
+        "title": "string (required)",
+        "children": "node (required)",
+        "elevated": "boolean (optional)",
+        "footer": "node (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { CardV2 } from '@atom/portal-components';\n\nexport function Example() {\n  \n  return (<CardV2 title=\"가상 상품 요약\" elevated footer={<p>가상 상품 조건을 표시하는 하단 영역입니다.</p>}><p>합성 상품의 설명을 표시하는 영역입니다.</p></CardV2>);\n}\n"
+    },
+    {
+      "id": "CMP-Tabs-v1",
+      "name": "Tabs",
+      "version": "1.0.0",
+      "exportName": "TabsV1",
+      "entry": "ui/Tabs/v1.tsx",
+      "description": "Platform reference implementation of Tabs version 1.",
+      "changes": "Controlled tab selection with arrow, Home, and End navigation.",
+      "props": {
+        "items": "{ id: string, label: string }[] (required)",
+        "activeId": "string (required)",
+        "onChange": "(id: string) => void (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { TabsV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [activeId, setActiveId] = useState('apply');\n  return (<div><TabsV1 items={[{id:\"apply\",label:\"신청\"},{id:\"review\",label:\"검토\"},{id:\"done\",label:\"완료\"}]} activeId={activeId} onChange={setActiveId} /><p role=\"tabpanel\" aria-label=\"선택한 탭 내용\">현재 단계: {activeId}</p></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Tabs-v2",
+      "name": "Tabs",
+      "version": "2.0.0",
+      "exportName": "TabsV2",
+      "entry": "ui/Tabs/v2.tsx",
+      "description": "Platform reference implementation of Tabs version 2.",
+      "changes": "Adds line and pill visual variants.",
+      "props": {
+        "items": "{ id: string, label: string }[] (required)",
+        "activeId": "string (required)",
+        "onChange": "(id: string) => void (required)",
+        "variant": "'line' | 'pill' (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { TabsV2 } from '@atom/portal-components';\n\nexport function Example() {\n  const [activeId, setActiveId] = useState('apply');\n  return (<div><TabsV2 items={[{id:\"apply\",label:\"신청\"},{id:\"review\",label:\"검토\"},{id:\"done\",label:\"완료\"}]} activeId={activeId} onChange={setActiveId} variant=\"pill\"/><p role=\"tabpanel\" aria-label=\"선택한 탭 내용\">현재 단계: {activeId}</p></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Stepper-v1",
+      "name": "Stepper",
+      "version": "1.0.0",
+      "exportName": "StepperV1",
+      "entry": "ui/Stepper/v1.tsx",
+      "description": "Platform reference implementation of Stepper version 1.",
+      "changes": "Displays the current step by ID and marks preceding steps complete.",
+      "props": {
+        "steps": "{ id: string, label: string }[] (required)",
+        "current": "string (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { StepperV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [step, setStep] = useState(0);const steps = [{id:'apply',label:'신청'},{id:'review',label:'검토'},{id:'done',label:'완료'}];\n  return (<div><StepperV1 steps={steps} current={steps[step].id}/><button type=\"button\" onClick={()=>setStep(n=>(n+1)%steps.length)}>다음 단계</button></div>);\n}\n"
+    },
+    {
+      "id": "CMP-FileUpload-v1",
+      "name": "FileUpload",
+      "version": "1.0.0",
+      "exportName": "FileUploadV1",
+      "entry": "ui/FileUpload/v1.tsx",
+      "description": "Platform reference implementation of FileUpload version 1.",
+      "changes": "Selects and clears local files; reports File[] without uploading.",
+      "props": {
+        "label": "string (required)",
+        "accept": "string (optional)",
+        "onFiles": "(files: File[]) => void (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { FileUploadV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [count, setCount] = useState(0);\n  return (<div><FileUploadV1 label=\"가상 첨부 파일\" accept=\".txt,.pdf\" onFiles={files=>setCount(files.length)}/><output>선택 수: {count}</output></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Badge-v1",
+      "name": "Badge",
+      "version": "1.0.0",
+      "exportName": "BadgeV1",
+      "entry": "ui/Badge/v1.tsx",
+      "description": "Platform reference implementation of Badge version 1.",
+      "changes": "Displays text with neutral, success, warning, critical, or info tone.",
+      "props": {
+        "text": "string (required)",
+        "tone": "'neutral' | 'success' | 'warning' | 'critical' | 'info' (required)"
+      },
+      "usage": "import { useState } from 'react';\nimport { BadgeV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [tone, setTone] = useState<'neutral'|'success'|'warning'|'critical'|'info'>('success');\n  return (<div><BadgeV1 text=\"가상 상태\" tone={tone}/><label>상태 표현 <select value={tone} onChange={e=>setTone(e.target.value as typeof tone)}>{[\"neutral\",\"success\",\"warning\",\"critical\",\"info\"].map(t=><option key={t} value={t}>{t}</option>)}</select></label></div>);\n}\n"
+    },
+    {
+      "id": "CMP-Toast-v1",
+      "name": "Toast",
+      "version": "1.0.0",
+      "exportName": "ToastV1",
+      "entry": "ui/Toast/v1.tsx",
+      "description": "Platform reference implementation of Toast version 1.",
+      "changes": "Displays status or alert text with an optional dismissal callback.",
+      "props": {
+        "message": "string (required)",
+        "tone": "'info' | 'success' | 'warning' | 'error' (required)",
+        "onDismiss": "() => void (optional)"
+      },
+      "usage": "import { useState } from 'react';\nimport { ToastV1 } from '@atom/portal-components';\n\nexport function Example() {\n  const [visible, setVisible] = useState(true);\n  return (<div>{visible ? <ToastV1 message=\"가상 변경 내용을 확인했습니다.\" tone=\"success\" onDismiss={()=>setVisible(false)}/> : <p>알림을 닫았습니다.</p>}</div>);\n}\n"
+    }
+  ]
+}

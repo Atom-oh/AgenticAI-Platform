@@ -39,6 +39,9 @@ for m in registry screengen report agentcore design_loop studio workspace docume
 mkdir -p api-dist/react-kit
 cp react-kit/catalog.json api-dist/react-kit/
 cp -r react-kit/ui api-dist/react-kit/
+mkdir -p api-dist/component-library
+cp component-library/catalog.json api-dist/component-library/
+cp -r component-library/ui api-dist/component-library/
 [ -d skills ] && cp -r skills api-dist/
 # Harness·Registry API는 최신 boto3가 필요하다 (Lambda 기본 boto3에는 없음) — 배포 패키지에 동봉
 pip3 install -q --upgrade --target api-dist boto3 botocore >> "$LOG" 2>&1 || { echo "boto3 vendoring failed"; tail -5 "$LOG"; exit 1; }
