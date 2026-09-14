@@ -59,6 +59,17 @@
 .doc-evidence { padding:14px; border-left:3px solid #008485; background:#f4f9f7; border-radius:0 8px 8px 0; }
 .doc-evidence blockquote { margin:8px 0; white-space:pre-wrap; }
 .doc-divider { border-top:1px solid #dde5e3; padding-top:16px; }
+.doc-app h3.doc-document-title { font-size:23px; line-height:1.4; }
+.doc-template-overview { background:#f0f7f4; border-left:3px solid #008485; padding:14px 16px; border-radius:0 8px 8px 0; gap:10px; }
+.doc-template-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:16px; }
+.doc-template-card { align-content:start; gap:12px; }
+.doc-template-card > h4 { font-size:17px; line-height:1.5; }
+.doc-template-number { font-size:13px; font-weight:700; color:#006c6d; }
+.doc-template-card details { align-self:end; }
+.doc-source-identity { display:grid; gap:5px; padding-bottom:12px; margin-bottom:12px; border-bottom:1px solid #b9d8cf; }
+.doc-source-identity strong { font-size:16px; }
+.doc-source-identity span { color:#556c65; font-size:13px; }
+.doc-source-identity p { font-size:14px; }
 @container documents (min-width:1000px) {
   .doc-library-grid { grid-template-columns:minmax(280px,.7fr) minmax(0,1.65fr); }
   .doc-analysis-grid { grid-template-columns:minmax(280px,.65fr) minmax(0,1.6fr); }

@@ -110,7 +110,16 @@ Identifiers are server generated; create operations require an idempotent
 | PUT `/documents/{id}/permissions` | `{version,readRoles}` → `{document}` |
 | POST `/documents/{id}/archive` | `{version}` → `{document}`; soft archive, no S3 deletion |
 | GET `/documents/{id}/activity?cursor=` | authorized append-only `events`, optional `cursor` |
+| GET `/documents/samples` | `{schemaVersion:1,notice,samples:[{graphRef,title,kind,name,versionLabel,sha256,sections:[{title,text}]}]}`; template preview only, no creation or model calls |
 | POST `/documents/samples` | `{requestId}` → private synthetic example documents; **draft only**, never automatic approval |
+
+The preview and installer use the same server-owned definitions and original-byte
+serialization. Catalog rows describe templates, not installed or approved private
+documents. Any current collection member can preview; only the owner can install.
+The reader shows a template explanation only for synthetic provenance with matching
+reference, kind, filename and original SHA-256. An unmatched historical/uploaded
+source retains its own title and literal paragraphs without substituting catalog
+text. Selected evidence repeats the document title, kind and source version.
 
 Regular uploads cannot claim `synthetic_sample` provenance. The sample installer
 is server-owned and labels every source as synthetic. No real bank material is

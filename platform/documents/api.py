@@ -376,6 +376,10 @@ def _handle(library, method, parts, event, query, *, trusted_sample=False):
                            "actorId": library.scope["actor"], "projectId": library.project_id})
     if parts == ["documents", "references"] and method == "GET":
         return _references(library)
+    if parts == ["documents", "samples"] and method == "GET":
+        from documents.samples import sample_catalog
+        library.assert_current()
+        return _json(200, sample_catalog())
     if parts == ["documents"]:
         if method == "GET":
             return _list(library, query)
