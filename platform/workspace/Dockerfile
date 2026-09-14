@@ -21,6 +21,7 @@ RUN cd react-kit && npm ci --ignore-scripts --no-audit --no-fund
 COPY react-kit ./react-kit
 COPY workspace ./workspace
 COPY workbench ./workbench
+COPY documents ./documents
 COPY engine ./engine
 COPY studio ./studio
 COPY api/common ./common

@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 import time
 from decimal import Decimal
@@ -19,7 +20,8 @@ from decimal import Decimal
 KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership",
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
                    "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
-                   "wb_artifact", "wb_pension", "wb_report", "wb_tool"})
+                   "wb_artifact", "wb_pension", "wb_report", "wb_tool",
+                   "document", "docrevision", "docbinding", "docaudit", "docanalysis", "docdecision"})
 MAX_BLOB_BYTES = 50 * 1024 * 1024
 MAX_RECORD_BYTES = 350_000
 JOB_RETENTION_SECONDS = 30 * 24 * 60 * 60
@@ -191,43 +193,73 @@ class Storage:
             transactions.append({"Put": put})
         for check in checks:
             if (not isinstance(check, dict) or set(check) != {"owner", "kind", "id", "version"}
-                    or type(check["version"]) is not int or check["version"] < 1):
+                    or check["version"] is not None and (type(check["version"]) is not int or check["version"] < 1)):
                 raise ValueError("Invalid transactional version check")
             keys = self._key(check["owner"], check["kind"], check["id"])
             identity = keys["pk"], keys["sk"]
             if identity in seen:
                 raise ValueError("A transaction cannot operate on the same record twice")
             seen.add(identity)
-            transactions.append({"ConditionCheck": {
+            condition = {
                 "TableName": table.name, "Key": keys, "ConditionExpression": "#version = :version",
                 "ExpressionAttributeNames": {"#version": "version"},
                 "ExpressionAttributeValues": {":version": check["version"]},
-            }})
-        try:
-            table.meta.client.transact_write_items(TransactItems=transactions)
-        except table.meta.client.exceptions.TransactionCanceledException as error:
-            reasons = error.response.get("CancellationReasons", [])
-            if any(reason.get("Code") in ("ConditionalCheckFailed", "TransactionConflict") for reason in reasons):
-                raise Conflict("The resource has changed") from error
-            raise
+            }
+            if check["version"] is None:
+                condition.update(ConditionExpression="attribute_not_exists(#pk)", ExpressionAttributeNames={"#pk": "pk"})
+                condition.pop("ExpressionAttributeValues")
+            transactions.append({"ConditionCheck": condition})
+        for attempt in range(5):
+            try:
+                table.meta.client.transact_write_items(TransactItems=copy.deepcopy(transactions))
+                break
+            except table.meta.client.exceptions.TransactionCanceledException as error:
+                reasons = error.response.get("CancellationReasons", [])
+                codes = [reason.get("Code") if isinstance(reason, dict) else None
+                         for reason in reasons] if isinstance(reasons, list) else []
+                # A canceled transaction wrote nothing. Retry only proven
+                # contention, with the same data, versions and authority checks.
+                # Actual predicate failures must never be refreshed or bypassed.
+                contention = (len(codes) == len(transactions) and "TransactionConflict" in codes
+                              and all(code in ("None", "TransactionConflict") for code in codes))
+                if contention and attempt < 4:
+                    time.sleep(random.uniform(.025 * 2 ** attempt, .05 * 2 ** attempt))
+                    continue
+                if any(code in ("ConditionalCheckFailed", "TransactionConflict") for code in codes):
+                    raise Conflict("The resource has changed") from error
+                raise
         return [_plain(data) for data, _, _ in prepared]
 
-    def list_page(self, owner: str, kind: str, limit: int = 100, cursor: str | None = None) -> dict:
+    def list_page(self, owner: str, kind: str, limit: int = 100, cursor: str | None = None, *, prefix: str = "") -> dict:
         from boto3.dynamodb.conditions import Key
         if kind not in KINDS or type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("Invalid list limit")
+        if not isinstance(prefix, str) or prefix and not _ID.fullmatch(prefix):
+            raise ValueError("Invalid list prefix")
         partition = f"owner#{_owner_hash(owner)}"
+        sort_prefix = f"{kind}#{prefix}"
         kwargs = {
-            "KeyConditionExpression": Key("pk").eq(partition) & Key("sk").begins_with(f"{kind}#"),
+            "KeyConditionExpression": Key("pk").eq(partition) & Key("sk").begins_with(sort_prefix),
             "ConsistentRead": True, "Limit": limit, "ScanIndexForward": True,
         }
         if cursor:
             try:
                 if not isinstance(cursor, str) or len(cursor) > 1000:
                     raise ValueError()
-                last_key = json.loads(base64.b64decode(cursor.encode(), altchars=b"-_", validate=True))
+                decoded = json.loads(base64.b64decode(cursor.encode(), altchars=b"-_", validate=True))
+                if not isinstance(decoded, dict):
+                    raise ValueError()
+                if set(decoded) == {"key", "prefix"}:
+                    if decoded["prefix"] != prefix or not isinstance(decoded["key"], dict):
+                        raise ValueError()
+                    last_key = decoded["key"]
+                else:
+                    # Existing unfiltered workspace cursors keep their contract.
+                    if prefix:
+                        raise ValueError()
+                    last_key = decoded
                 if (set(last_key) != {"pk", "sk"} or last_key["pk"] != partition
-                        or not isinstance(last_key["sk"], str) or not last_key["sk"].startswith(f"{kind}#")):
+                        or not isinstance(last_key["sk"], str) or not last_key["sk"].startswith(sort_prefix)):
                     raise ValueError()
                 _identity(kind, last_key["sk"].split("#", 1)[1])
             except (ValueError, TypeError, UnicodeError) as error:
@@ -236,12 +268,22 @@ class Storage:
         response = self.table().query(**kwargs)
         page = {"items": [_record(item) for item in response.get("Items", [])]}
         if response.get("LastEvaluatedKey"):
+            continuation = ({"key": response["LastEvaluatedKey"], "prefix": prefix}
+                            if prefix else response["LastEvaluatedKey"])
             page["cursor"] = base64.urlsafe_b64encode(
-                json.dumps(response["LastEvaluatedKey"], separators=(",", ":")).encode()).decode()
+                json.dumps(continuation, separators=(",", ":")).encode()).decode()
         return page
 
     def list(self, owner: str, kind: str, limit: int = 100) -> list[dict]:
         return self.list_page(owner, kind, limit)["items"]
+
+    def cursor_after(self, owner, kind, identifier, *, prefix=""):
+        if (not isinstance(identifier, str) or not isinstance(prefix, str)
+                or prefix and not _ID.fullmatch(prefix) or not identifier.startswith(prefix)):
+            raise ValueError("Invalid cursor prefix")
+        key = self._key(owner, kind, identifier)
+        value = {"key": key, "prefix": prefix} if prefix else key
+        return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode()
 
     def claim_job(self, owner: str, id: str) -> dict | None:
         job = self.get(owner, "job", id)

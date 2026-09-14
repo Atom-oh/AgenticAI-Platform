@@ -4,6 +4,29 @@ Date: 2026-09-13. Scope: the ontology workbench change based on `dbb0af1`.
 These are local results, not deployment, customer-service availability or
 security-certification claims.
 
+## Integration update — 2026-09-14
+
+The user requested review, merge and production deployment of PR #13. This
+supersedes the earlier draft-only handoff instruction; review and CI requirements
+still apply. GitHub had no submitted reviews, issue comments or inline comments
+when checked. The incomplete core AI review has not been treated as approval.
+
+Merged `main` at `75b3ba9` into the feature branch, preserving the internal
+document library, its source-bound S1 workflow and unchanged-fence transaction
+retries. Both document and workbench storage kinds, worker tasks and deployment
+packages remain present. The role navigation exposes the document library and
+S1 while retaining the selected project; the navigation regression was
+reproduced before the fix.
+
+The integrated tree passed 1,507 Python tests plus 119 subtests, 156 web tests,
+web/documentation builds, CDK synthesis, the workspace template checker and
+the eight privacy-delta cases plus full privacy integration check. These are
+local results; the new commit's CI and review are separate gates.
+
+Production was inspected read-only: the existing stack was `UPDATE_COMPLETE`.
+Any eventual deployment must preserve its configured private MyData relay.
+No production mutation or Confluence connection was performed.
+
 ## Current local checks
 
 | Check | Result |
@@ -87,9 +110,10 @@ The planning shortcut now retains product context while requiring an actual
 graph target; ordinary UI tests and the synthetic API capture verify this flow.
 These checks do not close the missing core AI review.
 
-The authorized handoff is a **Draft PR to `main`**. Commit CI and an exact-HEAD
-review remain external gates. **Do not merge or deploy the runtime** in this
-handoff. Do not retry or route around the blocked core review.
+The original handoff was a **Draft PR to `main`**. The 2026-09-14 user request
+authorizes integration once the gates pass. Commit CI and exact-HEAD review
+remain required; do not route around the blocked core review or equate missing
+coverage with approval.
 
 No real Confluence target was supplied or configured. `CONFLUENCE.md` is
 preparation documentation. Local feature hashing/private artifact indexes,

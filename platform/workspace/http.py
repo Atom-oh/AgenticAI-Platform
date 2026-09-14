@@ -30,7 +30,8 @@ _REQUEST = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 _EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules", "unresolved", "bindings")
 _BASE_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
 _JOB_TARGETS = {"finalize": ("asset", "assetId"), "run": ("run", "runId"), "release": ("release", "releaseId"),
-                "git": ("gitexport", "exportId")}
+                "git": ("gitexport", "exportId"), "document-finalize": ("docrevision", "revisionId"),
+                "document-analysis": ("docanalysis", "analysisId")}
 
 
 class HTTPError(Exception):
@@ -193,8 +194,13 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Resource not found")
         return record
 
-    def _expire_job(self, owner, job):
+    def _expire_job(self, owner, job, scope=None):
         """One CAS attempt per read; a concurrent heartbeat or completion wins."""
+        if job.get("task") in ("document-finalize", "document-analysis"):
+            from documents.jobs import expire_raw_job
+            if scope is None:
+                raise HTTPError(403, "forbidden", "Document scope is required")
+            return expire_raw_job(self, scope, job)
         updated = job.get("updatedAt")
         now = self.storage.clock()
         if (job.get("status") not in ("queued", "running") or type(updated) is not int
@@ -215,6 +221,19 @@ class WorkspaceAPI:
         return key
 
     def _route(self, owner, method, parts, event, query, scope=None):
+        if parts[0] in ("documents", "impact-analyses"):
+            from documents.errors import DocumentError
+            try:
+                if parts[0] == "documents":
+                    if parts == ["documents", "samples"] and method == "POST":
+                        from documents.samples import install_samples
+                        return _json(202, install_samples(self, scope, _body(event)))
+                    from documents.api import handle
+                else:
+                    from documents.analysis import handle
+                return handle(self, scope, method, parts, event, query)
+            except DocumentError as error:
+                return _json(error.status, {"error": error.message, "code": error.code})
         from engine import model_catalog
         if method == "GET" and parts == ["config"]:
             from workspace.component_catalog import read_catalog
@@ -273,7 +292,16 @@ class WorkspaceAPI:
         record = self._get(owner, kind, parts[1])
         if len(parts) == 2 and method == "GET":
             if kind == "job":
-                record = self._expire_job(owner, record)
+                if record.get("task") in ("document-finalize", "document-analysis"):
+                    from documents.errors import DocumentError
+                    from documents.library import authorize_job
+                    try:
+                        authorize_job(self, scope, record)
+                        record = self._expire_job(owner, record, scope=scope)
+                    except DocumentError as error:
+                        return _json(error.status, {"error": error.message, "code": error.code})
+                else:
+                    record = self._expire_job(owner, record)
             payload = {kind: record}
             if kind == "asset" and record.get("analysisKey"):
                 key = self._blob_key(owner, record["analysisKey"])
@@ -438,7 +466,7 @@ class WorkspaceAPI:
             target = self._get(owner, kind, target_id)
             if target.get("status") != "failed" or target.get("rounds"):
                 return job
-            update = {"status": "processing" if kind == "asset" else "queued", "error": None}
+            update = {"status": "processing" if kind in ("asset", "docrevision") else "queued", "error": None}
             if kind == "asset":
                 update["uploadStatus"] = "processing"
             writes.append({"owner": owner, "kind": kind, "item": {**target, **update}, "expected_version": target["version"]})

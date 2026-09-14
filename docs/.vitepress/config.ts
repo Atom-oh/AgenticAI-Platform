@@ -205,6 +205,7 @@ export default withMermaid(defineConfig({
           { text: '업무별 작업실 · 4분 영상', link: '/14-demo/ontology-workbench' },
           { text: '아키텍처와 설계 결정', link: '/14-demo/architecture' },
           { text: '마이데이터 개인정보 처리', link: '/14-demo/mydata-privacy' },
+          { text: '내부 문서함 · 원문 기반 영향 분석', link: '/14-demo/internal-documents' },
           { text: 'UX Studio 검증 루프', link: '/14-demo/ux-validation-loop' },
           { text: 'Design Studio 구현·사용성 점검', link: '/14-demo/studio-implementation-review' },
           { text: '외부 산출물 파일 반입', link: '/14-demo/studio-file-intake' },

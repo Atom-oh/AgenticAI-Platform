@@ -26,6 +26,7 @@ old test counts, screenshots, or a successful merge.
 | `platform/` architecture, deployment, shared services | `SPEC.md`, `platform/README.md` |
 | API events and module integration | `platform/docs/CONTRACTS.md` |
 | React workspace and releases | `platform/workspace/REACT_CONTRACT.md` |
+| Internal document library and source-bound S1 | `platform/documents/CONTRACT.md` |
 | Role workbench, knowledge ETL, impact, Skill Creator, pension/report workspace | `platform/workbench/CONTRACT.md`, `platform/workbench/README.md` |
 | Imported HTML validation | `platform/workspace/CONTRACT.md` |
 | MyData privacy | `platform/infra/README-privacy.md`, `docs/14-demo/mydata-privacy.md` |

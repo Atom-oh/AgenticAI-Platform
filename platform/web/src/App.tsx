@@ -2,6 +2,7 @@ import { Component, Suspense, lazy, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { auth, login } from './lib';
 import S1 from './S1';
+import LibraryPage from './documents/LibraryPage';
 import S2 from './S2';
 import Studio from './Studio';
 import { Agents, Dashboard, Explore, Frame, TwoPlane } from './Views';
@@ -21,7 +22,8 @@ const ALIAS: Record<string, string> = { twoplane: 'boundary' };
 const resolveView = () => { const h = location.hash.replace('#/', '').split('?')[0] || 'wb-planning'; return ALIAS[h] || h; };
 
 const TITLE: Record<string, string> = {
-  home: '플랫폼 대시보드', s1: '규정 영향 분석 — Vector RAG vs GraphRAG',
+  home: '플랫폼 대시보드', s1: '규정 영향 분석 — 원문 근거 · 변경 검토',
+  documents: '내부 문서함 — 원문 · 버전 · 검토',
   s2: '마이데이터 상담 — 숫자는 LLM이 만들지 않는다', explore: '온톨로지 탐색기',
   registry: 'Agent Registry — 자산 승인 거버넌스', screengen: '화면 생성 — 승인된 컴포넌트만, 실검증 게이트',
   portal: 'UX Asset Portal — AI-Readable 화면 · 에셋 관리 (P1)',
@@ -102,7 +104,7 @@ export default function App() {
   const go = (v: string) => {
     const current = new URLSearchParams(location.hash.split('?')[1] || '');
     const projectId = current.get('projectId') || current.get('project');
-    location.hash = '#/' + v + (projectId && (v.startsWith('wb-') || v === 'studio')
+    location.hash = '#/' + v + (projectId && (v.startsWith('wb-') || ['studio', 'documents', 's1'].includes(v))
       ? '?projectId=' + encodeURIComponent(projectId) : '');
   };
   const [cfg, setCfg] = useState<{ graphBackend?: string; planeDeployed?: boolean } | null>(null);
@@ -185,6 +187,7 @@ export default function App() {
           </Suspense>}
           {view === 'home' && <Dashboard go={go} />}
           {view === 's1' && <S1 />}
+          {view === 'documents' && <LibraryPage />}
           {view === 's2' && <S2 />}
           {view === 'explore' && <Explore />}
           {view === 'registry' && <RegistryView />}
