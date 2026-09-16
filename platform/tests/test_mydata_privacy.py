@@ -323,3 +323,15 @@ def test_float_latency_is_forwarded_as_bounded_int(monkeypatch):
     monkeypatch.setattr(privacy, "_invoke", lambda *_: ev)
     out = privacy.process("합성 질문", "qwen", "query", "trace1")
     assert out["evidence"]["latencyMs"] == 12 and type(out["evidence"]["latencyMs"]) is int
+
+
+def test_oversized_strict_input_is_rejected_before_network_and_is_diagnosable(monkeypatch, capsys):
+    """창을 넘는 입력은 네트워크 전에 거부되고(불변식), 운영자가 원인을 구분할 수 있게 길이만 기록된다."""
+    monkeypatch.setattr(pii, "GUARDRAIL_ID", "configured")
+    monkeypatch.setattr(pii.boto3, "client", lambda *_args, **_kwargs: pytest.fail("oversized input must not reach Guardrails"))
+    long_text = "가" * 4001
+    with pytest.raises(pii.PiiVerificationUnavailable):
+        pii.scan_outbound(long_text, strict=True)
+    out = capsys.readouterr().out
+    assert "pii.verification_input_too_long" in out
+    assert long_text not in out   # 원문은 로그에 남지 않는다

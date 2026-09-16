@@ -34,3 +34,8 @@ videos/**/renders/
 videos/**/snapshots/
 videos/**/__pycache__/
 videos/**/.media/
+
+# Local release staging and rendered previews; source lives under platform/ and videos/.
+/.portal-versions-deploy-*/
+/.workbench-deploy-*/
+/.workbench-render-*/
