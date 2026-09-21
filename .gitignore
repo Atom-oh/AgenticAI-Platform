@@ -39,3 +39,6 @@ videos/**/.media/
 /.portal-versions-deploy-*/
 /.workbench-deploy-*/
 /.workbench-render-*/
+/.local/ux-guidelines/
+# Customer source archives are private inputs, never public PR artifacts.
+*.[zZ][iI][pP]

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { listAll, messageOf, readPrivateBlob, resource } from './client';
 import { useWorkspaceScope, useWorkspaceClient } from './WorkspaceScope';
 import { buildPassed, can, currentGuideline, generationRequest } from './project';
@@ -6,21 +6,28 @@ import { BuildGates } from './ReleasePanel';
 import { contractProblems, importedHtmlAssets, isOriginalHtmlCheck, roundApprovable, stateLabel } from './rules';
 import { JobProgress, ModelPicker, Notice, PrivatePreview, useDownload } from './shared';
 import VerificationLoop, { deriveVerificationLoop, hasExactApproval } from './VerificationLoop';
+import { StateEvidence } from './StatePlan';
 import type { Asset, Batch, Contract, Job, Product, Round, Run, Selection, WorkspaceConfig } from './types';
 
 type Attempt = { id: string; label: string; payload: Record<string, unknown>; job?: Job; run?: Run; error?: string };
 const VARIANTS = { balanced: '기본 구성', baseline: '엄격 기준안', layout: '배치 변형', dense: '정보를 한눈에',
   emphasis: '핵심 강조', flow: '진행 흐름 강조', information: '정보 순서 변형' } as const;
 
-export default function RunsPanel({ config, assets, contracts, runs, refresh, preferredContract, editing, onSelection, product }: {
+export default function RunsPanel({ config, assets, contracts, runs, refresh, preferredContract, preferredSelection = 0, editing, onSelection, product,
+  initialRunId, initialRound, onHandoff }: {
   config: WorkspaceConfig; assets: Asset[]; contracts: Contract[]; runs: Run[]; refresh: () => void;
   preferredContract: string; editing: { id: string; dirty: boolean };
   onSelection?: (selection: Selection) => void; product?: Product;
+  preferredSelection?: number;
+  initialRunId?: string; initialRound?: number; onHandoff?: (runId: string, round: number) => void;
 }) {
   const { client: workspaceClient, role } = useWorkspaceScope();
   const mayGenerate = can(role, 'generate'), mayApprove = can(role, 'approve');
   const [contractId, setContractId] = useState(preferredContract);
-  const [contract, setContract] = useState<Contract | null>(null);
+  const preferredKey = `${preferredContract}:${preferredSelection}`;
+  const [appliedPreferred, setAppliedPreferred] = useState(preferredKey);
+  const [loadedContract, setContract] = useState<Contract | null>(null);
+  const contract = appliedPreferred === preferredKey && loadedContract?.id === contractId ? loadedContract : null;
   const [model, setModel] = useState(config.defaultModel);
   const [mode, setMode] = useState<'creative' | 'guided'>('creative');
   const [variationCount, setVariationCount] = useState(2);
@@ -40,9 +47,20 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [error, setError] = useState('');
-  const [runId, setRunId] = useState('');
-  const [run, setRun] = useState<Run | null>(null);
-  const [roundNumber, setRoundNumber] = useState(0);
+  const requestKey = `${initialRunId || ''}:${initialRound || 0}`;
+  const requestKeyRef = useRef(requestKey); requestKeyRef.current = requestKey;
+  const [appliedRequest, setAppliedRequest] = useState(requestKey);
+  const previousRequestedRun = useRef(initialRunId || '');
+  const roundIntent = useRef({ runId: initialRunId || '', round: initialRound || 0 });
+  const [runId, setRunId] = useState(initialRunId || '');
+  const [loadedRun, setRun] = useState<Run | null>(null);
+  const listedStale = runs.find(item => item.id === runId)?.needsRevalidation === true;
+  const run = useMemo(() => {
+    if (appliedRequest !== requestKey || loadedRun?.id !== runId || (product && loadedRun.productId !== product.id)) return null;
+    return listedStale || (product && !currentGuideline(product, loadedRun))
+      ? { ...loadedRun, needsRevalidation: true } : loadedRun;
+  }, [appliedRequest, requestKey, loadedRun, runId, listedStale, product?.id, product?.publishedGuidelineId, product?.ontologyHash]);
+  const [roundNumber, setRoundNumber] = useState(initialRound || 0);
   const [pageId, setPageId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [instruction, setInstruction] = useState('');
@@ -58,6 +76,23 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const currentRunVersion = runs.find(item => item.id === runId)?.version;
   useEffect(() => () => action.current?.abort(), []);
   useEffect(() => {
+    const previous = previousRequestedRun.current;
+    previousRequestedRun.current = initialRunId || '';
+    setAppliedRequest(requestKey);
+    if (initialRunId) {
+      const different = liveRun.current !== initialRunId;
+      roundIntent.current = { runId: initialRunId, round: initialRound || 0 };
+      setRunId(initialRunId); setRoundNumber(previous => initialRound || (different ? 0 : previous));
+      if (different) {
+        setBatchId(''); setBatch(null); setBatchRuns([]); setRun(null); setPageId(''); setInstruction('');
+      }
+    } else if (previous) {
+      roundIntent.current = { runId: '', round: 0 };
+      setRunId(''); setRun(null); setRoundNumber(0); setBatchId(''); setBatch(null); setBatchRuns([]);
+      setPageId(''); setInstruction(''); setEvidence(null);
+    }
+  }, [requestKey]);
+  useEffect(() => {
     const controller = new AbortController();
     listAll<Batch>(workspaceClient, 'batches', controller.signal).then(value => {
       if (!controller.signal.aborted) setBatches(value);
@@ -66,15 +101,20 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   }, [workspaceClient, runs]);
   useEffect(() => {
     const controller = new AbortController(); setBatch(null); setBatchRuns([]); setBatchError('');
+    if (appliedRequest !== requestKey) return () => controller.abort();
+    const requested = requestKey;
     if (batchId) workspaceClient.get<{ batch: Batch; runs: Run[] }>(`/batches/${resource(batchId)}`, controller.signal).then(value => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || requestKeyRef.current !== requested) return;
       if (value.batch?.id !== batchId || !Array.isArray(value.batch.runIds) || !Array.isArray(value.runs)) throw new Error('저장된 시안 비교를 확인하지 못했습니다.');
       setBatch(value.batch); setBatchRuns(value.runs);
       setRunId(previous => value.batch.runIds.includes(previous) ? previous : value.batch.baselineRunId || value.batch.runIds[0] || '');
     }).catch(reason => { if (!controller.signal.aborted) setBatchError(messageOf(reason)); });
     return () => controller.abort();
-  }, [workspaceClient, batchId, refreshKey]);
-  useEffect(() => { if (preferredContract) setContractId(preferredContract); }, [preferredContract]);
+  }, [workspaceClient, batchId, refreshKey, appliedRequest, requestKey]);
+  useEffect(() => {
+    setAppliedPreferred(preferredKey);
+    if (preferredContract) setContractId(preferredContract);
+  }, [preferredKey]);
   useEffect(() => {
     const controller = new AbortController(); setContract(null); setReference(''); setReferencePage(1); setSourceAssetId('');
     if (contractId) workspaceClient.get<{ contract: Contract }>(`/contracts/${resource(contractId)}`, controller.signal)
@@ -84,16 +124,21 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   }, [workspaceClient, contractId, currentContractVersion]);
   useEffect(() => {
     const controller = new AbortController(); setRun(previous => previous?.id === runId ? previous : null); setError(''); setApprovedCheck(false);
+    if (appliedRequest !== requestKey) return () => controller.abort();
+    const requested = requestKey;
     if (runId) workspaceClient.get<{ run: Run }>(`/runs/${resource(runId)}`, controller.signal)
       .then(value => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || requestKeyRef.current !== requested || liveRun.current !== runId) return;
+        if (value.run?.id !== runId || (product && value.run.productId !== product.id)) throw new Error('선택한 작업의 시안을 확인하지 못했습니다.');
         setRun(value.run);
-        setRoundNumber(previous => value.run.rounds?.some(round => round.number === previous) ? previous :
-          value.run.bestRound || value.run.rounds?.[0]?.number || 0);
+        if (initialRunId === value.run.id && !contractId) setContractId(value.run.contractId);
+        const intent = roundIntent.current.runId === value.run.id ? roundIntent.current.round : 0;
+        setRoundNumber(previous => intent || (value.run.rounds?.some(round => round.number === previous) ? previous :
+          value.run.bestRound || value.run.rounds?.[0]?.number || 0));
       })
       .catch(reason => { if (!controller.signal.aborted) setError(messageOf(reason)); });
     return () => controller.abort();
-  }, [workspaceClient, runId, refreshKey, currentRunVersion]);
+  }, [workspaceClient, runId, refreshKey, currentRunVersion, appliedRequest, requestKey, product?.publishedGuidelineId, product?.ontologyHash, listedStale]);
   const selectedRound = run?.rounds?.find(round => round.number === roundNumber);
   const selectedPage = selectedRound?.pageSources?.some(page => page.pageId === pageId) ? pageId : selectedRound?.pageSources?.[0]?.pageId;
   useEffect(() => { onSelection?.(run?.id === runId ? { run, round: selectedRound, pageId: selectedPage } : null); },
@@ -146,7 +191,9 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       if (controller.signal.aborted) return;
       if (!value.batch?.id || !Array.isArray(value.batch.runIds)) throw new Error('시안 묶음을 확인하지 못했습니다. 같은 설정으로 다시 조회하세요.');
       pendingBatch.current = { fingerprint, payload, batchId: value.batch.id };
-      setBatch(value.batch); setBatchId(value.batch.id); setRunId(value.batch.baselineRunId || value.batch.runIds[0] || ''); setRoundNumber(0); setInstruction('');
+      const firstRun = value.batch.baselineRunId || value.batch.runIds[0] || '';
+      roundIntent.current = { runId: firstRun, round: 0 };
+      setBatch(value.batch); setBatchId(value.batch.id); setRunId(firstRun); setRoundNumber(0); setInstruction('');
       // Each job keeps its own failure state. One failed variant never cancels the others.
       const results = await Promise.allSettled(value.batch.runIds.map(async id => {
         const item = value.runs?.find(item => item.id === id) ||
@@ -208,6 +255,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   };
   const jobFinished = () => { refresh(); setRefreshKey(value => value + 1); };
   const selectRun = (id: string) => {
+    roundIntent.current = { runId: id, round: 0 };
     const item = runs.find(item => item.id === id) || batchRuns.find(item => item.id === id) || attempts.find(item => item.run?.id === id)?.run;
     if (item?.batchId) setBatchId(item.batchId);
     else if (!batch?.runIds.includes(id)) setBatchId('');
@@ -261,6 +309,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         {mode === 'creative' ? '시안 1개 만들기' : `기준안 + 변형 ${variationCount}개 만들기`}</button>
         {htmlSources.length > 0 && <button onClick={verifyOriginal} disabled={!mayGenerate || !canUseContract || !selectedHtmlId || sending || approving}>반입 HTML 검사</button>}</div>
       <label className="ws-field">저장된 시안 비교<select aria-label="저장된 시안 비교" value={batchId} onChange={event => {
+        roundIntent.current = { runId: '', round: 0 };
         setBatchId(event.target.value); setRunId(''); setRoundNumber(0); setInstruction('');
       }}><option value="">비교 묶음 선택</option>
         {[...(batch && !batches.some(item => item.id === batch.id) ? [batch] : []), ...batches]
@@ -307,13 +356,17 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         {downloading.error && <Notice error>{downloading.error}</Notice>}
         <VerificationLoop run={run?.id === runId ? run : null} round={run?.id === runId ? selectedRound : undefined}
           evidence={run?.id === runId ? currentEvidence : undefined} />
+        {run?.contract && (run.contract.requiredStates?.length || run.contract.changeRequest) ? <StateEvidence contract={run.contract}
+          evidence={verification.nodes.find(node => node.id === 'evidence')?.state === 'recorded' ? currentEvidence : undefined} /> : null}
         {!run ? <div className="ws-empty">{runId ? '시안 기록을 불러오고 있습니다…' : '확인할 시안을 선택하세요.'}</div> : <>
           <div className="ws-section-heading"><div><h2>{inspectingOriginal ? '원본 HTML 검사' : '라운드별 결과 확인'}</h2><p>규칙 버전 {run.contractVersion} · {stateLabel(run.status)}</p></div>
             <button onClick={() => setRefreshKey(value => value + 1)}>진행 새로 조회</button></div>
           {inspectingOriginal && <Notice>AI 생성 없이 반입 HTML을 검사한 결과입니다. 검사 대상: {run.assetSnapshots?.find(asset => asset.id === run.sourceAssetId)?.name ||
             assets.find(asset => asset.id === run.sourceAssetId)?.name || '선택한 반입 HTML'}. 원본 파일은 그대로 보관됩니다.</Notice>}
           <div className="ws-rounds" aria-label="시안 라운드">{(run.rounds || []).map(round => <button key={round.number}
-            className={roundNumber === round.number ? 'is-selected' : ''} onClick={() => { setRoundNumber(round.number); setInstruction(''); setApprovedCheck(false); }}>
+            className={roundNumber === round.number ? 'is-selected' : ''} onClick={() => {
+              roundIntent.current = { runId, round: round.number };
+              setRoundNumber(round.number); setInstruction(''); setApprovedCheck(false); }}>
             라운드 {round.number} · {round.passed && (run.outputType !== 'react' || buildPassed(round, run.catalogHash)) ? '필수 검사 통과' : '확인 필요'}{round.number === run.bestRound ? ' · 최종 선택' : ''}</button>)}</div>
           {selectedRound ? <>
             {run.outputType === 'react' && <BuildGates evidence={selectedRound} catalogHash={run.catalogHash} />}
@@ -380,6 +433,8 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               <button onClick={() => void approve()} disabled={!mayApprove || !approvalReady || !approvedCheck ||
                 (verification.needsVariationReview && !variationAccepted) || approving || sending}>
                 라운드 {selectedRound.number} 시안 승인</button>
+              {onHandoff && run.outputType === 'react' && hasExactApproval(run, selectedRound) &&
+                <button className="ws-primary" disabled={!verification.complete} onClick={() => onHandoff(run.id, selectedRound.number)}>승인본 개발 전달</button>}
               {!roundApprovable(selectedRound) && <p>필수 검사 통과와 HTML·검수 기록·실행 화면 근거가 모두 있어야 승인할 수 있습니다.</p>}</div>
           </> : <Notice>아직 검수가 끝난 라운드가 없습니다. 작업 진행을 확인하거나 결과를 다시 조회하세요.</Notice>}
         </>}

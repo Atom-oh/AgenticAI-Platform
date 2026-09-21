@@ -84,6 +84,17 @@ test('workbench menus retain the selected project when opening documents and S1'
   await page.getByRole('button', { name: '규정 영향 검토', exact: true }).click();
   await page.locator('[data-view="S1"]').waitFor();
   assert.equal(new URL(page.url()).hash, '#/s1?projectId=team-1');
+  await page.getByRole('button', { name: '디자인 시스템 · 자산', exact: true }).click();
+  await page.locator('[data-view="Portal"]').waitFor();
+  assert.equal(new URL(page.url()).hash, '#/portal?projectId=team-1');
+});
+
+test('Studio and asset portal menu navigation retain product and saved work identity', async t => {
+  const page = await authenticatedPage(t, '#/studio?projectId=team-1&productId=product-1&contractId=work-1');
+  await page.locator('[data-view="Studio"]').waitFor();
+  await page.getByRole('button', { name: '디자인 시스템 · 자산', exact: true }).click();
+  await page.locator('[data-view="Portal"]').waitFor();
+  assert.equal(new URL(page.url()).hash, '#/portal?projectId=team-1&productId=product-1&contractId=work-1');
 });
 
 test('same-page asset links keep Portal mounted; browser history retains selection queries', async t => {

@@ -79,20 +79,23 @@ export function deriveVerificationLoop({ run, round, evidence }: Props) {
     verification = 'incomplete'; verificationLabel = 'React 빌드 근거 확인 필요';
   }
   const approved = hasExactApproval(run, round);
+  const currentCriteria = run?.needsRevalidation !== true;
   const nodes: Node[] = [
-    { id: 'rules', title: '기준 고정', state: fixed ? 'recorded' : 'pending', detail: fixed ? `규칙 v${run!.contractVersion} 고정` : '고정된 규칙 미확인' },
+    { id: 'rules', title: '기준 고정', state: !currentCriteria ? 'review' : fixed ? 'recorded' : 'pending',
+      detail: !currentCriteria ? '기준 변경 · 새 기준으로 재검증 필요' : fixed ? `규칙 v${run!.contractVersion} 고정` : '고정된 규칙 미확인' },
     { id: 'artifact', title: '시안 준비', state: artifact ? 'recorded' : 'pending',
       detail: `${run ? run.mode === 'verify' || run.model === 'no-inference' ? '반입 HTML' : 'AI 생성' : '반입 HTML / AI 생성'} · ${artifact ? '산출물 저장됨' : '산출물 미확인'}` },
     { id: 'browser', title: '브라우저 검증', state: verification, detail: verificationLabel },
     { id: 'evidence', title: '검수 근거', state: evidenceMatches ? 'recorded' : evidence ? 'incomplete' : 'pending',
       detail: evidenceMatches ? '이 라운드의 저장 근거' : evidence ? '시안·규칙과 근거 불일치' : '근거 내용 미확인' },
-    { id: 'approval', title: '사람 승인', state: approved ? 'approved' : 'pending', detail: approved ? '정확한 시안의 승인 기록 있음' : '이 시안의 승인 기록 없음' },
+    { id: 'approval', title: '사람 승인', state: approved && !currentCriteria ? 'review' : approved ? 'approved' : 'pending',
+      detail: approved && !currentCriteria ? '이전 기준의 승인 기록 · 재검증 필요' : approved ? '정확한 시안의 승인 기록 있음' : '이 시안의 승인 기록 없음' },
   ];
   return {
-    nodes, retry: verification === 'failed' || verification === 'incomplete',
-    verificationEligible: evidenceMatches && (verification === 'passed' || verification === 'review'),
+    nodes, retry: currentCriteria && (verification === 'failed' || verification === 'incomplete'),
+    verificationEligible: currentCriteria && evidenceMatches && (verification === 'passed' || verification === 'review'),
     needsVariationReview: verification === 'review',
-    complete: fixed && artifact && evidenceMatches && approved &&
+    complete: currentCriteria && fixed && artifact && evidenceMatches && approved &&
       (verification === 'passed' || (verification === 'review' && run?.approval?.acceptedVariation === true)),
     contractVersion: run?.contractVersion, contractHash: run?.contractHash,
   };

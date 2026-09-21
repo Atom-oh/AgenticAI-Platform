@@ -93,6 +93,19 @@ test('approval must match the selected round, artifact, contract version and con
   }
 });
 
+test('a historical matching approval cannot make changed criteria ready for handoff', () => {
+  const { deriveVerificationLoop, hasExactApproval } = load();
+  const value = fixture();
+  value.run.approval = { round: 2, artifactSha256: value.round.artifactSha256, contractVersion: 3,
+    contractHash: value.run.contractHash, actor: 'fixture-reviewer', at: 123456 };
+  value.run.needsRevalidation = true;
+  assert.equal(hasExactApproval(value.run, value.round), true);
+  const state = deriveVerificationLoop(value);
+  assert.equal(state.complete, false);
+  assert.equal(state.verificationEligible, false);
+  assert.equal(stage(state, 'rules').state, 'review');
+});
+
 test('failed and incomplete selected rounds return to the same frozen rule version', () => {
   const { deriveVerificationLoop } = load();
   for (const status of ['fail', 'incomplete']) {

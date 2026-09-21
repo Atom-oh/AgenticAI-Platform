@@ -352,10 +352,14 @@ def test_handler_routes_end_to_end():
     assert set(h.ROUTES) == {"registry_list", "registry_get", "registry_transition", "registry_search",
                              "registry_consumer", "registry_create"}
     ctx, gw = _ctx()
-    # 빈 레지스트리 → 목록 요청이 기준선을 부트스트랩한다
+    # User reads must never seed or approve shared records.
+    h.registry_list(ctx, {"bootstrap": True})
+    ev = gw.posted[-1]
+    assert ev["type"] == "registry_list" and ev["reqId"] == "r1" and ev["bootstrapped"] is None
+    assert ev["counts"]["total"] == 0 and ev["records"] == []
+    seedmod.seed("admin")
     h.registry_list(ctx, {})
     ev = gw.posted[-1]
-    assert ev["type"] == "registry_list" and ev["reqId"] == "r1" and ev["bootstrapped"]["created"] > 0
     assert ev["counts"]["total"] == len(ev["records"]) and all(EMBEDDING_ATTR not in r for r in ev["records"])
     assert ev["backend"] == "memory" and ev["embeddingsEnabled"] is False
     h.registry_list(ctx, {"type": "CUSTOM", "status": "PENDING_APPROVAL"})
@@ -400,9 +404,9 @@ def test_handler_routes_end_to_end():
     assert ev["ok"] and ev["record"]["status"] == "DRAFT" and ev["record"]["updatedBy"] == ACTOR
     h.registry_create(ctx, {"record": _rec("new_agent")})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 409
-    # seed 액션 (멱등)
+    # Even the removed legacy handler cannot seed from a user context.
     h.registry_seed(ctx, {})
-    assert gw.posted[-1]["ok"] and gw.posted[-1]["result"]["created"] == 0
+    assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 403
 
 
 def test_handler_does_not_log_reason_or_description_text(capsys):

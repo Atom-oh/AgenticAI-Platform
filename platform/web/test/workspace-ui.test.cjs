@@ -226,19 +226,22 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
       URL.revokeObjectURL = value => { window.objectURLs.delete(value); revoke(value); };
     });
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
-    await page.getByRole('heading', { name: '파일·스킬 작업실', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'UX 설계 작업실', exact: true }).waitFor();
     const summary = page.locator('.studio-summary');
-    assert.equal(await summary.isVisible(), true, 'The default workspace must have its own workflow summary');
-    assert.match(await summary.innerText(), /외부.*파일.*승인.*규칙.*실행 가능한 시안/s);
-    assert.match(await summary.innerText(), /실제 금융 API.*별도/s);
+    assert.equal(await summary.count(), 0, 'Legacy summary does not compete with the primary workflow');
+    assert.equal(await page.locator('[data-workflow-step]').count(), 5);
+    await page.getByRole('button', { name: '1 업무 정의', exact: true }).waitFor();
     assert.equal(await page.getByLabel('기존 Studio 집계', { exact: true }).count(), 0);
+    await page.getByText('이전 시안·참고 도구', { exact: true }).click();
     await page.locator('.studio-tabs').getByRole('button', { name: /시안 갤러리/ }).click();
     await page.getByLabel('기존 Studio 집계', { exact: true }).getByText('23', { exact: true }).waitFor();
     assert.match(await summary.innerText(), /정적 시안/);
     assert.match(await summary.innerText(), /픽셀 일치는 아직 검증하지 않습니다/);
-    await page.locator('.studio-tabs').getByRole('button', { name: '파일·스킬 작업실', exact: true }).click();
+    await page.locator('.studio-tabs').getByRole('button', { name: 'UX 설계 작업실', exact: true }).click();
     assert.equal(await page.getByLabel('기존 Studio 집계', { exact: true }).count(), 0);
-    assert(!((await summary.innerText()).includes('정적 시안')));
+    assert.equal(await summary.count(), 0);
+    await page.getByRole('button', { name: '2 기준·자산', exact: true }).click();
+    await page.getByRole('button', { name: '화면·그래픽 자료', exact: true }).click();
     const capture = async name => {
       if (!process.env.WORKSPACE_QA_DIR) return;
       fs.mkdirSync(process.env.WORKSPACE_QA_DIR, { recursive: true });
@@ -311,7 +314,7 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await page.getByText('버전 3의 규칙을 승인했습니다.', { exact: false }).waitFor();
     await capture('rules');
     await page.getByLabel('규칙 1', { exact: true }).fill('미저장 변경');
-    await page.getByRole('button', { name: '3 생성·검수·수정', exact: true }).click();
+    await page.getByRole('button', { name: '4 시안·검수', exact: true }).click();
     const loop = page.locator('.ws-loop');
     assert.equal(await loop.isVisible(), true);
     assert.equal(await loop.locator('[data-stage]').count(), 5);
@@ -320,9 +323,9 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     assert.equal(await page.getByRole('button', { name: '시안 1개 만들기', exact: true }).isDisabled(), true);
     await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).isDisabled(), true);
-    await page.getByRole('button', { name: '2 규칙 확인·승인', exact: true }).click();
+    await page.getByRole('button', { name: '3 흐름·상태 설계', exact: true }).click();
     await page.getByLabel('규칙 1', { exact: true }).fill('납입금액 전달 확인');
-    await page.getByRole('button', { name: '3 생성·검수·수정', exact: true }).click();
+    await page.getByRole('button', { name: '4 시안·검수', exact: true }).click();
     await page.locator('.ws-runs').getByLabel('AI 모델', { exact: true }).selectOption('fable').catch(async error => {
       t.diagnostic(JSON.stringify(await page.locator('.ws-runs label').allTextContents())); throw error;
     });

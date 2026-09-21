@@ -149,3 +149,7 @@
 .portal-version-source button { margin: 8px 8px 0 0; }
 .portal-version-detail table { width: 100%; border-collapse: collapse; font-size: 12px; overflow-wrap: anywhere; }
 .portal-version-detail th, .portal-version-detail td { padding: 6px; text-align: left; border-bottom: 1px solid #e2e9e5; vertical-align: top; }
+.portal-area-switch { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.portal-area-switch button { padding: 10px 16px; border: 1px solid #bccfc9; border-radius: 9px; background: white; color: #294f48; cursor: pointer; font-weight: 650; }
+.portal-area-switch button[aria-pressed="true"] { background: #007a78; border-color: #007a78; color: white; }
+.portal-area-switch button:focus-visible { outline: 3px solid #2593be; outline-offset: 3px; }

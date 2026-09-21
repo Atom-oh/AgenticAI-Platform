@@ -7,7 +7,7 @@
   registry_search     {q, type?}                       → {hits[{record, score, match, ...}], dense, note}
   registry_consumer   {subtype?, type?}                → Consumer API 결과 그대로 (APPROVED 만) — "에이전트가 보는 것"
   registry_create     {record}                         → {ok, record} (DRAFT 로 시작)
-  registry_seed       {reset?}                         → 기준선 시드 결과 (멱등)
+  기준선 시드는 IAM 전용 admin_handler에서만 수행한다.
 actor 는 항상 ctx.email(Cognito 검증 사용자). 레지스트리 오류(400/404/409)는 ok:false 로 돌려주고, 그 외 예외는 진입점이 처리한다.
 로그에는 사유·설명 원문을 남기지 않는다 (길이만).
 """
@@ -27,17 +27,9 @@ def _fail(ctx: Ctx, kind: str, e: RegistryError, **extra) -> None:
 def registry_list(ctx: Ctx, body: dict) -> None:
     filters = {"type": body.get("type"), "status": body.get("status"), "subtype": body.get("subtype"), "q": body.get("q")}
     c = api.counts()
-    bootstrapped = None
-    if c["total"] == 0 and body.get("bootstrap", True):
-        # 빈 테이블이면 기준선을 심는다 — 시연 중 "레코드 0건" 화면을 막는 안전장치 (멱등, 감사 이벤트 남음)
-        from registry.seed import seed
-        bootstrapped = seed(actor=ctx.email)
-        log_event("registry.bootstrap", ctx.trace_id, created=bootstrapped["created"],
-                  embedded=bootstrapped["embedded"], embedFailed=bootstrapped["embedFailed"])
-        c = api.counts()
     ctx.post({"type": "registry_list", "records": api.list_records(filters), "counts": c,
               "filters": filters, "backend": api.backend(), "embeddingsEnabled": api.embeddings_enabled(),
-              "bootstrapped": bootstrapped})
+              "bootstrapped": None})
 
 
 def registry_get(ctx: Ctx, body: dict) -> None:
@@ -98,11 +90,8 @@ def registry_create(ctx: Ctx, body: dict) -> None:
 
 
 def registry_seed(ctx: Ctx, body: dict) -> None:
-    from registry.seed import seed
-    res = seed(actor=ctx.email, reset=bool(body.get("reset")))
-    log_event("registry.seed", ctx.trace_id, reset=bool(body.get("reset")), **{k: v for k, v in res.items()
-                                                                                if isinstance(v, (int, bool, str))})
-    ctx.post({"type": "registry_seed", "ok": True, "result": res, "counts": api.counts()})
+    ctx.post({"type": "registry_seed", "ok": False, "code": 403,
+              "error": "Shared seeding requires the IAM-only administrative entry point."})
 
 
 ROUTES = {

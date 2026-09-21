@@ -90,7 +90,9 @@ async function mount(t, { workspace = false, initialCatalog = catalog, respond }
 test('files step lazily opens three isolated interactive samples and native downloads', { timeout: 45_000 }, async t => {
   const { page, requests } = await mount(t, { workspace: true });
   const gallery = page.getByRole('region', { name: 'React 예제로 연습하기' });
-  await page.getByRole('heading', { name: '파일·스킬 작업실' }).waitFor();
+  await page.getByRole('heading', { name: 'UX 설계 작업실' }).waitFor();
+  await page.getByRole('button', { name: '2 기준·자산' }).click();
+  await page.getByRole('button', { name: '화면·그래픽 자료', exact: true }).click();
   assert.equal(await page.title(), 'Studio sample gallery test');
   assert.equal(await gallery.locator('details').first().getAttribute('open'), null);
   assert.equal(requests.length, 0);
@@ -103,8 +105,9 @@ test('files step lazily opens three isolated interactive samples and native down
   await frame.getByRole('button', { name: '금액 확인', exact: true }).click();
   assert.equal(await frame.locator('#summary').textContent(), '25000');
   assert.equal(await frame.locator('html').getAttribute('data-isolated'), 'yes');
+  const currentUrl = page.url();
   await frame.getByRole('button', { name: '외부로 이동', exact: true }).click();
-  assert.equal(page.url(), 'https://offline.test/');
+  assert.equal(page.url(), currentUrl);
   assert.equal(await page.locator('body').getAttribute('data-sample-escaped'), null);
   assert.equal(await gallery.locator('iframe').getAttribute('sandbox'), 'allow-scripts');
   assert.equal(await gallery.locator('iframe').getAttribute('referrerpolicy'), 'no-referrer');
@@ -134,9 +137,9 @@ test('files step lazily opens three isolated interactive samples and native down
       await gallery.screenshot({ path: path.join(process.env.STUDIO_SAMPLES_SCREENSHOT_DIR, `gallery-${width}.png`) });
     }
   }
-  await page.getByRole('button', { name: '2 규칙 확인·승인' }).click();
+  await page.getByRole('button', { name: '3 흐름·상태 설계' }).click();
   assert.equal(await page.locator('iframe').count(), 0);
-  await page.getByRole('button', { name: '1 파일 준비' }).click();
+  await page.getByRole('button', { name: '2 기준·자산' }).click();
   await page.getByText('React 샘플 둘러보기', { exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.ws-samples iframe'));
   assert.equal(await gallery.locator('iframe').count(), 0);

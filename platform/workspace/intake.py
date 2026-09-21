@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 import warnings
 from html.parser import HTMLParser
 from pathlib import PurePath
@@ -13,7 +14,8 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
 MAX_IMAGE_PIXELS = 24_000_000
 MAX_PDF_PAGES = 20
-EXTENSIONS = ("html", "htm", "png", "jpg", "jpeg", "svg", "pdf", "fig", "md", "markdown", "txt", "json", "css")
+EXTENSIONS = ("html", "htm", "png", "jpg", "jpeg", "svg", "pdf", "fig", "md", "markdown", "txt", "json", "css",
+              "pptx", "xlsx", "tsx", "ts", "jsx", "js", "scss", "zip")
 
 
 class TextOnly(HTMLParser):
@@ -183,12 +185,58 @@ def _pdf(data: bytes) -> dict:
     return _bound_text(result)
 
 
-def extract_file(name: str, data: bytes) -> dict:
+def extract_file(name: str, data: bytes, *, deadline=None) -> dict:
     if not isinstance(data, bytes) or not 0 < len(data) <= MAX_FILE_BYTES:
         raise ValueError("파일은 비어 있지 않은 50MiB 이하의 파일이어야 합니다.")
     extension = PurePath(name).suffix.lower().lstrip(".")
     if extension not in EXTENSIONS:
         raise ValueError("지원하지 않는 파일 형식입니다.")
+    if extension in ("pptx", "xlsx", "tsx", "ts", "jsx", "js", "scss", "zip") or (
+            extension == "txt" and re.search(rb"(?:import\s+[\s\S]{0,300}\bfrom\s+['\"]|export\s+(?:default|const))", data[:64000])):
+        from workspace.prepare_sources import source_record
+        from workspace.prepare_guidelines import archive_entries
+        from workspace.guidelines import FORMAT, MAX_PACK_BYTES, summaries, validate_pack
+        import zipfile
+        deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 120)
+        sources, excluded = [], []
+        if extension == "zip":
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                for entry in archive_entries(archive):
+                    if entry.is_dir() or PurePath(entry.filename).name == ".DS_Store":
+                        continue
+                    if time.monotonic() >= deadline:
+                        excluded.append(entry.filename[:180] + ": 이번 반입의 해석 시간 한도로 제외되었습니다.")
+                        continue
+                    try:
+                        source = source_record(entry.filename, archive.read(entry), isolate_pdf=True, deadline=deadline)
+                        # Validate the member and combined bounds before accepting it.
+                        candidate = validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": sources + [source]})
+                        if len(json.dumps(candidate, ensure_ascii=False).encode()) > MAX_PACK_BYTES:
+                            raise ValueError("pack-too-large")
+                        sources.append(source)
+                    except Exception:
+                        excluded.append(entry.filename[:180] + ": 형식·보호·크기 또는 해석 한도로 제외되었습니다.")
+        else:
+            try:
+                sources.append(source_record(name, data, deadline=deadline))
+            except Exception as error:
+                raise ValueError("원본 형식·보호·크기 또는 해석 한도를 확인하세요.") from error
+        if not sources:
+            result = _base("zip")
+            result.update(parseStatus="unsupported", warnings=excluded or ["해석 가능한 참고 원본이 없습니다."])
+            return result
+        pack = validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": sources})
+        if len(json.dumps(pack, ensure_ascii=False).encode()) > MAX_PACK_BYTES:
+            raise ValueError("자료 묶음이 큽니다. 문서별 준비 도구로 나누어 반입하세요.")
+        result = _base(FORMAT)
+        result.update(guidelinePack=pack, guidelineSources=summaries(pack, originals_stored=True), pages=sum(s["pageCount"] for s in sources))
+        result["warnings"] = ["원본 상태·식별자는 참고 정보이며 승인이 아닙니다. 코드는 실행하지 않았고 이미지·배치 해석은 포함하지 않습니다."]
+        if excluded or any(page.get("truncated") for source in pack["sources"] for page in source["pages"]):
+            result.update(parseStatus="partial")
+            result["warnings"].extend(excluded)
+            if any(page.get("truncated") for source in pack["sources"] for page in source["pages"]):
+                result["warnings"].append("일부 원문의 텍스트가 상한에서 잘렸습니다. 완전한 범위를 나누어 준비하세요.")
+        return result
     if extension in ("png", "jpg", "jpeg"):
         return _image(data, extension)
     if extension == "svg":
@@ -221,9 +269,19 @@ def extract_file(name: str, data: bytes) -> dict:
     else:
         if extension == "json":
             try:
-                json.loads(text)
+                value = json.loads(text)
             except (ValueError, RecursionError) as error:
                 raise ValueError("올바른 JSON 파일이 아닙니다.") from error
+            from workspace.guidelines import FORMAT, MAX_PACK_BYTES, summaries, validate_pack
+            if isinstance(value, dict) and value.get("format") == FORMAT:
+                if len(data) > MAX_PACK_BYTES:
+                    raise ValueError("UX 가이드 묶음은 16MiB 이하여야 합니다.")
+                pack = validate_pack(value)
+                result.update(format=FORMAT, guidelinePack=pack, guidelineSources=summaries(pack),
+                              pages=sum(source["pageCount"] for source in pack["sources"]))
+                result["warnings"] = ["페이지별 텍스트 추출본입니다. 원본 PDF/PPTX의 이미지·배치와 대조한 뒤 규칙을 승인하세요.",
+                                      "원본 PDF/PPTX는 로컬에 별도 보관됩니다. 이 파일에는 원본 파일이 포함되지 않습니다."]
+                return result
         result["text"] = text
         if extension == "css":
             from studio.artifacts import external_references

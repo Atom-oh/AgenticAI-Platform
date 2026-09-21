@@ -9,10 +9,11 @@ import ComponentCatalogPanel from './ComponentCatalogPanel';
 import GuidelineHistory from './GuidelineHistory';
 import type { Anchor, Asset, ComponentCatalogSummary, Discussion, Product, Project, Role, Selection } from './types';
 
-export default function CollaborationSidebar({ products, product, onProduct, onProductSaved, selection, refresh, onProjectRefresh, assets, catalog }: {
+export default function CollaborationSidebar({ products, product, onProduct, onProductSaved, selection, refresh, onProjectRefresh, assets, catalog, workflow = false }: {
   products: Product[]; product?: Product; onProduct: (id: string) => void; onProductSaved: (product: Product) => void;
   selection: Selection; refresh: () => void; onProjectRefresh: () => void;
   assets: Asset[]; catalog?: ComponentCatalogSummary;
+  workflow?: boolean;
 }) {
   const { project, role } = useWorkspaceScope();
   const [tab, setTab] = useState<'plan' | 'discuss' | 'develop'>(project ? 'plan' : 'develop');
@@ -25,6 +26,20 @@ export default function CollaborationSidebar({ products, product, onProduct, onP
     runId: selection.run.id, ...(selection.round ? { round: selection.round.number } : {}),
     ...(selection.round && selection.pageId ? { pageId: selection.pageId } : {}),
   } : product ? { productId: product.id, ...(product.publishedGuidelineId ? { guidelineId: product.publishedGuidelineId } : {}) } : {};
+  if (workflow) return <aside className="ws-sidebar ws-workflow-context" aria-label="이번 작업의 기준과 협업">
+    <h2>이번 작업</h2>
+    <dl><dt>작업 공간</dt><dd>{project?.name || '개인 작업실'}</dd>
+      <dt>현재 역할</dt><dd>{role ? ROLE_LABELS[role] : '확인 필요'}</dd>
+      <dt>상품 기준</dt><dd>{product ? `${product.title} · ${product.publishedGuidelineId ? `게시 ${product.publishedRevision}차` : '게시 필요'}` : '상품 미선택'}</dd>
+      <dt>선택한 결과</dt><dd>{selection?.round ? `규칙 v${selection.run.contractVersion} · 라운드 ${selection.round.number}` : '시안·라운드 미선택'}</dd></dl>
+    <p className="ws-context-kit">{catalog ? `${catalog.label} · v${catalog.version}` : '실행 컴포넌트 기준 미확인'}</p>
+    <p className="ws-muted">실제 구성과 속성은 기준·자산의 실행 컴포넌트에서 확인합니다.</p>
+    {project ? <details className="ws-context-discussion"><summary>이 작업에 의견 남기기</summary>
+      <DiscussionPanel key={JSON.stringify(anchor)} anchor={anchor} product={product} selection={selection} /></details> :
+      <p>팀의 검토와 개발 인수는 함께 사용하는 프로젝트에서 진행하세요.</p>}
+    {project && can(role, 'members') && <details className="ws-member-details"><summary>참여자 관리</summary>
+      <Members key={project.version} project={project} onSaved={onProjectRefresh} /></details>}
+  </aside>;
   return <aside className="ws-sidebar" aria-label="기획·디자인·개발 협업">
     <div className="ws-section-heading"><h2>{project ? '함께 검토하기' : '개발 산출물'}</h2><span>{role && ROLE_LABELS[role]}</span></div>
     {project && <label className="ws-field">공유 상품<select aria-label="공유 상품" value={product?.id || ''} onChange={event => onProduct(event.target.value)}>

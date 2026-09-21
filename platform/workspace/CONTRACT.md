@@ -10,6 +10,25 @@ never agent instructions or executable server programs. Paths beginning with
 
 ## HTTP
 
+Reference intake additionally accepts PPTX/XLSX, TSX/TS/JSX/JS, SCSS and bounded
+ZIPs. See `GUIDELINES.md` for direct intake, corpus preparation, source-status
+semantics and per-document exclusions. Uploaded code is never executed.
+
+Editable contracts and proposal requests accept optional `changeRequest`.
+`change_requests.py` defines its bounded request metadata, source ID namespaces,
+screen/state inventory, guarded transitions, approved baseline reference and
+allowed generated-source paths. All fields participate in the contract hash.
+Rules optionally carry `screenId` and `transitionId`; missing per-screen or
+ordered-transition assertions block approval. Request drafts may have no rules,
+but empty-rule approval remains prohibited.
+
+GET `/runs/:id/baseline?round=1` returns the currently approved React baseline
+reference and generated-source paths within the current authorized scope.
+Baseline source identity and allowed file changes are rechecked by generation,
+UX approval and release. The release manifest includes actual file deltas,
+ID mappings and source references, without claiming customer integration or
+frontend acceptance. See `WORKFLOW.md` for evidence limits.
+
 Same-origin `/studio-api`, Cognito access token in `Authorization: Bearer`.
 The API Gateway JWT authorizer supplies claims; handler requires `sub` and
 `token_use=access`. Personal owner is the verified `sub`, never a body field. Optional
@@ -24,11 +43,14 @@ Errors use HTTP status plus `{error, code}`. No raw exception/prompt/token logs.
   Asset/contract/run/batch/release list routes accept the returned `cursor` query value.
 - POST `/assets`: `{name,size,sha256,purpose,parentId?}` -> `{asset,chunkBytes}`.
   Purpose: `reference|component|token|skill|guide|prototype|archive`.
-  Accept HTML/HTM, CSS, PNG/JPG/JPEG, SVG, PDF, FIG, MD/MARKDOWN, TXT, JSON.
+  Accept HTML/HTM, CSS, PNG/JPG/JPEG, SVG, PDF, FIG, MD/MARKDOWN, TXT, JSON,
+  PPTX/XLSX, TSX/TS/JSX/JS, SCSS and bounded ZIP reference packs.
 - PUT `/assets/:id/parts/:index`: binary bytes, max2MiB. Exact expected part size;
   retries must match the prior part hash. No writes after upload completion.
 - POST `/assets/:id/complete`: `{}` ->202 `{asset,job}`; background finalize.
 - GET `/assets/:id`: `{asset,analysis?}`.
+- GET `/assets/:id/guidelines?sourceId=&q=&cursor=0`: private page search for a
+  prepared UX guideline JSON pack. Returns `{sources,pages,total,cursor}`.
 - GET `/assets/:id/blob?kind=original|preview&page=1&offset=0`: binary chunk;
   `X-Total-Size`, `X-Chunk-Size`, `X-Content-Type`, `X-SHA256`.
   Original downloads are always attachment/octet-stream, never active same-origin HTML.
@@ -140,6 +162,21 @@ block approval; unsupported rules are never silently dropped or marked passed.
 Explicit source quotes must be present in the selected asset's extracted text.
 Inferred/manual sources are labelled honestly and require designer approval.
 Contract edits reset approval. Every run freezes the exact contract and assets.
+
+Prepared UX guideline packs retain a separate page index rather than truncating
+the ordinary analysis text. Optional `guideRefs` pin the selected
+`assetId,sourceId,page,sourceSha256,textSha256` in proposals and contract hashes.
+Explicit pack citations require the selected source ID and physical page as well
+as a matching quote. See [guideline intake](GUIDELINES.md) for preparation,
+private source search, limits and the distinction between extracts and originals.
+
+The [UX workflow](WORKFLOW.md) adds optional `requiredStates` on contracts and
+proposal requests, and `scenario` on each rule. Values are
+`entry|input|consent|error|empty|loading|back|cancel|complete`. Each selected state
+needs a required rule with an assertion before approval. Saving incomplete
+drafts is allowed. State scope is frozen in proposal input and the contract
+hash; empty/absent scope preserves legacy hashes. Classification is not proof
+of correct behavior; results still require matching browser evidence.
 
 `workspace/rules.py`: `validate_contract(data, asset_texts=None)->dict` returns
 normalized contract or raises ValueError; `contract_hash(contract)->str`.

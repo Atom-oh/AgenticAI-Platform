@@ -35,6 +35,9 @@ def handler(event, context):
     if op == "seed_registry":
         from registry.seed import seed
         return seed(actor="admin", reset=bool(event.get("reset")))
+    if op == "seed_mcp_servers":
+        from registry.seed import seed_mcp_servers
+        return seed_mcp_servers(actor="admin")
     if op == "reset_demo":
         from registry.seed import reset_demo_state
         return reset_demo_state(actor="admin")

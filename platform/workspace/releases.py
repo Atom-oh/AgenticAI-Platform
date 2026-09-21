@@ -43,6 +43,11 @@ def approved_artifacts(storage, owner, run, number, expected_approval=None):
         if hashlib.sha256(contents[kind]).hexdigest() != row.get(kind + "ArchiveSha256"):
             raise ValueError("승인 산출물 파일이 변경되었습니다.")
     source = read_archive(contents["source"], row["sourceHash"])
+    if run["contract"].get("changeRequest"):
+        from workspace.change_requests import baseline_project, enforce_scope
+        request = run["contract"]["changeRequest"]
+        baseline = baseline_project(storage, owner, request)
+        enforce_scope(request, generated_files(baseline) if baseline else {}, generated_files(source))
     read_archive(contents["dist"], row["bundleHash"])
     report = json.loads(contents["report"])
     if (not react_report_passes(run["contract"], report, visual_required=bool(run.get("referenceAssetId")),
@@ -144,6 +149,15 @@ def process_release(worker, owner, job):
                 **{key: release[key] for key in ("sourceHash", "bundleHash", "catalogHash", "contractHash", "approvalHash")},
                 "files": [{"path": name, "sha256": hashlib.sha256(data).hexdigest()} for name, data in sorted(bundle.items())],
                 "verification": "approved-source-rebuild-and-browser-test", "approvedScreenTolerance": 0.02}
+    if run["contract"].get("changeRequest"):
+        from workspace.change_requests import baseline_project, enforce_scope, file_changes
+        request = run["contract"]["changeRequest"]
+        baseline = baseline_project(worker.storage, owner, request) or {}
+        enforce_scope(request, generated_files(baseline) if baseline else {}, generated_files(project))
+        manifest["handoff"] = {"changeRequest": request, "sourceChanges": file_changes(baseline, project),
+                               "scope": "platform-react-package", "customerIntegration": "not-verified",
+                               "frontendAcceptance": "not-recorded",
+                               "sourceReferences": run["contract"].get("guideRefs", [])}
     for kind, data in (("manifest", manifest), ("report", report)):
         key = key_for(owner, "release", release["id"], kind + ".json")
         worker.storage.put_blob_once(key, _json_bytes(data), "application/json")

@@ -1,3 +1,4 @@
+import os
 import hashlib
 import json
 import sys
@@ -23,7 +24,7 @@ from workspace.worker import Worker
 
 def test_react_repair_preserves_code_criteria_and_approval_binds_source_and_dist(monkeypatch, repo):
     browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
-    if browser.is_file():
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
         monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
     calls = []
 

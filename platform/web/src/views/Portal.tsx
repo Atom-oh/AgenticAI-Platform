@@ -12,6 +12,7 @@ import VersionComponentDetail from '../portal/VersionComponentDetail';
 import type { Binding } from '../../portal-versions/client';
 import { loadReactCatalog, usageSnippet, type ReactCatalog } from '../portal/reactCatalog';
 import ImagePreview from '../portal/ImagePreview';
+import Workspace from '../workspace/Workspace';
 import { imageSource } from '../portal/image-source';
 import '../portal/portal.css';
 
@@ -412,7 +413,7 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
               플랫폼 {d.name} 실행 예제 보기
             </button>}
             {d.label === 'Component' && codeAvailable && <p>같은 이름의 플랫폼 예제이며, 이 설계 자산의 {d.version || '원본'} 구현으로 자동 연결되지 않습니다.</p>}
-            {d.label === 'Screen' && <a className="portal-link" href="#/studio">Design Studio에서 원본 파일 반입하기</a>}
+            {d.label === 'Screen' && <a className="portal-link" href={studioHash()}>Design Studio에서 원본 파일 반입하기</a>}
           </section>)}
         {d.visual?.kind === 'diagram' && d.visual.nodes.some(node => node.assetId && !node.missing && node.assetId !== d.id) &&
           <div className="portal-flow-links" aria-label="다이어그램의 연결 자산">
@@ -561,6 +562,51 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
 
 /* ---------------- Main portal ---------------- */
 export default function Portal() {
+  const [area, setArea] = useState<'reference' | 'guides'>(() =>
+    new URLSearchParams(location.hash.split('?')[1]).get('tab') === 'guides' ? 'guides' : 'reference');
+  const [openedGuides, setOpenedGuides] = useState(area === 'guides');
+  useEffect(() => {
+    const changed = () => {
+      const next = new URLSearchParams(location.hash.split('?')[1]).get('tab') === 'guides' ? 'guides' : 'reference';
+      setArea(next); if (next === 'guides') setOpenedGuides(true);
+    };
+    window.addEventListener('hashchange', changed);
+    window.addEventListener('popstate', changed);
+    return () => { window.removeEventListener('hashchange', changed); window.removeEventListener('popstate', changed); };
+  }, []);
+  const chooseArea = (next: 'reference' | 'guides') => {
+    const params = new URLSearchParams(location.hash.split('?')[1]);
+    for (const key of ['step', 'runId', 'round', 'assetId', 'id', 'component']) params.delete(key);
+    if (next === 'guides') { params.set('tab', 'guides'); params.set('step', 'assets'); } else params.delete('tab');
+    const query = params.toString();
+    location.hash = '#/portal' + (query ? '?' + query : '');
+    setArea(next);
+    if (next === 'guides') setOpenedGuides(true);
+  };
+  return <div>
+    <nav className="portal-area-switch" aria-label="UX 자산 작업 영역">
+      <button aria-pressed={area === 'reference'} onClick={() => chooseArea('reference')}>컴포넌트 · 설계 자산</button>
+      <button aria-pressed={area === 'guides'} onClick={() => chooseArea('guides')}>프로젝트 UX 기준·자산</button>
+    </nav>
+    {openedGuides && <div hidden={area !== 'guides'}><Workspace initialStep="guides" /></div>}
+    {area === 'reference' && <ReferencePortal />}
+  </div>;
+}
+
+function referenceHash(patch: Record<string, string> = {}) {
+  const current = new URLSearchParams(location.hash.split('?')[1]);
+  const params = new URLSearchParams(patch);
+  const projectId = current.get('projectId') || current.get('project');
+  if (projectId) params.set('projectId', projectId);
+  for (const key of ['productId', 'contractId']) {
+    const value = current.get(key); if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return '#/portal' + (query ? '?' + query : '');
+}
+function studioHash() { return referenceHash({ step: 'assets' }).replace('#/portal', '#/studio'); }
+
+function ReferencePortal() {
   const root = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef(false);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -659,12 +705,12 @@ export default function Portal() {
   }, [clearSelection]);
   const openCode = useCallback((name: string) => {
     clearSelection(); rememberSelection(); changeCategory('Components'); setComponentView('react'); setCodeName(name); setQ('');
-    history.replaceState(null, '', '#/portal?component=' + encodeURIComponent(name));
+    history.replaceState(null, '', referenceHash({ component: name }));
   }, [clearSelection, changeCategory, rememberSelection]);
   const openDetail = useCallback(async (id: string) => {
     clearSelection(); rememberSelection(); const request = ++detailRequest.current; selectedId.current = id;
     setComponentView('ontology'); setBusy('detail');
-    history.replaceState(null, '', '#/portal?id=' + encodeURIComponent(id));
+    history.replaceState(null, '', referenceHash({ id }));
     try {
       const e = await sock.request('portal_detail', { id });
       if (request !== detailRequest.current) return;
@@ -691,7 +737,7 @@ export default function Portal() {
   const chooseCategory = (category: string) => {
     clearSelection(); changeCategory(category); setQ('');
     if (category === 'Components') { setComponentView('react'); setCodeName('Button'); }
-    history.replaceState(null, '', '#/portal');
+    history.replaceState(null, '', referenceHash());
   };
   const runImpact = async () => {
     if (!detail) return; const id = detail.id, request = detailRequest.current;
@@ -750,7 +796,7 @@ export default function Portal() {
       <div><p className="portal-eyebrow">{termCategory ? 'UX WRITING · 용어 사전' : 'DESIGN ASSET LIBRARY'}</p>
         <h2>{termCategory ? '용어와 사용 맥락을 확인하세요.' : '그림으로 확인하고, 직접 사용해 보세요.'}</h2>
         <p>{termCategory ? '등록된 용어 설명과 연결된 사용 화면을 함께 확인합니다.' : '컴포넌트는 실제 React로, 사용자 흐름과 설계 관계는 다이어그램으로 확인합니다.'}</p></div>
-      <a href="#/studio" className="portal-secondary">파일 반입 · Design Studio</a>
+      <a href={studioHash()} className="portal-secondary">파일 반입 · Design Studio</a>
     </header>
     <div className={`portal-layout${hasDetail ? ' has-detail' : ''}`}>
       <nav className="portal-nav panel" aria-label="디자인 자산 유형">
