@@ -478,6 +478,9 @@ def test_real_delta_generation_rejects_unrelated_file_edits_and_releases_exact_h
     next_request["changeRequest"]["baseline"] = {"runId": changed["id"], "round": 2, "sourceHash": row["sourceHash"]}
     assert request(api, "POST", "/contracts", next_request)[0] == 400
     assert request(api, "GET", f"/runs/{changed['id']}/baseline")[0] == 409
+    assert request(api, "GET", f"/runs/{changed['id']}")[1]["run"]["needsRevalidation"] is True
+    history = request(api, "GET", "/runs")[1]["runs"]
+    assert next(item for item in history if item["id"] == changed["id"])["needsRevalidation"] is True
     releases_before = len(store.list("designer", "release"))
     assert request(api, "POST", "/releases", {"runId": changed["id"], "round": 2, "requestId": "stale-baseline-release"})[0] == 409
     assert len(store.list("designer", "release")) == releases_before

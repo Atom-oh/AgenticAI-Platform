@@ -194,9 +194,14 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Resource not found")
         return record
 
-    def _run_view(self, owner, record, scope, cache=None):
+    def _run_view(self, owner, record, scope, cache=None, seen=()):
         """Report current criteria independently of the browser's product filter."""
         cache = {} if cache is None else cache
+        if record.get("id") in seen or len(seen) >= 25:
+            return {**record, "needsRevalidation": True}
+        view_key = "view", record.get("id"), record.get("version")
+        if view_key in cache:
+            return cache[view_key]
         def read(kind, identifier):
             if not identifier:
                 return None
@@ -222,7 +227,20 @@ class WorkspaceAPI:
                 from workspace.component_catalog import read_catalog
                 cache["catalogHash"] = read_catalog()["hash"]
             stale = stale or record["catalogHash"] != cache["catalogHash"]
-        return {**record, "needsRevalidation": bool(stale)}
+        reference = (record.get("contract") or {}).get("changeRequest", {}).get("baseline")
+        if not stale and reference:
+            parent = read("run", reference["runId"])
+            approval = (parent or {}).get("approval") or {}
+            selected = next((row for row in (parent or {}).get("rounds", []) if row.get("number") == reference["round"]), None)
+            stale = (not parent or not selected or selected.get("passed") is not True
+                     or approval.get("round") != reference["round"] or selected.get("sourceHash") != reference["sourceHash"]
+                     or any(not selected.get(key) or approval.get(key) != selected[key]
+                            for key in ("sourceHash", "bundleHash", "catalogHash")))
+            if not stale:
+                stale = self._run_view(owner, parent, scope, cache, (*seen, record.get("id")))["needsRevalidation"]
+        result = {**record, "needsRevalidation": bool(stale)}
+        cache[view_key] = result
+        return result
 
     def _expire_job(self, owner, job, scope=None):
         """One CAS attempt per read; a concurrent heartbeat or completion wins."""
