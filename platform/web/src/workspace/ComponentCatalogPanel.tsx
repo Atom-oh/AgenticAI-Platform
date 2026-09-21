@@ -3,6 +3,7 @@ import { messageOf } from './client';
 import { useWorkspaceClient } from './WorkspaceScope';
 import { Notice } from './shared';
 import type { ComponentCatalog, ComponentCatalogSummary } from './types';
+import ReactSourcePanel from '../portal/ReactSourcePanel';
 
 export default function ComponentCatalogPanel({ summary }: { summary?: ComponentCatalogSummary }) {
   const client = useWorkspaceClient();
@@ -23,6 +24,7 @@ export default function ComponentCatalogPanel({ summary }: { summary?: Component
   return <section className="ws-component-catalog"><h3>현재 플랫폼 컴포넌트</h3>
     <p>{summary ? `${summary.label} · v${summary.version}` : '현재 컴포넌트 기준 미확인'}</p>
     <p className="ws-muted">플랫폼에서 제공하는 기본 패키지입니다. 고객 사내 컴포넌트의 승인을 뜻하지 않습니다. 선택한 과거 시안의 고정 기준은 해당 라운드의 검사 근거에서 확인하세요.</p>
+    {summary && <ReactSourcePanel hash={summary.hash} version={summary.version} />}
     {summary && <details onToggle={event => setOpen(event.currentTarget.open)}><summary>컴포넌트 목록·개발 속성</summary>
       {error ? <Notice error>{error} <button onClick={() => setRetry(value => value + 1)}>컴포넌트 다시 조회</button></Notice> :
         !catalog || catalog.hash !== summary.hash ? <p role="status">현재 목록 조회 중…</p> : <>

@@ -105,7 +105,7 @@ export default function App() {
     const current = new URLSearchParams(location.hash.split('?')[1] || '');
     const projectId = current.get('projectId') || current.get('project');
     const next = new URLSearchParams();
-    if (projectId && (v.startsWith('wb-') || ['studio', 'portal', 'documents', 's1'].includes(v)))
+    if (projectId && (v.startsWith('wb-') || ['studio', 'portal', 'documents', 's1', 'explore'].includes(v)))
       next.set('projectId', projectId);
     if (['studio', 'portal'].includes(v)) {
       for (const key of ['productId', 'contractId']) if (current.get(key)) next.set(key, current.get(key)!);

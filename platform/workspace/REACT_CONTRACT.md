@@ -194,6 +194,15 @@ The planning/discussion/developer sidebar stays tied to the selected product/run
 Guided comparison pins baseline and shows 2..5 variants with independent evidence and failures.
 Unknown/missing build, ontology, release or Git evidence never becomes a green badge.
 
+Studio keeps the React workspace, existing playground, process generator, gallery
+and assets directly visible in its tool navigation. `#/studio?tool=play|process|gallery|assets`
+opens the corresponding tool; no tool selects the React workspace. Tool navigation
+retains project/product/run context and browser history, and previously opened
+tools stay mounted so switching tools does not discard an in-progress edit.
+The global ontology explorer remains visible in common navigation across work-area
+filters. Neither exposing these tools nor component-source downloads grants a React
+release approval.
+
 ## Validation and evidence
 
 The component table matches `react-kit/ui/types.ts`; hashes come from

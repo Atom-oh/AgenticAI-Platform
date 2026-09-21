@@ -14,6 +14,7 @@ import { loadReactCatalog, usageSnippet, type ReactCatalog } from '../portal/rea
 import ImagePreview from '../portal/ImagePreview';
 import Workspace from '../workspace/Workspace';
 import { imageSource } from '../portal/image-source';
+import ReactSourcePanel from '../portal/ReactSourcePanel';
 import '../portal/portal.css';
 
 type Status = 'APPROVED' | 'DRAFT' | 'DEPRECATED';
@@ -153,6 +154,7 @@ function CodeDetail({ component, catalog, onClose, onFindDesign }: {
         <button type="button" className="chip" aria-label="컴포넌트 상세 닫기" onClick={onClose}>닫기</button>
       </div>
       <p className="portal-muted">{COMPONENT_HELP[component.name] || component.description}</p>
+      <ReactSourcePanel hash={catalog.hash} version={catalog.version} />
       <ReactComponentPreview key={component.name} name={component.name} />
       <p className="portal-preview-note">플랫폼에 포함된 원본 React 코드로 실행합니다. 이 예제의 조작은 고객 승인이나 업무 흐름 검증을 뜻하지 않습니다.</p>
       <button type="button" className="portal-secondary" onClick={onFindDesign}>같은 이름의 설계 자산 찾기</button>

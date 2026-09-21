@@ -13,3 +13,5 @@ export type ReactCatalog = {
 const loader = createReactLoader();
 export const loadReactCatalog = (): Promise<ReactCatalog> => loader.catalog();
 export const loadReactDocument = () => loader.document();
+export const loadReactSources = (catalogHash: string) => loader.sources(catalogHash);
+export const loadReactArchive = (catalogHash: string) => loader.archive(catalogHash);
