@@ -233,6 +233,11 @@ def validate_node(value):
             _identifier(binding["id"])
             _revision(binding["revision"])
             _hash(binding["contentHash"])
+    if value["type"] == "Pattern" and value["reviewState"] == "approved" and not value["tombstone"]:
+        bindings = properties.get("usageBindings", [])
+        identifiers = {binding["id"] for binding in bindings}
+        if len(identifiers) < 2 or len(identifiers) != len(bindings) or identifiers != set(properties.get("usageIds", [])):
+            raise ValueError("Approved pattern usages require exact revision/hash bindings")
     hashes = {"fileHash", "analyzerHash", "normalizedImageHash", "sourceHash"}
     for key in properties.keys() & hashes:
         _hash(properties[key])

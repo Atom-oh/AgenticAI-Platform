@@ -63,6 +63,15 @@ def test_next_and_ownership_are_not_undocumented_dependency_paths():
     assert "unrelated" not in {item["nodeId"] for item in run(value)["items"]}
 
 
+def test_direct_team_selection_is_a_terminal_item():
+    value = fixture()
+    generation = schema.digest(value)
+    result = analyze(value, {"id": "team-change", "kind": "permission", "baseGeneration": generation,
+                            "nodeIds": ["owner"]}, generation=generation, can_read=lambda refs: True)
+    assert [item["nodeId"] for item in result["items"]] == ["owner"]
+    assert result["items"][0]["witnessEdges"] == []
+
+
 def test_generation_mismatch_and_missing_authorization_are_rejected():
     value = fixture()
     change = {"id": "change-1", "kind": "asset", "baseGeneration": "a" * 64, "nodeIds": ["icon"]}

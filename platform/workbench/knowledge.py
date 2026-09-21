@@ -312,6 +312,7 @@ def authorize_refs(ctx, refs, *, authority="legacy"):
         return reader.recheck()
     if authority != "legacy":
         fail(400, "invalid-authority", "근거 저장소가 올바르지 않습니다.")
+    checks = []
     for ref in refs:
         if not isinstance(ref, dict):
             fail(400, "invalid-evidence", "문서 근거가 필요합니다.")
@@ -324,6 +325,8 @@ def authorize_refs(ctx, refs, *, authority="legacy"):
                 or not isinstance(ref.get("allowedRoles"), list)
                 or ctx.scope["role"] not in ref["allowedRoles"]):
             fail(403, "source-forbidden", "이 근거 자료를 읽을 현재 권한이 없습니다.")
+        checks.append(ctx.check("wb_source", source))
+    return checks
 
 
 def publish_batch(ctx, batch_id, pinned):
@@ -495,6 +498,7 @@ def legacy_graph(ctx, target_id=None, *, selected_ids=None):
     manifest, active, coverage = projections(ctx)
     observed_role = ctx.scope["role"]
     nodes, edges, conflicts = {}, [], set()
+    incomplete = bool(coverage.get("unavailableSources")) or any(not binding["complete"] for _, binding in active)
     parts = []
     for source, binding in active:
         parts.append((source, ctx.read_json(binding["graphKey"], binding["graphHash"])))
@@ -506,14 +510,20 @@ def legacy_graph(ctx, target_id=None, *, selected_ids=None):
                           ctx.read_json(declared["graphKey"], declared["graphHash"])))
         except Exception:
             coverage["complete"] = False
+            incomplete = True
     for source, part in parts:
         for node in part["nodes"]:
             if not visible(ctx, source, node["sourceRef"]):
+                incomplete = True
                 continue
             if node["id"] in nodes and nodes[node["id"]] != node:
                 conflicts.add(node["id"])
             nodes[node["id"]] = node
-        edges.extend(edge for edge in part["edges"] if visible(ctx, source, edge["sourceRef"]))
+        for edge in part["edges"]:
+            if visible(ctx, source, edge["sourceRef"]):
+                edges.append(edge)
+            else:
+                incomplete = True
     nodes = {k: v for k, v in nodes.items() if k not in conflicts}
     edges = [edge for edge in edges if edge["src"] in nodes and edge["dst"] in nodes]
     edges = list({_hash(edge): edge for edge in edges}.values())
@@ -533,12 +543,14 @@ def legacy_graph(ctx, target_id=None, *, selected_ids=None):
                 selected.update((edge["src"], edge["dst"]))
         nodes = {k: v for k, v in nodes.items() if k in selected}
         edges = [edge for edge in edges if edge["src"] in nodes and edge["dst"] in nodes]
-    truncated = len(nodes) > MAX_NODES or len(edges) > MAX_EDGES
+    truncated = coverage.get("truncated", False) or len(nodes) > MAX_NODES or len(edges) > MAX_EDGES
     nodes = dict(sorted(nodes.items())[:MAX_NODES])
     edges = sorted((edge for edge in edges if edge["src"] in nodes and edge["dst"] in nodes),
                    key=lambda edge: (edge["src"], edge["rel"], edge["dst"]))[:MAX_EDGES]
     coverage = {**coverage, "complete": False,
-                "unknown": ["unmapped-dependencies"] + (["outside-selected-legacy-scope"] if scoped_boundary else []),
+                "unknown": ["unmapped-dependencies"] + (["outside-selected-legacy-scope"] if scoped_boundary else []) +
+                           (["incomplete-legacy-snapshot"] if incomplete else []),
+                "incompleteSnapshot": incomplete,
                 "conflictingNodeIds": len(conflicts), "truncated": truncated,
                 "scope": "declared-or-connector-extracted-dependencies"}
     ctx.fresh()

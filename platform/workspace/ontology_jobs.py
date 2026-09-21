@@ -44,6 +44,12 @@ def submit(ctx, body):
         job = ctx.storage.get(ctx.owner, "job", prior["jobId"])
         if prior["status"] == "failed" and not job:
             fail(409, "ontology-analysis-interrupted", "작업 전달이 중단되었습니다. 새 요청으로 다시 실행하세요.")
+        if job and job["status"] == "queued" and prior["status"] in {"queued", "processing"}:
+            if prior["jobInput"]["authorizationExpiresAt"] <= ctx.storage.clock():
+                fail(401, "authorization-expired", "작업 인증이 만료되었습니다. 새 요청으로 다시 실행하세요.")
+            # A crash can occur after durable creation but before invocation.
+            # Re-delivery is safe: Worker.claim_job admits the analyzer once.
+            job = ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])
         return {"artifact": prior, "job": job or ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])}
     files = body.get("files")
     if not isinstance(files, list) or not 1 <= len(files) <= 100:
@@ -75,7 +81,7 @@ def submit(ctx, body):
               "expectedGeneration": body.get("expectedGeneration")}
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
-                "createdBy": ctx.actor, "requestHash": schema.digest(body)}
+                "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}
     saved = ctx.commit([ctx.write("wb_artifact", artifact)], checks)[0]
     return {"artifact": saved, "job": ctx.queue_job(job_id, pinned, saved["requestHash"])}
 

@@ -12,7 +12,7 @@ export function readContext(hash = window.location.hash) {
   return new URLSearchParams(hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '');
 }
 const scopedKeys = ['product', 'productId', 'change', 'changeId', 'target', 'targetId', 'impactHash',
-  'sourceRevision', 'targetRevision', 'revision', 'runId', 'assetId', 'guidelineId', 'sessionId', 'reportId', 'skillId', 'executionId', 'sourceId', 'batchId', 'generation'];
+  'sourceRevision', 'targetRevision', 'revision', 'runId', 'assetId', 'guidelineId', 'sessionId', 'reportId', 'skillId', 'executionId', 'sourceId', 'batchId', 'generation', 'analysisId'];
 export function contextHash(view: string, patch: Record<string, string | undefined> = {}, hash = window.location.hash) {
   const params = readContext(hash);
   if (patch.projectId !== undefined && patch.projectId !== (params.get('projectId') || params.get('project') || '')) {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { resource, listPages, waitForJob } from './client';
-import { ActionState, Details, Empty, Field, LoadState, Section, useAction, useLoad, useWorkbench } from './shared';
+import { ActionState, Details, Empty, Field, label, LoadState, Section, useAction, useLoad, useWorkbench } from './shared';
 import { DependencyGraph } from './Knowledge';
 import type { Asset } from '../workspace/types';
 
@@ -12,7 +12,8 @@ type Graph = { nodes: Node[]; edges: Edge[]; generation: string | null; cursor?:
 type Impact = { items: { nodeId: string; title: string; type: string; evidenceKind: string; witnessPath: string[];
   witnessEdges?: unknown[]; sourceRefs?: SourceRef[]; staleWitness?: boolean }[];
   generation: string; coverage: unknown };
-type AnalysisArtifact = { id: string; status: string; coverage?: unknown; execution?: { backend?: string; [key: string]: unknown } };
+type AnalysisArtifact = { id: string; status: string; name?: string; jobId?: string; requestId?: string;
+  coverage?: unknown; execution?: { backend?: string; [key: string]: unknown } };
 const LEVELS = ['Foundation', 'Atom', 'Molecule', 'Organism', 'Pattern', 'PageTemplate', 'Screen', 'Procedure'];
 const STATUS: Record<string, string> = { candidate: '검토 후보', reviewed: '검토 완료', approved: '승인', rejected: '반려', deprecated: '폐기' };
 const KIND: Record<string, string> = { Foundation: '기초 자산', Atom: '기본 요소', Molecule: '소규모 조합', Organism: '업무 영역',
@@ -21,19 +22,43 @@ const KIND: Record<string, string> = { Foundation: '기초 자산', Atom: '기�
   API: 'API', Test: '테스트', Asset: '파일 자산', Document: '문서', Skill: '스킬' };
 
 export default function OntologyView() {
-  const { client, project, overview, navigate } = useWorkbench();
+  const { client, project, overview, navigate, params } = useWorkbench();
   const [cursor, setCursor] = useState(''), [history, setHistory] = useState<string[]>([]);
   const [kind, setKind] = useState(''), [selected, setSelected] = useState<Node | null>(null);
   const [reason, setReason] = useState(''), [impact, setImpact] = useState<Impact | null>(null);
   const [collectionName, setCollectionName] = useState('source-collection');
   const [files, setFiles] = useState<Record<string, string>>({});
   const [receipt, setReceipt] = useState<AnalysisArtifact | null>(null);
+  const [analysisCursor, setAnalysisCursor] = useState('');
+  const [analysisReload, setAnalysisReload] = useState(0), [requestEpoch, setRequestEpoch] = useState(() => crypto.randomUUID());
+  const analysisId = params.get('analysisId') || '';
   const operation = useAction();
   const analysis = useAction();
   const query = cursor ? '?cursor=' + resource(cursor) : '';
   const state = useLoad(signal => client.get<Graph>('/ontology' + query, signal), [client, query]);
   const configuration = useLoad(signal => client.get<{ analyzerConfigured: boolean }>('/ontology/schema', signal), [client]);
   const assets = useLoad(signal => listPages<Asset>(client, '/assets', 'assets', signal), [client]);
+  const accepted = useLoad(signal => client.get<{ items: AnalysisArtifact[]; cursor?: string }>(
+    '/ontology/analyses?limit=20' + (analysisCursor ? '&cursor=' + resource(analysisCursor) : ''), signal), [client, analysisCursor]);
+  useEffect(() => {
+    setReceipt(null);
+    if (!analysisId) return;
+    analysis.cancel();
+    void analysis.run(async (signal, update) => {
+      const path = `/ontology/analyses/${resource(analysisId)}`;
+      let result = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
+      signal.throwIfAborted();
+      setReceipt(result.artifact);
+      if (['queued', 'processing', 'running'].includes(result.artifact.status) && result.artifact.jobId) {
+        await waitForJob(client, result.artifact.jobId, { signal, onUpdate: update });
+        result = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
+      }
+      if (result.artifact.status !== 'completed' || !result.artifact.execution?.backend || !result.artifact.coverage)
+        throw new Error('분석 완료 기록과 실행 근거를 확인하지 못했습니다. 저장된 작업 상태를 확인하세요.');
+      return result.artifact;
+    }, value => { setReceipt(value); state.refresh(); accepted.refresh(); }, '저장된 분석의 실행 근거를 조회했습니다.');
+    return () => analysis.cancel();
+  }, [client, analysisId, analysisReload]);
   const choose = (node: Node | null) => {
     if (operation.busy) operation.cancel();
     setSelected(node); setImpact(null); setReason('');
@@ -54,7 +79,8 @@ export default function OntologyView() {
     void operation.run(signal => client.post(`/ontology/nodes/${resource(target.id)}/review`, {
       requestId: operation.requestId([target.id, target.revision, decision, reason].join(':')),
       expectedGeneration: state.data!.generation, revision: target.revision, decision, reason,
-    }, signal), () => { setSelected(null); setImpact(null); state.refresh(); }, '선택한 버전의 검토 결정을 기록했습니다.');
+    }, signal), () => { setSelected(null); setImpact(null); setCursor(''); setHistory([]); state.refresh(); },
+    '선택한 버전의 검토 결정을 기록했습니다.');
   };
   return <div className="wb-stack">
     <Section title="자산·상품·규정·코드의 연결" description="워크스페이스 프로젝트 온톨로지를 정본으로 조회합니다. 그림의 연결은 원본 근거와 검토 상태를 함께 확인하세요."
@@ -91,32 +117,49 @@ export default function OntologyView() {
               onChange={event => setFiles(previous => ({ ...previous, [asset.id]: event.target.value }))} maxLength={500} /></Field>}
           </div>)}
       </div>}</LoadState>
-      <button disabled={analysis.busy || !configuration.data?.analyzerConfigured || !Object.keys(files).length ||
+      <button disabled={analysis.busy || Boolean(analysisId) || accepted.loading || Boolean(accepted.error) ||
+        accepted.data?.items.some(item => item.name === collectionName && ['queued', 'processing', 'running'].includes(item.status)) ||
+        !configuration.data?.analyzerConfigured || !Object.keys(files).length ||
         Object.keys(files).length > 50 || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(collectionName)}
-        onClick={() => void analysis.run(async (signal, update) => {
+        onClick={() => void analysis.run(async signal => {
           setReceipt(null);
           const payload = { name: collectionName, files: Object.entries(files).map(([assetId, path]) => ({ assetId, path })),
             expectedGeneration: state.data?.generation ?? null };
-          const queued = await client.post<{ artifact: { id: string }; job: { id: string } }>('/ontology/analyses', {
-            ...payload, requestId: analysis.requestId(JSON.stringify(payload)),
+          return await client.post<{ artifact: AnalysisArtifact; job: { id: string } }>('/ontology/analyses', {
+            ...payload, requestId: analysis.requestId(requestEpoch + JSON.stringify(payload)),
           }, signal);
-          await waitForJob(client, queued.job.id, { signal, onUpdate: update });
-          const result = await client.get<{ artifact: AnalysisArtifact }>(
-            `/ontology/analyses/${resource(queued.artifact.id)}`, signal);
-          if (result.artifact.status !== 'completed' || !result.artifact.execution?.backend || !result.artifact.coverage)
-            throw new Error('분석 완료 기록과 실행 근거를 확인하지 못했습니다.');
-          return result;
-        }, result => { setReceipt(result.artifact);
-          setCursor(''); setHistory([]); state.refresh(); }, '원본 참조를 추출했습니다. 후보 관계와 미해결 항목을 검토하세요.')}>
+        }, result => { accepted.refresh(); navigate('ontology', { analysisId: result.artifact.id });
+          setCursor(''); setHistory([]); }, '분석을 접수했습니다. 저장된 작업에서 이어서 확인하세요.')}>
         원본 분석·매핑 후보 등록
       </button>
+      {analysisId && <button onClick={() => {
+        analysis.cancel(); setRequestEpoch(crypto.randomUUID()); navigate('ontology', { analysisId: undefined });
+      }}>
+        새 분석 준비</button>}
       <ActionState action={analysis} />
       {receipt && <section aria-label="원본 분석 실행 근거">
-        <p>실제 분석 환경: {receipt.execution?.backend === 'local-offline' ? '로컬 테스트 실행' :
-          receipt.execution?.backend === 'agentcore-code-interpreter' ? 'AgentCore Code Interpreter' : '확인되지 않은 실행 환경'}</p>
-        <Details title="분석 작업·실행 증거" value={{ artifactId: receipt.id, execution: receipt.execution }} />
+        <p>분석 작업 상태: {receipt.status === 'processing' ? '분석 중' : label(receipt.status)}</p>
+        {receipt.execution && <p>실제 분석 환경: {receipt.execution.backend === 'local-offline' ? '로컬 테스트 실행' :
+          receipt.execution.backend === 'agentcore-code-interpreter' ? 'AgentCore Code Interpreter' : '확인되지 않은 실행 환경'}</p>}
+        <Details title="분석 작업·실행 증거" value={{ artifactId: receipt.id, requestId: receipt.requestId, execution: receipt.execution }} />
         <Details title="분석 범위·미해결 항목" value={receipt.coverage} />
       </section>}
+    </Section>
+    <Section title="접수된 원본 분석" description="화면을 떠나도 접수된 분석은 남습니다. 기존 작업을 열면 새 분석 요청 없이 상태와 실행 근거를 확인합니다."
+      action={<button onClick={accepted.refresh}>분석 작업 새로고침</button>}>
+      <LoadState state={accepted}>{accepted.data && <>
+        <div className="wb-record-list">{accepted.data.items.map(item => <button key={item.id} className="wb-record"
+          onClick={() => {
+            analysis.cancel();
+            if (analysisId === item.id) setAnalysisReload(value => value + 1);
+            else navigate('ontology', { analysisId: item.id });
+          }}>
+          <strong>{item.name || item.id}</strong><span>{label(item.status)} · 저장된 분석 열기</span>
+        </button>)}</div>
+        {!accepted.data.items.length && <Empty>이 페이지에 조회 가능한 원본 분석이 없습니다.</Empty>}
+        <div className="wb-actions"><button disabled={!analysisCursor} onClick={() => setAnalysisCursor('')}>분석 첫 페이지</button>
+          <button disabled={!accepted.data.cursor} onClick={() => setAnalysisCursor(accepted.data?.cursor || '')}>분석 다음 페이지</button></div>
+      </>}</LoadState>
     </Section>
     {selected && <Section title={selected.title} description={`${KIND[selected.type] || selected.type} · ${STATUS[selected.reviewState]} · 정확한 원본 버전과 연결을 검토합니다.`}>
       <Details title="원본 근거·코드 매핑" value={{ id: selected.id, sourceRefs: selected.sourceRefs, properties: selected.properties, provenance: selected.provenance }} />

@@ -136,8 +136,6 @@ class Service:
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
         if len(writes) + 1 > 100:
             fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
-        if not checks:
-            return self.collaboration._commit(self.scope, writes)
         unique = {}
         for check in checks:
             key = check["owner"], check["kind"], check["id"]
@@ -159,7 +157,9 @@ class Service:
             fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         fence = self.write("project", project, project["version"])
         try:
-            return self.storage.put_many([*writes, fence], checks=list(unique.values()))[:-1]
+            # Timed authority/source checks belong to the caller. A contention
+            # retry must return there for reauthorization before another send.
+            return self.storage.put_many([*writes, fence], checks=list(unique.values()), retry_conflicts=False)[:-1]
         except Conflict as error:
             raise CollaborationError(409, "conflict", "프로젝트 또는 근거가 변경되었습니다.") from error
 

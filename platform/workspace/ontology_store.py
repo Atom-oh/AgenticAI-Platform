@@ -37,7 +37,7 @@ def _mapping(value):
     result = copy.deepcopy(value)
     for field in ("revision", "contentHash", "reviewState"):
         result.pop(field, None)
-    for field in ("analyzerHash", "usageBindings"):
+    for field in ("usageBindings",):
         result.get("properties", {}).pop(field, None)
     return result
 
@@ -546,7 +546,8 @@ class Ontology:
             loc = self._index(current, "edges", _bucket(edge_id)).get(edge_id)
             part = self._part(current, loc["partition"]) if loc else None
             edge = next((item for item in part["graph"]["edges"] if item["id"] == edge_id), None) if part else None
-            if edge and (for_impact or self._visible(edge["sourceRefs"])):
+            if edge and (for_impact or not edge["tombstone"] and edge["reviewState"] not in {"rejected", "deprecated"}
+                         and self._visible(edge["sourceRefs"])):
                 values.append(edge["src"]["id"])
         result = []
         if len(set(values)) > 500:

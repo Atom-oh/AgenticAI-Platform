@@ -50,7 +50,9 @@ def route(host, scope, claims, method, parts, body, query):
         for seed in raw_seeds:
             schema._identifier(seed)
         seeds = list(raw_seeds)
+        restricted_source = False
         if body.get("oldSource"):
+            restricted_source = not ontology._visible([body["oldSource"]], historical=True)
             seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True))
         seeds = sorted(set(seeds))
         graph = (ontology.closure(seeds[:20], direction="dependents", max_nodes=500, historical=True) if seeds else
@@ -67,6 +69,8 @@ def route(host, scope, claims, method, parts, body, query):
         if len(seeds) > 20:
             graph["coverage"]["truncated"] = True
             graph["coverage"]["unknown"].append("seed-limit")
+        if restricted_source:
+            graph["coverage"]["unknown"].append("restricted-source-boundary")
         result = analyze({key: value for key, value in graph.items() if key != "generation"},
                          change, generation=current["generation"], can_read=lambda refs: ontology._visible(refs, historical=True))
         ontology._recheck(current)
@@ -74,6 +78,27 @@ def route(host, scope, claims, method, parts, body, query):
     if parts == ["analyses"] and method == "POST":
         from workspace.ontology_jobs import submit
         return 202, public(submit(ctx, body))
+    if parts == ["analyses"] and method == "GET":
+        from workspace.collaboration import CollaborationError
+        from workspace.ontology_jobs import reconcile
+        from workspace.ontology_sources import Sources
+        page = ctx.page("wb_artifact", query)
+        sources, items = Sources(ctx, max_records=2500), []
+        for artifact in page["items"]:
+            if artifact.get("kind") != "ontology-analysis":
+                continue
+            try:
+                sources.verify(artifact["sourceRefs"], recheck=False)
+            except CollaborationError as error:
+                if error.status in {403, 404, 409}:
+                    continue
+                raise
+            artifact = reconcile(ctx, artifact)
+            items.append({key: artifact[key] for key in
+                          ("id", "name", "status", "jobId", "requestId", "createdBy", "createdAt", "updatedAt")
+                          if key in artifact})
+        sources.recheck()
+        return 200, {"items": items, "cursor": page.get("cursor")}
     if len(parts) == 2 and parts[0] == "analyses" and method == "GET":
         from workspace.ontology_jobs import reconcile
         artifact = ctx.get("wb_artifact", parts[1])

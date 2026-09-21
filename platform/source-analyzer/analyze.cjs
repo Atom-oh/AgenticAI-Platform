@@ -332,6 +332,18 @@ function analyze(input) {
               reference(file, 'style-import', tokens.at(-1).value, at);
           }
           parsed.walk(token => {
+            if (token.type === 'function' && ['image-set', '-webkit-image-set'].includes(token.value.toLowerCase())) {
+              let first = true;
+              for (const child of token.nodes) {
+                if (child.type === 'div' && child.value === ',') { first = true; continue; }
+                if (['space', 'comment'].includes(child.type) || !first) continue;
+                first = false;
+                if (child.type === 'string' && !/[\\{}$]/.test(child.value))
+                  reference(file, 'style-asset', child.value, at);
+                else if (!(child.type === 'function' && child.value.toLowerCase() === 'url'))
+                  problem(file, 'unsupported-image-set-source', at.line, at.column);
+              }
+            }
             if (token.type === 'function' && token.value.toLowerCase() === 'url') {
               const children = token.nodes.filter(n => !['space', 'comment'].includes(n.type));
               if (children.length === 1 && ['string', 'word'].includes(children[0].type) && !/[\\{}$]/.test(children[0].value))

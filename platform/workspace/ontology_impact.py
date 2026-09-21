@@ -68,8 +68,6 @@ def analyze(graph, change, *, generation, can_read):
             break
         seen.add(identifier)
         node = nodes[identifier]
-        if node["type"] == "Team":
-            continue
         evidence = [node, *witnesses, *(nodes[prior] for prior in path[:-1])]
         stale = ("historical-source-revisions" in graph.get("coverage", {}).get("unknown", []) or
                  any(edge["tombstone"] or any(nodes[edge[end]["id"]]["revision"] != edge[end]["revision"] for end in ("src", "dst"))
@@ -86,6 +84,8 @@ def analyze(graph, change, *, generation, can_read):
                       "witnessPath": path, "witnessEdges": [edge["id"] for edge in witnesses],
                       "staleWitness": stale,
                       "sourceRefs": list(refs.values())})
+        if node["type"] == "Team":
+            continue
         if len(witnesses) >= LIMITS["hops"]:
             if reverse.get(identifier):
                 truncated = True

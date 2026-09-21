@@ -43,6 +43,28 @@ def test_canonical_workbench_impacts_keep_the_same_manifest_and_all_source_refs(
     assert loaded["generation"] == graph["generation"]
 
 
+def test_nonterminal_task_update_fences_revoked_canonical_source_records(wb):
+    from test_ontology_store import candidate
+    published = Ontology(context(wb)).publish_candidate("task-race", candidate(wb),
+        expected_generation=None, request_id="task-race")
+    wb.api.ontology_mode = "canonical"
+    change = call(wb, "POST", "changes", {"requestId": "task-race-change", "title": "Source race",
+        "targetId": published["identities"]["image"], "changeType": "update",
+        "before": "", "after": "", "reason": "Synthetic authorization race"})["change"]
+    result = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
+    task = result["tasks"][0]
+
+    def revoke():
+        source = wb.storage.get(wb.owner, "asset", "image")
+        wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+
+    wb.storage.table().before_transaction = revoke
+    with pytest.raises(CollaborationError) as error:
+        call(wb, "PUT", f"tasks/{task['id']}", {"version": task["version"], "status": "in-progress"})
+    assert error.value.code == "conflict"
+    assert wb.storage.get(wb.owner, "wb_task", task["id"])["status"] == "open"
+
+
 def test_archived_readable_source_keeps_canonical_change_detail_available(wb):
     from test_ontology_store import candidate
     data = candidate(wb)
@@ -101,6 +123,25 @@ def test_import_preserves_parallel_evidence_and_marks_invalid_next(wb, monkeypat
     assert len([e for e in graph["edges"] if e["type"] == "USES"]) == 1
     assert len(next(e for e in graph["edges"] if e["type"] == "USES")["sourceRefs"]) == 2
     assert "unmapped-legacy-edge-shape" in imported["coverage"]["unknown"]
+
+
+def test_stale_declared_graph_cannot_tombstone_a_previous_import(wb):
+    from workbench import knowledge
+    from test_workbench_core import queue, run, documents
+    src, _ = indexed(wb)
+    identifier = next(row["id"] for row in call(wb, "GET", "knowledge")["items"] if row["title"] == "Synthetic withdrawal guidance")
+    reference = call(wb, "GET", "knowledge/" + identifier)["evidence"]
+    knowledge.declare_graph(context(wb), {"requestId": "declared", "sourceRef": reference,
+        "nodes": [{"id": "declared-screen", "label": "Screen", "title": "Declared screen", "version": "1"}], "edges": []})
+    first = import_legacy(context(wb), {"requestId": "before-reindex", "expectedGeneration": None})
+    updated = documents()
+    updated[0]["revision"] = "r2"
+    run(wb, queue(wb, src, updated, request="reindex"))
+    assert knowledge.legacy_graph(context(wb))["coverage"]["incompleteSnapshot"]
+    with pytest.raises(CollaborationError) as error:
+        import_legacy(context(wb), {"requestId": "after-reindex", "expectedGeneration": first["generation"]})
+    assert error.value.code == "legacy-import-incomplete"
+    assert Ontology(context(wb)).current()["generation"] == first["generation"]
 
 
 def test_canonical_impact_excludes_order_containment_and_provenance():

@@ -71,6 +71,9 @@ unrelated collaboration writes do not revoke it. The commit still fences the
 latest project record and every observed source. Bounded project-CAS retries
 reuse already computed analysis; changed membership, sources or graph generation
 fail instead of running the analyzer again.
+Deadline-sensitive service commits submit a transaction once. Contention returns
+to the authorized caller, which repeats source and actor deadline checks before
+any retry; storage cannot silently resubmit that transaction after expiry.
 Visibility checks are memoized by source authority within one request. The
 final authority, source-version and expiry checks are always repeated before
 returning data or committing a mutation.
@@ -95,6 +98,7 @@ All endpoints use the existing `/studio-api` JWT authorizer and
 | `POST /ontology/impact` | `{changeId,kind,expectedGeneration,oldSource?,newSource?,nodeIds?}` returns authorized reverse paths |
 | `POST /ontology/import-workbench` | Owner-only, explicit legacy migration with source and legacy-index fences; optional `nodeIds` selects 1–20 nodes into a stable separate partition |
 | `POST /ontology/analyses` | `{requestId,name,files:[{assetId,path}],resolverProfileId?,expectedGeneration?}` queues source analysis |
+| `GET /ontology/analyses` | Source-authorized, paginated accepted analysis metadata, including its original request/artifact/job IDs |
 | `GET /ontology/analyses/:id` | Authorized analysis artifact, coverage and actual execution receipt |
 
 Manual candidate writes cannot claim parser provenance or approval. Only the
@@ -142,6 +146,10 @@ including an interruption between the job and artifact transitions.
 Recovery records failure and requires a new authorized request; it never repeats
 paid execution under an old authorization. Retrying an unexpired dispatch request
 can finish creating its missing job.
+The UI records an accepted artifact in its project-scoped URL before waiting.
+Returning to that URL or selecting a saved analysis resumes reads/polling of the
+existing job. Project changes clear the URL selection; the authorized analysis
+list remains available for recovery without another POST.
 This foundation accepts only the exact offline adapter with explicit test opt-in
 and verifies its input/code/lock hashes. Cloud adapter installation belongs to
 the separate adapter PR; a callable's backend label is insufficient.

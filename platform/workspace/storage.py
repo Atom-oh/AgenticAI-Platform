@@ -158,7 +158,7 @@ class Storage:
             raise Conflict("The resource has changed") from error
         return _plain(data)
 
-    def put_many(self, writes: list[dict], checks: list[dict] | None = None) -> list[dict]:
+    def put_many(self, writes: list[dict], checks: list[dict] | None = None, *, retry_conflicts=True) -> list[dict]:
         """Atomically publish conditional metadata across owner partitions.
 
         The resource client marshals native values. Build each nested condition
@@ -222,7 +222,7 @@ class Storage:
                 # Actual predicate failures must never be refreshed or bypassed.
                 contention = (len(codes) == len(transactions) and "TransactionConflict" in codes
                               and all(code in ("None", "TransactionConflict") for code in codes))
-                if contention and attempt < 4:
+                if contention and retry_conflicts and attempt < 4:
                     time.sleep(random.uniform(.025 * 2 ** attempt, .05 * 2 ** attempt))
                     continue
                 if any(code in ("ConditionalCheckFailed", "TransactionConflict") for code in codes):

@@ -117,6 +117,67 @@ def test_analysis_retry_after_publication_returns_the_same_receipt(wb):
     assert submit(context(wb), body)["artifact"]["status"] == "completed"
 
 
+def test_retry_redelivers_a_durable_job_after_a_crash_before_invocation(wb, monkeypatch):
+    wb.api.ontology_analyzer_ready = True
+    body = {"requestId": "lost-dispatch", "name": "example", "files": collection(wb)}
+
+    def crash(*args):
+        raise SystemExit("synthetic process termination after durable job creation")
+
+    monkeypatch.setattr(wb.api, "_invoke", crash)
+    with pytest.raises(SystemExit):
+        submit(context(wb), body)
+    artifact = wb.storage.get(wb.owner, "wb_artifact", context(wb).identity("wb_artifact", body["requestId"]))
+    job = wb.storage.get(wb.owner, "job", artifact["jobId"])
+    assert artifact["status"] == job["status"] == "queued"
+    deliveries = []
+    monkeypatch.setattr(wb.api, "_invoke", lambda owner, saved: deliveries.append(saved["id"]))
+    retried = submit(context(wb), body)
+    assert retried["job"]["id"] == job["id"] and deliveries == [job["id"]]
+    assert len(wb.storage.list(wb.owner, "wb_artifact")) == 1
+
+
+def test_sibling_file_change_preserves_unchanged_file_revision_and_node_hash(wb):
+    wb.api.ontology_analyzer_ready = True
+    files = collection(wb)
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    queued = submit(context(wb), {"requestId": "first-unit", "name": "example", "files": files})
+    process(worker, wb.owner, queued["job"])
+    initial = Ontology(context(wb)).read()
+    old = {node["properties"]["path"]: node for node in initial["nodes"] if node["type"] == "CodeFile"}
+    source = wb.storage.get(wb.owner, "asset", "code-app")
+    raw = wb.storage.get_blob(source["originalKey"]) + b"\nexport const added = true;"
+    key = wb.storage.key_for(wb.owner, "asset", source["id"], "revision-2")
+    wb.storage.put_blob_once(key, raw, "text/plain")
+    wb.storage.put(wb.owner, "asset", {**source, "originalKey": key, "sha256": hashlib.sha256(raw).hexdigest(),
+                                     "size": len(raw), "importRevision": 2}, source["version"])
+    queued = submit(context(wb), {"requestId": "second-unit", "name": "example", "files": files,
+                                  "expectedGeneration": initial["generation"]})
+    process(worker, wb.owner, queued["job"])
+    current = {node["properties"]["path"]: node for node in Ontology(context(wb)).read()["nodes"] if node["type"] == "CodeFile"}
+    assert current["Button.tsx"] == old["Button.tsx"]
+    assert current["App.tsx"]["revision"] == old["App.tsx"]["revision"] + 1
+    assert all("analyzerHash" not in node["properties"] for node in current.values())
+
+
+def test_accepted_analysis_list_recovers_ids_without_exposing_inaccessible_sources(wb):
+    from test_ontology_api import call as api_call
+    wb.api.ontology_analyzer_ready = True
+    body = {"requestId": "recover-list", "name": "example", "files": collection(wb)}
+    queued = submit(context(wb), body)
+    status, page = api_call(wb, "GET", "/analyses")
+    assert status == 200 and len(page["items"]) == 1
+    saved = page["items"][0]
+    assert saved["id"] == queued["artifact"]["id"] and saved["jobId"] == queued["job"]["id"]
+    assert saved["requestId"] == body["requestId"] and saved["status"] == "queued"
+    assert "jobInput" not in saved and "sourceRefs" not in saved
+    source = wb.storage.get(wb.owner, "asset", "code-app")
+    wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+    status, page = api_call(wb, "GET", "/analyses")
+    assert status == 200 and page["items"] == []
+
+
 def test_denied_partition_never_invokes_analyzer(wb):
     wb.api.ontology_analyzer_ready = True
     with pytest.raises(CollaborationError) as error:

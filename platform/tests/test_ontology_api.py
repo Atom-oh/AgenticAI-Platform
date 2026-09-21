@@ -93,6 +93,24 @@ def test_new_impact_source_requires_current_authority_and_empty_results_have_bou
     assert call(wb, "POST", "/impact", {**body, "newSource": asset_reference(source)})[0] == 409
 
 
+def test_revoked_edge_only_source_retains_a_restricted_impact_boundary(wb):
+    from test_ontology_sources import asset, context
+    from workspace.ontology_store import Ontology
+    from workspace import ontology_schema as schema
+    value = candidate(wb)
+    reference = asset_reference(asset(wb, "revoked-mapping"))
+    value["edges"][0] = schema.seal({**value["edges"][0], "sourceRefs": [reference]})
+    result = Ontology(context(wb)).publish_candidate("edge-only", value, expected_generation=None, request_id="edge-only")
+    source = wb.storage.get(wb.owner, "asset", reference["sourceId"])
+    wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+    status, impact = call(wb, "POST", "/impact", {"changeId": "revoked-edge", "kind": "permission",
+        "oldSource": reference, "expectedGeneration": result["generation"]})
+    assert status == 200, impact
+    assert impact["items"] and all(item["evidenceKind"] == "candidate" for item in impact["items"])
+    assert "restricted-source-boundary" in impact["coverage"]["unknown"]
+    assert reference["sourceId"] not in json.dumps(impact)
+
+
 def test_pattern_approval_requires_two_current_reviewed_usages(wb):
     from test_ontology_sources import asset
     from test_ontology_schema import node

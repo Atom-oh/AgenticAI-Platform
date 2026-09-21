@@ -70,7 +70,7 @@ async function harness() {
         { id: 'screen', type: 'Screen', title: `${scope.toUpperCase()} 화면`, revision: 1, reviewState: 'candidate', provenance: 'declared',
           sourceRefs: [{ sourceKind: 'asset', sourceId: 'screen-file', revision: '1', sha256: hash, audienceRevision: '1' }] }],
       edges: [{ id: 'edge', type: 'USES', src: { id: 'screen' }, dst: { id: 'icon' }, sourceRefs: [], provenance: 'declared' }] },
-    sessions: {}, jobs: {}, executions: {}, assets: [],
+    sessions: {}, jobs: {}, executions: {}, assets: [], analyses: [],
   };
   const catalog = { ...JSON.parse(fs.readFileSync(path.join(root, '../react-kit/catalog.json'), 'utf8')), hash };
   const css = ['workspace/workspace.css', 'workbench/workbench.css'].map(file => fs.readFileSync(path.join(root, 'src', file), 'utf8')).join('\n');
@@ -134,11 +134,19 @@ async function harness() {
       if (target === '/ontology/schema') return json({ analyzerConfigured: Boolean(fixture.analyzerConfigured) });
       if (target === '/ontology/analyses' && method === 'POST') {
         data.jobs['analysis-job'] = { id: 'analysis-job', kind: 'ontology-analysis', status: 'queued' };
-        return json({ artifact: { id: 'analysis-artifact' }, job: data.jobs['analysis-job'] }, 202);
+        const artifact = { id: 'analysis-artifact', jobId: 'analysis-job', status: 'queued',
+          name: body.name, requestId: body.requestId };
+        data.analyses.push(artifact);
+        return json({ artifact, job: data.jobs['analysis-job'] }, 202);
       }
-      if (target === '/ontology/analyses/analysis-artifact') return json({ artifact: {
-        id: 'analysis-artifact', status: 'completed', execution: { backend: 'local-offline', inputHash: hash },
-        coverage: { complete: false, unknown: ['unreviewed-design-mappings'] } } });
+      if (target === '/ontology/analyses' && method === 'GET') return json({ items: data.analyses });
+      if (target === '/ontology/analyses/analysis-artifact') {
+        const artifact = data.analyses[0];
+        if (data.jobs['analysis-job'].status === 'completed') Object.assign(artifact, {
+          status: 'completed', execution: { backend: 'local-offline', inputHash: hash },
+          coverage: { complete: false, unknown: ['unreviewed-design-mappings'] } });
+        return json({ artifact });
+      }
       if (target === '/ontology/impact') {
         const response = { generation: data.ontology.generation, coverage: { complete: false }, items: [
           { nodeId: body.nodeIds[0], title: '선택한 항목의 영향', type: 'Screen', evidenceKind: 'candidate', witnessPath: body.nodeIds }] };
@@ -383,6 +391,29 @@ test('ontology analysis displays the actual backend and receipt and clears it on
     await h.page.getByLabel('프로젝트', { exact: true }).selectOption('b');
     await h.page.locator('.wb-record-list button').filter({ hasText: 'B 이미지' }).waitFor();
     assert.equal(await h.page.getByText('실제 분석 환경: 로컬 테스트 실행', { exact: true }).count(), 0);
+    assert(!h.page.url().includes('analysisId='));
+  } finally { await h.close(); }
+});
+
+test('accepted ontology analysis can be recovered after remount without another paid request', { timeout: 60000 }, async () => {
+  const h = await harness();
+  try {
+    h.fixture.analyzerConfigured = true;
+    h.fixture.holdJobs = true;
+    h.data('a').assets = [{ id: 'code', name: 'App.tsx', uploadStatus: 'stored' }];
+    await h.open('ontology');
+    await h.page.getByRole('checkbox', { name: 'App.tsx', exact: true }).check();
+    await h.page.getByRole('button', { name: '원본 분석·매핑 후보 등록', exact: true }).click();
+    await h.page.waitForURL(/analysisId=analysis-artifact/);
+    const requestId = h.data('a').analyses[0].requestId;
+    await h.open('planning');
+    await h.open('ontology');
+    h.fixture.holdJobs = false;
+    await h.page.getByRole('button').filter({ hasText: 'source-collection' }).click();
+    await h.page.getByText('실제 분석 환경: 로컬 테스트 실행', { exact: true }).waitFor();
+    await h.page.getByText('분석 작업·실행 증거', { exact: true }).click();
+    assert.match(await h.page.getByRole('region', { name: '원본 분석 실행 근거' }).innerText(), new RegExp(requestId));
+    assert.equal(h.fixture.calls.filter(call => call.method === 'POST' && call.target === '/ontology/analyses').length, 1);
   } finally { await h.close(); }
 });
 

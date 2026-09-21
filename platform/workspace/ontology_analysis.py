@@ -161,7 +161,7 @@ def project_analysis(ctx, name, payload, bindings, analysis):
         else:
             add_node(identifier, "CodeFile", file["path"], [ref], {
                 "path": file["path"], "language": Path(file["path"]).suffix[1:],
-                "fileHash": file["sha256"], "analyzerHash": value["hash"], "collectionId": name})
+                "fileHash": file["sha256"], "collectionId": name})
     for item in value["exports"]:
         if item.get("path") not in bindings or not isinstance(item.get("name"), str):
             fail(409, "ontology-analysis-integrity", "내보내기 기호의 원본이 올바르지 않습니다.")

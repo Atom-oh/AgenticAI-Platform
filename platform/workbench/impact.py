@@ -51,7 +51,7 @@ def traversal(graph, target_id):
             continue
         visited.add(identifier)
         node = nodes.get(identifier)
-        if node is not None and node["label"] == "Role":
+        if node is not None and node["label"] == "Role" and node.get("canonicalType") != "Team":
             continue
         refs = [ref for entry in ([node] if node else []) + witness_edges
                 for ref in (entry.get("sourceRefs") or [entry["sourceRef"]])]
@@ -68,6 +68,8 @@ def traversal(graph, target_id):
                       "witnessPath": path, "witnessEdges": witness_edges, "sourceRefs": refs,
                       "sourceRevision": node["sourceRef"]["revision"] if node else None,
                       "confidence": confidence, "staleWitness": stale})
+        if node is not None and node.get("canonicalType") == "Team":
+            continue
         parallel = {}
         for edge in sorted(reverse.get(identifier, []), key=lambda e: (e["src"], e["rel"])):
             parallel.setdefault(edge["src"], []).append(edge)
@@ -203,7 +205,7 @@ def update_task(ctx, identifier, body):
     task = ctx.get("wb_task", identifier)
     ctx.fresh({"owner", task["role"]})
     authority = task.get("graphAuthority", "legacy")
-    knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority)
+    checks = knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority)
     if _version(body.get("version")) != task["version"]:
         fail(409, "conflict", "작업 버전이 변경되었습니다.")
     status = body.get("status")
@@ -215,7 +217,7 @@ def update_task(ctx, identifier, body):
         if not member or member["role"] not in {"owner", task["role"]}:
             fail(400, "invalid-assignee", "해당 역할의 현재 프로젝트 구성원만 배정할 수 있습니다.")
     refs = body.get("evidenceRefs", task.get("evidenceRefs", []))
-    checks = knowledge.verify_refs(ctx, refs, authority=authority)
+    checks.extend(knowledge.verify_refs(ctx, refs, authority=authority))
     if status == "done":
         change = ctx.get("wb_change", task["changeId"])
         impact = read_impact(ctx, task["changeId"])
@@ -232,7 +234,7 @@ def update_task(ctx, identifier, body):
     updated = {**task, "status": status, "assigneeSub": assignee, "evidenceRefs": refs,
                "completedBy": ctx.actor if status == "done" else None,
                "completedAt": ctx.storage.clock() if status == "done" else None}
-    knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority)
+    checks.extend(knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority))
     knowledge.verify_refs(ctx, refs, authority=authority)
     if status == "done":
         knowledge.verify_refs(ctx, task["sourceRefs"], authority=authority)

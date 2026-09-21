@@ -93,6 +93,16 @@ test('CSS module dependencies are recorded with unresolved transform semantics',
   assert.equal(extension.references.some(item => item.resolution.status === 'resolved-local'), false);
 });
 
+test('image-set strings and url sources retain exact assets without treating type descriptors as URLs', () => {
+  const result = analyze(request([
+    text('app.css', '.hero{background:image-set("hero.png" 1x, url("hero@2x.png") type("image/png") 2x)}', 'style'),
+    asset('hero.png'), asset('hero@2x.png'),
+  ]));
+  assert.deepEqual(result.references.map(ref => ref.resolution.targetPath).sort(), ['hero.png', 'hero@2x.png']);
+  const dynamic = analyze(request([text('app.css', '.hero{background:-webkit-image-set(var(--hero) 1x)}', 'style')]));
+  assert.ok(dynamic.unresolved.some(item => item.path === 'app.css' && item.reason === 'unsupported-image-set-source'));
+});
+
 test('CSS source-map discovery cannot inspect host files', () => {
   const PreviousMap = require('../node_modules/postcss/lib/previous-map');
   const original = PreviousMap.prototype.loadFile;

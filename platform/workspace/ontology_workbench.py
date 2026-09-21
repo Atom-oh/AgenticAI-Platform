@@ -55,14 +55,16 @@ def import_legacy(ctx, body):
             fail(422, "legacy-import-scope", "가져올 기존 노드를 1~20개 선택하세요.")
         selected = sorted({schema._identifier(identifier) for identifier in selected})
     old = knowledge.legacy_graph(ctx, selected_ids=selected) if selected is not None else knowledge.legacy_graph(ctx)
-    if old["coverage"].get("truncated") or old["coverage"].get("conflictingNodeIds"):
+    if (old["coverage"].get("truncated") or old["coverage"].get("conflictingNodeIds")
+            or old["coverage"].get("incompleteSnapshot")):
         from workbench.service import fail
         fail(422, "legacy-import-incomplete", "일부만 조회된 기존 그래프는 교체할 수 없습니다. 원본 범위를 나누고 충돌을 해결하세요.")
     if baseline and baseline.get("generation") != old.get("generation"):
         from workbench.service import fail
         fail(409, "legacy-source-changed", "가져오는 동안 기존 지식 그래프가 변경되었습니다.")
     nodes, edges, ids, missing = [], {}, set(), set()
-    types = {"Flow": "Procedure", "Guideline": "Document", "Rule": "PolicyRule", "Role": "Team", "Icon": "Foundation"}
+    types = {"Flow": "Procedure", "Guideline": "Document", "Rule": "PolicyRule", "Condition": "PolicyRule",
+             "Role": "Team", "Icon": "Foundation"}
     property_ids = {"Product": "productId", "Document": "documentId", "PolicyRule": "ruleId",
                     "Team": "teamId", "API": "apiId", "Test": "testId", "Skill": "skillId"}
     for old_node in old["nodes"]:
@@ -87,6 +89,7 @@ def import_legacy(ctx, body):
         ids.add(row["id"])
     relations = {"DEPENDS_ON": "USES", "CONFORMS_TO": "GOVERNED_BY", "REQUIRES": "USES"}
     node_types = {node["id"]: node["type"] for node in nodes}
+    node_by_id = {node["id"]: node for node in nodes}
     for old_edge in old["edges"]:
         if old_edge["src"] not in ids or old_edge["dst"] not in ids:
             missing.add("unmapped-legacy-endpoint")
@@ -106,7 +109,7 @@ def import_legacy(ctx, body):
             "reviewState": "candidate", "tombstone": False}
         try:
             schema.validate_graph({"schemaVersion": 1, "projectId": ctx.project_id,
-                "nodes": nodes, "edges": [schema.seal(row)]})
+                "nodes": [node_by_id[key] for key in sorted({source, target})], "edges": [schema.seal(row)]})
         except (ValueError, TypeError):
             missing.add("unmapped-legacy-edge-shape")
             continue

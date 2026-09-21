@@ -119,6 +119,45 @@ def test_failed_index_write_cannot_publish_a_partial_manifest(wb, monkeypatch):
     assert wb.storage.get(wb.owner, "ontology", CURRENT) is None
 
 
+def test_retired_edge_is_only_a_historical_source_seed(wb):
+    value = candidate(wb)
+    reference = asset_reference(asset(wb, "mapping-only"))
+    value["edges"][0] = schema.seal({**value["edges"][0], "sourceRefs": [reference]})
+    first = publish(wb, value)
+    assert Ontology(context(wb)).source_nodes(reference) == [first["identities"]["control"]]
+    publish(wb, {**value, "edges": []}, generation=first["generation"], request="retire")
+    assert Ontology(context(wb)).source_nodes(reference) == []
+    assert first["identities"]["control"] in Ontology(context(wb)).source_nodes(reference, for_impact=True)
+
+
+def test_service_contention_returns_for_reauthorization_before_any_retry(wb, monkeypatch):
+    from botocore.exceptions import ClientError
+    source = asset(wb)
+    ctx = context(wb)
+    ctx.claims["exp"] = wb.now // 1000 + 1
+    calls = []
+
+    def contend(**request):
+        calls.append(request)
+        wb.now += 2000
+        wb.storage.clock = lambda: wb.now
+        raise ClientError({"Error": {"Code": "TransactionCanceledException"},
+                           "CancellationReasons": [{"Code": "TransactionConflict"}] +
+                           [{"Code": "None"}] * (len(request["TransactItems"]) - 1)}, "TransactWriteItems")
+
+    client = wb.storage.table().meta.client
+    monkeypatch.setattr(client.exceptions, "TransactionCanceledException", ClientError)
+    monkeypatch.setattr(client, "transact_write_items", contend)
+    writes = [ctx.write("wb_artifact", {"id": "never-published", "projectId": wb.project["id"]})]
+    with pytest.raises(CollaborationError) as error:
+        ctx.commit(writes, [ctx.check("asset", source)])
+    assert error.value.code == "conflict" and len(calls) == 1
+    with pytest.raises(CollaborationError) as expired:
+        ctx.commit(writes, [ctx.check("asset", source)])
+    assert expired.value.code == "authorization-expired" and len(calls) == 1
+    assert wb.storage.get(wb.owner, "wb_artifact", "never-published") is None
+
+
 def test_revoked_or_archived_sources_disappear_without_restoring_old_graph_access(wb):
     publish(wb)
     row = wb.storage.get(wb.owner, "asset", "image")
