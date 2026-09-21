@@ -232,7 +232,9 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     assert.equal(await page.locator('[data-workflow-step]').count(), 5);
     await page.getByRole('button', { name: '1 업무 정의', exact: true }).waitFor();
     assert.equal(await page.getByLabel('기존 Studio 집계', { exact: true }).count(), 0);
-    await page.getByText('이전 시안·참고 도구', { exact: true }).click();
+    assert.equal(await page.getByRole('navigation', { name: 'UX 제작 도구' }).getByRole('button').count(), 5);
+    assert.equal(await page.getByRole('button', { name: 'UX 만들어보기 · 플레이그라운드', exact: true }).isVisible(), true);
+    assert.equal(await page.getByRole('button', { name: '프로세스·흐름 생성', exact: true }).isVisible(), true);
     await page.locator('.studio-tabs').getByRole('button', { name: /시안 갤러리/ }).click();
     await page.getByLabel('기존 Studio 집계', { exact: true }).getByText('23', { exact: true }).waitFor();
     assert.match(await summary.innerText(), /정적 시안/);

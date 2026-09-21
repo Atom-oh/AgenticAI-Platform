@@ -2,16 +2,18 @@ import type { ReactCatalog } from '../src/portal/reactCatalog';
 import { COMPONENT_NAMES, isComponentName } from './examples/names';
 
 const ROOT = '/portal-renderers/react/';
-export const LIMITS = Object.freeze({ manifest: 64_000, html: 1_000_000, timeout: 15_000 });
+export const LIMITS = Object.freeze({ manifest: 64_000, html: 1_000_000, sources: 256_000, archive: 512_000, timeout: 15_000 });
 type Renderer = { file: string; sha256: string; bytes: number };
-export type Manifest = { schemaVersion: 1; catalog: ReactCatalog; renderer: Renderer };
+export type Manifest = { schemaVersion: 1; catalog: ReactCatalog; renderer: Renderer; sources: Renderer & { archive: Renderer } };
 export type ReactDocument = { html: string; catalog: ReactCatalog };
+export type SourceFile = { path: string; sha256: string; content: string };
 const digestPattern = /^[a-f0-9]{64}$/;
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown, size: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= size;
 
 export function validateManifest(input: unknown): Manifest {
-  if (!record(input) || input.schemaVersion !== 1 || !record(input.catalog) || !record(input.renderer)) {
+  if (!record(input) || input.schemaVersion !== 1 || !record(input.catalog) || !record(input.renderer) ||
+      !record(input.sources) || !record(input.sources.archive)) {
     throw new Error('invalid-react-manifest');
   }
   const c = input.catalog, r = input.renderer;
@@ -40,7 +42,14 @@ export function validateManifest(input: unknown): Manifest {
     id: c.id, version: c.version, label: c.label, hash: c.hash,
     components: Object.freeze(components) as unknown as ReactCatalog['components'],
   });
-  return { schemaVersion: 1, catalog, renderer: { file: r.file as string, sha256: r.sha256, bytes: r.bytes } };
+  const asset = (value: Record<string, unknown>, extension: string, maximum: number): Renderer => {
+    if (!text(value.sha256, 64) || !digestPattern.test(value.sha256) || value.file !== `source-${value.sha256}.${extension}` ||
+        typeof value.bytes !== 'number' || !Number.isInteger(value.bytes) || value.bytes < 1 || value.bytes > maximum)
+      throw new Error('invalid-react-source-manifest');
+    return { file: value.file as string, sha256: value.sha256, bytes: value.bytes };
+  };
+  return { schemaVersion: 1, catalog, renderer: { file: r.file as string, sha256: r.sha256, bytes: r.bytes },
+    sources: { ...asset(input.sources, 'json', LIMITS.sources), archive: asset(input.sources.archive, 'zip', LIMITS.archive) } };
 }
 
 export async function readBytes(url: string, maximum: number, mime: string, fetcher: typeof fetch): Promise<Uint8Array> {
@@ -86,8 +95,16 @@ export async function readBytes(url: string, maximum: number, mime: string, fetc
 export function createReactLoader({ fetcher = fetch, origin }: { fetcher?: typeof fetch; origin?: string } = {}) {
   let manifestPromise: Promise<Manifest> | undefined;
   let documentPromise: Promise<ReactDocument> | undefined;
+  let sourcePromise: Promise<readonly SourceFile[]> | undefined;
   const localURL = (file: string) => new URL(ROOT + file, origin ?? globalThis.location.origin).href;
   const decode = (bytes: Uint8Array) => new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  const sha256 = async (bytes: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+    byte => byte.toString(16).padStart(2, '0')).join('');
+  const verified = async (asset: Renderer, mime: string) => {
+    const bytes = await readBytes(localURL(asset.file), asset.bytes, mime, fetcher);
+    if (bytes.byteLength !== asset.bytes || await sha256(bytes) !== asset.sha256) throw new Error('react-source-integrity-mismatch');
+    return bytes;
+  };
   const manifest = () => manifestPromise ||= readBytes(localURL('index.json'), LIMITS.manifest, 'application/json', fetcher)
     .then(bytes => validateManifest(JSON.parse(decode(bytes))))
     .catch(error => { manifestPromise = undefined; throw error; });
@@ -102,5 +119,37 @@ export function createReactLoader({ fetcher = fetch, origin }: { fetcher?: typeo
     })().catch(error => { documentPromise = undefined; manifestPromise = undefined; throw error; });
   // Never publish identity from a manifest whose renderer has not been verified.
   // Once resolved, both callers share the same immutable revision snapshot.
-  return { catalog: () => document().then(value => value.catalog), document };
+  const current = async (expectedHash: string) => {
+    const { catalog } = await document();
+    if (catalog.hash !== expectedHash) throw new Error('react-source-catalog-mismatch');
+    return manifest();
+  };
+  const sources = async (expectedHash: string) => {
+    const selected = await current(expectedHash);
+    return sourcePromise ||= (async () => {
+      const data: unknown = JSON.parse(decode(await verified(selected.sources, 'application/json')));
+      if (!record(data) || data.schemaVersion !== 1 || data.catalogHash !== expectedHash ||
+          !Array.isArray(data.files) || data.files.length < 1 || data.files.length > 50) throw new Error('invalid-react-sources');
+      const seen = new Set<string>();
+      const files: SourceFile[] = [];
+      for (const file of data.files) {
+        if (!record(file) || !text(file.path, 160) ||
+            !/^(?:catalog\.json|package\.json|README\.md|ui\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.(?:ts|tsx|css))$/.test(file.path) ||
+            seen.has(file.path) || typeof file.content !== 'string' || file.content.length > 100_000 ||
+            await sha256(new TextEncoder().encode(file.content)) !== file.sha256) throw new Error('invalid-react-source-file');
+        seen.add(file.path);
+        files.push(Object.freeze({ path: file.path, sha256: file.sha256 as string, content: file.content }));
+      }
+      const identity = files.filter(file => file.path === 'catalog.json' || file.path.startsWith('ui/'))
+        .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(({ path, sha256 }) => ({ path, sha256 }));
+      if (await sha256(new TextEncoder().encode(JSON.stringify(identity))) !== expectedHash ||
+          !seen.has('ui/index.tsx') || !seen.has('package.json') || !seen.has('README.md')) throw new Error('react-source-catalog-mismatch');
+      return Object.freeze(files);
+    })().catch(error => { sourcePromise = undefined; throw error; });
+  };
+  const archive = async (expectedHash: string) => {
+    const selected = await current(expectedHash);
+    return verified(selected.sources.archive, 'application/zip');
+  };
+  return { catalog: () => document().then(value => value.catalog), document, sources, archive };
 }

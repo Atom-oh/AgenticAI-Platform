@@ -97,6 +97,20 @@ test('Studio and asset portal menu navigation retain product and saved work iden
   assert.equal(new URL(page.url()).hash, '#/portal?projectId=team-1&productId=product-1&contractId=work-1');
 });
 
+test('ontology stays visible across role filters and retains project context', async t => {
+  const page = await authenticatedPage(t, '#/wb-planning?projectId=team-1');
+  for (const focus of ['all', 'planning', 'design', 'development', 'business']) {
+    await page.getByLabel('자주 쓰는 작업 영역', { exact: true }).selectOption(focus);
+    assert.equal(await page.getByRole('button', { name: '온톨로지 탐색기', exact: true }).isVisible(), true);
+  }
+  await page.getByRole('button', { name: '온톨로지 탐색기', exact: true }).click();
+  await page.locator('[data-view="Explore"]').waitFor();
+  assert.equal(new URL(page.url()).hash, '#/explore?projectId=team-1');
+  await page.goBack();
+  await page.locator('[data-view="Workbench"]').waitFor();
+  assert.equal(new URL(page.url()).hash, '#/wb-planning?projectId=team-1');
+});
+
 test('same-page asset links keep Portal mounted; browser history retains selection queries', async t => {
   const page = await authenticatedPage(t, '#/portal');
   await page.locator('[data-view="Portal"]').waitFor();

@@ -49,6 +49,10 @@ test('manifest rejects traversal, external renderer URLs, unbounded metadata, wr
     m => { m.renderer.file = 'https://external.invalid/react.html'; },
     m => { m.renderer.sha256 = '0'.repeat(64); },
     m => { m.renderer.bytes = 2_000_000; },
+    m => { m.sources.file = '../private.json'; },
+    m => { m.sources.archive.file = 'https://external.invalid/source.zip'; },
+    m => { m.sources.archive.bytes = 1_000_000; },
+    m => { delete m.sources; },
     m => { m.catalog.hash = 'unknown'; },
     m => { m.catalog.components[0].name = '__proto__'; },
     m => { m.catalog.components[0].description = 'x'.repeat(4000); },
@@ -61,6 +65,94 @@ test('manifest rejects traversal, external renderer URLs, unbounded metadata, wr
   }
 });
 
+test('source ZIP preserves the exact complete kit and can compile in a consumer project', async t => {
+  const fs = require('node:fs/promises');
+  const { inflateRawSync } = require('node:zlib');
+  const { build } = require('esbuild');
+  const { manifest, sources, archive } = await renderer();
+  const data = JSON.parse(sources);
+  assert.equal(data.catalogHash, manifest.catalog.hash);
+  assert.equal(createHash('sha256').update(archive).digest('hex'), manifest.sources.archive.sha256);
+  const files = {};
+  for (let offset = 0; archive.readUInt32LE(offset) === 0x04034b50;) {
+    const size = archive.readUInt32LE(offset + 18), nameLength = archive.readUInt16LE(offset + 26);
+    const start = offset + 30 + nameLength + archive.readUInt16LE(offset + 28);
+    const name = archive.subarray(offset + 30, offset + 30 + nameLength).toString();
+    files[name] = inflateRawSync(archive.subarray(start, start + size));
+    offset = start + size;
+  }
+  assert.deepEqual(Object.keys(files).sort(), data.files.map(f => f.path).sort());
+  for (const file of data.files) assert.equal(files[file.path].toString(), file.content);
+  for (const file of manifest.catalog.files) {
+    assert.equal(createHash('sha256').update(files[file.path]).digest('hex'), file.sha256);
+    assert.deepEqual(files[file.path], await fs.readFile(path.join(web, '../react-kit', file.path)));
+  }
+  assert.equal(JSON.parse(files['package.json']).exports['.'], './ui/index.tsx');
+  const temp = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'portal-source-test-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  for (const [name, contents] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(temp, name)), { recursive: true });
+    await fs.writeFile(path.join(temp, name), contents);
+  }
+  await fs.symlink(path.join(web, '../react-kit/node_modules'), path.join(temp, 'node_modules'), 'dir');
+  const app = `import {Button} from './ui'; export default function Example(){return <Button label="확인" onClick={()=>{}}/>;}`;
+  await fs.writeFile(path.join(temp, 'example.tsx'), app);
+  const ts = require('typescript');
+  const program = ts.createProgram([path.join(temp, 'example.tsx')], {
+    strict: true, noEmit: true, skipLibCheck: true, jsx: ts.JsxEmit.ReactJSX,
+    module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, target: ts.ScriptTarget.ES2022,
+  });
+  assert.deepEqual(ts.getPreEmitDiagnostics(program).map(d => ts.flattenDiagnosticMessageText(d.messageText, '\n')), []);
+  const bundle = await build({ absWorkingDir: temp, entryPoints: ['example.tsx'], outdir: path.join(temp, 'dist'),
+    bundle: true, write: false, jsx: 'automatic' });
+  assert.ok(bundle.outputFiles.some(file => file.path.endsWith('.css')));
+  assert.ok(bundle.outputFiles.some(file => file.text.includes('data-studio-component')));
+});
+
+test('source downloads pin displayed revision, reject altered bytes and retry cleanly', async () => {
+  const { createReactLoader } = source('portal-react/client.ts');
+  const data = await renderer();
+  const calls = []; let tamper = true;
+  const loader = createReactLoader({ origin: 'https://portal.test', fetcher: async url => {
+    calls.push(url);
+    if (url.endsWith('index.json')) return new Response(JSON.stringify(data.manifest), { headers: { 'content-type': 'application/json' } });
+    if (url.endsWith('.html')) return new Response(data.html, { headers: { 'content-type': 'text/html' } });
+    if (url.endsWith('.zip')) return new Response(tamper ? Buffer.from('wrong archive') : data.archive, { headers: { 'content-type': 'application/zip' } });
+    return new Response(tamper ? Buffer.from('{}') : data.sources, { headers: { 'content-type': 'application/json' } });
+  } });
+  const catalog = await loader.catalog();
+  assert.equal(calls.length, 2, 'Sources are not fetched while browsing metadata');
+  await assert.rejects(loader.archive('0'.repeat(64)), /catalog-mismatch/);
+  await assert.rejects(loader.sources(catalog.hash), /integrity/);
+  await assert.rejects(loader.archive(catalog.hash), /integrity/);
+  tamper = false;
+  const files = await loader.sources(catalog.hash);
+  assert.ok(files.find(file => file.path === 'ui/index.tsx').content.includes('export function Button'));
+  assert.deepEqual(Buffer.from(await loader.archive(catalog.hash)), data.archive);
+});
+
+test('source file hashes and catalog closure must agree even in a rehashed source manifest', async () => {
+  const { createReactLoader } = source('portal-react/client.ts');
+  const data = await renderer();
+  for (const mutate of [
+    f => { f[0].path = '../private.ts'; },
+    f => { f[0].content = '<script>untrusted</script>'; },
+    f => { f.push(f[0]); },
+    f => { f.splice(f.findIndex(item => item.path === 'ui/internal.ts'), 1); },
+    f => { f.find(item => item.path === 'ui/index.tsx').content += '\n// changed';
+      const item = f.find(item => item.path === 'ui/index.tsx'); item.sha256 = createHash('sha256').update(item.content).digest('hex'); },
+  ]) {
+    const changed = JSON.parse(data.sources); mutate(changed.files);
+    const bytes = Buffer.from(JSON.stringify(changed)), manifest = structuredClone(data.manifest);
+    manifest.sources.sha256 = createHash('sha256').update(bytes).digest('hex');
+    manifest.sources.file = `source-${manifest.sources.sha256}.json`; manifest.sources.bytes = bytes.length;
+    const loader = createReactLoader({ origin: 'https://portal.test', fetcher: async url =>
+      url.endsWith('index.json') ? new Response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json' } }) :
+        url.endsWith('.html') ? new Response(data.html, { headers: { 'content-type': 'text/html' } }) :
+          new Response(bytes, { headers: { 'content-type': 'application/json' } }) });
+    await assert.rejects(loader.sources(manifest.catalog.hash));
+  }
+});
 test('shared loader fetches bounded same-origin bytes once and reuses the verified document', async () => {
   const { createReactLoader } = source('portal-react/client.ts');
   const { manifest, html } = await renderer();

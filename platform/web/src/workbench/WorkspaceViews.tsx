@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ProductPlanner from '../workspace/ProductPlanner';
+import ReactSourcePanel from '../portal/ReactSourcePanel';
 import { buildDetails, releaseChecksPassed } from '../workspace/project';
 import type { Asset, ComponentCatalog, Product, Release, Run } from '../workspace/types';
 import { listPages, resource } from './client';
@@ -88,6 +89,7 @@ export function Components() {
   const state = useLoad(signal => client.get<{ catalog: ComponentCatalog }>('/components', signal), [client]);
   return <Section title="플랫폼 기본 React 패키지" description="실제 타입과 고정 버전의 플랫폼 패키지입니다. 고객 사내 컴포넌트 승인 여부는 별도 확인이 필요합니다.">
     <LoadState state={state}>{state.data && <>
+      <ReactSourcePanel hash={state.data.catalog.hash} version={state.data.catalog.version} />
       <div className="wb-toolbar"><div><strong>{state.data.catalog.label}</strong><p>버전 {state.data.catalog.version} · {state.data.catalog.components.length}개 컴포넌트</p></div>
         <Field label="컴포넌트 검색"><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="이름 또는 설명" /></Field></div>
       <div className="wb-component-grid">{state.data.catalog.components.filter(component => `${component.name} ${component.description}`.toLowerCase().includes(query.toLowerCase())).map(component =>
@@ -95,6 +97,7 @@ export function Components() {
           <h3>{component.name}</h3><p>{component.description}</p>
           <dl className="wb-props">{Object.entries(component.props).map(([name, value]) => <div key={name}><dt><code>{name}</code></dt><dd>{value}</dd></div>)}</dl>
           <p className="wb-muted">허용 변화: {component.variationAxes.join(' · ') || '별도 정의 없음'}</p>
+          <button onClick={() => navigate('portal', { component: component.name, tab: undefined, id: undefined, tool: undefined })}>소스·실행 예제</button>
           <button onClick={() => navigate('knowledge', { targetId: component.name })}>사용 관계·근거</button>
         </article>)}</div>
       <Details title="패키지 기준 해시" value={{ id: state.data.catalog.id, hash: state.data.catalog.hash }} />

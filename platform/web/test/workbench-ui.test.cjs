@@ -294,6 +294,22 @@ async function harness() {
   } };
 }
 
+test('React components expose source download and link the selected component with project context', { timeout: 60000 }, async () => {
+  const h = await harness();
+  try {
+    await h.open('components');
+    await h.page.getByRole('button', { name: 'React 코드 다운로드 (ZIP)', exact: true }).waitFor();
+    await h.page.getByLabel('컴포넌트 검색', { exact: true }).fill('Button');
+    await h.page.locator('.wb-component').filter({ has: h.page.getByRole('heading', { name: 'Button', exact: true }) })
+      .getByRole('button', { name: '소스·실행 예제', exact: true }).click();
+    await h.page.waitForURL(/#\/portal\?/);
+    const params = new URLSearchParams(new URL(h.page.url()).hash.split('?')[1]);
+    assert.equal(params.get('component'), 'Button');
+    assert.equal(params.get('projectId'), 'a');
+    assert.equal(params.get('tab'), null);
+  } finally { await h.close(); }
+});
+
 test('Workbench creates a project, saves and publishes real product fields, preserves opaque navigation', { timeout: 60000 }, async () => {
   const h = await harness();
   try {

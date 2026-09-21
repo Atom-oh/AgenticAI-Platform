@@ -10,13 +10,44 @@ import { Asset, Draft, Product } from './types';
 import { ModelOption } from './ModelSelect';
 import Workspace from '../workspace/Workspace';
 
+const TOOLS = [
+  ['workspace', 'UX 설계 작업실'],
+  ['play', 'UX 만들어보기 · 플레이그라운드'],
+  ['process', '프로세스·흐름 생성'],
+  ['gallery', '시안 갤러리'],
+  ['assets', '디자인 자산'],
+] as const;
+type StudioTool = typeof TOOLS[number][0];
+function selectedTool(): StudioTool {
+  const tool = new URLSearchParams(location.hash.split('?')[1]).get('tool');
+  return TOOLS.find(([id]) => id === tool)?.[0] || 'workspace';
+}
+
 export default function Studio() {
-  const [tab, setTab] = useState<'workspace' | 'gallery' | 'play' | 'process' | 'assets'>('workspace');
+  const [tab, setTab] = useState<StudioTool>(selectedTool);
+  const [opened, setOpened] = useState<Set<StudioTool>>(() => new Set([selectedTool()]));
+  useEffect(() => {
+    const changed = () => {
+      const next = selectedTool();
+      setTab(next); setOpened(previous => new Set([...previous, next]));
+    };
+    window.addEventListener('hashchange', changed);
+    window.addEventListener('popstate', changed);
+    return () => { window.removeEventListener('hashchange', changed); window.removeEventListener('popstate', changed); };
+  }, []);
+  const chooseTool = (next: StudioTool) => {
+    const params = new URLSearchParams(location.hash.split('?')[1]);
+    if (next === 'workspace') params.delete('tool'); else params.set('tool', next);
+    const query = params.toString();
+    location.hash = '#/studio' + (query ? '?' + query : '');
+    setTab(next); setOpened(previous => new Set([...previous, next]));
+  };
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [meta, setMeta] = useState<{ backend?: string; graphBackend?: string; model?: string }>({});
   const [editDraft, setEditDraft] = useState<Draft | null>(null);
+  const [draftSelection, setDraftSelection] = useState(0);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [defaultModel, setDefaultModel] = useState('');
   const [loadError, setLoadError] = useState('');
@@ -33,7 +64,9 @@ export default function Studio() {
   useEffect(() => { if (tab !== 'workspace') load(); }, [tab]);
   const workspaceActive = tab === 'workspace';
   const approved = drafts.filter(d => d.status === '승인됨').length;
-  const openInPlayground = (d: Draft) => { setEditDraft(d); setTab('play'); };
+  const openInPlayground = (d: Draft) => {
+    setEditDraft(d); setDraftSelection(value => value + 1); chooseTool('play');
+  };
 
   return (
     <div>
@@ -70,19 +103,16 @@ export default function Studio() {
         </div>}
       </div>}
       {tab !== 'workspace' && loadError && <div role="alert" className="mb-3 text-sm text-rose-700">{loadError} <button className="underline" onClick={load}>다시 조회</button></div>}
-      <div className="studio-tabs">
-        <button aria-pressed={workspaceActive} onClick={() => setTab('workspace')}>UX 설계 작업실</button>
-        <details className="studio-legacy-tools"><summary>이전 시안·참고 도구</summary><div>
-        {([['gallery', '🖼 시안 갤러리'], ['play', '✨ 플레이그라운드'], ['process', '🧭 프로세스 생성 (명세서→PRD)'], ['assets', '🎨 디자인 자산']] as const).map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-xl text-sm font-semibold border ${tab === id ? 'bg-[#008485] text-white border-[#008485]' : 'bg-white text-slate-600 border-slate-200 hover:border-teal-400'}`}>{label}</button>
-        ))}
-        </div></details>
-      </div>
-      <div hidden={tab !== 'workspace'}><Workspace /></div>
-      {tab === 'gallery' && <Gallery drafts={drafts} canWrite={canWrite} reload={load} onEdit={openInPlayground} />}
-      {tab === 'play' && <Playground assets={assets} products={products} models={models} defaultModel={defaultModel} canWrite={canWrite} initialDraft={editDraft} onDone={load} />}
-      {tab === 'process' && <ProcessStudio models={models} defaultModel={defaultModel} />}
-      {tab === 'assets' && <Assets assets={assets} canRegister={!!auth.studioToken} reload={load} />}
+      <nav className="studio-tabs" aria-label="UX 제작 도구">
+        {TOOLS.map(([id, label]) => <button key={id} type="button" aria-pressed={tab === id}
+          onClick={() => chooseTool(id)}>{label}</button>)}
+      </nav>
+      <p className="text-sm text-slate-600 mb-4">UX 설계 작업실에서는 React 화면을 생성·검증합니다. 만들어보기와 프로세스 생성에서는 기존 정적 시안을 실험하고 흐름을 구성합니다.</p>
+      {opened.has('workspace') && <div hidden={tab !== 'workspace'}><Workspace /></div>}
+      {opened.has('gallery') && <div hidden={tab !== 'gallery'}><Gallery drafts={drafts} canWrite={canWrite} reload={load} onEdit={openInPlayground} /></div>}
+      {opened.has('play') && <div hidden={tab !== 'play'}><Playground key={draftSelection} assets={assets} products={products} models={models} defaultModel={defaultModel} canWrite={canWrite} initialDraft={editDraft} onDone={load} /></div>}
+      {opened.has('process') && <div hidden={tab !== 'process'}><ProcessStudio models={models} defaultModel={defaultModel} /></div>}
+      {opened.has('assets') && <div hidden={tab !== 'assets'}><Assets assets={assets} canRegister={!!auth.studioToken} reload={load} /></div>}
     </div>
   );
 }

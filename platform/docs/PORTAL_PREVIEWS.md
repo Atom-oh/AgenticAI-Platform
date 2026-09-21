@@ -10,6 +10,13 @@ metadata. A visible preview is not an approval or a successful UX execution test
   execute the original `platform/react-kit/ui` code. The kit is a platform sample,
   not an approved customer package. Its version and source hash identify the
   implementation being displayed.
+  The detail view provides **React code download (ZIP)** and a source-file viewer.
+  The ZIP includes the complete shared `ui/` implementation, types, CSS, catalog,
+  a local package descriptor and integration instructions. These are component
+  sources for an existing React project, not a generated screen or approved release.
+  The workspace component catalog exposes the same download.
+  The developer workbench's **React components** page also exposes the package
+  download and links each component to its source and interactive Portal example.
 - **Components → Versioned components:** inspect existing ontology entries and their
   relationships. The 22 named seed versions have exact-ID reference implementations
   in `platform/component-library`, under `@atom/portal-components`. Each version
@@ -79,6 +86,11 @@ The React renderer manifest comes from the real kit's `manifest.cjs`. The client
 checks the local manifest, size limits, HTML hash and renderer message binding.
 Catalog identity is exposed only after the corresponding HTML is verified;
 both metadata and previews use that same cached revision snapshot.
+Source JSON and ZIP are separate immutable assets in that manifest. Downloads
+are fetched on demand with size, MIME and SHA-256 checks against the displayed
+revision. Source viewing additionally verifies file hashes and reconstructs the
+kit's catalog fingerprint. A workspace API/web catalog mismatch blocks download.
+Serve source JSON as `application/json` and source ZIP as `application/zip`.
 Examples are local, synthetic and reset on selection; they do not initiate
 transactions or update approved assets.
 
@@ -99,7 +111,7 @@ available as text. The local package is not claimed to be published on npm.
 React and Mermaid are bundled locally into separate immutable HTML files under
 `public/portal-renderers/{react,mermaid,versions}/`. Build commands run automatically
 through the web package's `predev` and `prebuild` scripts. Deploy their manifests
-and referenced HTML before publishing the new web index; retain older hashes
+and referenced HTML/source assets before publishing the new web index; retain older hashes
 for existing clients.
 The API package must include `component-library/catalog.json` and `component-library/ui/`.
 Do not reseed Registry or graph data to deploy a source binding.
@@ -131,5 +143,7 @@ node --test test/portal-*.test.cjs
 
 Browser checks must include real component interactions, image success/failure,
 diagram rendering and navigation, stale-response handling, CSP isolation and
-desktop/mobile containment. These checks establish preview behavior, not the
+desktop/mobile containment. Source checks compare downloaded ZIP files with the
+catalog-bound kit and compile the extracted package using the web TypeScript
+dependency and installed `react-kit/node_modules`. These checks establish preview behavior, not the
 business correctness or approval of a generated product flow.

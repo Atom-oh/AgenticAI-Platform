@@ -54,12 +54,12 @@ test('project scope, collaboration, guided baselines and real release metadata r
     slots: [{ index: 0, role: 'baseline', variant: 'baseline', error: '기준안 준비 실패' },
       { index: 1, role: 'variation', variant: 'layout', runId: 'a-existing' },
       { index: 2, role: 'variation', variant: 'dense', error: '변형안 준비 실패' }] });
-  const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import Workspace from './src/workspace/Workspace';
-    const root=createRoot(document.getElementById('root'));root.render(<Workspace/>);window.dispose=()=>root.unmount();`,
+  const bundle = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import Studio from './src/studio/Studio';
+    const root=createRoot(document.getElementById('root'));root.render(<Studio/>);window.dispose=()=>root.unmount();`,
     loader: 'tsx', resolveDir: root }, bundle: true, write: false, jsx: 'automatic', format: 'iife', loader: { '.css': 'empty' },
     define: { 'process.env.NODE_ENV': '"development"' }, plugins: [{ name: 'offline-auth', setup(builder) {
       builder.onResolve({ filter: /(^|\/)lib$/ }, () => ({ path: 'lib', namespace: 'offline' }));
-      builder.onLoad({ filter: /.*/, namespace: 'offline' }, () => ({ contents: 'export const auth={token:"offline"};' }));
+      builder.onLoad({ filter: /.*/, namespace: 'offline' }, () => ({ contents: 'export const auth={token:"offline"};export const sock={request:async()=>({})};' }));
     } }] });
   const browser = await chromium.launch({ executablePath: process.env.WORKSPACE_CHROMIUM, headless: true,
     args: ['--no-sandbox', '--disable-background-networking', '--host-resolver-rules=MAP * ~NOTFOUND'] });
@@ -351,6 +351,19 @@ test('project scope, collaboration, guided baselines and real release metadata r
     await page.getByLabel('협업할 화면', { exact: false }).selectOption('review');
     await page.getByText('이 작업에 의견 남기기', { exact: true }).click();
     await page.getByLabel('의견 내용', { exact: true }).fill('선택한 화면의 강조를 확인해 주세요.');
+    const beforeTool = new URL(page.url()).hash;
+    await page.evaluate(() => {
+      const params = new URLSearchParams(location.hash.split('?')[1]);
+      params.set('tool', 'process'); location.hash = '#/studio?' + params;
+    });
+    await page.waitForURL(/tool=process/);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.getByRole('navigation', { name: 'UX 제작 도구' }).getByRole('button', { name: '프로세스·흐름 생성', exact: true }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('.ws-discussion textarea').inputValue(), '선택한 화면의 강조를 확인해 주세요.');
+    await page.goBack();
+    await page.waitForFunction(hash => location.hash === hash, beforeTool);
+    assert.equal(await page.getByRole('navigation', { name: 'UX 제작 도구' }).getByRole('button', { name: 'UX 설계 작업실', exact: true }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('.ws-discussion textarea').inputValue(), '선택한 화면의 강조를 확인해 주세요.');
     await page.getByRole('button', { name: '이 맥락에 의견 남기기' }).click();
     await page.getByText('선택한 화면의 강조를 확인해 주세요.', { exact: true }).waitFor();
     assert.deepEqual(discussions[0].anchor, { productId: 'product', guidelineId: 'guide-1', runId: 'batch-2-baseline', round: 1, pageId: 'review' });

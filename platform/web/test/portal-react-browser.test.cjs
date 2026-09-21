@@ -12,8 +12,10 @@ const assets = () => prepared ||= Promise.all([
   build({ stdin: { loader: 'tsx', resolveDir: web, contents: `
 import React from 'react'; import {createRoot} from 'react-dom/client'; import {flushSync} from 'react-dom';
 import {ReactComponentPreview} from './src/portal/ReactComponentPreview';
+import ReactSourcePanel from './src/portal/ReactSourcePanel';
 const root=createRoot(document.getElementById('app'));
 window.showPreview=(name, compact=false)=>flushSync(()=>root.render(<ReactComponentPreview name={name} compact={compact}/>));
+window.showSources=(hash,version='1.0.0')=>flushSync(()=>root.render(<ReactSourcePanel hash={hash} version={version}/>));
 window.receipts=[];window.addEventListener('message',e=>{if(e.data?.channel==='portal-react/v1')window.receipts.push(e.data);});
 ` }, bundle: true, write: false, format: 'iife', define: { 'process.env.NODE_ENV': '"production"' } }),
 ]);
@@ -39,6 +41,12 @@ async function mount(t, respond, intentionalCsp = false) {
     if (url.pathname === `/portal-renderers/react/${renderer.manifest.renderer.file}`) return route.fulfill({
       contentType: 'text/html', body: renderer.html,
     });
+    if (url.pathname === `/portal-renderers/react/${renderer.manifest.sources.file}`) return route.fulfill({
+      contentType: 'application/json', body: renderer.sources,
+    });
+    if (url.pathname === `/portal-renderers/react/${renderer.manifest.sources.archive.file}`) return route.fulfill({
+      contentType: 'application/zip', body: renderer.archive,
+    });
     throw new Error(`Unexpected local request ${url.pathname}`);
   });
   const page = await context.newPage();
@@ -59,6 +67,49 @@ async function show(page, name, compact = false) {
   await page.locator('[data-react-preview-state="rendered"]').waitFor();
   return page.frameLocator('iframe[data-portal-react]');
 }
+
+test('source panel downloads real ZIP and selected TSX and rejects a stale catalog', { timeout: 45000 }, async t => {
+  const { page, renderer } = await mount(t);
+  await page.evaluate(hash => window.showSources(hash), renderer.manifest.catalog.hash);
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'React 코드 다운로드 (ZIP)', exact: true }).click();
+  const zip = await download;
+  assert.match(zip.suggestedFilename(), /^studio-ui-1\.0\.0-[a-f0-9]{12}\.zip$/);
+  assert.deepEqual(await fs.readFile(await zip.path()), renderer.archive);
+  await page.getByRole('button', { name: '소스 보기', exact: true }).click();
+  await page.getByLabel('컴포넌트 소스 파일', { exact: true }).waitFor();
+  assert.match(await page.locator('pre').innerText(), /export function Button/);
+  const current = page.waitForEvent('download');
+  await page.getByRole('button', { name: '현재 파일 다운로드', exact: true }).click();
+  const tsx = await current;
+  assert.equal(tsx.suggestedFilename(), 'index.tsx');
+  assert.equal(await fs.readFile(await tsx.path(), 'utf8'), JSON.parse(renderer.sources).files.find(f => f.path === 'ui/index.tsx').content);
+  await page.evaluate(() => window.showSources('a'.repeat(64)));
+  await page.getByRole('button', { name: 'React 코드 다운로드 (ZIP)', exact: true }).click();
+  await page.getByRole('alert').waitFor();
+  assert.equal(await page.locator('pre').count(), 0);
+});
+
+test('a late source download cannot start after the displayed revision changes', { timeout: 45000 }, async t => {
+  let release;
+  const { page, renderer } = await mount(t, async (route, url, renderer) => {
+    if (!url.pathname.endsWith('.zip')) return false;
+    await new Promise(resolve => { release = async () => {
+      await route.fulfill({ contentType: 'application/zip', body: renderer.archive }); resolve();
+    }; });
+    return true;
+  });
+  const downloads = [];
+  page.on('download', download => downloads.push(download.suggestedFilename()));
+  await page.evaluate(hash => window.showSources(hash), renderer.manifest.catalog.hash);
+  await page.getByRole('button', { name: 'React 코드 다운로드 (ZIP)', exact: true }).click();
+  while (!release) await new Promise(resolve => setTimeout(resolve, 10));
+  await page.evaluate(() => window.showSources('b'.repeat(64)));
+  await release();
+  await page.getByRole('button', { name: '소스 보기', exact: true }).click();
+  await page.getByRole('alert').waitFor();
+  assert.deepEqual(downloads, []);
+});
 
 test('all 15 real exports render with original markers, styles, isolated landmarks and one cached bundle', { timeout: 60_000 }, async t => {
   const { page, requests, renderer } = await mount(t);
