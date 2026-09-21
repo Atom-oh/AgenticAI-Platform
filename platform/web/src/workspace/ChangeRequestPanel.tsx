@@ -3,15 +3,17 @@ import { messageOf, resource } from './client';
 import { useWorkspaceClient } from './WorkspaceScope';
 import { Notice } from './shared';
 import { UX_STATES } from './workflow';
-import type { ChangeRequest, EditableContract, Run, UXState } from './types';
+import type { ChangeRequest, EditableContract, GuideRef, Run, UXState } from './types';
 
 export const emptyRequest = (): ChangeRequest => ({
   kind: 'new', channel: '', requester: '', dueDate: '', baselineNote: '', preserve: '',
   allowedFiles: [], screens: [], transitions: [],
 });
 const KINDS = { page: '화면', 'bottom-sheet': '바텀시트', popup: '팝업', tab: '탭', slot: '슬롯' };
-const CHANGES = { add: '추가', modify: '수정', keep: '유지', remove: '제외' };
+const CHANGES = { add: '추가', modify: '수정', keep: '유지', remove: '삭제' };
 const nextId = (prefix: string) => prefix + '-' + crypto.randomUUID().slice(0, 8);
+const sameRef = (left: GuideRef, right: GuideRef) => left.assetId === right.assetId && left.sourceId === right.sourceId &&
+  left.page === right.page && left.sourceSha256 === right.sourceSha256 && left.textSha256 === right.textSha256;
 export function requestIssues(draft: EditableContract): string[] {
   const request = draft.changeRequest;
   if (!request) return [];
@@ -21,13 +23,22 @@ export function requestIssues(draft: EditableContract): string[] {
     if (screen.sourceRefs?.some(ref => !draft.guideRefs?.some(selected => selected.assetId === ref.assetId &&
       selected.sourceId === ref.sourceId && selected.page === ref.page && selected.sourceSha256 === ref.sourceSha256 && selected.textSha256 === ref.textSha256)))
       issues.push(`${screen.title}: 원문 연결을 현재 선택한 페이지와 다시 대조하세요.`);
-    if (screen.change === 'remove') continue;
+    if (screen.change === 'remove') {
+      if (!draft.rules.some(rule => rule.required && rule.screenId === screen.id &&
+        rule.steps.some(step => step.action === 'expectVisible' && step.target === screen.id && step.value === false) &&
+        rule.steps.some(step => step.action === 'expectVisible' && step.target !== screen.id && step.value === true)))
+        issues.push(`${screen.title}: 유지되는 화면과 삭제 대상의 미표시를 확인하는 필수 규칙이 필요합니다.`);
+      continue;
+    }
     if (!screen.states.length) issues.push(`${screen.title}: 확인할 상태를 선택하세요.`);
     for (const state of screen.states) if (!draft.rules.some(rule => rule.required && rule.screenId === screen.id &&
       rule.scenario === state && rule.steps.some(step => step.action === 'expectVisible' && step.target === screen.id && step.value === true)))
       issues.push(`${screen.title} · ${UX_STATES[state].label}: 화면 표시를 포함한 필수 규칙이 필요합니다.`);
   }
   for (const link of request.transitions) {
+    if (request.screens.some(screen => screen.change === 'remove' && [link.from, link.to].includes(screen.id))) {
+      issues.push(`${link.id}: 삭제 대상 대신 이동할 화면으로 연결을 수정하세요.`); continue;
+    }
     if (!link.action || !link.condition || !link.retention) issues.push(`${link.id}: 이동 행동·조건·값 유지 기준을 정하세요.`);
     if (!draft.rules.some(rule => rule.required && rule.transitionId === link.id && rule.steps.some((start, i) =>
       start.action === 'expectVisible' && start.target === link.from && start.value === true &&
@@ -39,9 +50,10 @@ export function requestIssues(draft: EditableContract): string[] {
   return issues;
 }
 
-export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, onChange }: {
+export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, onChange, onPending }: {
   draft: EditableContract; runs?: Run[]; disabled: boolean; stage: 'define' | 'design';
   onChange: (draft: EditableContract) => void;
+  onPending?: (pending: boolean) => void;
 }) {
   const client = useWorkspaceClient();
   const request = draft.changeRequest || emptyRequest();
@@ -50,14 +62,16 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
   const [loading, setLoading] = useState(false);
   const [newFile, setNewFile] = useState('');
   const operation = useRef<AbortController | null>(null);
+  const pendingCallback = useRef(onPending); pendingCallback.current = onPending;
   const latestDraft = useRef(draft); latestDraft.current = draft;
-  useEffect(() => () => operation.current?.abort(), []);
+  useEffect(() => () => { operation.current?.abort(); pendingCallback.current?.(false); }, []);
   const update = (change: Partial<ChangeRequest>) => onChange({ ...draft, changeRequest: { ...request, ...change } });
   const eligible = runs.filter(run => run.outputType === 'react' && run.approval && !run.needsRevalidation);
   const chooseBaseline = async (id: string, refreshOnly = false) => {
     operation.current?.abort();
-    if (!id) { update({ baseline: undefined, allowedFiles: [] }); setFiles([]); setLoading(false); return; }
+    if (!id) { update({ baseline: undefined, allowedFiles: [] }); setFiles([]); setLoading(false); setError(''); pendingCallback.current?.(false); return; }
     const abort = new AbortController(); operation.current = abort; setLoading(true); setError('');
+    pendingCallback.current?.(true);
     const expected = request.baseline;
     try {
       const value = await client.get<{ baseline: ChangeRequest['baseline']; files: string[] }>(
@@ -72,7 +86,7 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
         setFiles(value.files);
       }
     } catch (reason) { if (!abort.signal.aborted) setError(messageOf(reason)); }
-    finally { if (!abort.signal.aborted) setLoading(false); }
+    finally { if (!abort.signal.aborted) { setLoading(false); pendingCallback.current?.(false); } }
   };
   useEffect(() => {
     if (request.baseline) void chooseBaseline(request.baseline.runId, true);
@@ -138,23 +152,30 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
         </div>
         <label className="ws-field">무엇을 바꾸거나 유지하나요?<textarea rows={2} maxLength={1000} value={screen.instruction}
           onChange={event => screenChange(screen.id, { instruction: event.target.value })} /></label>
+        {screen.change === 'remove' ? <p>유지되는 화면이 표시되고, 이 대상은 더 이상 표시되지 않는지 검증합니다.</p> :
         <details open={stage === 'design'}><summary>이 화면에서 확인할 상태</summary>
           <div className="ws-scope-states">{(Object.entries(UX_STATES) as [UXState, typeof UX_STATES[UXState]][]).map(([state, info]) =>
             <label className="ws-check" key={state}><input type="checkbox" checked={screen.states.includes(state)}
               onChange={() => screenChange(screen.id, { states: screen.states.includes(state) ? screen.states.filter(s => s !== state) : [...screen.states, state] })} />{info.label}</label>)}</div>
-        </details>
+        </details>}
         <details><summary>원본 화면 ID·출처 연결</summary><p>다른 이름 공간의 ID는 별도로 기록합니다. 원본의 ‘완료’ 표시는 승인으로 사용하지 않습니다.</p>
           <div className="ws-request-fields">{([['uiuxId', 'UIUX 화면 ID'], ['developerId', '개발 화면 ID'], ['canonicalId', '지식 저장소 ID']] as const).map(([key, label]) =>
             <label key={key} className="ws-field">{label}<input maxLength={128} value={screen[key]} onChange={event => screenChange(screen.id, { [key]: event.target.value })} /></label>)}</div>
           <label className="ws-field">ID 매핑·원본 버전 확인 근거<textarea rows={2} maxLength={1000} value={screen.sourceNote}
             onChange={event => screenChange(screen.id, { sourceNote: event.target.value })} /></label>
           {!!draft.guideRefs?.length && <div><p>이 화면과 연결할 선택 원문</p>{draft.guideRefs.map(ref => {
-            const key = JSON.stringify(ref);
-            const selected = screen.sourceRefs?.some(item => JSON.stringify(item) === key);
+            const key = `${ref.assetId}:${ref.sourceId}:${ref.page}:${ref.sourceSha256}:${ref.textSha256}`;
+            const selected = screen.sourceRefs?.some(item => sameRef(item, ref));
             return <label className="ws-check" key={key}><input type="checkbox" checked={!!selected} onChange={() =>
-              screenChange(screen.id, { sourceRefs: selected ? screen.sourceRefs!.filter(item => JSON.stringify(item) !== key) :
+              screenChange(screen.id, { sourceRefs: selected ? screen.sourceRefs!.filter(item => !sameRef(item, ref)) :
                 [...(screen.sourceRefs || []), ref] })} />{ref.sourceId} · {ref.page}페이지 · {ref.sourceSha256.slice(0, 8)}</label>;
           })}</div>}
+          {screen.sourceRefs?.filter(ref => !draft.guideRefs?.some(current => current.assetId === ref.assetId &&
+            current.sourceId === ref.sourceId && current.page === ref.page && current.sourceSha256 === ref.sourceSha256 &&
+            current.textSha256 === ref.textSha256)).map(ref => <div className="ws-notice" key={`${ref.assetId}:${ref.sourceId}:${ref.page}`}>
+              선택에서 빠진 원문: {ref.sourceId} · {ref.page}페이지
+              <button onClick={() => screenChange(screen.id, { sourceRefs: screen.sourceRefs!.filter(item => item !== ref) })}>이전 원문 연결 제외</button>
+            </div>)}
           <small>검사 연결 ID: {screen.id} · 선택한 원문 페이지는 기준·자산에서 연결합니다.</small>
         </details>
         <button onClick={() => {

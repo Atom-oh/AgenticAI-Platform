@@ -43,9 +43,14 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [error, setError] = useState('');
+  const requestKey = `${initialRunId || ''}:${initialRound || 0}`;
+  const requestKeyRef = useRef(requestKey); requestKeyRef.current = requestKey;
+  const [appliedRequest, setAppliedRequest] = useState(requestKey);
+  const previousRequestedRun = useRef(initialRunId || '');
+  const roundIntent = useRef({ runId: initialRunId || '', round: initialRound || 0 });
   const [runId, setRunId] = useState(initialRunId || '');
   const [loadedRun, setRun] = useState<Run | null>(null);
-  const run = loadedRun?.id === runId && (!product || loadedRun.productId === product.id) ? loadedRun : null;
+  const run = appliedRequest === requestKey && loadedRun?.id === runId && (!product || loadedRun.productId === product.id) ? loadedRun : null;
   const [roundNumber, setRoundNumber] = useState(initialRound || 0);
   const [pageId, setPageId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -62,14 +67,22 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const currentRunVersion = runs.find(item => item.id === runId)?.version;
   useEffect(() => () => action.current?.abort(), []);
   useEffect(() => {
+    const previous = previousRequestedRun.current;
+    previousRequestedRun.current = initialRunId || '';
+    setAppliedRequest(requestKey);
     if (initialRunId) {
       const different = liveRun.current !== initialRunId;
+      roundIntent.current = { runId: initialRunId, round: initialRound || 0 };
       setRunId(initialRunId); setRoundNumber(previous => initialRound || (different ? 0 : previous));
       if (different) {
         setBatchId(''); setBatch(null); setBatchRuns([]); setRun(null); setPageId(''); setInstruction('');
       }
+    } else if (previous) {
+      roundIntent.current = { runId: '', round: 0 };
+      setRunId(''); setRun(null); setRoundNumber(0); setBatchId(''); setBatch(null); setBatchRuns([]);
+      setPageId(''); setInstruction(''); setEvidence(null);
     }
-  }, [initialRunId, initialRound]);
+  }, [requestKey]);
   useEffect(() => {
     const controller = new AbortController();
     listAll<Batch>(workspaceClient, 'batches', controller.signal).then(value => {
@@ -79,14 +92,16 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   }, [workspaceClient, runs]);
   useEffect(() => {
     const controller = new AbortController(); setBatch(null); setBatchRuns([]); setBatchError('');
+    if (appliedRequest !== requestKey) return () => controller.abort();
+    const requested = requestKey;
     if (batchId) workspaceClient.get<{ batch: Batch; runs: Run[] }>(`/batches/${resource(batchId)}`, controller.signal).then(value => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || requestKeyRef.current !== requested) return;
       if (value.batch?.id !== batchId || !Array.isArray(value.batch.runIds) || !Array.isArray(value.runs)) throw new Error('저장된 시안 비교를 확인하지 못했습니다.');
       setBatch(value.batch); setBatchRuns(value.runs);
-      setRunId(previous => previous || value.batch.baselineRunId || value.batch.runIds[0] || '');
+      setRunId(previous => value.batch.runIds.includes(previous) ? previous : value.batch.baselineRunId || value.batch.runIds[0] || '');
     }).catch(reason => { if (!controller.signal.aborted) setBatchError(messageOf(reason)); });
     return () => controller.abort();
-  }, [workspaceClient, batchId, refreshKey]);
+  }, [workspaceClient, batchId, refreshKey, appliedRequest, requestKey]);
   useEffect(() => { if (preferredContract) setContractId(preferredContract); }, [preferredContract]);
   useEffect(() => {
     const controller = new AbortController(); setContract(null); setReference(''); setReferencePage(1); setSourceAssetId('');
@@ -97,18 +112,21 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   }, [workspaceClient, contractId, currentContractVersion]);
   useEffect(() => {
     const controller = new AbortController(); setRun(previous => previous?.id === runId ? previous : null); setError(''); setApprovedCheck(false);
+    if (appliedRequest !== requestKey) return () => controller.abort();
+    const requested = requestKey;
     if (runId) workspaceClient.get<{ run: Run }>(`/runs/${resource(runId)}`, controller.signal)
       .then(value => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || requestKeyRef.current !== requested || liveRun.current !== runId) return;
         if (value.run?.id !== runId || (product && value.run.productId !== product.id)) throw new Error('선택한 작업의 시안을 확인하지 못했습니다.');
         setRun(value.run);
         if (initialRunId === value.run.id && !contractId) setContractId(value.run.contractId);
-        setRoundNumber(previous => value.run.rounds?.some(round => round.number === previous) ? previous :
-          (value.run.id === initialRunId && initialRound) || value.run.bestRound || value.run.rounds?.[0]?.number || 0);
+        const intent = roundIntent.current.runId === value.run.id ? roundIntent.current.round : 0;
+        setRoundNumber(previous => intent || (value.run.rounds?.some(round => round.number === previous) ? previous :
+          value.run.bestRound || value.run.rounds?.[0]?.number || 0));
       })
       .catch(reason => { if (!controller.signal.aborted) setError(messageOf(reason)); });
     return () => controller.abort();
-  }, [workspaceClient, runId, refreshKey, currentRunVersion]);
+  }, [workspaceClient, runId, refreshKey, currentRunVersion, appliedRequest, requestKey]);
   const selectedRound = run?.rounds?.find(round => round.number === roundNumber);
   const selectedPage = selectedRound?.pageSources?.some(page => page.pageId === pageId) ? pageId : selectedRound?.pageSources?.[0]?.pageId;
   useEffect(() => { onSelection?.(run?.id === runId ? { run, round: selectedRound, pageId: selectedPage } : null); },
@@ -161,7 +179,9 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       if (controller.signal.aborted) return;
       if (!value.batch?.id || !Array.isArray(value.batch.runIds)) throw new Error('시안 묶음을 확인하지 못했습니다. 같은 설정으로 다시 조회하세요.');
       pendingBatch.current = { fingerprint, payload, batchId: value.batch.id };
-      setBatch(value.batch); setBatchId(value.batch.id); setRunId(value.batch.baselineRunId || value.batch.runIds[0] || ''); setRoundNumber(0); setInstruction('');
+      const firstRun = value.batch.baselineRunId || value.batch.runIds[0] || '';
+      roundIntent.current = { runId: firstRun, round: 0 };
+      setBatch(value.batch); setBatchId(value.batch.id); setRunId(firstRun); setRoundNumber(0); setInstruction('');
       // Each job keeps its own failure state. One failed variant never cancels the others.
       const results = await Promise.allSettled(value.batch.runIds.map(async id => {
         const item = value.runs?.find(item => item.id === id) ||
@@ -223,6 +243,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   };
   const jobFinished = () => { refresh(); setRefreshKey(value => value + 1); };
   const selectRun = (id: string) => {
+    roundIntent.current = { runId: id, round: 0 };
     const item = runs.find(item => item.id === id) || batchRuns.find(item => item.id === id) || attempts.find(item => item.run?.id === id)?.run;
     if (item?.batchId) setBatchId(item.batchId);
     else if (!batch?.runIds.includes(id)) setBatchId('');
@@ -276,6 +297,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         {mode === 'creative' ? '시안 1개 만들기' : `기준안 + 변형 ${variationCount}개 만들기`}</button>
         {htmlSources.length > 0 && <button onClick={verifyOriginal} disabled={!mayGenerate || !canUseContract || !selectedHtmlId || sending || approving}>반입 HTML 검사</button>}</div>
       <label className="ws-field">저장된 시안 비교<select aria-label="저장된 시안 비교" value={batchId} onChange={event => {
+        roundIntent.current = { runId: '', round: 0 };
         setBatchId(event.target.value); setRunId(''); setRoundNumber(0); setInstruction('');
       }}><option value="">비교 묶음 선택</option>
         {[...(batch && !batches.some(item => item.id === batch.id) ? [batch] : []), ...batches]
@@ -330,7 +352,9 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
           {inspectingOriginal && <Notice>AI 생성 없이 반입 HTML을 검사한 결과입니다. 검사 대상: {run.assetSnapshots?.find(asset => asset.id === run.sourceAssetId)?.name ||
             assets.find(asset => asset.id === run.sourceAssetId)?.name || '선택한 반입 HTML'}. 원본 파일은 그대로 보관됩니다.</Notice>}
           <div className="ws-rounds" aria-label="시안 라운드">{(run.rounds || []).map(round => <button key={round.number}
-            className={roundNumber === round.number ? 'is-selected' : ''} onClick={() => { setRoundNumber(round.number); setInstruction(''); setApprovedCheck(false); }}>
+            className={roundNumber === round.number ? 'is-selected' : ''} onClick={() => {
+              roundIntent.current = { runId, round: round.number };
+              setRoundNumber(round.number); setInstruction(''); setApprovedCheck(false); }}>
             라운드 {round.number} · {round.passed && (run.outputType !== 'react' || buildPassed(round, run.catalogHash)) ? '필수 검사 통과' : '확인 필요'}{round.number === run.bestRound ? ' · 최종 선택' : ''}</button>)}</div>
           {selectedRound ? <>
             {run.outputType === 'react' && <BuildGates evidence={selectedRound} catalogHash={run.catalogHash} />}

@@ -64,5 +64,6 @@ export function workflowHash(hash: string, selection: {
   const params = new URLSearchParams();
   if (route === '#/portal') params.set('tab', 'guides');
   for (const [key, value] of Object.entries(selection)) if (value !== undefined && value !== '') params.set(key, String(value));
-  return route + (params.size ? '?' + params.toString() : '');
+  const query = params.toString();
+  return route + (query ? '?' + query : '');
 }

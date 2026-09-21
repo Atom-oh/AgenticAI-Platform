@@ -83,7 +83,7 @@ def test_malformed_packs_are_rejected(change):
         validate_pack(value)
 
 
-@pytest.mark.parametrize("limit", ["sources", "pages", "page-text", "total-text"])
+@pytest.mark.parametrize("limit", ["sources", "pages", "page-text", "total-text", "metadata"])
 def test_pack_size_limits_fail_closed(limit):
     value = pack_data()
     if limit == "sources":
@@ -92,10 +92,21 @@ def test_pack_size_limits_fail_closed(limit):
         value["sources"][0].update(pageCount=1201, pages=[{"page": i + 1, "text": "x"} for i in range(1201)])
     elif limit == "page-text":
         value["sources"][0]["pages"][0]["text"] = "x" * 20001
-    else:
+    elif limit == "total-text":
         value["sources"][0].update(pageCount=151, pages=[{"page": i + 1, "text": "x" * 20000} for i in range(151)])
+    else:
+        value["sources"] = [{**copy.deepcopy(value["sources"][0]), "id": f"source-{i}",
+                            "metadata": {key: "가" * 1024 for key in ("path", "sid", "pver", "dver", "sync", "mdate", "status", "imports")}}
+                           for i in range(4)]
     with pytest.raises(ValueError):
         validate_pack(value)
+
+
+def test_generated_context_headers_cannot_be_cited_as_original_page_text():
+    _, api, _, identifier = imported()
+    value = cited_contract(identifier)
+    value["rules"][0]["source"]["quote"] = "원본 ID: interaction"
+    assert request(api, "POST", "/contracts", value)[0] == 400
 
 
 def test_references_pin_source_and_page_content_and_reject_empty_or_truncated_text():

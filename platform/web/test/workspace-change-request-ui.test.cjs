@@ -33,6 +33,8 @@ test('change request preserves baseline, file scope and screen identities throug
     try {
       const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, offline: true });
       let saved, proposal, approved = false;
+      let releaseBaseline, firstBaseline = true;
+      const baselineReady = new Promise(resolve => { releaseBaseline = resolve; });
       const calls = [], errors = [];
       await context.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -42,8 +44,11 @@ test('change request preserves baseline, file scope and screen identities throug
         const target = url.pathname.replace('/studio-api', ''), method = route.request().method();
         const body = method === 'GET' ? null : route.request().postDataJSON();
         calls.push({ target, method, body });
-        if (target === '/runs/base/baseline') return json({ baseline: { runId: 'base', round: 1, sourceHash: 'a'.repeat(64) },
-          files: ['src/App.tsx', 'src/pages/keep.tsx'] });
+        if (target === '/runs/base/baseline') {
+          if (firstBaseline) { firstBaseline = false; await baselineReady; }
+          return json({ baseline: { runId: 'base', round: 1, sourceHash: 'a'.repeat(64) },
+            files: ['src/App.tsx', 'src/pages/keep.tsx'] });
+        }
         if (target === '/contracts' && method === 'POST') {
           saved = { ...body, id: 'work', version: 1, status: 'draft' }; return json({ contract: saved });
         }
@@ -79,6 +84,8 @@ test('change request preserves baseline, file scope and screen identities throug
       await page.getByLabel('요청 담당').fill('합성 요청자');
       await page.getByText('승인된 React 시안에서 변경하기', { exact: true }).click();
       await page.getByLabel('기준 시안', { exact: true }).selectOption('base');
+      assert.equal(await page.getByRole('button', { name: '업무 요청 저장', exact: true }).isDisabled(), true);
+      releaseBaseline();
       await page.getByLabel('src/App.tsx', { exact: true }).check();
       assert.equal(await page.getByLabel('src/pages/keep.tsx', { exact: true }).isChecked(), false);
       await page.getByRole('button', { name: '업무 요청 저장', exact: true }).click();

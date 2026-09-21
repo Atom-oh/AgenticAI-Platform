@@ -313,6 +313,23 @@ async function openAsset(page, id) {
   return aside;
 }
 
+test('reference navigation normalizes legacy project scope and preserves the Studio handoff link', { timeout: 45000 }, async t => {
+  const { page } = await mount(t);
+  await page.evaluate(() => { location.hash = '#/portal?project=team-1&productId=product-1&contractId=work-1'; });
+  await flushUi(page);
+  await library(page).getByRole('button', { name: /입력 필드.*Input/ }).click();
+  const current = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+  assert.equal(current.get('projectId'), 'team-1');
+  assert.equal(current.get('productId'), 'product-1');
+  assert.equal(current.get('contractId'), 'work-1');
+  assert.equal(current.has('project'), false);
+  const href = await page.getByRole('link', { name: '파일 반입 · Design Studio' }).getAttribute('href');
+  const target = new URLSearchParams(href.split('?')[1]);
+  assert.equal(target.get('projectId'), 'team-1');
+  assert.equal(target.get('productId'), 'product-1');
+  assert.equal(target.get('contractId'), 'work-1');
+});
+
 test('ontology detail displays its exact React implementation and source through the shipped Portal', { timeout: 60_000 }, async t => {
   const versionRenderer = await require('../portal-versions/build.cjs').buildRenderer({ write: false });
   const { page, hold } = await mount(t, versionRenderer);
@@ -430,7 +447,7 @@ test('procedure detail renders real Mermaid and links to a Screen with a valid i
   const externalImage = await openAsset(page, 'SCR-002');
   assert.equal(await externalImage.locator('iframe').count(), 0);
   await externalImage.getByRole('link', { name: 'Design Studio에서 원본 파일 반입하기' }).waitFor();
-  assert.equal(await externalImage.getByRole('link', { name: 'Design Studio에서 원본 파일 반입하기' }).getAttribute('href'), '#/studio');
+  assert.equal(await externalImage.getByRole('link', { name: 'Design Studio에서 원본 파일 반입하기' }).getAttribute('href'), '#/studio?step=assets');
 });
 
 test('late category and detail responses cannot replace a newer selection or reopen closed details', { timeout: 60_000 }, async t => {

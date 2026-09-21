@@ -99,6 +99,12 @@ def coverage_issues(contract):
         issues.append("변경 대상 화면·슬롯을 하나 이상 정하세요.")
     for screen in request["screens"]:
         if screen["change"] == "remove":
+            matching = [rule for rule in rules if rule.get("screenId") == screen["id"]]
+            if not any(any(step["action"] == "expectVisible" and step["target"] == screen["id"] and step.get("value") is False
+                           for step in rule["steps"]) and
+                       any(step["action"] == "expectVisible" and step["target"] != screen["id"] and step.get("value") is True
+                           for step in rule["steps"]) for rule in matching):
+                issues.append(f"{screen['title']}: 유지되는 화면과 삭제 대상의 미표시를 확인하는 필수 규칙이 필요합니다.")
             continue
         if not screen["states"]:
             issues.append(f"{screen['title']}: 확인할 상태를 선택하세요.")
@@ -108,6 +114,9 @@ def coverage_issues(contract):
                            for step in rule["steps"]) for rule in matching):
                 issues.append(f"{screen['title']} · {state}: 해당 화면 표시를 포함한 필수 규칙이 필요합니다.")
     for transition in request["transitions"]:
+        if any(screen["change"] == "remove" and screen["id"] in (transition["from"], transition["to"]) for screen in request["screens"]):
+            issues.append(f"{transition['id']}: 삭제 대상 대신 이동할 화면으로 연결을 수정하세요.")
+            continue
         if not transition["action"] or not transition["condition"] or not transition["retention"]:
             issues.append(f"{transition['id']}: 이동 행동·조건·값 유지 기준을 정하세요.")
         def observes_link(rule):

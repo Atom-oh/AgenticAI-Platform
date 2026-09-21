@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import posixpath
+import time
 import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -58,11 +59,12 @@ def pdf_pages(data):
         return result
 
 
-def pptx_pages(data):
+def pptx_pages(data, deadline=None):
     from defusedxml import ElementTree
     relation_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
     presentation_ns = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
     drawing_ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 45)
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         archive_entries(archive, maximum=6000, total_limit=128 * 1024 * 1024)
         def xml(name):
@@ -73,8 +75,10 @@ def pptx_pages(data):
         slides = xml("ppt/presentation.xml").findall(f"{presentation_ns}sldIdLst/{presentation_ns}sldId")
         if not 1 <= len(slides) <= MAX_PAGES:
             raise ValueError("슬라이드 수 상한을 초과했습니다.")
-        result = []
+        result, characters = [], 0
         for number, slide in enumerate(slides, 1):
+            if time.monotonic() >= deadline:
+                raise ValueError("슬라이드 해석 시간 한도를 초과했습니다.")
             relation = relations[slide.attrib[relation_ns + "id"]]
             target = relation.attrib["Target"]
             if relation.attrib.get("TargetMode") == "External" or ":" in target or "\\" in target:
@@ -83,11 +87,31 @@ def pptx_pages(data):
             if not path.startswith("ppt/slides/") or not path.endswith(".xml"):
                 raise ValueError("슬라이드 경로가 올바르지 않습니다.")
             root = xml(path)
-            text = "\n".join("".join(node.text or "" if node.tag == drawing_ns + "t" else
-                                    "\n" if node.tag == drawing_ns + "br" else
-                                    "\t" if node.tag == drawing_ns + "tab" else "" for node in paragraph.iter())
-                             for paragraph in root.iter(drawing_ns + "p"))
-            result.append({"page": number, "text": text[:MAX_PAGE_CHARS], "truncated": len(text) > MAX_PAGE_CHARS})
+            pieces, count, paragraph_seen, truncated = [], 0, False, False
+            # Visit each XML node once; nested paragraphs cannot multiply text.
+            for index, node in enumerate(root.iter()):
+                if index > 500000 or index % 1024 == 0 and time.monotonic() >= deadline:
+                    raise ValueError("슬라이드 구조·시간 한도를 초과했습니다.")
+                value = ""
+                if node.tag == drawing_ns + "p":
+                    value = "\n" if paragraph_seen else ""
+                    paragraph_seen = True
+                elif node.tag == drawing_ns + "t":
+                    value = node.text or ""
+                elif node.tag == drawing_ns + "br":
+                    value = "\n"
+                elif node.tag == drawing_ns + "tab":
+                    value = "\t"
+                remaining = MAX_PAGE_CHARS - count
+                pieces.append(value[:remaining]); count += min(len(value), remaining)
+                if len(value) > remaining:
+                    truncated = True
+                    break
+            text = "".join(pieces)
+            characters += len(text)
+            if characters > MAX_TOTAL_CHARS:
+                raise ValueError("슬라이드 추출 텍스트 한도를 초과했습니다.")
+            result.append({"page": number, "text": text, "truncated": truncated})
         return result
 
 

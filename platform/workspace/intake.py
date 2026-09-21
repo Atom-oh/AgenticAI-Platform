@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 import warnings
 from html.parser import HTMLParser
 from pathlib import PurePath
@@ -184,7 +185,7 @@ def _pdf(data: bytes) -> dict:
     return _bound_text(result)
 
 
-def extract_file(name: str, data: bytes) -> dict:
+def extract_file(name: str, data: bytes, *, deadline=None) -> dict:
     if not isinstance(data, bytes) or not 0 < len(data) <= MAX_FILE_BYTES:
         raise ValueError("파일은 비어 있지 않은 50MiB 이하의 파일이어야 합니다.")
     extension = PurePath(name).suffix.lower().lstrip(".")
@@ -196,19 +197,28 @@ def extract_file(name: str, data: bytes) -> dict:
         from workspace.prepare_guidelines import archive_entries
         from workspace.guidelines import FORMAT, MAX_PACK_BYTES, summaries, validate_pack
         import zipfile
+        deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 120)
         sources, excluded = [], []
         if extension == "zip":
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 for entry in archive_entries(archive):
                     if entry.is_dir() or PurePath(entry.filename).name == ".DS_Store":
                         continue
+                    if time.monotonic() >= deadline:
+                        excluded.append(entry.filename[:180] + ": 이번 반입의 해석 시간 한도로 제외되었습니다.")
+                        continue
                     try:
-                        sources.append(source_record(entry.filename, archive.read(entry), isolate_pdf=True))
+                        source = source_record(entry.filename, archive.read(entry), isolate_pdf=True, deadline=deadline)
+                        # Validate the member and combined bounds before accepting it.
+                        candidate = validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": sources + [source]})
+                        if len(json.dumps(candidate, ensure_ascii=False).encode()) > MAX_PACK_BYTES:
+                            raise ValueError("pack-too-large")
+                        sources.append(source)
                     except Exception:
                         excluded.append(entry.filename[:180] + ": 형식·보호·크기 또는 해석 한도로 제외되었습니다.")
         else:
             try:
-                sources.append(source_record(name, data))
+                sources.append(source_record(name, data, deadline=deadline))
             except Exception as error:
                 raise ValueError("원본 형식·보호·크기 또는 해석 한도를 확인하세요.") from error
         if not sources:
@@ -221,9 +231,11 @@ def extract_file(name: str, data: bytes) -> dict:
         result = _base(FORMAT)
         result.update(guidelinePack=pack, guidelineSources=summaries(pack, originals_stored=True), pages=sum(s["pageCount"] for s in sources))
         result["warnings"] = ["원본 상태·식별자는 참고 정보이며 승인이 아닙니다. 코드는 실행하지 않았고 이미지·배치 해석은 포함하지 않습니다."]
-        if excluded:
+        if excluded or any(page.get("truncated") for source in pack["sources"] for page in source["pages"]):
             result.update(parseStatus="partial")
             result["warnings"].extend(excluded)
+            if any(page.get("truncated") for source in pack["sources"] for page in source["pages"]):
+                result["warnings"].append("일부 원문의 텍스트가 상한에서 잘렸습니다. 완전한 범위를 나누어 준비하세요.")
         return result
     if extension in ("png", "jpg", "jpeg"):
         return _image(data, extension)

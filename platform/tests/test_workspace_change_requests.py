@@ -113,10 +113,24 @@ def test_independent_screen_states_and_navigation_order_are_required():
     popup["rules"][-1]["steps"].insert(1, {"action": "expectVisible", "target": "complete", "value": True})
     assert state_coverage_issues(popup) == []
     popup["rules"][-1]["steps"][2] = {"action": "fill", "target": "code", "value": "123"}
+    popup["changeRequest"]["transitions"][0]["action"] = "Enter code to continue"
     assert state_coverage_issues(popup) == []
     changed = copy.deepcopy(value)
     changed["rules"][-1]["required"] = False
     assert any("next-step" in issue for issue in state_coverage_issues(changed))
+
+
+def test_removed_screen_requires_explicit_absence_in_a_visible_context():
+    value = contract()
+    value["changeRequest"]["screens"][0]["change"] = "remove"
+    value["changeRequest"]["transitions"] = []
+    value["rules"] = value["rules"][:3]
+    assert any("삭제 대상" in issue for issue in state_coverage_issues(value))
+    value["rules"].append({"id": "removed", "title": "Removed screen", "screenId": "entry", "required": True,
+        "source": {"kind": "manual"}, "steps": [
+            {"action": "expectVisible", "target": "complete", "value": True},
+            {"action": "expectVisible", "target": "entry", "value": False}]})
+    assert not state_coverage_issues(validate_contract(value))
 
 
 def test_mapping_schedule_and_scope_edits_invalidate_exact_approval():
@@ -131,6 +145,20 @@ def test_mapping_schedule_and_scope_edits_invalidate_exact_approval():
     assert contract_hash(changed) != contract_hash(approved)
     status, edited = request(api, "PUT", f"/contracts/{approved['id']}", changed)
     assert status == 200 and edited["contract"]["status"] == "draft" and not edited["contract"].get("approval")
+
+
+def test_archiving_a_source_during_contract_approval_is_an_atomic_conflict():
+    store, api, worker = environment()
+    identifier = upload(api, worker, "guide.txt", b"Synthetic source")
+    status, created = request(api, "POST", "/contracts", {**contract(), "assetIds": [identifier]})
+    assert status == 201, created
+    saved = created["contract"]
+    def archive():
+        asset = store.get("designer", "asset", identifier)
+        store.put("designer", "asset", {**asset, "archived": True}, asset["version"])
+    store.table().before_transaction = archive
+    assert request(api, "POST", f"/contracts/{saved['id']}/approve", {"version": saved["version"]})[0] == 409
+    assert store.get("designer", "contract", saved["id"])["status"] == "draft"
 
 
 @pytest.mark.parametrize("patch", [
@@ -269,6 +297,59 @@ def test_shared_string_expansion_is_bounded_before_building_a_workbook_page():
         workbook_pages(output.getvalue())
 
 
+def test_nested_slide_paragraphs_do_not_duplicate_descendant_text():
+    from test_workspace_guidelines import pptx_bytes
+    from workspace.prepare_guidelines import pptx_pages
+    original, output = io.BytesIO(pptx_bytes()), io.BytesIO()
+    with zipfile.ZipFile(original) as before, zipfile.ZipFile(output, "w") as after:
+        for item in before.infolist():
+            data = before.read(item.filename)
+            if item.filename == "ppt/slides/slide1.xml":
+                data = ('<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+                        '<a:p>' * 100 + '<a:r><a:t>UniqueText</a:t></a:r>' + '</a:p>' * 100 + '</p:sld>').encode()
+            after.writestr(item, data)
+    pages = pptx_pages(output.getvalue())
+    combined = "".join(page["text"] for page in pages)
+    assert combined.count("UniqueText") == 1 and len(combined) < 1000
+
+
+def test_mixed_zip_preserves_readable_source_when_a_workbook_has_no_pages():
+    empty = io.BytesIO()
+    with zipfile.ZipFile(empty, "w"):
+        pass
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("good.tsx", source())
+        archive.writestr("empty.xlsx", empty.getvalue())
+    result = extract_file("mixed.zip", output.getvalue())
+    assert result["parseStatus"] == "partial"
+    assert len(result["guidelinePack"]["sources"]) == 1
+    assert any("empty.xlsx" in warning for warning in result["warnings"])
+
+
+def test_zip_uses_one_aggregate_deadline_and_reports_unprocessed_members(monkeypatch):
+    import workspace.intake as intake
+    import workspace.prepare_sources as preparation
+    original = preparation.source_record
+    now, calls = [0.0], []
+    monkeypatch.setattr(intake.time, "monotonic", lambda: now[0])
+    def parse(name, data, **kwargs):
+        calls.append(name)
+        value = original(name, data, **kwargs)
+        now[0] = 11
+        return value
+    monkeypatch.setattr(preparation, "source_record", parse)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for index in range(3):
+            archive.writestr(f"source-{index}.tsx", source())
+    result = intake.extract_file("bounded.zip", output.getvalue(), deadline=10)
+    assert len(calls) == 1 and result["parseStatus"] == "partial"
+    assert len(result["guidelinePack"]["sources"]) == 1
+    assert sum("시간 한도" in warning for warning in result["warnings"]) == 2
+
+
 def test_pdf_in_zip_uses_the_bounded_child_without_inheriting_credentials(monkeypatch):
     from workspace import source_parse_task
     from test_workspace_guidelines import pdf_bytes
@@ -278,13 +359,18 @@ def test_pdf_in_zip_uses_the_bounded_child_without_inheriting_credentials(monkey
         environments.append(kwargs["env"])
         return original(*args, **kwargs)
     monkeypatch.setattr(source_parse_task.subprocess, "run", execute)
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-must-not-enter-parser")
+    credentials = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+                   "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_PROFILE"]
+    for name in credentials:
+        monkeypatch.setenv(name, "synthetic-must-not-enter-parser")
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
         archive.writestr("guide.pdf", pdf_bytes())
     result = extract_file("guides.zip", output.getvalue())
     assert result["guidelinePack"]["sources"][0]["pages"][0]["text"].strip() == "Guidance page 1"
-    assert environments and all("AWS_SECRET_ACCESS_KEY" not in env for env in environments)
+    assert environments and all(not any(name in env for name in credentials) for env in environments)
+    assert all(set(env) <= {"PATH", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "TMPDIR"}
+               for env in environments)
 
 
 def test_real_delta_generation_rejects_unrelated_file_edits_and_releases_exact_handoff():

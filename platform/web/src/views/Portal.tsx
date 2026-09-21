@@ -413,7 +413,7 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
               플랫폼 {d.name} 실행 예제 보기
             </button>}
             {d.label === 'Component' && codeAvailable && <p>같은 이름의 플랫폼 예제이며, 이 설계 자산의 {d.version || '원본'} 구현으로 자동 연결되지 않습니다.</p>}
-            {d.label === 'Screen' && <a className="portal-link" href="#/studio">Design Studio에서 원본 파일 반입하기</a>}
+            {d.label === 'Screen' && <a className="portal-link" href={studioHash()}>Design Studio에서 원본 파일 반입하기</a>}
           </section>)}
         {d.visual?.kind === 'diagram' && d.visual.nodes.some(node => node.assetId && !node.missing && node.assetId !== d.id) &&
           <div className="portal-flow-links" aria-label="다이어그램의 연결 자산">
@@ -578,7 +578,8 @@ export default function Portal() {
     const params = new URLSearchParams(location.hash.split('?')[1]);
     for (const key of ['step', 'runId', 'round', 'assetId', 'id', 'component']) params.delete(key);
     if (next === 'guides') { params.set('tab', 'guides'); params.set('step', 'assets'); } else params.delete('tab');
-    location.hash = '#/portal' + (params.size ? '?' + params.toString() : '');
+    const query = params.toString();
+    location.hash = '#/portal' + (query ? '?' + query : '');
     setArea(next);
     if (next === 'guides') setOpenedGuides(true);
   };
@@ -595,11 +596,15 @@ export default function Portal() {
 function referenceHash(patch: Record<string, string> = {}) {
   const current = new URLSearchParams(location.hash.split('?')[1]);
   const params = new URLSearchParams(patch);
-  for (const key of ['projectId', 'productId', 'contractId']) {
+  const projectId = current.get('projectId') || current.get('project');
+  if (projectId) params.set('projectId', projectId);
+  for (const key of ['productId', 'contractId']) {
     const value = current.get(key); if (value) params.set(key, value);
   }
-  return '#/portal' + (params.size ? '?' + params.toString() : '');
+  const query = params.toString();
+  return '#/portal' + (query ? '?' + query : '');
 }
+function studioHash() { return referenceHash({ step: 'assets' }).replace('#/portal', '#/studio'); }
 
 function ReferencePortal() {
   const root = useRef<HTMLDivElement>(null);
@@ -791,7 +796,7 @@ function ReferencePortal() {
       <div><p className="portal-eyebrow">{termCategory ? 'UX WRITING · 용어 사전' : 'DESIGN ASSET LIBRARY'}</p>
         <h2>{termCategory ? '용어와 사용 맥락을 확인하세요.' : '그림으로 확인하고, 직접 사용해 보세요.'}</h2>
         <p>{termCategory ? '등록된 용어 설명과 연결된 사용 화면을 함께 확인합니다.' : '컴포넌트는 실제 React로, 사용자 흐름과 설계 관계는 다이어그램으로 확인합니다.'}</p></div>
-      <a href="#/studio" className="portal-secondary">파일 반입 · Design Studio</a>
+      <a href={studioHash()} className="portal-secondary">파일 반입 · Design Studio</a>
     </header>
     <div className={`portal-layout${hasDetail ? ' has-detail' : ''}`}>
       <nav className="portal-nav panel" aria-label="디자인 자산 유형">

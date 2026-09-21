@@ -11,18 +11,19 @@ import hashlib
 import io
 import json
 import re
+import time
 import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from workspace.guidelines import FORMAT, MAX_PACK_BYTES, MAX_PAGE_CHARS, MAX_PAGES, MAX_TOTAL_CHARS, validate_pack
+from workspace.guidelines import FORMAT, MAX_METADATA_BYTES, MAX_PACK_BYTES, MAX_PAGE_CHARS, MAX_PAGES, MAX_TOTAL_CHARS, validate_pack
 from workspace.prepare_guidelines import archive_entries, category_for, pdf_pages, pptx_pages
 
 SOURCE_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".scss", ".css"}
 SUPPORTED = SOURCE_EXTENSIONS | {".pdf", ".pptx", ".txt", ".md", ".xlsx"}
 
 
-def source_record(name, data, *, isolate_pdf=False):
+def source_record(name, data, *, isolate_pdf=False, deadline=None):
     original_name = name
     name = unicodedata.normalize("NFC", name)
     path = PurePosixPath(name)
@@ -36,14 +37,14 @@ def source_record(name, data, *, isolate_pdf=False):
     if extension == ".pdf":
         if isolate_pdf:
             from workspace.source_parse_task import isolated_pdf_pages
-            pages = isolated_pdf_pages(data)
+            pages = isolated_pdf_pages(data, timeout=min(50, deadline - time.monotonic()) if deadline is not None else 50)
         else:
             pages = pdf_pages(data)
         category = category_for(name)
     elif extension == ".pptx":
-        pages, category = pptx_pages(data), "specification"
+        pages, category = pptx_pages(data, deadline=deadline), "specification"
     elif extension == ".xlsx":
-        pages, category = workbook_pages(data), "inventory"
+        pages, category = workbook_pages(data, deadline=deadline), "inventory"
     else:
         prefix = data[:4 * (MAX_PAGE_CHARS + 1)]
         value = codecs.getincrementaldecoder("utf-8-sig")().decode(prefix, final=len(prefix) == len(data))
@@ -66,10 +67,11 @@ def source_record(name, data, *, isolate_pdf=False):
             "pageCount": len(pages), "pages": pages}
 
 
-def workbook_pages(data):
+def workbook_pages(data, deadline=None):
     """OOXML cells only; preserve sheet/row coordinates, never evaluate formulas."""
     from defusedxml import ElementTree as ET
     ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 45)
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         archive_entries(archive, maximum=3000, total_limit=128 * 1024 * 1024)
         def xml(name):
@@ -92,6 +94,8 @@ def workbook_pages(data):
             # Groups of rows are searchable pages; each retains exact OOXML coordinates.
             lines = []
             for row in xml(name).iter(ns + "row"):
+                if time.monotonic() >= deadline:
+                    raise ValueError("workbook-time-limit")
                 row_count += 1
                 row_id = row.get("r", "?")
                 if row_count > 100000 or len(row_id) > 10:
@@ -173,6 +177,7 @@ def prepare_archive(path, output):
             if records and (len(records) >= 20 or sum(len(s["pages"]) for s in records) + len(source["pages"]) > 1200
                             or sum(len(p["text"]) for s in records for p in s["pages"]) +
                             sum(len(p["text"]) for p in source["pages"]) > 2_500_000
+                            or sum(len(json.dumps(s.get("metadata", {}), ensure_ascii=False).encode()) for s in records + [source]) > MAX_METADATA_BYTES
                             or len(json.dumps({"format": FORMAT, "schemaVersion": 1, "sources": records + [source]},
                                               ensure_ascii=False).encode()) > MAX_PACK_BYTES):
                 flush()

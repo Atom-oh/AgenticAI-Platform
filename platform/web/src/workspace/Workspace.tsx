@@ -44,7 +44,8 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
     const changed = () => {
       const next = readWorkflowRoute(location.hash);
       if (location.hash.split('?')[0] !== acceptedHash.current.split('?')[0]) return;
-      const scopeChanged = next.projectId !== acceptedRoute.current.projectId || next.productId !== acceptedRoute.current.productId;
+      const scopeChanged = next.projectId !== acceptedRoute.current.projectId || next.productId !== acceptedRoute.current.productId ||
+        next.contractId !== acceptedRoute.current.contractId;
       if (scopeChanged && unsaved.current && !confirm('저장하지 않은 설계 변경을 닫고 다른 작업 공간·상품으로 이동할까요?')) {
         history.replaceState(null, '', acceptedHash.current); return;
       }
@@ -147,6 +148,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const [preferredContract, setPreferredContract] = useState('');
   const [editing, setEditing] = useState({ id: '', dirty: false });
   const [planningDirty, setPlanningDirty] = useState(false);
+  const [criteriaPending, setCriteriaPending] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [requestedRun, setRequestedRun] = useState({ id: route.runId, round: route.round });
@@ -214,6 +216,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const scopedContracts = contracts.filter(item => !productId || !item.productId || item.productId === productId);
   const scopedRuns = runs.filter(item => !productId || item.productId === productId);
   const navigate = (next: WorkflowStep, runId?: string, round?: number) => {
+    if (criteriaPending) { setError('기준 시안 조회가 끝나면 다음 단계로 이동할 수 있습니다.'); return; }
     setStep(next);
     const target = runId ? { id: runId, round } : {
       id: selection?.run.id || requestedRun.id, round: selection?.round?.number || requestedRun.round,
@@ -236,8 +239,14 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   };
   const current = WORKFLOW_STEPS.find(item => item.id === step)!;
   const saveProduct = (value: Product) => {
-    setProducts(items => [value, ...items.filter(item => item.id !== value.id)]); setProductId(value.id);
     const sameProduct = value.id === productId;
+    setProducts(items => [value, ...items.filter(item => item.id !== value.id)]);
+    if (!sameProduct && editing.dirty && !confirm('저장하지 않은 UX 설계 변경을 닫고 저장한 상품으로 이동할까요?')) return;
+    if (!sameProduct) {
+      setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
+      setRequestedRun({ id: '', round: undefined }); setSelected([]); setGuideRefs([]);
+    }
+    setProductId(value.id);
     const hash = workflowHash(location.hash, { projectId: project?.id || '', productId: value.id, step,
       ...(sameProduct ? { contractId: editing.id || undefined, runId: selection?.run.id || requestedRun.id,
         round: selection?.round?.number || requestedRun.round } : {}) });
@@ -251,7 +260,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       <p>{product?.publishedGuidelineId ? `게시 ${product.publishedRevision}차 기준으로 함께 설계합니다.` : '업무 정의에서 상품 조건과 진행 절차를 먼저 확정하세요.'}</p></div>}
     <nav className="ws-workflow-nav" aria-label="UX 설계 단계">{WORKFLOW_STEPS.map((item, index) =>
       <button key={item.id} data-workflow-step={item.id} aria-label={`${index + 1} ${item.label}`}
-        aria-current={step === item.id ? 'step' : undefined} onClick={() => navigate(item.id)}>
+        aria-current={step === item.id ? 'step' : undefined} disabled={criteriaPending} onClick={() => navigate(item.id)}>
         <span>{String(index + 1).padStart(2, '0')}</span><strong>{item.label}</strong><small>{item.output}</small>
       </button>)}</nav>
     <div className="ws-stage-heading"><div><h2 ref={heading} tabIndex={-1}>{current.label}</h2><p>{current.purpose}</p></div>
@@ -266,6 +275,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
           {product && <GuidelineHistory key={product.id} product={product} assets={assets} />}</details></section>}
       <div hidden={step !== 'define' && step !== 'design'}><RulesPanel key={productId || 'unbound'} config={config} assets={assets} selected={selected}
         runs={scopedRuns}
+        onPending={setCriteriaPending}
         guideRefs={guideRefs} stage={step === 'define' ? 'define' : 'design'} initialContractId={route.contractId}
         contracts={scopedContracts} product={product} onContinue={() => navigate(step === 'define' ? 'assets' : 'review')}
         refresh={() => void refresh()} onApproved={onApproved} onEditing={onEditing} /></div>

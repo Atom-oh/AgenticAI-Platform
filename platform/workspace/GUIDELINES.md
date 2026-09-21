@@ -23,10 +23,15 @@ the existing 20-source, 1,200-page and 16 MiB limits. Matching outputs are reuse
 on restart. Protected, unsupported and unreadable originals appear in an explicit
 local exclusion receipt. Truncated code cannot be selected as model context.
 There is no arbitrary nested-ZIP recursion, code execution or network retrieval.
-Server ZIP PDF extraction runs in a separate process without AWS credentials,
+Server ZIP PDF extraction runs in a separate process without inherited AWS credential variables,
 with 1.5 GiB address-space, 45-second CPU, 50-second wall-time and 16 MiB output
 limits. PDF text is requested in bounded ranges. XLSX parsing bounds shared
 strings, cell/row counts and cumulative expanded text before assembling pages.
+PPTX text is accumulated in one bounded traversal per slide, with a cumulative
+document budget. Server source intake has one 120-second parsing deadline,
+shortened to reserve 30 seconds of remaining Lambda time for persistence.
+Each PDF child receives only the remaining budget. Unprocessed members are
+reported as exclusions, so a slow mixed ZIP can retain completed extracts.
 Text/code classification and extraction inspect a bounded prefix; omitted text
 is explicitly truncated and unavailable as generation evidence.
 

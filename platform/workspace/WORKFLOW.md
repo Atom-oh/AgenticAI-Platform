@@ -17,6 +17,10 @@ a `screenId`/`scenario` rule observing that screen. Each transition needs a
 `transitionId` rule observing source, action and destination in order.
 Conditions and retained values need semantic review and additional meaningful
 assertions; these structural checks do not establish their correctness.
+Removal requires a screen-linked absence assertion together with a visible
+retained context. Baseline selection blocks save/proposal/stage advancement
+until its exact reference is resolved. Superseded screen references remain
+visible for explicit removal; they are never silently rebound.
 
 An optional baseline pins an approved React run, round and source hash in the
 same storage scope. Only explicitly allowed generated-source paths may change;
@@ -27,6 +31,7 @@ Baseline dependencies are validated recursively, including current product
 guidance, with cycles and chains over 24 runs rejected. Approval transactions
 condition-check the referenced runs, contracts and products to reject concurrent
 invalidation. A stale ancestor cannot be laundered through a derived baseline.
+Selected source asset revisions are also included in approval transactions.
 
 The release manifest adds the request, ID fields, references and actual
 added/modified/deleted exported files with before/after hashes. Trusted build/

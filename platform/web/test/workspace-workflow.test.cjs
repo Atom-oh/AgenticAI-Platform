@@ -29,6 +29,16 @@ test('workflow links retain exact scoped artifacts and reject malformed identiti
     '#/portal?tab=guides&projectId=p&step=assets');
 });
 
+test('scope links do not depend on URLSearchParams.size support', () => {
+  const { workflowHash } = load('workflow');
+  const Original = global.URLSearchParams;
+  global.URLSearchParams = class extends Original { get size() { return undefined; } };
+  try {
+    assert.equal(workflowHash('#/studio', { projectId: 'p', productId: 'product', step: 'handoff', runId: 'run', round: 2 }),
+      '#/studio?projectId=p&productId=product&step=handoff&runId=run&round=2');
+  } finally { global.URLSearchParams = Original; }
+});
+
 test('state results do not pass missing, duplicated or malformed evidence', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');

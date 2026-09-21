@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { messageOf, resource } from './client';
 import { useWorkspaceClient } from './WorkspaceScope';
 import { buildPassed } from './project';
@@ -14,9 +14,12 @@ export default function HandoffPanel({ runs, contracts, selection, product, init
   onSelection?: (selection: Selection) => void;
 }) {
   const client = useWorkspaceClient();
+  const requestKey = `${initialRunId || ''}:${initialRound || 0}`;
+  const [appliedRequest, setAppliedRequest] = useState(requestKey);
+  const previousRequestedRun = useRef(initialRunId || '');
   const [id, setId] = useState(initialRunId || selection?.run.id || '');
   const [loadedRun, setRun] = useState<Run | null>(null);
-  const run = loadedRun?.id === id && (!product || loadedRun.productId === product.id) ? loadedRun : null;
+  const run = appliedRequest === requestKey && loadedRun?.id === id && (!product || loadedRun.productId === product.id) ? loadedRun : null;
   const [number, setNumber] = useState(initialRound || selection?.round?.number || 0);
   const [pageId, setPageId] = useState(selection?.pageId || '');
   const [error, setError] = useState('');
@@ -24,11 +27,14 @@ export default function HandoffPanel({ runs, contracts, selection, product, init
   const reactRuns = runs.filter(item => item.outputType === 'react');
   const currentVersion = runs.find(item => item.id === id)?.version;
   useEffect(() => {
+    const previous = previousRequestedRun.current;
+    previousRequestedRun.current = initialRunId || '';
+    setAppliedRequest(requestKey);
     if (initialRunId) {
       setId(initialRunId); setNumber(initialRound || 0);
       setPageId(selection?.run.id === initialRunId && (!initialRound || selection.round?.number === initialRound) ? selection.pageId || '' : '');
-    }
-  }, [initialRunId, initialRound]);
+    } else if (previous) { setId(''); setRun(null); setNumber(0); setPageId(''); }
+  }, [requestKey]);
   useEffect(() => {
     const abort = new AbortController(); setRun(null); setError('');
     if (id) client.get<{ run: Run }>(`/runs/${resource(id)}`, abort.signal).then(value => {

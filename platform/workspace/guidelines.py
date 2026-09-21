@@ -13,6 +13,7 @@ MAX_PAGE_CHARS = 20_000
 MAX_TOTAL_CHARS = 3_000_000
 MAX_REFS = 12
 MAX_CONTEXT_CHARS = 60_000
+MAX_METADATA_BYTES = 64_000
 CATEGORIES = ("foundation", "interaction", "graphics", "content", "writing", "general", "specification", "source", "inventory")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 SHA256 = re.compile(r"[a-f0-9]{64}\Z")
@@ -47,7 +48,7 @@ def validate_pack(value):
     sources = value.get("sources")
     if not isinstance(sources, list) or not 1 <= len(sources) <= 20:
         raise ValueError("가이드 원본은 1~20개가 필요합니다.")
-    result, identifiers, page_count, characters = [], set(), 0, 0
+    result, identifiers, page_count, characters, metadata_bytes = [], set(), 0, 0, 0
     for source in sources:
         if not isinstance(source, dict):
             raise ValueError("가이드 원본 정보가 올바르지 않습니다.")
@@ -90,6 +91,9 @@ def validate_pack(value):
             result[-1]["metadata"] = {key: _string(metadata[key], 1024, "원본 정보", empty=True)
                                      for key in ("path", "sid", "pver", "dver", "sync", "mdate", "status", "imports")
                                      if key in metadata}
+            metadata_bytes += len(json.dumps(result[-1]["metadata"], ensure_ascii=False).encode())
+            if metadata_bytes > MAX_METADATA_BYTES:
+                raise ValueError("원본 메타데이터는 묶음당 64KB 이내여야 합니다.")
     return {"format": FORMAT, "schemaVersion": 1, "sources": result}
 
 

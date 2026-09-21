@@ -38,6 +38,10 @@ export function StateEvidence({ contract, evidence }: { contract: EditableContra
     {contract.changeRequest && <div>{contract.changeRequest.screens.filter(screen => screen.change !== 'remove').flatMap(screen =>
       screen.states.map(state => <article key={`${screen.id}:${state}`}><strong>{screen.title} · {UX_STATES[state]?.label || state}</strong>
         <span>{stateResult(contract.rules.filter(rule => rule.required && rule.screenId === screen.id && rule.scenario === state).map(rule => rule.id))}</span></article>))}
+      {contract.changeRequest.screens.filter(screen => screen.change === 'remove').map(screen => <article key={screen.id}>
+        <strong>{screen.title} · 삭제 확인</strong>
+        <span>{stateResult(contract.rules.filter(rule => rule.required && rule.screenId === screen.id).map(rule => rule.id))}</span>
+      </article>)}
       {contract.changeRequest.transitions.map(link => <article key={link.id}><strong>
         {contract.changeRequest!.screens.find(screen => screen.id === link.from)?.title} → {contract.changeRequest!.screens.find(screen => screen.id === link.to)?.title}
       </strong><span>{stateResult(contract.rules.filter(rule => rule.required && rule.transitionId === link.id).map(rule => rule.id))}</span></article>)}</div>}

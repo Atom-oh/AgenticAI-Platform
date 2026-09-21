@@ -682,7 +682,7 @@ class WorkspaceAPI:
             **normalized, "id": record["id"], "status": "draft", "revisions": revisions}, version)
         return _json(200, {"contract": result})
 
-    def _approval_put(self, owner, kind, record, expected_version, scope, action):
+    def _approval_put(self, owner, kind, record, expected_version, scope, action, assets=()):
         writes = [{"owner": owner, "kind": kind, "item": record, "expected_version": expected_version}]
         if scope and scope.get("project"):
             fresh = self.collaboration.require(scope, action)
@@ -691,6 +691,7 @@ class WorkspaceAPI:
                 raise Conflict("Project authority or planning criteria changed during approval")
             writes.append({"owner": owner, "kind": "project", "item": project, "expected_version": project["version"]})
         checks = [{"owner": owner, "kind": "contract", "id": record["contractId"], "version": record["contractVersion"]}] if kind == "run" else []
+        checks.extend({"owner": owner, "kind": "asset", "id": asset["id"], "version": asset["version"]} for asset in assets)
         from workspace.change_requests import baseline_project
         criteria = record["contract"] if kind == "run" else record
         baseline_project(self.storage, owner, criteria.get("changeRequest", {}), checks=checks)
@@ -712,7 +713,7 @@ class WorkspaceAPI:
             raise Conflict("Contract changed")
         if record.get("catalogHash"):
             self._criteria(owner, {}, scope, record)
-        normalized, _ = self._validated_contract(owner, record)
+        normalized, assets = self._validated_contract(owner, record)
         from workspace.rules import state_coverage_issues
         coverage_issues = state_coverage_issues(normalized)
         if coverage_issues:
@@ -735,7 +736,7 @@ class WorkspaceAPI:
             **record, **normalized, "status": "approved",
             "approval": {"version": version + 1, "hash": digest, "actor": scope["actor"] if scope else owner,
                          "at": self.storage.clock()},
-        }, version, scope, "edit_rules")
+        }, version, scope, "edit_rules", assets=assets)
         return _json(200, {"contract": result})
 
     @staticmethod
@@ -979,6 +980,7 @@ class WorkspaceAPI:
                 or not isinstance(digest, str) or not _SHA.fullmatch(digest)
                 or digest != selected.get("artifactSha256") or not selected.get("reportKey")):
             raise HTTPError(409, "approval-evidence-required", "Approve only the exact artifact with passing required evidence")
+        _, approval_assets = self._validated_contract(owner, contract)
         html_key = self._blob_key(owner, selected.get("htmlKey"))
         report_key = self._blob_key(owner, selected["reportKey"])
         if self.storage.blob_info(html_key)["sha256"] != digest:
@@ -1029,7 +1031,7 @@ class WorkspaceAPI:
             **run, "approval": {"round": number, "artifactSha256": digest, "contractVersion": version,
                                 "contractHash": run["contractHash"], "actor": scope["actor"] if scope else owner,
                                 "at": self.storage.clock(), **extra_approval},
-        }, run["version"], scope, "approve")
+        }, run["version"], scope, "approve", assets=approval_assets)
         return _json(200, {"run": result})
 
     @staticmethod

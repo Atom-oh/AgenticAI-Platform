@@ -47,6 +47,8 @@ Each screen/state rule needs screenId, scenario and expectVisible=true on that
 screen ID, plus meaningful state assertions. A transition rule needs transitionId,
 expectVisible=true on its source, the real navigation action, and expectVisible=true
 on its destination, in that order. Test conditions and retained values as specified.
+For change=remove, require a screenId-linked rule observing a retained screen
+and expectVisible=false on the removed target, with the meaningful entry actions.
 Keep UIUX, developer and canonical IDs separate. Source status is not approval.
 Honor source-specific validation timing, back/reentry, cancellation and completion
 behavior. Do not assume every invalid form needs a disabled primary button.
@@ -249,7 +251,7 @@ class Worker:
         try:
             task = job["task"]
             if task == "finalize":
-                result = self._finalize(owner, job)
+                result = self._finalize(owner, job, context)
             elif task == "propose":
                 result = self._propose(owner, job)
             elif task == "run":
@@ -315,7 +317,7 @@ class Worker:
                 self._update(owner, "run", job["input"]["runId"], status="failed", error=message)
             return {"status": "failed", "jobId": identifier}
 
-    def _finalize(self, owner, job):
+    def _finalize(self, owner, job, context=None):
         asset = self.storage.get(owner, "asset", job["input"]["assetId"])
         if not asset or asset.get("uploadStatus") != "processing":
             raise ValueError("반입 처리할 파일이 없습니다.")
@@ -331,7 +333,11 @@ class Worker:
         self.storage.put_blob_once(asset["originalKey"], data, "application/octet-stream")
         self._update(owner, "job", job["id"], progress={"percent": 35, "stage": "extract", "message": "원본 보관·미리보기 해석"})
         try:
-            analysis = self.extractor(asset["name"], data)
+            remaining = context.get_remaining_time_in_millis() / 1000 - 30 if context else 120
+            if self.extractor is extract_file:
+                analysis = self.extractor(asset["name"], data, deadline=time.monotonic() + min(120, remaining))
+            else:
+                analysis = self.extractor(asset["name"], data)
         except ValueError as error:
             analysis = {"format": Path(asset["name"]).suffix[1:], "text": "", "parseStatus": "failed",
                         "warnings": [str(error)], "previews": [], "pages": 0, "resources": []}
@@ -425,7 +431,7 @@ class Worker:
                     local_files[asset["name"]] = local
             if asset.get("parseStatus") in ("failed", "unsupported"):
                 warnings.append(f"{asset['name']}: 원본 보관만 지원하며 자동 해석하지 못했습니다.")
-            if analysis.get("parseStatus") == "partial":
+            if analysis.get("parseStatus") == "partial" and not asset.get("guidelinesKey"):
                 warnings.extend(f"{asset['name']}: {warning}" for warning in analysis.get("warnings", []))
             if not asset.get("guidelinesKey") and (len(text) > 60_000 or analysis.get("truncated")):
                 warnings.append(f"{asset['name']}: AI 문맥에는 추출 텍스트 앞부분만 포함됩니다. 적용 범위를 확인하세요.")

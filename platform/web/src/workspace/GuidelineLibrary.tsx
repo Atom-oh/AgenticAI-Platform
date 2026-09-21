@@ -38,6 +38,14 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [retry, setRetry] = useState(0);
+  const invalidSelections = selected.filter(ref => {
+    const asset = assets.find(asset => asset.id === ref.assetId && !asset.archived && asset.uploadStatus === 'stored');
+    const source = asset?.guidelineSources?.find(source => source.id === ref.sourceId);
+    const page = asset?.id === pack?.id ? result?.pages.find(page => page.sourceId === ref.sourceId && page.page === ref.page) : undefined;
+    return !source || source.sha256 !== ref.sourceSha256 ||
+      ['삭제', '폐기', 'deleted', 'deprecated', 'discarded'].includes((source.metadata?.status || '').normalize('NFKC').trim().toLowerCase()) ||
+      (page && (page.textSha256 !== ref.textSha256 || page.truncated || !page.text.trim()));
+  });
   useEffect(() => {
     setResult(null); setError('');
     if (!pack) { setLoading(false); return; }
@@ -62,7 +70,9 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
   return <section className="ws-section ws-guide-library">
     <div className="ws-section-heading"><div><h2>고객 가이드 · AI UX 기준</h2>
       <p>업무 흐름·디자인·그래픽·콘텐츠·문구의 원문을 찾아, 이번 화면에 적용할 페이지를 선택하세요.</p></div>
-      <button className="ws-primary" disabled={!selected.length} onClick={onContinue}>선택한 {selected.length}페이지로 규칙 만들기</button></div>
+      <button className="ws-primary" disabled={!selected.length || !!invalidSelections.length} onClick={onContinue}>선택한 {selected.length}페이지로 규칙 만들기</button></div>
+    {!!invalidSelections.length && <Notice error>현재 자료와 일치하지 않거나 제외된 원문 {invalidSelections.length}개가 있습니다.
+      아래 선택 목록에서 제외하거나 원문을 다시 선택하세요.</Notice>}
     <div className="ws-guide-method" aria-label="가이드 검토 관점">{TOPICS.map(topic => <button key={topic.title}
       onClick={() => find(topic.query)}><strong>{topic.title}</strong><span>{topic.description}</span></button>)}</div>
     {!packs.length ? <div className="ws-empty"><h3>아직 반입한 고객 가이드가 없습니다</h3>
@@ -98,6 +108,7 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
       {result?.total === 0 && <div className="ws-empty">일치하는 원문이 없습니다. 다른 검색어 또는 원본을 선택하세요.</div>}
       <div className="ws-guide-pages">{result?.pages.map(page => {
         const checked = selected.some(ref => samePage(ref, { ...page, assetId: pack!.id }));
+        const replacing = selected.some(ref => sameAddress(ref, { ...page, assetId: pack!.id }));
         const source = pack?.guidelineSources?.find(source => source.id === page.sourceId);
         const deleted = ['삭제', '폐기', 'deleted', 'deprecated', 'discarded'].includes((source?.metadata?.status || '').normalize('NFKC').trim().toLowerCase());
         const unusable = deleted || page.truncated || !page.text.trim();
@@ -105,7 +116,7 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
           <div className="ws-section-heading"><div><span className="ws-guide-kind">{GUIDE_CATEGORIES[page.category]}</span>
             <h3>{page.sourceName} · {page.page}페이지</h3></div>
             <label className="ws-check"><input type="checkbox" aria-label={`${page.sourceName} ${page.page}페이지 적용`}
-              checked={checked} disabled={unusable || (!checked && selected.length >= 12)} onChange={() => toggle(page)} />AI 기준에 포함</label></div>
+              checked={checked} disabled={unusable || (!checked && !replacing && selected.length >= 12)} onChange={() => toggle(page)} />AI 기준에 포함</label></div>
           <p className="ws-guide-excerpt">{page.text.slice(0, 500) || '추출 가능한 텍스트가 없습니다.'}</p>
           {source?.metadata && <details><summary>원본 ID·버전·의존성 확인</summary>
             <dl>{Object.entries(source.metadata).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
@@ -126,6 +137,7 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
       {selected.map(ref => {
         const source = assets.find(asset => asset.id === ref.assetId)?.guidelineSources?.find(source => source.id === ref.sourceId);
         return <div key={`${ref.assetId}:${ref.sourceId}:${ref.page}`}><span>{source?.name || ref.sourceId} · {ref.page}페이지</span>
+          {invalidSelections.some(item => samePage(item, ref)) && <strong>원문 재확인 필요</strong>}
           <button aria-label={`${source?.name || ref.sourceId} ${ref.page}페이지 제외`} onClick={() => onSelected(selected.filter(item => !samePage(item, ref)))}>제외</button></div>;
       })}
       <p>선택은 승인과 별개입니다. AI가 제안한 근거·조건·예외를 규칙 화면에서 확인하세요.</p>

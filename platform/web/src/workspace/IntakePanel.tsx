@@ -30,15 +30,32 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
   const requestedAsset = useRef('');
   const [linkError, setLinkError] = useState('');
   useEffect(() => {
-    if (!initialAssetId) { requestedAsset.current = ''; openedAsset.current = ''; setLinkError(''); return; }
+    const abort = new AbortController();
+    if (!initialAssetId) {
+      if (requestedAsset.current) setInspect(null);
+      requestedAsset.current = ''; openedAsset.current = ''; setLinkError(''); return;
+    }
     if (requestedAsset.current !== initialAssetId) {
       requestedAsset.current = initialAssetId; openedAsset.current = ''; setInspect(null);
     }
+    const current = assets.find(item => item.id === initialAssetId);
+    if (current?.archived || current?.system) {
+      setInspect(null); setLinkError('현재 반입 자료에서 제외된 파일입니다.'); return;
+    }
     if (openedAsset.current === initialAssetId) return;
-    const asset = assets.find(item => item.id === initialAssetId && !item.system && !item.archived);
+    const asset = current;
     if (asset) { openedAsset.current = asset.id; setInspect(asset); setLinkError(''); }
-    else { setInspect(null); setLinkError('연결된 파일을 현재 작업 공간에서 찾지 못했습니다. 파일 목록을 다시 조회하세요.'); }
-  }, [assets, initialAssetId]);
+    else {
+      setInspect(null); setLinkError('');
+      workspaceClient.get<{ asset: Asset }>(`/assets/${resource(initialAssetId)}`, abort.signal).then(value => {
+        if (abort.signal.aborted) return;
+        if (value.asset.id !== initialAssetId || value.asset.system || value.asset.archived)
+          throw new Error('현재 반입 자료에서 연결된 파일을 확인하지 못했습니다.');
+        openedAsset.current = value.asset.id; setInspect(value.asset);
+      }).catch(reason => { if (!abort.signal.aborted) setLinkError(messageOf(reason)); });
+    }
+    return () => abort.abort();
+  }, [workspaceClient, assets, initialAssetId]);
   useEffect(() => () => { stopBatch.current = true; control.current?.abort(); }, []);
   const add = (chosen: FileList | File[]) => {
     const incoming = Array.from(chosen);

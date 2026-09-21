@@ -110,7 +110,8 @@ export default function App() {
     if (['studio', 'portal'].includes(v)) {
       for (const key of ['productId', 'contractId']) if (current.get(key)) next.set(key, current.get(key)!);
     }
-    location.hash = '#/' + v + (next.size ? '?' + next.toString() : '');
+    const query = next.toString();
+    location.hash = '#/' + v + (query ? '?' + query : '');
   };
   const [cfg, setCfg] = useState<{ graphBackend?: string; planeDeployed?: boolean } | null>(null);
   const [route, setRoute] = useState<WsEvent | null>(null);   // traces(limit 1, 플레인 호출 없음) → llmRoute · genModel · plane
