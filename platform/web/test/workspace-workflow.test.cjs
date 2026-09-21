@@ -27,6 +27,12 @@ test('workflow links retain exact scoped artifacts and reject malformed identiti
   assert.equal(changed, '#/studio?projectId=new&step=define');
   assert.equal(workflowHash('#/portal?component=Button', { projectId: 'p', step: 'assets' }),
     '#/portal?tab=guides&projectId=p&step=assets');
+  assert.equal(readWorkflowRoute(workflowHash('#/studio?projectId=p&assetId=file', {
+    projectId: 'p', step: 'design',
+  })).assetId, 'file');
+  assert.equal(readWorkflowRoute(workflowHash('#/studio?projectId=p&assetId=file', {
+    projectId: 'other', step: 'assets',
+  })).assetId, '');
 });
 
 test('scope links do not depend on URLSearchParams.size support', () => {

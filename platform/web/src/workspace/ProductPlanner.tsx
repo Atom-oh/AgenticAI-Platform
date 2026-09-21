@@ -14,7 +14,7 @@ export default function ProductPlanner({ product, onSaved, refresh, onEditing }:
   product?: Product; onSaved: (product: Product) => void; refresh: () => void; onEditing?: (dirty: boolean) => void;
 }) {
   const { client, role } = useWorkspaceScope();
-  const [draft, setDraft] = useState<Draft>(() => fields(product));
+  const [draft, setDraftState] = useState<Draft>(() => fields(product));
   const [base, setBase] = useState(product);
   const [ontology, setOntology] = useState<Ontology | null>(null);
   const [affected, setAffected] = useState<Run[] | null>(null);
@@ -25,12 +25,21 @@ export default function ProductPlanner({ product, onSaved, refresh, onEditing }:
   const operation = useRef<AbortController | null>(null);
   const request = useRef({ fingerprint: '', id: '' });
   const dirty = JSON.stringify(draft) !== JSON.stringify(fields(base));
+  const dirtyNow = useRef(dirty); dirtyNow.current = dirty;
+  const setDraft = (value: Draft) => {
+    dirtyNow.current = JSON.stringify(value) !== JSON.stringify(fields(base));
+    onEditing?.(dirtyNow.current); setDraftState(value);
+  };
+  const adopt = (value: Product | undefined) => {
+    setBase(value); setDraftState(fields(value)); setChecked(false);
+    dirtyNow.current = false; onEditing?.(false);
+  };
   const allowed = can(role, 'publish');
-  useEffect(() => { onEditing?.(dirty); }, [dirty, onEditing]);
+  useEffect(() => { onEditing?.(dirtyNow.current); }, [dirty, onEditing]);
   useEffect(() => () => operation.current?.abort(), []);
   useEffect(() => {
     // New server data must not erase an unsaved planner draft.
-    if (!dirty && product?.version !== base?.version) { setBase(product); setDraft(fields(product)); setChecked(false); }
+    if (!dirtyNow.current && product?.version !== base?.version) adopt(product);
   }, [product]);
   useEffect(() => {
     const abort = new AbortController(); setOntology(null); setAffected(null);
@@ -63,7 +72,7 @@ export default function ProductPlanner({ product, onSaved, refresh, onEditing }:
       const value = publish ? await client.post<{ product: Product }>(`/products/${resource(base!.id)}/publish`, { version: base!.version }, abort.signal) :
         base ? await client.put<{ product: Product }>(`/products/${resource(base.id)}`, { version: base.version, ...draft }, abort.signal) :
           await client.post<{ product: Product }>('/products', { ...draft, requestId: request.current.id }, abort.signal);
-      if (!abort.signal.aborted) { setBase(value.product); setDraft(fields(value.product)); setChecked(false); onSaved(value.product); refresh(); setRevision(value => value + 1); }
+      if (!abort.signal.aborted) { adopt(value.product); onSaved(value.product); refresh(); setRevision(value => value + 1); }
     } catch (reason) { if (!abort.signal.aborted) setError(messageOf(reason)); }
     finally { if (!abort.signal.aborted) setBusy(false); }
   };
@@ -72,7 +81,7 @@ export default function ProductPlanner({ product, onSaved, refresh, onEditing }:
     {!allowed && <Notice>기획·관리자만 상품 지침을 수정·게시할 수 있습니다.</Notice>}
     {error && <Notice error>{error}</Notice>}
     {product && base && product.version !== base.version && <Notice>다른 참여자의 변경이 있습니다. 내 초안은 유지했습니다.
-      <button onClick={() => { setBase(product); setDraft(fields(product)); setChecked(false); }}>최신 지침으로 다시 열기</button></Notice>}
+      <button onClick={() => adopt(product)}>최신 지침으로 다시 열기</button></Notice>}
     <fieldset disabled={!allowed || busy} className="ws-editable">
       <label className="ws-field">상품 이름<input value={draft.title} maxLength={180} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
       <label className="ws-field">상품 설명<textarea aria-label="상품 설명" rows={3} value={draft.description} maxLength={12000} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>

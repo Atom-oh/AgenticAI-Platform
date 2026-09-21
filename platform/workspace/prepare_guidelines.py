@@ -144,7 +144,11 @@ def prepare(path):
                 raise ValueError("가이드 묶음에는 PDF와 PPTX만 넣어 주세요.")
             data = archive.read(entry)
             digest = hashlib.sha256(data).hexdigest()
-            pages = pdf_pages(data) if extension == ".pdf" else pptx_pages(data)
+            if extension == ".pdf":
+                from workspace.source_parse_task import isolated_pdf_pages
+                pages = isolated_pdf_pages(data)
+            else:
+                pages = pptx_pages(data)
             sources.append({"id": f"source-{len(sources) + 1}", "name": name, "sha256": digest,
                             "category": category_for(name), "pageCount": len(pages), "pages": pages})
     return validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": sources})

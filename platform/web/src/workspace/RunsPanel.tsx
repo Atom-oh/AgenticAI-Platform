@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { listAll, messageOf, readPrivateBlob, resource } from './client';
 import { useWorkspaceScope, useWorkspaceClient } from './WorkspaceScope';
 import { buildPassed, can, currentGuideline, generationRequest } from './project';
@@ -13,17 +13,21 @@ type Attempt = { id: string; label: string; payload: Record<string, unknown>; jo
 const VARIANTS = { balanced: '기본 구성', baseline: '엄격 기준안', layout: '배치 변형', dense: '정보를 한눈에',
   emphasis: '핵심 강조', flow: '진행 흐름 강조', information: '정보 순서 변형' } as const;
 
-export default function RunsPanel({ config, assets, contracts, runs, refresh, preferredContract, editing, onSelection, product,
+export default function RunsPanel({ config, assets, contracts, runs, refresh, preferredContract, preferredSelection = 0, editing, onSelection, product,
   initialRunId, initialRound, onHandoff }: {
   config: WorkspaceConfig; assets: Asset[]; contracts: Contract[]; runs: Run[]; refresh: () => void;
   preferredContract: string; editing: { id: string; dirty: boolean };
   onSelection?: (selection: Selection) => void; product?: Product;
+  preferredSelection?: number;
   initialRunId?: string; initialRound?: number; onHandoff?: (runId: string, round: number) => void;
 }) {
   const { client: workspaceClient, role } = useWorkspaceScope();
   const mayGenerate = can(role, 'generate'), mayApprove = can(role, 'approve');
   const [contractId, setContractId] = useState(preferredContract);
-  const [contract, setContract] = useState<Contract | null>(null);
+  const preferredKey = `${preferredContract}:${preferredSelection}`;
+  const [appliedPreferred, setAppliedPreferred] = useState(preferredKey);
+  const [loadedContract, setContract] = useState<Contract | null>(null);
+  const contract = appliedPreferred === preferredKey && loadedContract?.id === contractId ? loadedContract : null;
   const [model, setModel] = useState(config.defaultModel);
   const [mode, setMode] = useState<'creative' | 'guided'>('creative');
   const [variationCount, setVariationCount] = useState(2);
@@ -50,7 +54,12 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const roundIntent = useRef({ runId: initialRunId || '', round: initialRound || 0 });
   const [runId, setRunId] = useState(initialRunId || '');
   const [loadedRun, setRun] = useState<Run | null>(null);
-  const run = appliedRequest === requestKey && loadedRun?.id === runId && (!product || loadedRun.productId === product.id) ? loadedRun : null;
+  const listedStale = runs.find(item => item.id === runId)?.needsRevalidation === true;
+  const run = useMemo(() => {
+    if (appliedRequest !== requestKey || loadedRun?.id !== runId || (product && loadedRun.productId !== product.id)) return null;
+    return listedStale || (product && !currentGuideline(product, loadedRun))
+      ? { ...loadedRun, needsRevalidation: true } : loadedRun;
+  }, [appliedRequest, requestKey, loadedRun, runId, listedStale, product?.id, product?.publishedGuidelineId, product?.ontologyHash]);
   const [roundNumber, setRoundNumber] = useState(initialRound || 0);
   const [pageId, setPageId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -102,7 +111,10 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
     }).catch(reason => { if (!controller.signal.aborted) setBatchError(messageOf(reason)); });
     return () => controller.abort();
   }, [workspaceClient, batchId, refreshKey, appliedRequest, requestKey]);
-  useEffect(() => { if (preferredContract) setContractId(preferredContract); }, [preferredContract]);
+  useEffect(() => {
+    setAppliedPreferred(preferredKey);
+    if (preferredContract) setContractId(preferredContract);
+  }, [preferredKey]);
   useEffect(() => {
     const controller = new AbortController(); setContract(null); setReference(''); setReferencePage(1); setSourceAssetId('');
     if (contractId) workspaceClient.get<{ contract: Contract }>(`/contracts/${resource(contractId)}`, controller.signal)
@@ -126,7 +138,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       })
       .catch(reason => { if (!controller.signal.aborted) setError(messageOf(reason)); });
     return () => controller.abort();
-  }, [workspaceClient, runId, refreshKey, currentRunVersion, appliedRequest, requestKey]);
+  }, [workspaceClient, runId, refreshKey, currentRunVersion, appliedRequest, requestKey, product?.publishedGuidelineId, product?.ontologyHash, listedStale]);
   const selectedRound = run?.rounds?.find(round => round.number === roundNumber);
   const selectedPage = selectedRound?.pageSources?.some(page => page.pageId === pageId) ? pageId : selectedRound?.pageSources?.[0]?.pageId;
   useEffect(() => { onSelection?.(run?.id === runId ? { run, round: selectedRound, pageId: selectedPage } : null); },

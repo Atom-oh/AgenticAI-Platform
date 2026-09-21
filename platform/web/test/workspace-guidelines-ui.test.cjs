@@ -82,10 +82,15 @@ test('guideline page selection reaches AI proposal, exact citations survive edit
         if (target === '/jobs/proposal') return json({ job: { id: 'proposal', task: 'propose', status: 'completed', result: { contractId: 'contract' } } });
         if (target === '/contracts/contract' && method === 'GET') return json({ contract });
         if (target === '/contracts/contract' && method === 'PUT') {
+          assert.equal(body.version, contract.version);
+          assert.deepEqual(body.guideRefs, contract.guideRefs);
+          assert.deepEqual(body.requiredStates, ['error', 'back']);
+          assert.deepEqual(body.rules[0].source, contract.rules[0].source);
           contract = { ...contract, ...body, version: contract.version + 1, status: 'draft' };
           return json({ contract });
         }
         if (target === '/contracts/contract/approve') {
+          assert.equal(body.version, contract.version);
           assert(contract.requiredStates.every(state => contract.rules.some(rule => rule.required && rule.scenario === state)));
           contract = { ...contract, version: contract.version + 1, status: 'approved', hash: hash('approved-states') };
           return json({ contract });

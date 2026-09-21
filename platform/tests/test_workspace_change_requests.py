@@ -90,14 +90,27 @@ def test_queued_generation_rechecks_revoked_project_membership(output_type):
     status, queued = scoped(api, "POST", "/runs", {"contractId": saved["id"], "contractVersion": result["contract"]["version"],
         "outputType": output_type, "requestId": "revoked-" + output_type}, actor="carol", project=project["id"])
     assert status == 202, queued
+    status, control = scoped(api, "POST", "/runs", {"contractId": saved["id"], "contractVersion": result["contract"]["version"],
+        "outputType": output_type, "requestId": "control-" + output_type}, actor="carol", project=project["id"])
+    assert status == 202, control
     owner = "project:" + project["id"]
+    calls = []
+    worker = Worker(storage=api.storage, model_call=lambda *args: calls.append("model"), react_call=lambda *args: calls.append("react"))
+    worker.handle({"owner": owner, "jobId": control["job"]["id"]})
+    assert calls == ["model"], "the same fixture must reach generation before revocation"
+    calls.clear()
     current = api.storage.get(owner, "project", project["id"])
     members = {key: member for key, member in current["members"].items() if key != "carol"}
     assert scoped(api, "PUT", f"/projects/{project['id']}/members", {"version": current["version"], "members": members})[0] == 200
-    calls = []
-    worker = Worker(storage=api.storage, model_call=lambda *args: calls.append("model"), react_call=lambda *args: calls.append("react"))
+    reads = []
+    get_blob = api.storage.get_blob
+    def observed_blob(key):
+        reads.append(key)
+        return get_blob(key)
+    api.storage.get_blob = observed_blob
     assert worker.handle({"owner": owner, "jobId": queued["job"]["id"]})["status"] == "failed"
     assert calls == []
+    assert reads == []
 
 
 def test_independent_screen_states_and_navigation_order_are_required():
@@ -237,7 +250,7 @@ def source(status="완료"):
             '\npver: V1\n`;\nexport default function Example(){return <HxButton/>;}').encode()
 
 
-@pytest.mark.parametrize("status", ["삭제", "폐기", "DELETED", "Deprecated", " discarded "])
+@pytest.mark.parametrize("status", ["삭제", "폐기", "DELETED", "Deprecated", " discarded ", "deprecated since 2026-01", "폐기됨"])
 def test_source_txt_is_not_prose_and_deleted_source_cannot_enter_generation_context(status):
     analysis = extract_file("UX-1.txt", source(status))
     pack = analysis["guidelinePack"]
@@ -350,6 +363,25 @@ def test_zip_uses_one_aggregate_deadline_and_reports_unprocessed_members(monkeyp
     assert sum("시간 한도" in warning for warning in result["warnings"]) == 2
 
 
+def test_finalize_reserves_time_to_persist_failure_before_reading_parts():
+    from hashlib import sha256
+    from types import SimpleNamespace
+    store, api, worker = environment()
+    data = b"Synthetic source"
+    _, created = request(api, "POST", "/assets", {"name": "guide.txt", "size": len(data),
+        "sha256": sha256(data).hexdigest(), "purpose": "guide"})
+    identifier = created["asset"]["id"]
+    assert request(api, "PUT", f"/assets/{identifier}/parts/0", data)[0] == 200
+    _, queued = request(api, "POST", f"/assets/{identifier}/complete")
+    reads = []
+    original = worker._read
+    worker._read = lambda *args: reads.append(args) or original(*args)
+    result = worker.handle({"owner": "designer", "jobId": queued["job"]["id"]},
+                           SimpleNamespace(get_remaining_time_in_millis=lambda: 29000))
+    assert result["status"] == "failed" and reads == []
+    assert store.get("designer", "asset", identifier)["uploadStatus"] == "failed"
+
+
 def test_pdf_in_zip_uses_the_bounded_child_without_inheriting_credentials(monkeypatch):
     from workspace import source_parse_task
     from test_workspace_guidelines import pdf_bytes
@@ -446,3 +478,6 @@ def test_real_delta_generation_rejects_unrelated_file_edits_and_releases_exact_h
     next_request["changeRequest"]["baseline"] = {"runId": changed["id"], "round": 2, "sourceHash": row["sourceHash"]}
     assert request(api, "POST", "/contracts", next_request)[0] == 400
     assert request(api, "GET", f"/runs/{changed['id']}/baseline")[0] == 409
+    releases_before = len(store.list("designer", "release"))
+    assert request(api, "POST", "/releases", {"runId": changed["id"], "round": 2, "requestId": "stale-baseline-release"})[0] == 409
+    assert len(store.list("designer", "release")) == releases_before

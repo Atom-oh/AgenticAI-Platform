@@ -19,6 +19,8 @@ const sameAddress = (left: GuideRef, right: GuideRef) =>
   left.assetId === right.assetId && left.sourceId === right.sourceId && left.page === right.page;
 const samePage = (left: GuideRef, right: GuideRef) => sameAddress(left, right) &&
   left.sourceSha256 === right.sourceSha256 && left.textSha256 === right.textSha256;
+const retired = (status = '') => ['삭제', '폐기', 'deleted', 'deprecated', 'discarded', 'retired']
+  .some(marker => status.normalize('NFKC').trim().toLowerCase().includes(marker));
 
 export default function GuidelineLibrary({ assets, selected, onSelected, onContinue, onUpload }: {
   assets: Asset[]; selected: GuideRef[]; onSelected: (refs: GuideRef[]) => void; onContinue: () => void; onUpload: () => void;
@@ -43,7 +45,7 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
     const source = asset?.guidelineSources?.find(source => source.id === ref.sourceId);
     const page = asset?.id === pack?.id ? result?.pages.find(page => page.sourceId === ref.sourceId && page.page === ref.page) : undefined;
     return !source || source.sha256 !== ref.sourceSha256 ||
-      ['삭제', '폐기', 'deleted', 'deprecated', 'discarded'].includes((source.metadata?.status || '').normalize('NFKC').trim().toLowerCase()) ||
+      retired(source.metadata?.status) ||
       (page && (page.textSha256 !== ref.textSha256 || page.truncated || !page.text.trim()));
   });
   useEffect(() => {
@@ -110,7 +112,7 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
         const checked = selected.some(ref => samePage(ref, { ...page, assetId: pack!.id }));
         const replacing = selected.some(ref => sameAddress(ref, { ...page, assetId: pack!.id }));
         const source = pack?.guidelineSources?.find(source => source.id === page.sourceId);
-        const deleted = ['삭제', '폐기', 'deleted', 'deprecated', 'discarded'].includes((source?.metadata?.status || '').normalize('NFKC').trim().toLowerCase());
+        const deleted = retired(source?.metadata?.status);
         const unusable = deleted || page.truncated || !page.text.trim();
         return <article className={`ws-guide-page${checked ? ' is-selected' : ''}`} key={`${page.sourceId}:${page.page}`}>
           <div className="ws-section-heading"><div><span className="ws-guide-kind">{GUIDE_CATEGORIES[page.category]}</span>

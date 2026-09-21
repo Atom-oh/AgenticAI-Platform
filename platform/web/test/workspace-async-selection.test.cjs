@@ -35,8 +35,9 @@ test('late run response preserves the latest explicit missing round and clearing
   const run = { id: 'run', version: 1, outputType: 'html', status: 'needs_changes', contractId: 'contract',
     contractVersion: 1, contract, bestRound: 1, rounds: [{ number: 1, passed: false, artifactSha256: 'a'.repeat(64),
       hasHtml: false, hasReport: false, hasScreenshot: false, checks: { pass: 0, fail: 0, incomplete: 1 } }] };
-  let release, reads = 0;
+  let release, arrived, reads = 0;
   const waiting = new Promise(resolve => { release = resolve; });
+  const firstRequest = new Promise(resolve => { arrived = resolve; });
   const page = await mount(t, `import React from 'react';import {createRoot} from 'react-dom/client';import RunsPanel from './src/workspace/RunsPanel';
     const run=${JSON.stringify(run)},contract=${JSON.stringify(contract)};
     const config={models:[{id:'test',label:'Test'}],defaultModel:'test'};
@@ -49,10 +50,11 @@ test('late run response preserves the latest explicit missing round and clearing
     const json = value => route.fulfill({ contentType: 'application/json', body: JSON.stringify(value) }).catch(() => {});
     if (target === '/batches') return json({ batches: [] });
     if (target === '/contracts/contract') return json({ contract });
-    if (target === '/runs/run') { reads++; if (reads === 1) await waiting; return json({ run }); }
+    if (target === '/runs/run') { reads++; if (reads === 1) { arrived(); await waiting; } return json({ run }); }
     throw new Error('Unexpected ' + target);
   });
   await page.waitForFunction(() => typeof window.selectRequest === 'function');
+  await firstRequest;
   await page.evaluate(() => { window.observations = []; window.selectRequest({ id: 'run', round: 4 }); });
   release();
   await page.getByText('아직 검수가 끝난 라운드가 없습니다.', { exact: false }).waitFor();
@@ -81,4 +83,44 @@ test('a screen citation removed from current page selection remains visible and 
   await page.getByRole('button', { name: '이전 원문 연결 제외' }).click();
   assert.equal(await page.evaluate(() => window.snapshot.changeRequest.screens[0].sourceRefs.length), 0);
   assert.equal(await page.evaluate(() => window.snapshot.guideRefs[0].page), 2);
+});
+
+test('continuing with an opened approved contract selects it even after a different generation choice', { timeout: 45000 }, async t => {
+  const contracts = ['a', 'b'].map(id => ({ id, title: id.toUpperCase(), version: 1, status: 'approved', brief: '', assetIds: [],
+    viewport: { width: 390, height: 844 }, unresolved: [], rules: [{ id: 'R1', title: 'Display', required: true, source: { kind: 'manual' },
+      steps: [{ action: 'expectVisible', target: 'entry', targetLabel: 'Entry', value: true }] }] }));
+  const submitted = [];
+  const page = await mount(t, `import React from 'react';import {createRoot} from 'react-dom/client';
+    import RulesPanel from './src/workspace/RulesPanel';import RunsPanel from './src/workspace/RunsPanel';
+    const contracts=${JSON.stringify(contracts)},config={models:[{id:'test',label:'Test'}],defaultModel:'test'};
+    function App(){const [stage,setStage]=React.useState('design'),[target,setTarget]=React.useState({id:'a',sequence:0});
+      const choose=React.useCallback(value=>setTarget(old=>({id:value.id,sequence:old.sequence+1})),[]);
+      return <><button onClick={()=>setStage('design')}>기준 다시 보기</button>
+        <div hidden={stage!=='design'}><RulesPanel config={config} assets={[]} selected={[]} contracts={contracts} initialContractId="a"
+          onEditing={()=>{}} refresh={()=>{}} onApproved={choose} onContinue={()=>setStage('review')}/></div>
+        <div hidden={stage!=='review'}><RunsPanel config={config} assets={[]} contracts={contracts} runs={[]} refresh={()=>{}}
+          preferredContract={target.id} preferredSelection={target.sequence} editing={{id:'',dirty:false}}/></div></>;}
+    createRoot(document.getElementById('root')).render(<App/>);`, async (route, target) => {
+    const json = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+    if (target === '/batches' && route.request().method() === 'GET') return json({ batches: [] });
+    if (target.startsWith('/contracts/')) return json({ contract: contracts.find(item => item.id === target.split('/')[2]) });
+    if (target === '/batches') {
+      submitted.push(route.request().postDataJSON());
+      return json({ error: 'Synthetic stop after capturing the selected criteria.' }, 503);
+    }
+    throw new Error('Unexpected ' + target);
+  });
+  await page.getByLabel('저장한 규칙', { exact: true }).selectOption('b');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ws-rules-panel input')].some(input => input.value === 'B'));
+  await page.getByRole('button', { name: '승인 기준으로 시안·검수' }).click();
+  await page.getByRole('button', { name: '시안 1개 만들기', exact: true }).click();
+  await page.getByText('작업실에서 요청을 처리하지 못했습니다.', { exact: false }).waitFor();
+  assert.equal(submitted[0].contractId, 'b');
+  await page.getByLabel('사용할 규칙', { exact: true }).selectOption('a');
+  await page.getByRole('button', { name: '기준 다시 보기' }).click();
+  await page.getByRole('button', { name: '승인 기준으로 시안·검수' }).click();
+  await page.getByRole('button', { name: '시안 1개 만들기', exact: true }).click();
+  await page.getByText('작업실에서 요청을 처리하지 못했습니다.', { exact: false }).waitFor();
+  assert.equal(submitted.length, 2);
+  assert(submitted.every(body => body.contractId === 'b'));
 });

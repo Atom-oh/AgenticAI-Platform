@@ -23,7 +23,9 @@ SOURCE_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".scss", ".css"}
 SUPPORTED = SOURCE_EXTENSIONS | {".pdf", ".pptx", ".txt", ".md", ".xlsx"}
 
 
-def source_record(name, data, *, isolate_pdf=False, deadline=None):
+def source_record(name, data, *, isolate_pdf=True, deadline=None):
+    if deadline is not None and time.monotonic() >= deadline:
+        raise ValueError("source-time-limit")
     original_name = name
     name = unicodedata.normalize("NFC", name)
     path = PurePosixPath(name)
@@ -75,13 +77,20 @@ def workbook_pages(data, deadline=None):
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         archive_entries(archive, maximum=3000, total_limit=128 * 1024 * 1024)
         def xml(name):
+            if time.monotonic() >= deadline:
+                raise ValueError("workbook-time-limit")
             if archive.getinfo(name).file_size > 16 * 1024 * 1024:
                 raise ValueError("workbook-xml-too-large")
-            return ET.fromstring(archive.read(name), forbid_dtd=True, forbid_entities=True, forbid_external=True)
+            result = ET.fromstring(archive.read(name), forbid_dtd=True, forbid_entities=True, forbid_external=True)
+            if time.monotonic() >= deadline:
+                raise ValueError("workbook-time-limit")
+            return result
         strings = []
         if "xl/sharedStrings.xml" in archive.namelist():
             shared_chars = 0
             for item in xml("xl/sharedStrings.xml"):
+                if time.monotonic() >= deadline:
+                    raise ValueError("workbook-time-limit")
                 value = "".join(node.text or "" for node in item.iter(ns + "t"))
                 shared_chars += len(value)
                 if len(value) > MAX_PAGE_CHARS or shared_chars > MAX_TOTAL_CHARS or len(strings) >= 500000:

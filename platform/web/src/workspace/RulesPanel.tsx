@@ -40,41 +40,50 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
   const [proposalActive, setProposalActive] = useState(false);
   const [baselinePending, setBaselinePending] = useState(false);
   const baselineBusy = useRef(false);
-  const baselineStatus = useCallback((value: boolean) => {
-    baselineBusy.current = value; setBaselinePending(value); onPending?.(value);
-  }, [onPending]);
   const operation = useRef<AbortController | null>(null);
   const revision = useRef(0);
   const proposalRevision = useRef(0);
   const pendingProposal = useRef<{ fingerprint: string; payload: Record<string, unknown> } | null>(null);
   const mounted = useRef(true);
   const dirty = JSON.stringify(editable(record || initialDraft)) !== JSON.stringify(editable(draft));
+  const dirtyNow = useRef(dirty); dirtyNow.current = dirty;
   const [scenarioFilter, setScenarioFilter] = useState<UXState | 'all' | 'unclassified'>('all');
   const opened = useRef('');
   const requestedContract = useRef(initialContractId || '');
   const activeRecord = useRef(record?.id || ''); activeRecord.current = record?.id || '';
+  const baselineStatus = useCallback((value: boolean) => {
+    baselineBusy.current = value; setBaselinePending(value); onPending?.(value);
+    onEditing(activeRecord.current, dirtyNow.current || value);
+  }, [onPending, onEditing]);
   const [editorEpoch, setEditorEpoch] = useState(0);
   const guide = useGuidelinePages(record?.productId || product?.id, record?.guidelineId || product?.publishedGuidelineId,
     record?.ontologyHash || product?.ontologyHash);
   const problems = [...contractProblems(draft), ...requestIssues(draft), ...noticeProblems(draft, guide.pages),
     ...(!guide.ready ? ['게시 지침의 안내 화면을 조회한 뒤 규칙을 승인하세요.'] : [])];
-  useEffect(() => { onEditing(record?.id || '', dirty || baselinePending); }, [record?.id, dirty, baselinePending, onEditing]);
+  useEffect(() => { onEditing(activeRecord.current, dirtyNow.current || baselineBusy.current); }, [record?.id, dirty, baselinePending, onEditing]);
   useEffect(() => { onDraft?.(draft); }, [draft, onDraft]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current?.abort(); }; }, []);
   const change = (next: EditableContract) => {
     if (next.changeRequest && !draft.changeRequest && !record && JSON.stringify(draft.rules) === JSON.stringify(initialDraft.rules))
       next = { ...next, rules: [] };
+    dirtyNow.current = JSON.stringify(editable(record || initialDraft)) !== JSON.stringify(editable(next));
+    onEditing(activeRecord.current, dirtyNow.current || baselineBusy.current);
     revision.current++; setDraft(next); setChecked(false); setNotice('');
   };
-  const apply = (contract: Contract) => { setRecord(contract); setDraft(editable(contract)); setChecked(false); revision.current++; };
+  const apply = (contract: Contract) => {
+    activeRecord.current = contract.id; dirtyNow.current = false;
+    setRecord(contract); setDraft(editable(contract)); setChecked(false); revision.current++;
+    onEditing(contract.id, baselineBusy.current);
+  };
   const begin = () => { operation.current?.abort(); const controller = new AbortController(); operation.current = controller; setError(''); setBusy(true); return controller; };
   const open = async (id: string, confirmSwitch = true) => {
-    if (confirmSwitch && dirty && !confirm('저장하지 않은 규칙 변경을 버리고 다른 규칙을 열까요?')) return;
+    if (confirmSwitch && dirtyNow.current && !confirm('저장하지 않은 규칙 변경을 버리고 다른 규칙을 열까요?')) return;
     revision.current++;
     setEditorEpoch(value => value + 1);
     const controller = begin();
     setProposalActive(false); setProposal(null); pendingProposal.current = null;
     const empty = blankContract(manualSelected);
+    activeRecord.current = ''; dirtyNow.current = false; onEditing('', false);
     setRecord(null); setInitialDraft(empty); setDraft(empty); setChecked(false);
     if (!id) { setBusy(false); return; }
     try {
@@ -186,7 +195,7 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
     {!mayEdit && <Notice>현재 역할은 규칙을 조회할 수 있습니다. 규칙 편집은 기획·디자인·관리자에게 요청하세요.</Notice>}
     {project && <Notice>{product ? `${product.title} · ${product.publishedGuidelineId ? `게시 지침 ${product.publishedRevision}차 기준` : '게시한 상품 지침 없음'}` : '업무 정의에서 상품 지침을 선택하면 설계 기준과 연결됩니다.'}</Notice>}
     <div className="ws-section-heading"><div><h2>만들 화면과 확인 기준</h2><p>가이드의 근거와 AI가 추정한 내용을 구분합니다. 확인한 규칙의 버전만 생성에 사용합니다.</p></div>
-      <div className="ws-actions"><label className="ws-field">저장한 규칙<select value={record?.id || ''} disabled={busy} onChange={event => void open(event.target.value)}>
+      <div className="ws-actions"><label className="ws-field">저장한 규칙<select aria-label="저장한 규칙" value={record?.id || ''} disabled={busy} onChange={event => void open(event.target.value)}>
         <option value="">새 규칙 작성</option>{contracts.map(contract => <option value={contract.id} key={contract.id}>
           {contract.title} · v{contract.version} · {stateLabel(contract.status)}</option>)}</select></label>
         {record && <button disabled={busy} onClick={() => void open(record.id)}>저장된 버전 다시 불러오기</button>}</div></div>
@@ -258,12 +267,13 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
     <div className="ws-approval">
       <div><strong>{record ? `규칙 버전 ${record.version} · ${dirty ? '미저장 변경 있음' : stateLabel(record.status)}` : '아직 저장하지 않은 규칙'}</strong>
         <p>규칙을 수정하면 이전 승인은 새 버전에 적용되지 않습니다.</p></div>
-      <button className="ws-primary" disabled={baselinePending || !mayEdit || !hasPlanningContext || busy || !dirty} onClick={() => void save()}>규칙 저장</button>
+      <button className="ws-primary" disabled={baselinePending || !mayEdit || (!hasPlanningContext && !draft.changeRequest) || busy || !dirty} onClick={() => void save()}>규칙 저장</button>
       <label className="ws-check"><input type="checkbox" checked={checked} disabled={!mayEdit || !hasPlanningContext || busy || dirty || !record || !!problems.length}
         onChange={event => setChecked(event.target.checked)} />이 버전의 근거와 모든 확인 단계를 검토했습니다</label>
       <button disabled={baselinePending || !mayEdit || !hasPlanningContext || busy || dirty || !record || !checked || !!problems.length || record.status === 'approved'} onClick={() => void approve()}>
         {record ? `버전 ${record.version} 규칙 승인` : '저장 후 규칙 승인'}</button>
-      {record?.status === 'approved' && !dirty && <button className="ws-primary" onClick={onContinue}>승인 기준으로 시안·검수</button>}
+      {record?.status === 'approved' && !dirty && <button className="ws-primary" disabled={baselinePending || proposalActive || busy}
+        onClick={() => { if (!baselineBusy.current && !proposalActive) { onApproved(record); onContinue?.(); } }}>승인 기준으로 시안·검수</button>}
     </div>
   </section>;
 }

@@ -31,6 +31,7 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
   const createRequest = useRef({ name: '', id: '' });
   const operation = useRef<AbortController | null>(null);
   const unsaved = useRef(false);
+  const reportDirty = useCallback((value: boolean) => { unsaved.current = value; }, []);
   const acceptedHash = useRef(location.hash);
   const acceptedRoute = useRef(route);
   const recordLocation = useCallback((hash: string) => {
@@ -124,7 +125,7 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
       !route.invalid && role && (!projectId || project?.id === projectId) ? <WorkspaceScope.Provider value={scope}>
         <ProjectWorkspace key={`${projectId || 'personal'}:${config.actorId || ''}:${role}`} config={config} initialStep={initialStep} route={route}
           onRoute={applyRoute} onLocation={recordLocation}
-          onDirty={value => { unsaved.current = value; }} onProjectRefresh={() => setRetry(value => value + 1)} />
+          onDirty={reportDirty} onProjectRefresh={() => setRetry(value => value + 1)} />
       </WorkspaceScope.Provider> : <Notice>참여 권한이 확인된 작업 공간을 선택하세요. 이전 프로젝트의 자료는 표시하지 않습니다.</Notice>}
   </div>;
 }
@@ -146,8 +147,11 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const [selected, setSelected] = useState<string[]>([]);
   const [guideRefs, setGuideRefs] = useState<GuideRef[]>([]);
   const [preferredContract, setPreferredContract] = useState('');
+  const [preferredSelection, setPreferredSelection] = useState(0);
   const [editing, setEditing] = useState({ id: '', dirty: false });
   const [planningDirty, setPlanningDirty] = useState(false);
+  const editingNow = useRef(editing);
+  const planningNow = useRef(planningDirty);
   const [criteriaPending, setCriteriaPending] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -189,9 +193,10 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   }, [client, project?.id]);
   useEffect(() => { void refresh(); return () => controller.current?.abort(); }, [refresh]);
   useEffect(() => { setGuideRefs(previous => previous.filter(ref => selected.includes(ref.assetId))); }, [selected]);
-  useEffect(() => { onDirty(editing.dirty || planningDirty); }, [editing.dirty, planningDirty, onDirty]);
+  useEffect(() => { onDirty(editingNow.current.dirty || planningNow.current); }, [editing.dirty, planningDirty, onDirty]);
   useEffect(() => {
     if (activeProduct.current !== route.productId) {
+      editingNow.current = { id: '', dirty: false }; planningNow.current = false; onDirty(false);
       setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
       setSelected([]); setGuideRefs([]);
     }
@@ -200,6 +205,8 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
     setProductId(route.productId); setRequestedRun({ id: route.runId, round: route.round });
   }, [route]);
   const onEditing = useCallback((id: string, dirty: boolean) => {
+    if (activeProduct.current !== productId) return;
+    editingNow.current = { id, dirty }; onDirty(dirty || planningNow.current);
     setEditing(previous => previous.id === id && previous.dirty === dirty ? previous : { id, dirty });
     if (id && ['define', 'design'].includes(activeStage.current)) {
       const params = new URLSearchParams(location.hash.split('?')[1]);
@@ -208,9 +215,14 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       const hash = location.hash.split('?')[0] + '?' + params.toString();
       history.replaceState(null, '', hash); onLocation(hash);
     }
-  }, []);
+  }, [productId, onDirty, onLocation]);
+  const onPlanning = useCallback((dirty: boolean) => {
+    if (activeProduct.current !== productId) return;
+    planningNow.current = dirty; setPlanningDirty(dirty); onDirty(dirty || editingNow.current.dirty);
+  }, [productId, onDirty]);
   const onApproved = useCallback((contract: Contract) => {
-    setPreferredContract(contract.id); setContracts(previous => [contract, ...previous.filter(item => item.id !== contract.id)]);
+    setPreferredContract(contract.id); setPreferredSelection(value => value + 1);
+    setContracts(previous => [contract, ...previous.filter(item => item.id !== contract.id)]);
   }, []);
   const product = products.find(item => item.id === productId);
   const scopedContracts = contracts.filter(item => !productId || !item.productId || item.productId === productId);
@@ -230,7 +242,8 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
     requestAnimationFrame(() => heading.current?.focus({ preventScroll: true }));
   };
   const chooseProduct = (id: string) => {
-    if (id !== productId && (editing.dirty || planningDirty) && !confirm('저장하지 않은 설계 변경을 닫고 다른 상품을 선택할까요?')) return;
+    if (id !== productId && (editingNow.current.dirty || planningNow.current) && !confirm('저장하지 않은 설계 변경을 닫고 다른 상품을 선택할까요?')) return;
+    activeProduct.current = id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; onDirty(false);
     setProductId(id); setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setRequestedRun({ id: '', round: undefined });
     setPlanningDirty(false);
     setSelected([]); setGuideRefs([]);
@@ -241,8 +254,9 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const saveProduct = (value: Product) => {
     const sameProduct = value.id === productId;
     setProducts(items => [value, ...items.filter(item => item.id !== value.id)]);
-    if (!sameProduct && editing.dirty && !confirm('저장하지 않은 UX 설계 변경을 닫고 저장한 상품으로 이동할까요?')) return;
+    if (!sameProduct && editingNow.current.dirty && !confirm('저장하지 않은 UX 설계 변경을 닫고 저장한 상품으로 이동할까요?')) return;
     if (!sameProduct) {
+      activeProduct.current = value.id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; onDirty(false);
       setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
       setRequestedRun({ id: '', round: undefined }); setSelected([]); setGuideRefs([]);
     }
@@ -271,7 +285,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       {project && <section className="ws-section ws-product-definition" hidden={step !== 'define'}>
         <h2>상품 조건과 진행 절차</h2><p>팀이 사용할 상품 기준을 게시한 뒤 UX 목적과 상태를 정합니다.</p>
         <details open={!product?.publishedGuidelineId}><summary>{product?.publishedGuidelineId ? '게시 기준 확인·새 버전 작성' : '상품 지침 작성·게시'}</summary>
-          <ProductPlanner key={product?.id || 'new'} product={product} onSaved={saveProduct} onEditing={setPlanningDirty} refresh={() => void refresh()} />
+          <ProductPlanner key={product?.id || 'new'} product={product} onSaved={saveProduct} onEditing={onPlanning} refresh={() => void refresh()} />
           {product && <GuidelineHistory key={product.id} product={product} assets={assets} />}</details></section>}
       <div hidden={step !== 'define' && step !== 'design'}><RulesPanel key={productId || 'unbound'} config={config} assets={assets} selected={selected}
         runs={scopedRuns}
@@ -297,7 +311,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       </div>
       <div hidden={step !== 'review'}><RunsPanel key={productId || 'unbound'} config={config} assets={assets}
         contracts={scopedContracts} runs={scopedRuns} initialRunId={requestedRun.id} initialRound={requestedRun.round}
-        refresh={() => void refresh()} preferredContract={preferredContract} editing={editing} onSelection={reviewSelection} product={product}
+        refresh={() => void refresh()} preferredContract={preferredContract} preferredSelection={preferredSelection} editing={editing} onSelection={reviewSelection} product={product}
         onHandoff={(runId, round) => navigate('handoff', runId, round)} /></div>
       {step === 'handoff' && <HandoffPanel key={productId || 'unbound'} runs={scopedRuns} contracts={scopedContracts} selection={selection}
         product={product} initialRunId={requestedRun.id} initialRound={requestedRun.round} onSelection={handoffSelection}

@@ -13,10 +13,15 @@ MAX_PAGE_CHARS = 20_000
 MAX_TOTAL_CHARS = 3_000_000
 MAX_REFS = 12
 MAX_CONTEXT_CHARS = 60_000
+MAX_RENDERED_CONTEXT_CHARS = 100_000
 MAX_METADATA_BYTES = 64_000
 CATEGORIES = ("foundation", "interaction", "graphics", "content", "writing", "general", "specification", "source", "inventory")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 SHA256 = re.compile(r"[a-f0-9]{64}\Z")
+
+def retired_source(status):
+    normalized = unicodedata.normalize("NFKC", status).strip().casefold()
+    return any(marker in normalized for marker in ("삭제", "폐기", "deprecated", "deleted", "discarded", "retired"))
 
 
 def text_hash(text):
@@ -146,7 +151,7 @@ def selected_pages(pack, refs):
             raise ValueError("선택한 가이드 원본·페이지가 변경되었습니다. 다시 선택하세요.")
         if not page["text"].strip() or page["truncated"]:
             raise ValueError("비어 있거나 잘린 가이드 페이지는 AI 기준으로 선택할 수 없습니다.")
-        if unicodedata.normalize("NFKC", source.get("metadata", {}).get("status", "")).strip().casefold() in ("삭제", "폐기", "deprecated", "deleted", "discarded"):
+        if retired_source(source.get("metadata", {}).get("status", "")):
             raise ValueError("삭제·폐기된 원본은 생성 기준으로 선택할 수 없습니다. 이력 확인용으로만 보관합니다.")
         result.append((source, page))
     return result
@@ -164,16 +169,19 @@ def context_for(pack, refs):
 
 def validate_selection(storage, owner, assets, refs):
     normalized = normalize_refs(refs, [asset["id"] for asset in assets])
-    pages, characters = {}, 0
+    pages, characters, rendered = {}, 0, 0
     for asset in assets:
         selected = [ref for ref in normalized if ref["assetId"] == asset["id"]]
         if not selected:
             continue
-        _, texts = context_for(load_pack(storage, owner, asset), selected)
+        block, texts = context_for(load_pack(storage, owner, asset), selected)
+        rendered += len(block)
         characters += sum(len(text) for text in texts.values())
         pages.update({(asset["id"], source_id, page): text for (source_id, page), text in texts.items()})
     if characters > MAX_CONTEXT_CHARS:
         raise ValueError("선택한 가이드 원문은 합계 60,000자 이내여야 합니다. 적용 범위를 나누세요.")
+    if rendered > MAX_RENDERED_CONTEXT_CHARS:
+        raise ValueError("선택한 원문과 출처 정보는 합계 100,000자 이내여야 합니다. 적용 범위를 나누세요.")
     return normalized, pages
 
 

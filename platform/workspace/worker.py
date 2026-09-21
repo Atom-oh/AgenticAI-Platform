@@ -318,11 +318,16 @@ class Worker:
             return {"status": "failed", "jobId": identifier}
 
     def _finalize(self, owner, job, context=None):
+        def reserve_time():
+            if context and context.get_remaining_time_in_millis() <= 30_000:
+                raise ValueError("반입을 완료할 시간이 부족해 작업을 중단합니다. 다시 반입해 주세요.")
+        reserve_time()
         asset = self.storage.get(owner, "asset", job["input"]["assetId"])
         if not asset or asset.get("uploadStatus") != "processing":
             raise ValueError("반입 처리할 파일이 없습니다.")
         pieces = []
         for index in range(asset["partCount"]):
+            reserve_time()
             part = asset["parts"].get(str(index))
             if not part or part.get("status") != "stored":
                 raise ValueError("파일의 일부가 업로드되지 않았습니다.")
@@ -332,6 +337,7 @@ class Worker:
             raise ValueError("원본 파일의 크기 또는 해시가 일치하지 않습니다.")
         self.storage.put_blob_once(asset["originalKey"], data, "application/octet-stream")
         self._update(owner, "job", job["id"], progress={"percent": 35, "stage": "extract", "message": "원본 보관·미리보기 해석"})
+        reserve_time()
         try:
             remaining = context.get_remaining_time_in_millis() / 1000 - 30 if context else 120
             if self.extractor is extract_file:

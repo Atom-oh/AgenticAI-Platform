@@ -5,8 +5,10 @@
 PPTX, XLSX, TSX/TS/JSX/JS and SCSS are private reference inputs. Code-bearing TXT
 is classified as source, preserving bounded metadata/imports without execution.
 Direct originals remain downloadable; prepared JSON packs identify originals
-as local-only. Original status never grants approval. Deleted/deprecated sources
-are excluded from generation. XLSX retains worksheet XML/cell/row coordinates;
+as local-only. Original status never grants approval. Known retirement markers
+(including annotated deleted/deprecated/retired and 삭제/폐기 labels) conservatively
+exclude sources from generation. Other status labels remain unreviewed, not active
+or approved lifecycle certification. XLSX retains worksheet XML/cell/row coordinates;
 formulas are not evaluated and row groups become searchable pages.
 
 Small ZIP imports retain the 50 MiB HTTP and 20-original limits. Prepare large
@@ -32,6 +34,10 @@ document budget. Server source intake has one 120-second parsing deadline,
 shortened to reserve 30 seconds of remaining Lambda time for persistence.
 Each PDF child receives only the remaining budget. Unprocessed members are
 reported as exclusions, so a slow mixed ZIP can retain completed extracts.
+Both local preparation commands also use the bounded PDF child. Selected
+model context is capped at 60,000 source characters and 100,000 characters
+including rendered provenance, preserving selected pages before ordinary
+reference material reaches the overall prompt limit.
 Text/code classification and extraction inspect a bounded prefix; omitted text
 is explicitly truncated and unavailable as generation evidence.
 

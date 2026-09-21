@@ -109,6 +109,35 @@ def test_generated_context_headers_cannot_be_cited_as_original_page_text():
     assert request(api, "POST", "/contracts", value)[0] == 400
 
 
+def test_provenance_overhead_cannot_truncate_selected_pages_after_approval():
+    from workspace.guidelines import validate_selection
+    value = pack_data()
+    source = value["sources"][0]
+    source.update(pageCount=12, pages=[{"page": i + 1, "text": "x" * 5000} for i in range(12)],
+                  metadata={key: "m" * 1024 for key in ("path", "sid", "pver", "dver", "sync", "mdate", "status", "imports")})
+    value["sources"] = [source]
+    store, api, worker, identifier = imported(pack=value)
+    refs = [ref_for(identifier, page=i + 1, pack=value) for i in range(12)]
+    asset = store.get("designer", "asset", identifier)
+    with pytest.raises(ValueError, match="출처 정보"):
+        validate_selection(store, "designer", [asset], refs)
+
+
+def test_queued_run_refuses_corrupted_frozen_page_index_before_model_use():
+    calls = []
+    store, api, worker, identifier = imported(model=lambda *args: calls.append(args))
+    _, created = request(api, "POST", "/contracts", cited_contract(identifier))
+    record = created["contract"]
+    _, accepted = request(api, "POST", f"/contracts/{record['id']}/approve", {"version": record["version"]})
+    status, queued = request(api, "POST", "/runs", {"contractId": record["id"], "contractVersion": accepted["contract"]["version"],
+        "outputType": "react", "requestId": "frozen-index-corruption"})
+    assert status == 202, queued
+    asset = store.get("designer", "asset", identifier)
+    store.put_blob(asset["guidelinesKey"], b'{"tampered":true}', "application/json")
+    assert worker.handle({"owner": "designer", "jobId": queued["job"]["id"]})["status"] == "failed"
+    assert calls == []
+
+
 def test_references_pin_source_and_page_content_and_reject_empty_or_truncated_text():
     pack = validate_pack(pack_data())
     ref = ref_for("asset")

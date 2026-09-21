@@ -209,10 +209,10 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
       <p>선택한 경로만 추가·수정·삭제할 수 있습니다. 다른 기준 파일은 바이트 단위로 유지합니다.</p>
       {stage === 'design' && <button disabled={disabled || loading} onClick={() => void chooseBaseline(request.baseline!.runId, true)}>기준 파일 다시 조회</button>}
       {[...new Set([...files, ...request.allowedFiles])].sort().map(path => <label key={path} className="ws-check"><input type="checkbox"
-        disabled={disabled} checked={request.allowedFiles.includes(path)} onChange={() => update({ allowedFiles: request.allowedFiles.includes(path) ?
+        disabled={disabled || loading} checked={request.allowedFiles.includes(path)} onChange={() => update({ allowedFiles: request.allowedFiles.includes(path) ?
           request.allowedFiles.filter(item => item !== path) : [...request.allowedFiles, path] })} />{path}</label>)}
-      <label className="ws-field">추가할 화면·로직 파일<input value={newFile} placeholder="src/pages/product-detail.tsx" onChange={event => setNewFile(event.target.value)} /></label>
-      <button disabled={disabled || !/^src\/(?:App\.tsx|pages\/[a-z][a-z0-9-]*\.tsx|logic\/[a-z][a-z0-9-]*\.ts)$/.test(newFile) || newFile === 'src/logic/assets.ts'}
+      <label className="ws-field">추가할 화면·로직 파일<input disabled={disabled || loading} value={newFile} placeholder="src/pages/product-detail.tsx" onChange={event => setNewFile(event.target.value)} /></label>
+      <button disabled={disabled || loading || !/^src\/(?:App\.tsx|pages\/[a-z][a-z0-9-]*\.tsx|logic\/[a-z][a-z0-9-]*\.ts)$/.test(newFile) || newFile === 'src/logic/assets.ts'}
         onClick={() => { update({ allowedFiles: [...new Set([...request.allowedFiles, newFile])] }); setNewFile(''); }}>변경 경로 추가</button>
     </details>}
   </section>;

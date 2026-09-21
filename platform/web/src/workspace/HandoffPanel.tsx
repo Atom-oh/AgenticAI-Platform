@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { messageOf, resource } from './client';
 import { useWorkspaceClient } from './WorkspaceScope';
-import { buildPassed } from './project';
+import { buildPassed, currentGuideline } from './project';
 import { hasExactApproval } from './VerificationLoop';
 import ReleasePanel from './ReleasePanel';
 import { Notice } from './shared';
@@ -19,7 +19,12 @@ export default function HandoffPanel({ runs, contracts, selection, product, init
   const previousRequestedRun = useRef(initialRunId || '');
   const [id, setId] = useState(initialRunId || selection?.run.id || '');
   const [loadedRun, setRun] = useState<Run | null>(null);
-  const run = appliedRequest === requestKey && loadedRun?.id === id && (!product || loadedRun.productId === product.id) ? loadedRun : null;
+  const listedStale = runs.find(item => item.id === id)?.needsRevalidation === true;
+  const run = useMemo(() => {
+    if (appliedRequest !== requestKey || loadedRun?.id !== id || (product && loadedRun.productId !== product.id)) return null;
+    return listedStale || (product && !currentGuideline(product, loadedRun))
+      ? { ...loadedRun, needsRevalidation: true } : loadedRun;
+  }, [appliedRequest, requestKey, loadedRun, id, listedStale, product?.id, product?.publishedGuidelineId, product?.ontologyHash]);
   const [number, setNumber] = useState(initialRound || selection?.round?.number || 0);
   const [pageId, setPageId] = useState(selection?.pageId || '');
   const [error, setError] = useState('');
@@ -44,10 +49,10 @@ export default function HandoffPanel({ runs, contracts, selection, product, init
       setRun(value.run);
     }).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
     return () => abort.abort();
-  }, [client, id, product?.id, currentVersion, retry]);
+  }, [client, id, product?.id, product?.publishedGuidelineId, product?.ontologyHash, listedStale, currentVersion, retry]);
   const round = number ? run?.rounds.find(item => item.number === number) :
     run?.rounds.find(item => item.number === run.approval?.round) || run?.rounds.find(item => item.number === run.bestRound);
-  const approved = hasExactApproval(run, round);
+  const approved = !run?.needsRevalidation && hasExactApproval(run, round);
   const selectedPage = round?.pageSources?.some(page => page.pageId === pageId) ? pageId : round?.pageSources?.[0]?.pageId;
   const selected: Selection = run ? { run, round, pageId: selectedPage } : null;
   useEffect(() => { onSelection?.(run ? { run, round, pageId: selectedPage } : null); }, [run, round, selectedPage, onSelection]);

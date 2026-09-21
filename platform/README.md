@@ -131,10 +131,10 @@ resumable `workspace.prepare_sources` tool and batched authenticated upload.
 Imported status never becomes approval, and references do not supply a missing
 customer SDK or establish frontend integration. See `workspace/GUIDELINES.md`.
 
-The portal Registry mapping is read-only. MCP reference seeding uses the existing
+The portal Registry mapping and Registry listing are read-only. MCP reference seeding uses the existing
 IAM-only admin Lambda with `op: "seed_mcp_servers"`; opening the portal never
 creates approved records. Queued HTML and React generation both recheck current
-project membership and product criteria before reading inputs.
+project membership and product criteria before reading source blobs or invoking models.
 
 | Directory | Responsibility |
 | --- | --- |

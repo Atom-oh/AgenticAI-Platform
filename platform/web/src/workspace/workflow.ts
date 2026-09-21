@@ -58,12 +58,16 @@ export function initialWorkflowStep(route: ReturnType<typeof readWorkflowRoute>,
     legacy === 'files' || legacy === 'guides' ? 'assets' : role === 'developer' ? 'handoff' : 'define');
 }
 export function workflowHash(hash: string, selection: {
-  projectId: string; productId?: string; step?: WorkflowStep; runId?: string; round?: number; contractId?: string;
+  projectId: string; productId?: string; step?: WorkflowStep; runId?: string; round?: number; contractId?: string; assetId?: string;
 }) {
   const route = hash.split('?')[0] === '#/portal' ? '#/portal' : '#/studio';
   const params = new URLSearchParams();
   if (route === '#/portal') params.set('tab', 'guides');
   for (const [key, value] of Object.entries(selection)) if (value !== undefined && value !== '') params.set(key, String(value));
+  const current = readWorkflowRoute(hash);
+  if (selection.assetId === undefined && selection.step && current.assetId &&
+      selection.projectId === current.projectId && (selection.productId || '') === current.productId)
+    params.set('assetId', current.assetId);
   const query = params.toString();
   return route + (query ? '?' + query : '');
 }
