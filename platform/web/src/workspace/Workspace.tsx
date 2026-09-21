@@ -45,6 +45,10 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
     const changed = () => {
       const next = readWorkflowRoute(location.hash);
       if (location.hash.split('?')[0] !== acceptedHash.current.split('?')[0]) return;
+      if (JSON.stringify(next) === JSON.stringify(acceptedRoute.current)) {
+        recordLocation(location.hash);
+        return;
+      }
       const scopeChanged = next.projectId !== acceptedRoute.current.projectId || next.productId !== acceptedRoute.current.productId ||
         next.contractId !== acceptedRoute.current.contractId;
       if (scopeChanged && unsaved.current && !confirm('저장하지 않은 설계 변경을 닫고 다른 작업 공간·상품으로 이동할까요?')) {

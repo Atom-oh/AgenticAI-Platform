@@ -196,9 +196,14 @@ Unknown/missing build, ontology, release or Git evidence never becomes a green b
 
 Studio keeps the React workspace, existing playground, process generator, gallery
 and assets directly visible in its tool navigation. `#/studio?tool=play|process|gallery|assets`
-opens the corresponding tool; no tool selects the React workspace. Tool navigation
+opens the corresponding tool; omitting `tool` selects the React workspace.
+The explicit `workspace` value and unknown values also fall back to that workspace.
+Tool navigation
 retains project/product/run context and browser history, and previously opened
 tools stay mounted so switching tools does not discard an in-progress edit.
+Tool-only route changes leave the selected run/page discussion anchor intact.
+Explicitly opening a gallery draft starts a fresh Playground session for that
+selection, including a repeated selection, so another draft's score cannot carry over.
 The global ontology explorer remains visible in common navigation across work-area
 filters. Neither exposing these tools nor component-source downloads grants a React
 release approval.

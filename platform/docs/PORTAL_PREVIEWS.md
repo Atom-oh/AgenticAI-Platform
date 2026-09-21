@@ -90,6 +90,7 @@ Source JSON and ZIP are separate immutable assets in that manifest. Downloads
 are fetched on demand with size, MIME and SHA-256 checks against the displayed
 revision. Source viewing additionally verifies file hashes and reconstructs the
 kit's catalog fingerprint. A workspace API/web catalog mismatch blocks download.
+Serve source JSON as `application/json` and source ZIP as `application/zip`.
 Examples are local, synthetic and reset on selection; they do not initiate
 transactions or update approved assets.
 
@@ -142,5 +143,7 @@ node --test test/portal-*.test.cjs
 
 Browser checks must include real component interactions, image success/failure,
 diagram rendering and navigation, stale-response handling, CSP isolation and
-desktop/mobile containment. These checks establish preview behavior, not the
+desktop/mobile containment. Source checks compare downloaded ZIP files with the
+catalog-bound kit and compile the extracted package using the web TypeScript
+dependency and installed `react-kit/node_modules`. These checks establish preview behavior, not the
 business correctness or approval of a generated product flow.

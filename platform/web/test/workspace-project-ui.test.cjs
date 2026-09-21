@@ -351,6 +351,17 @@ test('project scope, collaboration, guided baselines and real release metadata r
     await page.getByLabel('협업할 화면', { exact: false }).selectOption('review');
     await page.getByText('이 작업에 의견 남기기', { exact: true }).click();
     await page.getByLabel('의견 내용', { exact: true }).fill('선택한 화면의 강조를 확인해 주세요.');
+    const beforeTool = new URL(page.url()).hash;
+    await page.evaluate(() => {
+      const params = new URLSearchParams(location.hash.split('?')[1]);
+      params.set('tool', 'process'); location.hash = '#/studio?' + params;
+    });
+    await page.waitForURL(/tool=process/);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.locator('.ws-discussion textarea').inputValue(), '선택한 화면의 강조를 확인해 주세요.');
+    await page.goBack();
+    await page.waitForFunction(hash => location.hash === hash, beforeTool);
+    assert.equal(await page.locator('.ws-discussion textarea').inputValue(), '선택한 화면의 강조를 확인해 주세요.');
     await page.getByRole('button', { name: '이 맥락에 의견 남기기' }).click();
     await page.getByText('선택한 화면의 강조를 확인해 주세요.', { exact: true }).waitFor();
     assert.deepEqual(discussions[0].anchor, { productId: 'product', guidelineId: 'guide-1', runId: 'batch-2-baseline', round: 1, pageId: 'review' });

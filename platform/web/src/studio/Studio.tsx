@@ -47,6 +47,7 @@ export default function Studio() {
   const [products, setProducts] = useState<Product[]>([]);
   const [meta, setMeta] = useState<{ backend?: string; graphBackend?: string; model?: string }>({});
   const [editDraft, setEditDraft] = useState<Draft | null>(null);
+  const [draftSelection, setDraftSelection] = useState(0);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [defaultModel, setDefaultModel] = useState('');
   const [loadError, setLoadError] = useState('');
@@ -63,7 +64,9 @@ export default function Studio() {
   useEffect(() => { if (tab !== 'workspace') load(); }, [tab]);
   const workspaceActive = tab === 'workspace';
   const approved = drafts.filter(d => d.status === '승인됨').length;
-  const openInPlayground = (d: Draft) => { setEditDraft(d); chooseTool('play'); };
+  const openInPlayground = (d: Draft) => {
+    setEditDraft(d); setDraftSelection(value => value + 1); chooseTool('play');
+  };
 
   return (
     <div>
@@ -107,7 +110,7 @@ export default function Studio() {
       <p className="text-sm text-slate-600 mb-4">UX 설계 작업실에서는 React 화면을 생성·검증합니다. 만들어보기와 프로세스 생성에서는 기존 정적 시안을 실험하고 흐름을 구성합니다.</p>
       {opened.has('workspace') && <div hidden={tab !== 'workspace'}><Workspace /></div>}
       {opened.has('gallery') && <div hidden={tab !== 'gallery'}><Gallery drafts={drafts} canWrite={canWrite} reload={load} onEdit={openInPlayground} /></div>}
-      {opened.has('play') && <div hidden={tab !== 'play'}><Playground assets={assets} products={products} models={models} defaultModel={defaultModel} canWrite={canWrite} initialDraft={editDraft} onDone={load} /></div>}
+      {opened.has('play') && <div hidden={tab !== 'play'}><Playground key={draftSelection} assets={assets} products={products} models={models} defaultModel={defaultModel} canWrite={canWrite} initialDraft={editDraft} onDone={load} /></div>}
       {opened.has('process') && <div hidden={tab !== 'process'}><ProcessStudio models={models} defaultModel={defaultModel} /></div>}
       {opened.has('assets') && <div hidden={tab !== 'assets'}><Assets assets={assets} canRegister={!!auth.studioToken} reload={load} /></div>}
     </div>
