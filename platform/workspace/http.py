@@ -631,7 +631,7 @@ class WorkspaceAPI:
                 raise HTTPError(400, "project-required", "상품 기준은 프로젝트에서 선택하세요.")
             return criteria
         if not product_id:
-            if allow_request_draft:
+            if allow_request_draft and not (previous or {}).get("productId"):
                 return criteria
             raise HTTPError(409, "guideline-required", "기획에서 확정한 상품 기준을 먼저 선택하세요.")
         if previous and previous.get("productId") and previous["productId"] != product_id:
@@ -691,6 +691,19 @@ class WorkspaceAPI:
                 raise Conflict("Project authority or planning criteria changed during approval")
             writes.append({"owner": owner, "kind": "project", "item": project, "expected_version": project["version"]})
         checks = [{"owner": owner, "kind": "contract", "id": record["contractId"], "version": record["contractVersion"]}] if kind == "run" else []
+        from workspace.change_requests import baseline_project
+        criteria = record["contract"] if kind == "run" else record
+        baseline_project(self.storage, owner, criteria.get("changeRequest", {}), checks=checks)
+        unique = {}
+        written = {(write["owner"], write["kind"], write["item"]["id"]) for write in writes}
+        for check in checks:
+            key = check["owner"], check["kind"], check["id"]
+            if key in written:
+                raise Conflict("Approval depends on a record being changed")
+            if key in unique and unique[key]["version"] != check["version"]:
+                raise Conflict("Baseline changed during approval")
+            unique[key] = check
+        checks = list(unique.values())
         return self.storage.put_many(writes, checks=checks)[0]
 
     def _contract_approve(self, owner, record, body, scope=None):

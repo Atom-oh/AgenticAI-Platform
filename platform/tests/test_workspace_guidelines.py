@@ -83,6 +83,21 @@ def test_malformed_packs_are_rejected(change):
         validate_pack(value)
 
 
+@pytest.mark.parametrize("limit", ["sources", "pages", "page-text", "total-text"])
+def test_pack_size_limits_fail_closed(limit):
+    value = pack_data()
+    if limit == "sources":
+        value["sources"] = [{**copy.deepcopy(value["sources"][0]), "id": f"source-{i}"} for i in range(21)]
+    elif limit == "pages":
+        value["sources"][0].update(pageCount=1201, pages=[{"page": i + 1, "text": "x"} for i in range(1201)])
+    elif limit == "page-text":
+        value["sources"][0]["pages"][0]["text"] = "x" * 20001
+    else:
+        value["sources"][0].update(pageCount=151, pages=[{"page": i + 1, "text": "x" * 20000} for i in range(151)])
+    with pytest.raises(ValueError):
+        validate_pack(value)
+
+
 def test_references_pin_source_and_page_content_and_reject_empty_or_truncated_text():
     pack = validate_pack(pack_data())
     ref = ref_for("asset")

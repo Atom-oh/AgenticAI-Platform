@@ -6,6 +6,7 @@ Outputs stay local until uploaded through the authenticated workspace intake.
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
 import io
 import json
@@ -14,14 +15,14 @@ import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from workspace.guidelines import FORMAT, MAX_PACK_BYTES, MAX_PAGE_CHARS, validate_pack
+from workspace.guidelines import FORMAT, MAX_PACK_BYTES, MAX_PAGE_CHARS, MAX_PAGES, MAX_TOTAL_CHARS, validate_pack
 from workspace.prepare_guidelines import archive_entries, category_for, pdf_pages, pptx_pages
 
 SOURCE_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".scss", ".css"}
 SUPPORTED = SOURCE_EXTENSIONS | {".pdf", ".pptx", ".txt", ".md", ".xlsx"}
 
 
-def source_record(name, data):
+def source_record(name, data, *, isolate_pdf=False):
     original_name = name
     name = unicodedata.normalize("NFC", name)
     path = PurePosixPath(name)
@@ -33,13 +34,19 @@ def source_record(name, data):
     digest = hashlib.sha256(data).hexdigest()
     metadata = {"path": original_name}
     if extension == ".pdf":
-        pages, category = pdf_pages(data), category_for(name)
+        if isolate_pdf:
+            from workspace.source_parse_task import isolated_pdf_pages
+            pages = isolated_pdf_pages(data)
+        else:
+            pages = pdf_pages(data)
+        category = category_for(name)
     elif extension == ".pptx":
         pages, category = pptx_pages(data), "specification"
     elif extension == ".xlsx":
         pages, category = workbook_pages(data), "inventory"
     else:
-        value = data.decode("utf-8-sig")
+        prefix = data[:4 * (MAX_PAGE_CHARS + 1)]
+        value = codecs.getincrementaldecoder("utf-8-sig")().decode(prefix, final=len(prefix) == len(data))
         if "\x00" in value:
             raise ValueError("non-text-original")
         code = extension in SOURCE_EXTENSIONS or bool(re.search(r"(?:import\s+[\s\S]{0,300}\bfrom\s+['\"]|export\s+(?:default|const)|<[A-Z]\w+[\s/>])", value))
@@ -52,7 +59,8 @@ def source_record(name, data):
                     if match:
                         metadata[key] = match[1].strip()[:1024]
             metadata["imports"] = ", ".join(sorted(set(re.findall(r"\bfrom\s+['\"]([^'\"]+)['\"]", value))))[:1024]
-        pages = [{"page": 1, "text": value[:MAX_PAGE_CHARS], "truncated": len(value) > MAX_PAGE_CHARS}]
+        pages = [{"page": 1, "text": value[:MAX_PAGE_CHARS],
+                  "truncated": len(prefix) < len(data) or len(value) > MAX_PAGE_CHARS}]
     return {"id": "src-" + hashlib.sha256((name + digest).encode()).hexdigest()[:24],
             "name": path.name, "sha256": digest, "category": category, "metadata": metadata,
             "pageCount": len(pages), "pages": pages}
@@ -70,25 +78,51 @@ def workbook_pages(data):
             return ET.fromstring(archive.read(name), forbid_dtd=True, forbid_entities=True, forbid_external=True)
         strings = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            strings = ["".join(node.text or "" for node in item.iter(ns + "t")) for item in xml("xl/sharedStrings.xml")]
-        pages = []
+            shared_chars = 0
+            for item in xml("xl/sharedStrings.xml"):
+                value = "".join(node.text or "" for node in item.iter(ns + "t"))
+                shared_chars += len(value)
+                if len(value) > MAX_PAGE_CHARS or shared_chars > MAX_TOTAL_CHARS or len(strings) >= 500000:
+                    raise ValueError("workbook-shared-string-limit")
+                strings.append(value)
+        pages, characters, cell_count, row_count = [], 0, 0, 0
         for name in sorted(archive.namelist()):
             if not re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name):
                 continue
             # Groups of rows are searchable pages; each retains exact OOXML coordinates.
             lines = []
             for row in xml(name).iter(ns + "row"):
-                cells = []
+                row_count += 1
+                row_id = row.get("r", "?")
+                if row_count > 100000 or len(row_id) > 10:
+                    raise ValueError("workbook-row-limit")
+                cells, row_chars = [], len(name) + len(row_id) + 10
                 for cell in row.findall(ns + "c"):
+                    cell_count += 1
+                    reference = cell.get("r", "?")
+                    if cell_count > 500000 or len(reference) > 16:
+                        raise ValueError("workbook-cell-limit")
                     node = cell.find(ns + "v")
                     value = node.text or "" if node is not None else "".join(t.text or "" for t in cell.iter(ns + "t"))
                     if cell.get("t") == "s":
-                        value = strings[int(value)]
+                        index = int(value)
+                        if not 0 <= index < len(strings):
+                            raise ValueError("workbook-shared-string-reference")
+                        value = strings[index]
                     if value:
-                        cells.append(f"{cell.get('r', '?')}: {value}")
-                line = f"{name} row {row.get('r', '?')}: " + " | ".join(cells)
+                        addition = len(reference) + len(value) + 5
+                        row_chars += addition
+                        if row_chars > MAX_PAGE_CHARS or characters + row_chars > MAX_TOTAL_CHARS:
+                            raise ValueError("workbook-extraction-limit")
+                        cells.append(f"{reference}: {value}")
+                line = f"{name} row {row_id}: " + " | ".join(cells)
+                characters += len(line) + 1
+                if characters > MAX_TOTAL_CHARS:
+                    raise ValueError("workbook-extraction-limit")
                 if lines and sum(map(len, lines)) + len(line) > 15000:
                     pages.append({"page": len(pages) + 1, "text": "\n".join(lines)})
+                    if len(pages) >= MAX_PAGES:
+                        raise ValueError("workbook-page-limit")
                     lines = []
                 lines.append(line)
             if lines:
@@ -129,15 +163,20 @@ def prepare_archive(path, output):
                 continue
             try:
                 source = source_record(entry.filename, archive.read(entry))
-                validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": [source]})
-                if records and (len(records) >= 20 or sum(len(s["pages"]) for s in records) + len(source["pages"]) > 1200
-                                or sum(len(p["text"]) for s in records for p in s["pages"]) +
-                                sum(len(p["text"]) for p in source["pages"]) > 2_500_000):
-                    flush()
-                records.append(source)
+                single = validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": [source]})
+                if len(json.dumps(single, ensure_ascii=False).encode()) > MAX_PACK_BYTES:
+                    raise ValueError("source-pack-too-large")
             except Exception as error:
                 errors.append({"path": entry.filename, "reason": str(error) if isinstance(error, ValueError) and
-                               str(error) in ("protected-original", "unsupported-format") else "parse-failed"})
+                               str(error) in ("protected-original", "unsupported-format", "source-pack-too-large") else "parse-failed"})
+                continue
+            if records and (len(records) >= 20 or sum(len(s["pages"]) for s in records) + len(source["pages"]) > 1200
+                            or sum(len(p["text"]) for s in records for p in s["pages"]) +
+                            sum(len(p["text"]) for p in source["pages"]) > 2_500_000
+                            or len(json.dumps({"format": FORMAT, "schemaVersion": 1, "sources": records + [source]},
+                                              ensure_ascii=False).encode()) > MAX_PACK_BYTES):
+                flush()
+            records.append(source)
         flush()
     receipt = {"archive": Path(path).name, "packs": written, "excluded": errors, "originalStatus": "local-only",
                "reviewStatus": "unreviewed", "execution": "none"}
@@ -151,7 +190,10 @@ def main():
     parser.add_argument("archive", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
-    receipt = prepare_archive(args.archive, args.output_dir)
+    try:
+        receipt = prepare_archive(args.archive, args.output_dir)
+    except Exception:
+        parser.exit(1, "Source preparation failed. Check archive limits and the output directory; completed packs remain reusable.\n")
     print(f"Prepared {len(receipt['packs'])} reference packs; excluded {len(receipt['excluded'])} originals. Review the local receipt.")
 
 

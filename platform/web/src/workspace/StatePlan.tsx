@@ -36,7 +36,7 @@ export function StateEvidence({ contract, evidence }: { contract: EditableContra
   };
   return <section className="ws-state-evidence"><h3>설계한 상태의 검수 결과</h3>
     {contract.changeRequest && <div>{contract.changeRequest.screens.filter(screen => screen.change !== 'remove').flatMap(screen =>
-      screen.states.map(state => <article key={`${screen.id}:${state}`}><strong>{screen.title} · {UX_STATES[state].label}</strong>
+      screen.states.map(state => <article key={`${screen.id}:${state}`}><strong>{screen.title} · {UX_STATES[state]?.label || state}</strong>
         <span>{stateResult(contract.rules.filter(rule => rule.required && rule.screenId === screen.id && rule.scenario === state).map(rule => rule.id))}</span></article>))}
       {contract.changeRequest.transitions.map(link => <article key={link.id}><strong>
         {contract.changeRequest!.screens.find(screen => screen.id === link.from)?.title} → {contract.changeRequest!.screens.find(screen => screen.id === link.to)?.title}

@@ -191,25 +191,39 @@ def extract_file(name: str, data: bytes) -> dict:
     if extension not in EXTENSIONS:
         raise ValueError("지원하지 않는 파일 형식입니다.")
     if extension in ("pptx", "xlsx", "tsx", "ts", "jsx", "js", "scss", "zip") or (
-            extension == "txt" and re.search(rb"(?:import\s+[\s\S]{0,300}\bfrom\s+['\"]|export\s+(?:default|const))", data)):
+            extension == "txt" and re.search(rb"(?:import\s+[\s\S]{0,300}\bfrom\s+['\"]|export\s+(?:default|const))", data[:64000])):
         from workspace.prepare_sources import source_record
         from workspace.prepare_guidelines import archive_entries
         from workspace.guidelines import FORMAT, MAX_PACK_BYTES, summaries, validate_pack
         import zipfile
-        sources = []
+        sources, excluded = [], []
         if extension == "zip":
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 for entry in archive_entries(archive):
-                    if not entry.is_dir():
-                        sources.append(source_record(entry.filename, archive.read(entry)))
+                    if entry.is_dir() or PurePath(entry.filename).name == ".DS_Store":
+                        continue
+                    try:
+                        sources.append(source_record(entry.filename, archive.read(entry), isolate_pdf=True))
+                    except Exception:
+                        excluded.append(entry.filename[:180] + ": 형식·보호·크기 또는 해석 한도로 제외되었습니다.")
         else:
-            sources.append(source_record(name, data))
+            try:
+                sources.append(source_record(name, data))
+            except Exception as error:
+                raise ValueError("원본 형식·보호·크기 또는 해석 한도를 확인하세요.") from error
+        if not sources:
+            result = _base("zip")
+            result.update(parseStatus="unsupported", warnings=excluded or ["해석 가능한 참고 원본이 없습니다."])
+            return result
         pack = validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": sources})
         if len(json.dumps(pack, ensure_ascii=False).encode()) > MAX_PACK_BYTES:
             raise ValueError("자료 묶음이 큽니다. 문서별 준비 도구로 나누어 반입하세요.")
         result = _base(FORMAT)
         result.update(guidelinePack=pack, guidelineSources=summaries(pack, originals_stored=True), pages=sum(s["pageCount"] for s in sources))
         result["warnings"] = ["원본 상태·식별자는 참고 정보이며 승인이 아닙니다. 코드는 실행하지 않았고 이미지·배치 해석은 포함하지 않습니다."]
+        if excluded:
+            result.update(parseStatus="partial")
+            result["warnings"].extend(excluded)
         return result
     if extension in ("png", "jpg", "jpeg"):
         return _image(data, extension)

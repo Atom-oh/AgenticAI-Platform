@@ -15,8 +15,10 @@ const TOPICS = [
   { title: '상태', description: '입력·오류·복구', query: '상태' },
   { title: '적용', description: '사용 조건과 예외', query: '적용' },
 ];
-const samePage = (left: GuideRef, right: GuideRef) =>
+const sameAddress = (left: GuideRef, right: GuideRef) =>
   left.assetId === right.assetId && left.sourceId === right.sourceId && left.page === right.page;
+const samePage = (left: GuideRef, right: GuideRef) => sameAddress(left, right) &&
+  left.sourceSha256 === right.sourceSha256 && left.textSha256 === right.textSha256;
 
 export default function GuidelineLibrary({ assets, selected, onSelected, onContinue, onUpload }: {
   assets: Asset[]; selected: GuideRef[]; onSelected: (refs: GuideRef[]) => void; onContinue: () => void; onUpload: () => void;
@@ -54,7 +56,8 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
     const ref: GuideRef = { assetId: pack.id, sourceId: page.sourceId, page: page.page,
       sourceSha256: page.sourceSha256, textSha256: page.textSha256 };
     if (selected.some(item => samePage(item, ref))) onSelected(selected.filter(item => !samePage(item, ref)));
-    else if (selected.length < 12) onSelected([...selected, ref]);
+    else if (selected.length < 12 || selected.some(item => sameAddress(item, ref)))
+      onSelected([...selected.filter(item => !sameAddress(item, ref)), ref]);
   };
   return <section className="ws-section ws-guide-library">
     <div className="ws-section-heading"><div><h2>고객 가이드 · AI UX 기준</h2>
@@ -94,9 +97,9 @@ export default function GuidelineLibrary({ assets, selected, onSelected, onConti
       {result && <p role="status">{result.total}페이지 검색 · AI 적용 {selected.length}/12페이지</p>}
       {result?.total === 0 && <div className="ws-empty">일치하는 원문이 없습니다. 다른 검색어 또는 원본을 선택하세요.</div>}
       <div className="ws-guide-pages">{result?.pages.map(page => {
-        const checked = selected.some(ref => ref.assetId === pack?.id && ref.sourceId === page.sourceId && ref.page === page.page);
+        const checked = selected.some(ref => samePage(ref, { ...page, assetId: pack!.id }));
         const source = pack?.guidelineSources?.find(source => source.id === page.sourceId);
-        const deleted = ['삭제', 'deleted', 'DEPRECATED'].includes(source?.metadata?.status || '');
+        const deleted = ['삭제', '폐기', 'deleted', 'deprecated', 'discarded'].includes((source?.metadata?.status || '').normalize('NFKC').trim().toLowerCase());
         const unusable = deleted || page.truncated || !page.text.trim();
         return <article className={`ws-guide-page${checked ? ' is-selected' : ''}`} key={`${page.sourceId}:${page.page}`}>
           <div className="ws-section-heading"><div><span className="ws-guide-kind">{GUIDE_CATEGORIES[page.category]}</span>

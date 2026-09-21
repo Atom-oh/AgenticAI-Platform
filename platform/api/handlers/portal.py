@@ -624,17 +624,13 @@ def portal_sync(ctx: Ctx, body: dict) -> None:
 
 
 def portal_registry_map(ctx: Ctx, body: dict) -> None:
-    """§7 등록 대상 매핑표 + 실제 Registry 상태. MCP 서버 레코드 3건은 여기서 멱등 시드한다 (기준선과 분리)."""
+    """Read actual Registry state; shared seeding is IAM-admin-only."""
     t0 = time.time()
     reg = _registry()
     if reg is None:
         ctx.post({"type": "portal_registry_map", "ok": False, "code": 503, "error": "Registry 모듈 없음", "rows": []})
         return
     from registry import seed as seedmod
-    bootstrapped = None
-    if reg.counts()["total"] == 0 and body.get("bootstrap", True):
-        bootstrapped = seedmod.seed(actor=ctx.email)
-    mcp_seed = seedmod.seed_mcp_servers(actor=ctx.email)
     lookup = {
         "component_contract": [("Button", "v2"), ("Button", "v3")],
         "screen_spec": [], "pattern": [],
@@ -659,9 +655,8 @@ def portal_registry_map(ctx: Ctx, body: dict) -> None:
                      "subtype": x["subtype"], "found": True, "payloadFlags": {}}
                     for x in reg.list_records({"type": "CUSTOM", "subtype": sub})][:20]
         rows.append({**row, "records": recs})
-    log_event("portal.registry_map", ctx.trace_id, mcpCreated=mcp_seed["created"], bootstrapped=bool(bootstrapped),
-              ms=_elapsed(t0))
-    ctx.post({"type": "portal_registry_map", "ok": True, "rows": rows, "mcpSeed": mcp_seed, "bootstrapped": bootstrapped,
+    log_event("portal.registry_map", ctx.trace_id, ms=_elapsed(t0))
+    ctx.post({"type": "portal_registry_map", "ok": True, "rows": rows, "mcpSeed": None, "bootstrapped": None,
               "tier": TIER_BADGE, "registryBackend": reg.backend(), "counts": reg.counts(), "elapsedMs": _elapsed(t0)})
 
 

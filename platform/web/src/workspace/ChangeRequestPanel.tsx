@@ -32,7 +32,7 @@ export function requestIssues(draft: EditableContract): string[] {
     if (!draft.rules.some(rule => rule.required && rule.transitionId === link.id && rule.steps.some((start, i) =>
       start.action === 'expectVisible' && start.target === link.from && start.value === true &&
       rule.steps.some((end, j) => j > i && end.action === 'expectVisible' && end.target === link.to && end.value === true &&
-        rule.steps.slice(i + 1, j).some(step => ['click', 'press', 'select', 'check'].includes(step.action))))))
+        rule.steps.slice(i + 1, j).some(step => ['click', 'press', 'select', 'check', 'fill'].includes(step.action))))))
       issues.push(`${link.id}: 출발 화면 → 조작 → 도착 화면 확인이 필요합니다.`);
   }
   if (request.baseline && !request.allowedFiles.length) issues.push('기준 시안에서 변경할 파일을 선택하세요.');
@@ -54,14 +54,17 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
   useEffect(() => () => operation.current?.abort(), []);
   const update = (change: Partial<ChangeRequest>) => onChange({ ...draft, changeRequest: { ...request, ...change } });
   const eligible = runs.filter(run => run.outputType === 'react' && run.approval && !run.needsRevalidation);
-  const chooseBaseline = async (id: string) => {
+  const chooseBaseline = async (id: string, refreshOnly = false) => {
     operation.current?.abort();
     if (!id) { update({ baseline: undefined, allowedFiles: [] }); setFiles([]); setLoading(false); return; }
     const abort = new AbortController(); operation.current = abort; setLoading(true); setError('');
+    const expected = request.baseline;
     try {
       const value = await client.get<{ baseline: ChangeRequest['baseline']; files: string[] }>(
-        `/runs/${resource(id)}/baseline`, abort.signal);
+        `/runs/${resource(id)}/baseline${refreshOnly && expected ? `?round=${expected.round}` : ''}`, abort.signal);
       if (!abort.signal.aborted) {
+        if (refreshOnly && (!expected || value.baseline?.sourceHash !== expected.sourceHash || value.baseline?.round !== expected.round))
+          throw new Error('고정한 기준 시안의 현재 승인을 확인하지 못했습니다. 업무 정의에서 기준을 다시 선택하세요.');
         const latest = latestDraft.current;
         const current = latest.changeRequest || emptyRequest();
         if (current.baseline?.sourceHash !== value.baseline?.sourceHash || current.baseline?.runId !== value.baseline?.runId)
@@ -71,6 +74,9 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
     } catch (reason) { if (!abort.signal.aborted) setError(messageOf(reason)); }
     finally { if (!abort.signal.aborted) setLoading(false); }
   };
+  useEffect(() => {
+    if (request.baseline) void chooseBaseline(request.baseline.runId, true);
+  }, [request.baseline?.runId, request.baseline?.round, request.baseline?.sourceHash]);
   const addScreen = (kind: keyof typeof KINDS = 'page') => {
     const id = nextId(kind === 'page' ? 'screen' : kind);
     update({ screens: [...request.screens, { id, kind, title: `${KINDS[kind]} ${request.screens.length + 1}`,
@@ -104,7 +110,7 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
           {request.baseline && !eligible.some(run => run.id === request.baseline!.runId) && <option value={request.baseline.runId}>저장된 기준 · 현재 승인 재확인 필요</option>}
           {eligible.map(run => <option key={run.id} value={run.id}>{run.contract?.title || run.id} · 승인 라운드 {run.approval?.round}</option>)}</select></label>
         {request.baseline && <><p>기준 라운드 {request.baseline.round} · 소스 {request.baseline.sourceHash.slice(0, 12)}</p>
-          <button disabled={disabled || loading} onClick={() => void chooseBaseline(request.baseline!.runId)}>기준 파일 다시 조회</button></>}
+          <button disabled={disabled || loading} onClick={() => void chooseBaseline(request.baseline!.runId, true)}>기준 파일 다시 조회</button></>}
       </details>
     </>}
     {error && <Notice error>{error}</Notice>}
@@ -180,6 +186,7 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
     </section>}
     {request.baseline && <details open className="ws-file-scope"><summary>변경을 허용할 소스 파일</summary>
       <p>선택한 경로만 추가·수정·삭제할 수 있습니다. 다른 기준 파일은 바이트 단위로 유지합니다.</p>
+      {stage === 'design' && <button disabled={disabled || loading} onClick={() => void chooseBaseline(request.baseline!.runId, true)}>기준 파일 다시 조회</button>}
       {[...new Set([...files, ...request.allowedFiles])].sort().map(path => <label key={path} className="ws-check"><input type="checkbox"
         disabled={disabled} checked={request.allowedFiles.includes(path)} onChange={() => update({ allowedFiles: request.allowedFiles.includes(path) ?
           request.allowedFiles.filter(item => item !== path) : [...request.allowedFiles, path] })} />{path}</label>)}

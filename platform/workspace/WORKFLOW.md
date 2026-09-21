@@ -6,6 +6,8 @@ The five stages support a versioned `changeRequest` inside the existing scoped
 rule contract. Type, channel, requester, date, baseline notes, preserved behavior,
 page/overlay/slot inventory, distinct ID namespaces and guarded transitions
 survive proposal, approval and handoff. Mapping notes remain reviewer claims.
+The normalized request is limited to 64 KB. Screen-level source references must
+match selected page/hash references in that same contract.
 
 A request draft can have no rules and be saved before proposing tests.
 Project drafts may be saved before a product is selected; shared proposal,
@@ -21,6 +23,10 @@ same storage scope. Only explicitly allowed generated-source paths may change;
 other generated files remain byte-identical. This is file-level enforcement,
 not preservation of every region inside an edited file. Imported customer
 source cannot become an executable baseline through reference intake.
+Baseline dependencies are validated recursively, including current product
+guidance, with cycles and chains over 24 runs rejected. Approval transactions
+condition-check the referenced runs, contracts and products to reject concurrent
+invalidation. A stale ancestor cannot be laundered through a derived baseline.
 
 The release manifest adds the request, ID fields, references and actual
 added/modified/deleted exported files with before/after hashes. Trusted build/

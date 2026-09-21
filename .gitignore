@@ -41,4 +41,4 @@ videos/**/.media/
 /.workbench-render-*/
 /.local/ux-guidelines/
 # Customer source archives are private inputs, never public PR artifacts.
-/*.zip
+*.[zZ][iI][pP]

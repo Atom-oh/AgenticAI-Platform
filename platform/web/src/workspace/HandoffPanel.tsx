@@ -15,7 +15,8 @@ export default function HandoffPanel({ runs, contracts, selection, product, init
 }) {
   const client = useWorkspaceClient();
   const [id, setId] = useState(initialRunId || selection?.run.id || '');
-  const [run, setRun] = useState<Run | null>(null);
+  const [loadedRun, setRun] = useState<Run | null>(null);
+  const run = loadedRun?.id === id && (!product || loadedRun.productId === product.id) ? loadedRun : null;
   const [number, setNumber] = useState(initialRound || selection?.round?.number || 0);
   const [pageId, setPageId] = useState(selection?.pageId || '');
   const [error, setError] = useState('');

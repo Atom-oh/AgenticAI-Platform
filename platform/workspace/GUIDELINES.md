@@ -23,6 +23,16 @@ the existing 20-source, 1,200-page and 16 MiB limits. Matching outputs are reuse
 on restart. Protected, unsupported and unreadable originals appear in an explicit
 local exclusion receipt. Truncated code cannot be selected as model context.
 There is no arbitrary nested-ZIP recursion, code execution or network retrieval.
+Server ZIP PDF extraction runs in a separate process without AWS credentials,
+with 1.5 GiB address-space, 45-second CPU, 50-second wall-time and 16 MiB output
+limits. PDF text is requested in bounded ranges. XLSX parsing bounds shared
+strings, cell/row counts and cumulative expanded text before assembling pages.
+Text/code classification and extraction inspect a bounded prefix; omitted text
+is explicitly truncated and unavailable as generation evidence.
+
+Small mixed ZIPs report excluded members and partial extraction, retaining the
+original archive. An archive with no readable supported source is unsupported,
+not complete. Unsafe archive paths remain a hard rejection.
 
 Select `sources-*.json` in the workspace and use **준비한 파일 모두 보관**.
 The queue supports 500 files, serial uploads, stop-after-current and per-file

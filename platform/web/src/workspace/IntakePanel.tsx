@@ -27,9 +27,17 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
   const input = useRef<HTMLInputElement>(null);
   const control = useRef<AbortController | null>(null);
   const openedAsset = useRef('');
+  const requestedAsset = useRef('');
+  const [linkError, setLinkError] = useState('');
   useEffect(() => {
+    if (!initialAssetId) { requestedAsset.current = ''; openedAsset.current = ''; setLinkError(''); return; }
+    if (requestedAsset.current !== initialAssetId) {
+      requestedAsset.current = initialAssetId; openedAsset.current = ''; setInspect(null);
+    }
+    if (openedAsset.current === initialAssetId) return;
     const asset = assets.find(item => item.id === initialAssetId && !item.system && !item.archived);
-    if (asset && openedAsset.current !== asset.id) { openedAsset.current = asset.id; setInspect(asset); }
+    if (asset) { openedAsset.current = asset.id; setInspect(asset); setLinkError(''); }
+    else { setInspect(null); setLinkError('연결된 파일을 현재 작업 공간에서 찾지 못했습니다. 파일 목록을 다시 조회하세요.'); }
   }, [assets, initialAssetId]);
   useEffect(() => () => { stopBatch.current = true; control.current?.abort(); }, []);
   const add = (chosen: FileList | File[]) => {
@@ -112,6 +120,7 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
       </details>
       {parent && <Notice>{parent.name}의 새 반입 버전으로 추가할 파일을 선택하세요. 이전 원본과 이력은 보존됩니다.</Notice>}
       {error && <Notice error>{error}</Notice>}
+      {linkError && <Notice error>{linkError}<button onClick={refresh}>파일 목록 다시 조회</button></Notice>}
       {files.length > 0 && <div className="ws-upload-list">
         <div className="ws-actions"><button className="ws-primary" disabled={busy || batch || !files.some(file => file.state !== 'sent')}
           onClick={() => void uploadAll()}>준비한 파일 모두 보관</button>

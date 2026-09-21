@@ -347,9 +347,18 @@ def test_mcp_server_seed_is_separate_and_idempotent():
     assert res["total"] == res["updated"] and registry_api.get_record("figma_mcp", "v1")["status"] == "APPROVED"
 
 
-def test_registry_map_bootstraps_and_reports_truthfully(store):
+def test_registry_map_is_read_only_even_when_bootstrap_is_requested(store):
+    ev = _call(portal.portal_registry_map, {"bootstrap": True})
+    assert ev["ok"] and ev["bootstrapped"] is None and ev["mcpSeed"] is None
+    assert registry_api.counts()["total"] == 0
+    assert all(not record["found"] for row in ev["rows"] for record in row["records"])
+
+
+def test_registry_map_reports_administratively_seeded_records(store):
+    seedmod.seed(ACTOR)
+    seedmod.seed_mcp_servers(ACTOR)
     ev = _call(portal.portal_registry_map, {})
-    assert ev["ok"] and ev["bootstrapped"]["created"] > 0 and ev["mcpSeed"]["created"] == 3 and ev["tier"] == "Tier 0/1 전용"
+    assert ev["ok"] and ev["bootstrapped"] is None and ev["mcpSeed"] is None and ev["tier"] == "Tier 0/1 전용"
     rows = {r["key"]: r for r in ev["rows"]}
     assert set(rows) == {r["key"] for r in seedmod.ASSET_RECORD_TYPES}
     comp = rows["component_contract"]
@@ -361,7 +370,7 @@ def test_registry_map_bootstraps_and_reports_truthfully(store):
     assert rows["pattern"]["records"] == [] and rows["screen_spec"]["records"] == []
     _call(portal.portal_publish, {"id": "PAT-001"})
     ev2 = _call(portal.portal_registry_map, {})
-    assert ev2["bootstrapped"] is None and ev2["mcpSeed"]["created"] == 0
+    assert ev2["bootstrapped"] is None and ev2["mcpSeed"] is None
     assert [r["name"] for r in {r["key"]: r for r in ev2["rows"]}["pattern"]["records"]] == ["PAT-001"]
 
 

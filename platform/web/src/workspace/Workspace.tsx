@@ -31,13 +31,29 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
   const createRequest = useRef({ name: '', id: '' });
   const operation = useRef<AbortController | null>(null);
   const unsaved = useRef(false);
+  const acceptedHash = useRef(location.hash);
+  const acceptedRoute = useRef(route);
+  const recordLocation = useCallback((hash: string) => {
+    acceptedHash.current = hash; acceptedRoute.current = readWorkflowRoute(hash);
+  }, []);
+  const applyRoute = useCallback((hash: string) => {
+    recordLocation(hash);
+    const next = readWorkflowRoute(hash); setRoute(next); setProjectId(next.projectId);
+  }, [recordLocation]);
   useEffect(() => {
     const changed = () => {
       const next = readWorkflowRoute(location.hash);
-      setRoute(next); setProjectId(next.projectId);
+      if (location.hash.split('?')[0] !== acceptedHash.current.split('?')[0]) return;
+      const scopeChanged = next.projectId !== acceptedRoute.current.projectId || next.productId !== acceptedRoute.current.productId;
+      if (scopeChanged && unsaved.current && !confirm('저장하지 않은 설계 변경을 닫고 다른 작업 공간·상품으로 이동할까요?')) {
+        history.replaceState(null, '', acceptedHash.current); return;
+      }
+      if (scopeChanged) unsaved.current = false;
+      applyRoute(location.hash);
     };
     window.addEventListener('hashchange', changed);
-    return () => window.removeEventListener('hashchange', changed);
+    window.addEventListener('popstate', changed);
+    return () => { window.removeEventListener('hashchange', changed); window.removeEventListener('popstate', changed); };
   }, []);
   useEffect(() => {
     const abort = new AbortController();
@@ -74,7 +90,7 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
       if (!abort.signal.aborted) {
         setProjects(items => [value, ...items.filter(item => item.id !== value.id)]); setProjectId(value.id); setName('');
         const hash = workflowHash(location.hash, { projectId: value.id });
-        history.replaceState(null, '', hash); setRoute(readWorkflowRoute(hash));
+        history.replaceState(null, '', hash); applyRoute(hash);
       }
     } catch (reason) { if (!abort.signal.aborted) setError(messageOf(reason)); }
     finally { if (!abort.signal.aborted) setCreating(false); }
@@ -89,7 +105,7 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
         if (unsaved.current && !confirm('저장하지 않은 설계 변경을 닫고 다른 작업 공간으로 이동할까요?')) return;
         const next = event.target.value; setProject(null); setProjectId(next); unsaved.current = false;
         const hash = workflowHash(location.hash, { projectId: next });
-        history.replaceState(null, '', hash); setRoute(readWorkflowRoute(hash));
+        history.replaceState(null, '', hash); applyRoute(hash);
       }}><option value="">개인 작업실 · 기존 비공개 이력</option>{projects.map(item =>
         <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <span>{projectId ? role ? `${ROLE_LABELS[role]} · 프로젝트 참여자와 공유` : '참여 권한 확인 중' : '개인 파일은 프로젝트로 자동 공유되지 않습니다.'}</span>
@@ -101,19 +117,21 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
     {route.invalid && <Notice error>작업 링크의 식별자를 확인하지 못했습니다. 선택한 작업 공간을 확인한 뒤 다시 시작하세요.
       <button onClick={() => {
         const hash = workflowHash(location.hash, { projectId });
-        history.replaceState(null, '', hash); setRoute(readWorkflowRoute(hash));
+        history.replaceState(null, '', hash); applyRoute(hash);
       }}>선택한 작업 공간에서 새로 시작</button></Notice>}
     {!config || loading ? <p role="status">작업실을 준비하고 있습니다…</p> :
       !route.invalid && role && (!projectId || project?.id === projectId) ? <WorkspaceScope.Provider value={scope}>
         <ProjectWorkspace key={`${projectId || 'personal'}:${config.actorId || ''}:${role}`} config={config} initialStep={initialStep} route={route}
+          onRoute={applyRoute} onLocation={recordLocation}
           onDirty={value => { unsaved.current = value; }} onProjectRefresh={() => setRetry(value => value + 1)} />
       </WorkspaceScope.Provider> : <Notice>참여 권한이 확인된 작업 공간을 선택하세요. 이전 프로젝트의 자료는 표시하지 않습니다.</Notice>}
   </div>;
 }
 
-function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefresh }: {
+function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefresh, onRoute, onLocation }: {
   config: WorkspaceConfig; initialStep?: 'files' | 'guides'; route: ReturnType<typeof readWorkflowRoute>;
   onDirty: (dirty: boolean) => void; onProjectRefresh: () => void;
+  onRoute: (hash: string) => void; onLocation: (hash: string) => void;
 }) {
   const { client, project, role } = useWorkspaceScope();
   const [step, setStep] = useState<WorkflowStep>(() => initialWorkflowStep(route, role, initialStep));
@@ -134,17 +152,23 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const [requestedRun, setRequestedRun] = useState({ id: route.runId, round: route.round });
   const heading = useRef<HTMLHeadingElement>(null);
   const activeStage = useRef(step); activeStage.current = step;
+  const activeProduct = useRef(productId); activeProduct.current = productId;
   const reviewSelection = useCallback((value: Selection) => {
     if (activeStage.current === 'handoff') return;
     setSelection(value);
-    if (value?.round && activeStage.current === 'review') history.replaceState(null, '',
-      workflowHash(location.hash, { projectId: project?.id || '', productId, step: 'review', runId: value.run.id, round: value.round.number }));
+    if (value?.round && activeStage.current === 'review') {
+      const hash = workflowHash(location.hash, { projectId: project?.id || '', productId, step: 'review', runId: value.run.id, round: value.round.number });
+      history.replaceState(null, '', hash); onLocation(hash);
+    }
   }, [project?.id, productId]);
   const handoffSelection = useCallback((value: Selection) => {
     if (activeStage.current !== 'handoff') return;
     setSelection(value);
-    if (value?.round) history.replaceState(null, '', workflowHash(location.hash, {
-      projectId: project?.id || '', productId, step: 'handoff', runId: value.run.id, round: value.round.number }));
+    if (value?.round) {
+      const hash = workflowHash(location.hash, {
+        projectId: project?.id || '', productId, step: 'handoff', runId: value.run.id, round: value.round.number });
+      history.replaceState(null, '', hash); onLocation(hash);
+    }
   }, [project?.id, productId]);
   const controller = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
@@ -165,6 +189,11 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   useEffect(() => { setGuideRefs(previous => previous.filter(ref => selected.includes(ref.assetId))); }, [selected]);
   useEffect(() => { onDirty(editing.dirty || planningDirty); }, [editing.dirty, planningDirty, onDirty]);
   useEffect(() => {
+    if (activeProduct.current !== route.productId) {
+      setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
+      setSelected([]); setGuideRefs([]);
+    }
+    setSelection(null);
     setStep(initialWorkflowStep(route, role, initialStep));
     setProductId(route.productId); setRequestedRun({ id: route.runId, round: route.round });
   }, [route]);
@@ -173,7 +202,9 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
     if (id && ['define', 'design'].includes(activeStage.current)) {
       const params = new URLSearchParams(location.hash.split('?')[1]);
       params.set('contractId', id);
-      history.replaceState(null, '', location.hash.split('?')[0] + '?' + params.toString());
+      params.set('step', activeStage.current);
+      const hash = location.hash.split('?')[0] + '?' + params.toString();
+      history.replaceState(null, '', hash); onLocation(hash);
     }
   }, []);
   const onApproved = useCallback((contract: Contract) => {
@@ -192,6 +223,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       contractId: editing.id || undefined,
       ...(next === 'review' || next === 'handoff' ? { runId: target.id, round: target.round } : {}) });
     if (hash !== location.hash) history.pushState(null, '', hash);
+    onLocation(hash);
     requestAnimationFrame(() => heading.current?.focus({ preventScroll: true }));
   };
   const chooseProduct = (id: string) => {
@@ -199,12 +231,18 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
     setProductId(id); setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setRequestedRun({ id: '', round: undefined });
     setPlanningDirty(false);
     setSelected([]); setGuideRefs([]);
-    history.replaceState(null, '', workflowHash(location.hash, { projectId: project?.id || '', productId: id, step }));
+    const hash = workflowHash(location.hash, { projectId: project?.id || '', productId: id, step });
+    history.replaceState(null, '', hash); onRoute(hash);
   };
   const current = WORKFLOW_STEPS.find(item => item.id === step)!;
   const saveProduct = (value: Product) => {
     setProducts(items => [value, ...items.filter(item => item.id !== value.id)]); setProductId(value.id);
-    history.replaceState(null, '', workflowHash(location.hash, { projectId: project?.id || '', productId: value.id, step }));
+    const sameProduct = value.id === productId;
+    const hash = workflowHash(location.hash, { projectId: project?.id || '', productId: value.id, step,
+      ...(sameProduct ? { contractId: editing.id || undefined, runId: selection?.run.id || requestedRun.id,
+        round: selection?.round?.number || requestedRun.round } : {}) });
+    history.replaceState(null, '', hash);
+    if (sameProduct) onLocation(hash); else onRoute(hash);
   };
   return <>
     {project && <div className="ws-product-context"><label className="ws-field">공유 상품<select aria-label="공유 상품" value={productId}

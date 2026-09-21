@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 
 FORMAT = "ux-guidelines"
 MAX_PACK_BYTES = 16 * 1024 * 1024
@@ -141,7 +142,7 @@ def selected_pages(pack, refs):
             raise ValueError("선택한 가이드 원본·페이지가 변경되었습니다. 다시 선택하세요.")
         if not page["text"].strip() or page["truncated"]:
             raise ValueError("비어 있거나 잘린 가이드 페이지는 AI 기준으로 선택할 수 없습니다.")
-        if source.get("metadata", {}).get("status") in ("삭제", "DEPRECATED", "deleted"):
+        if unicodedata.normalize("NFKC", source.get("metadata", {}).get("status", "")).strip().casefold() in ("삭제", "폐기", "deprecated", "deleted", "discarded"):
             raise ValueError("삭제·폐기된 원본은 생성 기준으로 선택할 수 없습니다. 이력 확인용으로만 보관합니다.")
         result.append((source, page))
     return result

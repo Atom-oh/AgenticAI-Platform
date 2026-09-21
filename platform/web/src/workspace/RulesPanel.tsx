@@ -27,7 +27,7 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
   const manualSelected = selected.filter(id => manualAssets(assets).some(asset => asset.id === id));
   const hasPlanningContext = !project || !!product?.publishedGuidelineId;
   const [record, setRecord] = useState<Contract | null>(null);
-  const [initialDraft] = useState<EditableContract>(() => blankContract(manualSelected));
+  const [initialDraft, setInitialDraft] = useState<EditableContract>(() => blankContract(manualSelected));
   const [draft, setDraft] = useState<EditableContract>(initialDraft);
   const [model, setModel] = useState(config.defaultModel);
   const [error, setError] = useState('');
@@ -45,6 +45,7 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
   const dirty = JSON.stringify(editable(record || initialDraft)) !== JSON.stringify(editable(draft));
   const [scenarioFilter, setScenarioFilter] = useState<UXState | 'all' | 'unclassified'>('all');
   const opened = useRef('');
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const guide = useGuidelinePages(record?.productId || product?.id, record?.guidelineId || product?.publishedGuidelineId,
     record?.ontologyHash || product?.ontologyHash);
   const problems = [...contractProblems(draft), ...requestIssues(draft), ...noticeProblems(draft, guide.pages),
@@ -53,7 +54,7 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
   useEffect(() => { onDraft?.(draft); }, [draft, onDraft]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current?.abort(); }; }, []);
   const change = (next: EditableContract) => {
-    if (next.changeRequest && !draft.changeRequest && !record && draft.rules.length === 1 && draft.rules[0].title === '화면 요소가 표시된다')
+    if (next.changeRequest && !draft.changeRequest && !record && JSON.stringify(draft.rules) === JSON.stringify(initialDraft.rules))
       next = { ...next, rules: [] };
     revision.current++; setDraft(next); setChecked(false); setNotice('');
   };
@@ -62,17 +63,22 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
   const open = async (id: string) => {
     if (dirty && !confirm('저장하지 않은 규칙 변경을 버리고 다른 규칙을 열까요?')) return;
     revision.current++;
+    setEditorEpoch(value => value + 1);
     const controller = begin();
-    if (!id) { setRecord(null); setDraft(blankContract(manualSelected)); setChecked(false); setBusy(false); return; }
+    const empty = blankContract(manualSelected);
+    setRecord(null); setInitialDraft(empty); setDraft(empty); setChecked(false);
+    if (!id) { setBusy(false); return; }
     try {
       const { contract } = await workspaceClient.get<{ contract: Contract }>(`/contracts/${resource(id)}`, controller.signal);
-      if (!controller.signal.aborted) apply(contract);
+      if (contract.id !== id || (product && contract.productId && contract.productId !== product.id))
+        throw new Error('연결된 작업의 기준을 현재 상품에서 확인하지 못했습니다.');
+      if (!controller.signal.aborted) { apply(contract); opened.current = id; }
     } catch (reason) { if (!controller.signal.aborted) setError(messageOf(reason)); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
   useEffect(() => {
     if (initialContractId && opened.current !== initialContractId) {
-      opened.current = initialContractId; void open(initialContractId);
+      void open(initialContractId);
     }
   }, [initialContractId]);
   const save = async () => {
@@ -80,7 +86,7 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
     const controller = begin();
     try {
       const { contract } = record
-        ? await workspaceClient.put<{ contract: Contract }>(`/contracts/${resource(record.id)}`, { version: record.version, ...draft }, controller.signal)
+        ? await workspaceClient.put<{ contract: Contract }>(`/contracts/${resource(record.id)}`, { version: record.version, ...draft, ...context }, controller.signal)
         : await workspaceClient.post<{ contract: Contract }>('/contracts', { ...draft, ...context }, controller.signal);
       if (controller.signal.aborted) return;
       apply(contract); refresh(); setNotice('규칙을 저장했습니다. 이 버전의 내용을 확인한 뒤 승인하세요.');
@@ -88,7 +94,7 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
   const approve = async () => {
-    if (!mayEdit || !record || dirty || !checked || problems.length) return;
+    if (!mayEdit || !hasPlanningContext || !record || dirty || !checked || problems.length) return;
     const controller = begin();
     try {
       const { contract } = await workspaceClient.post<{ contract: Contract }>(`/contracts/${resource(record.id)}/approve`, { version: record.version }, controller.signal);
@@ -147,7 +153,7 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
     </div>
     {project && !product?.publishedGuidelineId && <Notice>이 프로젝트의 상품 지침을 먼저 선택·게시하세요. 공통 가이드와 상품 조건은 함께 적용됩니다.</Notice>}
     {!mayEdit && <Notice>현재 역할에서는 확정된 업무와 상태를 조회합니다. 정의·규칙 편집은 기획·디자인·관리자가 수행합니다.</Notice>}
-    {error && <Notice error>{error}</Notice>}
+    {error && <Notice error>{error}{initialContractId && !record && <button onClick={() => void open(initialContractId)}>연결된 작업 다시 조회</button>}</Notice>}
     <fieldset disabled={busy || !mayEdit}>
       <div className="ws-definition-starters" aria-label="흐름 시작점">{DESIGN_STARTERS.map(starter =>
         <button key={starter.label} onClick={() => change({ ...draft, brief: draft.brief.trim() ? draft.brief : starter.brief,
@@ -157,8 +163,8 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
       <label className="ws-field">사용자 목적·완료 조건<textarea rows={4} maxLength={4000} value={draft.brief}
         placeholder="누가 사용하는지, 어떤 일을 마쳐야 하는지, 완료 후 무엇을 확인할 수 있어야 하는지 적어 주세요."
         onChange={event => change({ ...draft, brief: event.target.value })} /></label>
-      <ChangeRequestPanel draft={draft} runs={runs} disabled={busy || !mayEdit} stage="define" onChange={change} />
-      <details open={!draft.changeRequest}><summary>공통 상태 체크리스트</summary><StatePlan draft={draft} disabled={busy || !mayEdit || !hasPlanningContext}
+      <ChangeRequestPanel key={`${record?.id || 'new'}:${editorEpoch}`} draft={draft} runs={runs} disabled={busy || !mayEdit} stage="define" onChange={change} />
+      <details open={!draft.changeRequest}><summary>공통 상태 체크리스트</summary><StatePlan draft={draft} disabled={busy || !mayEdit}
         onChange={requiredStates => change({ ...draft, requiredStates })} /></details>
     </fieldset>
     <div className="ws-stage-next"><p>{record ? `저장된 규칙 v${record.version}${dirty ? ' · 미저장 변경 있음' : ''}` : '흐름·상태 설계 단계에서 규칙과 함께 저장합니다.'}</p>
@@ -186,8 +192,8 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
       저장된 규칙에는 해당 규칙의 원본·페이지 기준이 유지됩니다.</Notice>}
     {proposal && <JobProgress job={proposal} label="가이드에서 규칙 제안" onComplete={job => void proposed(job)} onFailure={() => setProposalActive(false)} />}
     {guide.error && <Notice error>{guide.error} <button onClick={guide.reload}>지침 화면 다시 조회</button></Notice>}
-    {error && <Notice error>{error}</Notice>}{notice && <Notice>{notice}</Notice>}
-    {draft.changeRequest ? <ChangeRequestPanel draft={draft} runs={runs} stage="design" disabled={busy || !mayEdit} onChange={change} /> :
+    {error && <Notice error>{error}{initialContractId && !record && <button onClick={() => void open(initialContractId)}>연결된 작업 다시 조회</button>}</Notice>}{notice && <Notice>{notice}</Notice>}
+    {draft.changeRequest ? <ChangeRequestPanel key={`${record?.id || 'new'}:${editorEpoch}`} draft={draft} runs={runs} stage="design" disabled={busy || !mayEdit} onChange={change} /> :
       <StatePlan draft={draft} disabled={busy || !mayEdit}
         onChange={requiredStates => change({ ...draft, requiredStates })} onInspect={setScenarioFilter} />}
     <fieldset disabled={busy || !mayEdit} className="ws-editable">
@@ -242,9 +248,9 @@ export default function RulesPanel({ config, assets, selected, guideRefs = [], c
       <div><strong>{record ? `규칙 버전 ${record.version} · ${dirty ? '미저장 변경 있음' : stateLabel(record.status)}` : '아직 저장하지 않은 규칙'}</strong>
         <p>규칙을 수정하면 이전 승인은 새 버전에 적용되지 않습니다.</p></div>
       <button className="ws-primary" disabled={!mayEdit || !hasPlanningContext || busy || !dirty} onClick={() => void save()}>규칙 저장</button>
-      <label className="ws-check"><input type="checkbox" checked={checked} disabled={!mayEdit || busy || dirty || !record || !!problems.length}
+      <label className="ws-check"><input type="checkbox" checked={checked} disabled={!mayEdit || !hasPlanningContext || busy || dirty || !record || !!problems.length}
         onChange={event => setChecked(event.target.checked)} />이 버전의 근거와 모든 확인 단계를 검토했습니다</label>
-      <button disabled={!mayEdit || busy || dirty || !record || !checked || !!problems.length || record.status === 'approved'} onClick={() => void approve()}>
+      <button disabled={!mayEdit || !hasPlanningContext || busy || dirty || !record || !checked || !!problems.length || record.status === 'approved'} onClick={() => void approve()}>
         {record ? `버전 ${record.version} 규칙 승인` : '저장 후 규칙 승인'}</button>
       {record?.status === 'approved' && !dirty && <button className="ws-primary" onClick={onContinue}>승인 기준으로 시안·검수</button>}
     </div>

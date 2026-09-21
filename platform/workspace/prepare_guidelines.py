@@ -11,7 +11,7 @@ import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from workspace.guidelines import FORMAT, MAX_PACK_BYTES, MAX_PAGE_CHARS, MAX_PAGES, validate_pack
+from workspace.guidelines import FORMAT, MAX_PACK_BYTES, MAX_PAGE_CHARS, MAX_PAGES, MAX_TOTAL_CHARS, validate_pack
 
 MAX_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 400 * 1024 * 1024
@@ -39,18 +39,22 @@ def pdf_pages(data):
     with pdfium.PdfDocument(data) as document:
         if not 1 <= len(document) <= MAX_PAGES:
             raise ValueError("PDF 페이지 수 상한을 초과했습니다.")
-        result = []
+        result, characters = [], 0
         for index in range(len(document)):
             page = document[index]
             try:
                 text_page = page.get_textpage()
                 try:
-                    text = text_page.get_text_range()
+                    count = text_page.count_chars()
+                    text = text_page.get_text_range(index=0, count=min(count, MAX_PAGE_CHARS)) if count else ""
                 finally:
                     text_page.close()
             finally:
                 page.close()
-            result.append({"page": index + 1, "text": text[:MAX_PAGE_CHARS], "truncated": len(text) > MAX_PAGE_CHARS})
+            characters += len(text)
+            if characters > MAX_TOTAL_CHARS:
+                raise ValueError("PDF 추출 텍스트 한도를 초과했습니다.")
+            result.append({"page": index + 1, "text": text[:MAX_PAGE_CHARS], "truncated": count > MAX_PAGE_CHARS or len(text) > MAX_PAGE_CHARS})
         return result
 
 

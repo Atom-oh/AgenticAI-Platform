@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import date
 
@@ -82,6 +83,8 @@ def normalize_request(value):
         clean = {key: transition[key] for key in ("id", "from", "to")}
         clean.update({key: text(transition.get(key, ""), 1000) for key in ("action", "condition", "retention")})
         result["transitions"].append(clean)
+    if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) > 64_000:
+        raise ValueError("변경 요청은 64KB 이내로 나누어 등록하세요.")
     return result
 
 
@@ -109,13 +112,12 @@ def coverage_issues(contract):
             issues.append(f"{transition['id']}: 이동 행동·조건·값 유지 기준을 정하세요.")
         def observes_link(rule):
             steps = rule["steps"]
-            start = next((i for i, step in enumerate(steps) if step["action"] == "expectVisible"
-                          and step["target"] == transition["from"] and step.get("value") is True), None)
-            end = next((i for i, step in enumerate(steps) if step["action"] == "expectVisible"
-                        and step["target"] == transition["to"] and step.get("value") is True and
-                        (start is not None and i > start)), None)
-            return start is not None and end is not None and any(
-                step["action"] in ("click", "press", "select", "check") for step in steps[start + 1:end])
+            starts = [i for i, step in enumerate(steps) if step["action"] == "expectVisible"
+                      and step["target"] == transition["from"] and step.get("value") is True]
+            ends = [i for i, step in enumerate(steps) if step["action"] == "expectVisible"
+                    and step["target"] == transition["to"] and step.get("value") is True]
+            return any(start < end and any(step["action"] in ("click", "press", "select", "check", "fill")
+                       for step in steps[start + 1:end]) for start in starts for end in ends)
         if not any(rule.get("transitionId") == transition["id"] and observes_link(rule) for rule in rules):
             issues.append(f"{transition['id']}: 출발 화면 → 조작 → 도착 화면을 확인하는 필수 규칙이 필요합니다.")
     if request.get("baseline") and not request["allowedFiles"]:
@@ -123,12 +125,16 @@ def coverage_issues(contract):
     return issues
 
 
-def baseline_project(storage, owner, request):
+def baseline_project(storage, owner, request, *, checks=None, seen=None):
     """Resolve within the authenticated storage scope; never accept source bytes."""
     from workspace.react_artifacts import read_archive
     reference = request.get("baseline")
     if not reference:
         return None
+    seen = set() if seen is None else seen
+    if reference["runId"] in seen or len(seen) >= 24:
+        raise ValueError("기준 시안의 순환 참조 또는 최대 24단계 의존성을 확인하세요.")
+    seen.add(reference["runId"])
     run = storage.get(owner, "run", reference["runId"])
     if not run:
         raise ValueError("현재 작업 공간에서 기준 시안을 찾을 수 없습니다.")
@@ -141,15 +147,35 @@ def baseline_project(storage, owner, request):
             or (contract.get("approval") or {}).get("hash") != run.get("contractHash")
             or any(not row.get(key) or approval.get(key) != row[key] for key in ("sourceHash", "bundleHash", "catalogHash"))):
         raise ValueError("기준 시안의 현재 승인과 소스 버전을 확인하세요.")
+    from workspace.rules import contract_hash
+    if contract_hash(run.get("contract", {})) != run["contractHash"] or contract_hash(contract) != run["contractHash"]:
+        raise ValueError("기준 시안의 검증 기준이 달라졌습니다.")
+    if checks is not None:
+        checks.extend([{"owner": owner, "kind": "run", "id": run["id"], "version": run["version"]},
+                       {"owner": owner, "kind": "contract", "id": contract["id"], "version": contract["version"]}])
     if row["sourceHash"] != reference["sourceHash"]:
         raise ValueError("선택한 기준 소스가 바뀌었습니다. 기준 시안을 다시 확인하세요.")
+    if run.get("productId"):
+        product = storage.get(owner, "product", run["productId"])
+        if (not run.get("projectId") or owner != "project:" + run["projectId"] or not product
+                or product.get("publishedGuidelineId") != run.get("guidelineId")
+                or product.get("ontologyHash") != run.get("ontologyHash")):
+            raise ValueError("기준 시안의 상품 지침이 변경되었습니다. 현재 지침으로 재검증한 기준을 선택하세요.")
+        if checks is not None:
+            checks.append({"owner": owner, "kind": "product", "id": product["id"], "version": product["version"]})
     key = row.get("sourceKey")
     if not key or not storage.owns_key(owner, key) or storage.blob_info(key)["size"] > 8_000_000:
         raise ValueError("기준 소스의 비공개 경로·크기를 확인하세요.")
     source = storage.get_blob(key)
     if hashlib.sha256(source).hexdigest() != row.get("sourceArchiveSha256"):
         raise ValueError("기준 소스 파일이 변경되었습니다.")
-    return read_archive(source, row["sourceHash"])
+    project = read_archive(source, row["sourceHash"])
+    parent_request = run.get("contract", {}).get("changeRequest", {})
+    parent = baseline_project(storage, owner, parent_request, checks=checks, seen=seen)
+    if parent:
+        from workspace.react_artifacts import generated_files
+        enforce_scope(parent_request, generated_files(parent), generated_files(project))
+    return project
 
 
 def file_changes(before, after):

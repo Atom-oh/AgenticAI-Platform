@@ -44,7 +44,8 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const sendingRef = useRef(false);
   const [error, setError] = useState('');
   const [runId, setRunId] = useState(initialRunId || '');
-  const [run, setRun] = useState<Run | null>(null);
+  const [loadedRun, setRun] = useState<Run | null>(null);
+  const run = loadedRun?.id === runId && (!product || loadedRun.productId === product.id) ? loadedRun : null;
   const [roundNumber, setRoundNumber] = useState(initialRound || 0);
   const [pageId, setPageId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -61,7 +62,13 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const currentRunVersion = runs.find(item => item.id === runId)?.version;
   useEffect(() => () => action.current?.abort(), []);
   useEffect(() => {
-    if (initialRunId) { setRunId(initialRunId); setRoundNumber(initialRound || 0); }
+    if (initialRunId) {
+      const different = liveRun.current !== initialRunId;
+      setRunId(initialRunId); setRoundNumber(previous => initialRound || (different ? 0 : previous));
+      if (different) {
+        setBatchId(''); setBatch(null); setBatchRuns([]); setRun(null); setPageId(''); setInstruction('');
+      }
+    }
   }, [initialRunId, initialRound]);
   useEffect(() => {
     const controller = new AbortController();
@@ -76,7 +83,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       if (controller.signal.aborted) return;
       if (value.batch?.id !== batchId || !Array.isArray(value.batch.runIds) || !Array.isArray(value.runs)) throw new Error('저장된 시안 비교를 확인하지 못했습니다.');
       setBatch(value.batch); setBatchRuns(value.runs);
-      setRunId(previous => value.batch.runIds.includes(previous) ? previous : value.batch.baselineRunId || value.batch.runIds[0] || '');
+      setRunId(previous => previous || value.batch.baselineRunId || value.batch.runIds[0] || '');
     }).catch(reason => { if (!controller.signal.aborted) setBatchError(messageOf(reason)); });
     return () => controller.abort();
   }, [workspaceClient, batchId, refreshKey]);
@@ -315,7 +322,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         {downloading.error && <Notice error>{downloading.error}</Notice>}
         <VerificationLoop run={run?.id === runId ? run : null} round={run?.id === runId ? selectedRound : undefined}
           evidence={run?.id === runId ? currentEvidence : undefined} />
-        {run?.contract?.requiredStates?.length ? <StateEvidence contract={run.contract}
+        {run?.contract && (run.contract.requiredStates?.length || run.contract.changeRequest) ? <StateEvidence contract={run.contract}
           evidence={verification.nodes.find(node => node.id === 'evidence')?.state === 'recorded' ? currentEvidence : undefined} /> : null}
         {!run ? <div className="ws-empty">{runId ? '시안 기록을 불러오고 있습니다…' : '확인할 시안을 선택하세요.'}</div> : <>
           <div className="ws-section-heading"><div><h2>{inspectingOriginal ? '원본 HTML 검사' : '라운드별 결과 확인'}</h2><p>규칙 버전 {run.contractVersion} · {stateLabel(run.status)}</p></div>

@@ -35,7 +35,9 @@ expectStyle(string,property:color|backgroundColor|fontSize|fontWeight|fontFamily
 borderRadius|padding|margin|gap|minHeight|height|width|borderColor|borderWidth|display).
 For design-token/style guides, include actual computed-style assertions, e.g.
 expectStyle target=primaryButton property=backgroundColor value=#008485.
-Every rule needs a real expectation. Max 12 rules, max 12 steps each.
+Every rule needs a real expectation. Max 20 rules, max 20 steps each.
+If the requested coverage does not fit, retain it and explain the required task
+split in unresolved. Never silently remove required screens, states or transitions.
 When requiredStates are supplied, cover every requested state with a required
 rule whose scenario is that exact state ID. Supported IDs: entry,input,consent,
 error,empty,loading,back,cancel,complete. Include meaningful actions and
@@ -425,7 +427,7 @@ class Worker:
                 warnings.append(f"{asset['name']}: 원본 보관만 지원하며 자동 해석하지 못했습니다.")
             if analysis.get("parseStatus") == "partial":
                 warnings.extend(f"{asset['name']}: {warning}" for warning in analysis.get("warnings", []))
-            if (len(text) > 60_000 and not asset.get("guidelinesKey")) or analysis.get("truncated"):
+            if not asset.get("guidelinesKey") and (len(text) > 60_000 or analysis.get("truncated")):
                 warnings.append(f"{asset['name']}: AI 문맥에는 추출 텍스트 앞부분만 포함됩니다. 적용 범위를 확인하세요.")
             excerpt = text if asset.get("guidelinesKey") else text[:60000]
             block = f"자산 ID: {asset['id']}\n이름: {asset['name']}\n용도: {asset.get('purpose')}\n추출 내용:\n{excerpt}"
@@ -533,7 +535,9 @@ class Worker:
         proposal["unresolved"] += notice_coverage_issues(proposal, ontology["pages"])
         normalized = validate_contract(proposal, asset_texts=texts)
         from workspace.guidelines import validate_citations, validate_selection
-        _, pages = validate_selection(self.storage, owner, source["assetSnapshots"], normalized.get("guideRefs", []))
+        refs, pages = validate_selection(self.storage, owner, source["assetSnapshots"], normalized.get("guideRefs", []))
+        if refs:
+            normalized["guideRefs"] = refs
         validate_citations(normalized, pages)
         record = self.storage.put(owner, "contract", {**normalized, "id": uuid.uuid4().hex, "status": "draft",
                                                       "model": info.get("modelId", source["model"]), "usage": usage})
@@ -548,6 +552,8 @@ class Worker:
         if run.get("outputType") == "react":
             from workspace.react_generation import run_react
             return run_react(self, owner, run, job, lambda_context)
+        from workspace.criteria import resolve_generation_context
+        resolve_generation_context(self.storage, owner, run, "generate")
         approved = validate_contract(run["contract"])
         if approved["unresolved"] or contract_hash(approved) != run["contractHash"]:
             raise ValueError("확정된 동작 규칙이 변경되었거나 미정의 항목이 있습니다.")

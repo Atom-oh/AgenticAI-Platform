@@ -564,26 +564,38 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
 export default function Portal() {
   const [area, setArea] = useState<'reference' | 'guides'>(() =>
     new URLSearchParams(location.hash.split('?')[1]).get('tab') === 'guides' ? 'guides' : 'reference');
+  const [openedGuides, setOpenedGuides] = useState(area === 'guides');
+  useEffect(() => {
+    const changed = () => {
+      const next = new URLSearchParams(location.hash.split('?')[1]).get('tab') === 'guides' ? 'guides' : 'reference';
+      setArea(next); if (next === 'guides') setOpenedGuides(true);
+    };
+    window.addEventListener('hashchange', changed);
+    window.addEventListener('popstate', changed);
+    return () => { window.removeEventListener('hashchange', changed); window.removeEventListener('popstate', changed); };
+  }, []);
   const chooseArea = (next: 'reference' | 'guides') => {
     const params = new URLSearchParams(location.hash.split('?')[1]);
-    for (const key of ['step', 'runId', 'round', 'contractId', 'assetId', 'id', 'component']) params.delete(key);
+    for (const key of ['step', 'runId', 'round', 'assetId', 'id', 'component']) params.delete(key);
     if (next === 'guides') { params.set('tab', 'guides'); params.set('step', 'assets'); } else params.delete('tab');
-    history.replaceState(null, '', '#/portal' + (params.size ? '?' + params.toString() : ''));
+    location.hash = '#/portal' + (params.size ? '?' + params.toString() : '');
     setArea(next);
+    if (next === 'guides') setOpenedGuides(true);
   };
   return <div>
     <nav className="portal-area-switch" aria-label="UX 자산 작업 영역">
       <button aria-pressed={area === 'reference'} onClick={() => chooseArea('reference')}>컴포넌트 · 설계 자산</button>
       <button aria-pressed={area === 'guides'} onClick={() => chooseArea('guides')}>프로젝트 UX 기준·자산</button>
     </nav>
-    {area === 'guides' ? <Workspace initialStep="guides" /> : <ReferencePortal />}
+    {openedGuides && <div hidden={area !== 'guides'}><Workspace initialStep="guides" /></div>}
+    {area === 'reference' && <ReferencePortal />}
   </div>;
 }
 
 function referenceHash(patch: Record<string, string> = {}) {
   const current = new URLSearchParams(location.hash.split('?')[1]);
   const params = new URLSearchParams(patch);
-  for (const key of ['projectId', 'productId']) {
+  for (const key of ['projectId', 'productId', 'contractId']) {
     const value = current.get(key); if (value) params.set(key, value);
   }
   return '#/portal' + (params.size ? '?' + params.toString() : '');

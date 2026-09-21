@@ -67,6 +67,39 @@ def test_project_request_can_be_registered_before_product_publication_but_not_ap
     assert status == 409 and refused["code"] == "guideline-required"
 
 
+@pytest.mark.parametrize("output_type", ["html", "react"])
+def test_queued_generation_rechecks_revoked_project_membership(output_type):
+    from test_workspace_collaboration import DRAFT
+    from test_workspace_project_http import make_api, request as scoped, shared
+    from workspace.worker import Worker
+    api = make_api()
+    project = shared(api)
+    _, result = scoped(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = result["product"]
+    _, published = scoped(api, "POST", f"/products/{product['id']}/publish", {"version": product["version"]},
+                          actor="bob", project=project["id"])
+    rule = {"id": "Notice", "title": "Required notice", "source": {"kind": "manual"}, "steps": [
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, result = scoped(api, "POST", "/contracts", {"title": "Revocation check", "productId": product["id"], "rules": [rule]},
+                            actor="carol", project=project["id"])
+    assert status == 201, result
+    saved = result["contract"]
+    status, result = scoped(api, "POST", f"/contracts/{saved['id']}/approve", {"version": saved["version"]},
+                            actor="carol", project=project["id"])
+    assert status == 200, result
+    status, queued = scoped(api, "POST", "/runs", {"contractId": saved["id"], "contractVersion": result["contract"]["version"],
+        "outputType": output_type, "requestId": "revoked-" + output_type}, actor="carol", project=project["id"])
+    assert status == 202, queued
+    owner = "project:" + project["id"]
+    current = api.storage.get(owner, "project", project["id"])
+    members = {key: member for key, member in current["members"].items() if key != "carol"}
+    assert scoped(api, "PUT", f"/projects/{project['id']}/members", {"version": current["version"], "members": members})[0] == 200
+    calls = []
+    worker = Worker(storage=api.storage, model_call=lambda *args: calls.append("model"), react_call=lambda *args: calls.append("react"))
+    assert worker.handle({"owner": owner, "jobId": queued["job"]["id"]})["status"] == "failed"
+    assert calls == []
+
+
 def test_independent_screen_states_and_navigation_order_are_required():
     value = validate_contract(contract())
     assert state_coverage_issues(value) == []
@@ -76,6 +109,11 @@ def test_independent_screen_states_and_navigation_order_are_required():
     changed = copy.deepcopy(value)
     changed["rules"][-1]["steps"].reverse()
     assert any("next-step" in issue for issue in state_coverage_issues(changed))
+    popup = copy.deepcopy(value)
+    popup["rules"][-1]["steps"].insert(1, {"action": "expectVisible", "target": "complete", "value": True})
+    assert state_coverage_issues(popup) == []
+    popup["rules"][-1]["steps"][2] = {"action": "fill", "target": "code", "value": "123"}
+    assert state_coverage_issues(popup) == []
     changed = copy.deepcopy(value)
     changed["rules"][-1]["required"] = False
     assert any("next-step" in issue for issue in state_coverage_issues(changed))
@@ -100,6 +138,8 @@ def test_mapping_schedule_and_scope_edits_invalidate_exact_approval():
     {"baseline": {"runId": "other", "round": True, "sourceHash": "a" * 64}},
     {"screens": [{"id": "bad/id", "title": "Bad", "kind": "page", "change": "add"}]},
     {"transitions": [{"id": "link", "from": "entry", "to": "unknown"}]},
+    {"allowedFiles": ["package.json"]}, {"allowedFiles": ["package-lock.json"]},
+    {"allowedFiles": ["compile.cjs"]}, {"allowedFiles": ["ui/index.tsx"]},
 ])
 def test_invalid_scope_is_rejected(patch):
     with pytest.raises(ValueError):
@@ -131,6 +171,10 @@ def test_scope_enforces_exact_unchanged_bytes_and_records_added_modified_deleted
     assert all("keep" not in item["path"] for item in changes)
     with pytest.raises(ValueError, match="범위 밖"):
         enforce_scope(value, before, {**after, "src/pages/keep.tsx": "unrelated edit"})
+    with pytest.raises(ValueError, match="범위 밖"):
+        enforce_scope(value, before, {**after, "src/pages/unrequested.tsx": "extra"})
+    with pytest.raises(ValueError, match="범위 밖"):
+        enforce_scope(value, before, {path: code for path, code in after.items() if path != "src/pages/keep.tsx"})
 
 
 def test_model_cannot_drop_or_rewrite_request_scope():
@@ -151,11 +195,13 @@ def test_model_cannot_drop_or_rewrite_request_scope():
 
 
 def test_baseline_cannot_be_read_from_another_storage_scope():
-    _, api, _ = environment()
+    store, api, _ = environment()
+    store.put("other-owner", "run", {"id": "someone-elses-run", "outputType": "react"})
     value = contract()
     value["changeRequest"]["baseline"] = {"runId": "someone-elses-run", "round": 1, "sourceHash": "a" * 64}
-    status, _ = request(api, "POST", "/contracts", value)
-    assert status == 400
+    status, result = request(api, "POST", "/contracts", value)
+    assert status == 400 and "현재 작업 공간" in result["error"]
+    assert request(api, "GET", "/runs/someone-elses-run/baseline")[0] == 404
 
 
 def source(status="완료"):
@@ -163,8 +209,9 @@ def source(status="완료"):
             '\npver: V1\n`;\nexport default function Example(){return <HxButton/>;}').encode()
 
 
-def test_source_txt_is_not_prose_and_deleted_source_cannot_enter_generation_context():
-    analysis = extract_file("UX-1.txt", source("삭제"))
+@pytest.mark.parametrize("status", ["삭제", "폐기", "DELETED", "Deprecated", " discarded "])
+def test_source_txt_is_not_prose_and_deleted_source_cannot_enter_generation_context(status):
+    analysis = extract_file("UX-1.txt", source(status))
     pack = analysis["guidelinePack"]
     item = pack["sources"][0]
     assert item["category"] == "source" and item["metadata"]["sid"] == "UX-1"
@@ -208,6 +255,36 @@ def test_unsafe_zip_never_creates_a_reference_pack():
             archive.writestr(name, source())
         with pytest.raises(ValueError):
             extract_file("references.zip", output.getvalue())
+
+
+def test_shared_string_expansion_is_bounded_before_building_a_workbook_page():
+    from workspace.prepare_sources import workbook_pages
+    output = io.BytesIO()
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xl/sharedStrings.xml", f'<sst xmlns="{ns}"><si><t>{"x" * 10000}</t></si></sst>')
+        cells = "".join(f'<c r="A{i}" t="s"><v>0</v></c>' for i in range(1, 1000))
+        archive.writestr("xl/worksheets/sheet1.xml", f'<worksheet xmlns="{ns}"><sheetData><row r="1">{cells}</row></sheetData></worksheet>')
+    with pytest.raises(ValueError, match="workbook-extraction-limit"):
+        workbook_pages(output.getvalue())
+
+
+def test_pdf_in_zip_uses_the_bounded_child_without_inheriting_credentials(monkeypatch):
+    from workspace import source_parse_task
+    from test_workspace_guidelines import pdf_bytes
+    original = source_parse_task.subprocess.run
+    environments = []
+    def execute(*args, **kwargs):
+        environments.append(kwargs["env"])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(source_parse_task.subprocess, "run", execute)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-must-not-enter-parser")
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("guide.pdf", pdf_bytes())
+    result = extract_file("guides.zip", output.getvalue())
+    assert result["guidelinePack"]["sources"][0]["pages"][0]["text"].strip() == "Guidance page 1"
+    assert environments and all("AWS_SECRET_ACCESS_KEY" not in env for env in environments)
 
 
 def test_real_delta_generation_rejects_unrelated_file_edits_and_releases_exact_handoff():
@@ -269,3 +346,17 @@ def test_real_delta_generation_rejects_unrelated_file_edits_and_releases_exact_h
     assert manifest["handoff"]["frontendAcceptance"] == "not-recorded"
     assert all(item["path"] != "src/logic/keep.ts" for item in manifest["handoff"]["sourceChanges"])
     assert outputs == [], "release rebuild does not generate source"
+    # Invalidation after reads must fail the approval transaction without a write.
+    before_version = store.get("designer", "run", changed["id"])["version"]
+    def invalidate_base():
+        old = store.get("designer", "contract", base["contractId"])
+        store.put("designer", "contract", {**old, "status": "draft"}, old["version"])
+    store.table().before_transaction = invalidate_base
+    status, _ = request(api, "POST", f"/runs/{changed['id']}/approve", {"round": 2, "contractVersion": changed["contractVersion"],
+        **{key: row[key] for key in ("artifactSha256", "sourceHash", "bundleHash")}})
+    assert status == 409
+    assert store.get("designer", "run", changed["id"])["version"] == before_version
+    next_request = copy.deepcopy(delta)
+    next_request["changeRequest"]["baseline"] = {"runId": changed["id"], "round": 2, "sourceHash": row["sourceHash"]}
+    assert request(api, "POST", "/contracts", next_request)[0] == 400
+    assert request(api, "GET", f"/runs/{changed['id']}/baseline")[0] == 409

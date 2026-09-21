@@ -70,6 +70,9 @@ test('change request preserves baseline, file scope and screen identities throug
       await page.addStyleTag({ content: fs.readFileSync(path.join(root, 'src/workspace/workspace.css'), 'utf8') });
       await page.addScriptTag({ content: bundle.outputFiles[0].text });
       await page.getByLabel('사용자 목적·완료 조건').fill('기존 가입 순서를 유지하고 두 화면과 배너 문구를 변경합니다.');
+      await page.getByRole('button', { name: '설계 단계 전환' }).click();
+      await page.getByLabel('화면 요소', { exact: true }).first().fill('담당자가 편집한 검사 대상');
+      await page.getByRole('button', { name: '설계 단계 전환' }).click();
       await page.getByRole('button', { name: '두 화면·한 슬롯으로 범위 잡기' }).click();
       assert.equal(await page.locator('.ws-scope-card').count(), 3);
       await page.getByLabel('적용 채널').fill('합성 모바일 앱');
@@ -80,12 +83,13 @@ test('change request preserves baseline, file scope and screen identities throug
       assert.equal(await page.getByLabel('src/pages/keep.tsx', { exact: true }).isChecked(), false);
       await page.getByRole('button', { name: '업무 요청 저장', exact: true }).click();
       await page.getByText(/저장된 규칙 v1/).waitFor();
-      assert.equal(saved.rules.length, 0);
+      assert.equal(saved.rules.length, 1);
+      assert.equal(saved.rules[0].steps[0].targetLabel, '담당자가 편집한 검사 대상');
       assert.deepEqual(saved.changeRequest.allowedFiles, ['src/App.tsx']);
       assert.equal(saved.changeRequest.screens.filter(screen => screen.kind === 'slot').length, 1);
       await page.getByRole('button', { name: '설계 단계 전환' }).click();
       await page.getByRole('button', { name: '선택한 파일로 규칙 제안받기' }).click();
-      await page.locator('.ws-rule-card').first().waitFor();
+      await page.getByText('AI 제안은 아직 승인되지 않았습니다. 근거와 단계를 확인하세요.', { exact: true }).waitFor();
       assert.equal(proposal.changeRequest.baseline.sourceHash, 'a'.repeat(64));
       assert.equal(await page.locator('.ws-rule-readable').count(), 3);
       assert.equal(await page.locator('.ws-rule-details[open]').count(), 0);

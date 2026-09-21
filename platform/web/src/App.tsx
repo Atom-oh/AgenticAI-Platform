@@ -104,8 +104,13 @@ export default function App() {
   const go = (v: string) => {
     const current = new URLSearchParams(location.hash.split('?')[1] || '');
     const projectId = current.get('projectId') || current.get('project');
-    location.hash = '#/' + v + (projectId && (v.startsWith('wb-') || ['studio', 'portal', 'documents', 's1'].includes(v))
-      ? '?projectId=' + encodeURIComponent(projectId) : '');
+    const next = new URLSearchParams();
+    if (projectId && (v.startsWith('wb-') || ['studio', 'portal', 'documents', 's1'].includes(v)))
+      next.set('projectId', projectId);
+    if (['studio', 'portal'].includes(v)) {
+      for (const key of ['productId', 'contractId']) if (current.get(key)) next.set(key, current.get(key)!);
+    }
+    location.hash = '#/' + v + (next.size ? '?' + next.toString() : '');
   };
   const [cfg, setCfg] = useState<{ graphBackend?: string; planeDeployed?: boolean } | null>(null);
   const [route, setRoute] = useState<WsEvent | null>(null);   // traces(limit 1, 플레인 호출 없음) → llmRoute · genModel · plane
