@@ -56,6 +56,16 @@ def test_archived_readable_source_keeps_canonical_change_detail_available(wb):
     wb.storage.put(wb.owner, "asset", {**source, "archived": True}, source["version"])
     assert call(wb, "GET", f"changes/{change['id']}")["change"]["id"] == change["id"]
     assert call(wb, "GET", f"changes/{change['id']}/impact")["impact"]["impactHash"] == analyzed["impact"]["impactHash"]
+    report = call(wb, "POST", "reports", {"requestId": "historical-report", "type": "change-impact",
+                                       "changeId": change["id"]})["report"]
+    assert call(wb, "GET", f"reports/{report['id']}/document")["markdown"]
+    with pytest.raises(CollaborationError):
+        call(wb, "POST", f"reports/{report['id']}/approve",
+             {"version": report["version"], "contentHash": report["contentHash"]})
+    current = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**current, "accessRevoked": True}, current["version"])
+    with pytest.raises(CollaborationError):
+        call(wb, "GET", f"reports/{report['id']}/document")
 
 
 def test_non_owner_cannot_migrate_or_overwrite_canonical_authority(wb):
@@ -111,6 +121,37 @@ def test_missing_legacy_authority_cannot_publish_an_unfenced_empty_import(wb):
         import_legacy(context(wb), {"requestId": "empty", "expectedGeneration": None})
     assert error.value.code == "legacy-not-indexed"
     assert wb.storage.get(wb.owner, "ontology", "project-current") is None
+
+
+def test_scoped_import_has_stable_separate_partitions_and_discloses_cross_scope_edges(wb):
+    from workbench import knowledge
+    indexed(wb)
+    legacy = knowledge.legacy_graph(context(wb))
+    relation = next(edge for edge in legacy["edges"] if edge["rel"] == "DEPENDS_ON")
+    first = import_legacy(context(wb), {"requestId": "scope-one", "expectedGeneration": None,
+                                       "nodeIds": [relation["src"]]})
+    second = import_legacy(context(wb), {"requestId": "scope-two", "expectedGeneration": first["generation"],
+                                        "nodeIds": [relation["dst"]]})
+    assert first["partitionId"] != second["partitionId"]
+    assert "outside-selected-legacy-scope" in first["coverage"]["unknown"]
+    again = import_legacy(context(wb), {"requestId": "scope-again", "expectedGeneration": second["generation"],
+                                       "nodeIds": [relation["src"]]})
+    assert first["partitionId"] == again["partitionId"]
+    assert len(Ontology(context(wb)).read()["nodes"]) == 2
+
+
+@pytest.mark.parametrize("coverage", [{"truncated": True}, {"conflictingNodeIds": 1}])
+def test_incomplete_legacy_snapshots_cannot_replace_published_mappings(wb, monkeypatch, coverage):
+    from workbench import knowledge
+    indexed(wb)
+    first = import_legacy(context(wb), {"requestId": "whole", "expectedGeneration": None})
+    old = knowledge.legacy_graph(context(wb))
+    old["coverage"].update(coverage)
+    monkeypatch.setattr(knowledge, "legacy_graph", lambda ctx: old)
+    with pytest.raises(CollaborationError) as error:
+        import_legacy(context(wb), {"requestId": "incomplete", "expectedGeneration": first["generation"]})
+    assert error.value.code == "legacy-import-incomplete"
+    assert Ontology(context(wb)).current()["generation"] == first["generation"]
 
 
 def test_parallel_impact_evidence_and_prior_truncation_survive_projection():

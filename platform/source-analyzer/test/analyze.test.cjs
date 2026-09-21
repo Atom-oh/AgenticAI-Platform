@@ -5,6 +5,25 @@ const text = (path, source, kind = 'code') => ({ path, kind, text: source, sha25
 const asset = path => ({ path, kind: 'asset', sha256: sha(path) });
 const request = files => ({ schemaVersion: 1, files });
 
+test('generic call noise cannot starve later dynamic dependency observations', () => {
+  const result = analyze(request([
+    text('a.ts', 'run();'.repeat(4500)),
+    text('z.ts', 'import(nextModule);'),
+  ]));
+  assert.ok(result.unresolved.some(item => item.path === 'z.ts' && item.reason === 'dynamic-or-commonjs-dependency'));
+  assert.equal(result.unresolved.find(item => item.path === 'a.ts' && item.reason === 'call-semantics-not-inspected').count, 4500);
+  assert.equal(result.coverage.truncated, false);
+});
+
+test('dropped locations identify every affected file when the reference budget fills', () => {
+  const result = analyze(request([
+    text('a.ts', 'import("./missing");'.repeat(4000)),
+    text('z.ts', 'import(nextModule);'),
+  ]));
+  assert.equal(result.coverage.truncated, true);
+  assert.ok(result.coverage.truncatedFiles.includes('z.ts'));
+});
+
 test('import equals and import type retain literal dependencies; namespace aliases remain unknown', () => {
   const result = analyze(request([
     text('App.tsx', 'import Button = require("./Button");type Props = import("./Button").Props;export const App=()=> <Button/>'),
@@ -100,6 +119,26 @@ test('uninspected calls, constructors and HTML navigation never claim full cover
     assert.ok(html.unresolved.some(item => item.reason === reason));
 });
 
+test('JSX spreads, templates and opaque SVGs disclose uninspected dependencies', () => {
+  const result = analyze(request([
+    text('App.tsx', 'export const Image=<img {...{src:"./image.svg"}}/>;export const Box=styled.div`background:url("./image.svg")`;'),
+    asset('image.svg'),
+  ]));
+  for (const reason of ['jsx-spread-not-inspected', 'tagged-template-transform-not-inspected', 'opaque-svg-dependencies-not-inspected'])
+    assert.ok(result.unresolved.some(item => item.reason === reason));
+  assert.equal(result.coverage.complete, false);
+});
+
+test('namespace and destructured exports are recorded; CommonJS exports remain unknown', () => {
+  const result = analyze(request([
+    text('index.ts', 'export * as UI from "./ui";export const {x, y: renamed}={x:1,y:2};'),
+    text('ui.ts', 'export const Button=1;'),
+    text('legacy.js', 'module["exports"]={Button:1};'),
+  ]));
+  assert.deepEqual(result.exports.filter(item => item.path === 'index.ts').map(item => item.name).sort(), ['UI', 'renamed', 'x']);
+  assert.ok(result.unresolved.some(item => item.reason === 'commonjs-export-bindings-not-enumerated'));
+});
+
 test('real TS parser connects imports, JSX symbols, image imports and CSS resources', () => {
   const input = request([
     text('src/App.tsx', `import {Button as Action} from './Button';
@@ -111,7 +150,7 @@ export default function App(){return <><Action/><img src={hero}/></>}`),
     asset('images/hero.png'),
   ]);
   const result = analyze(input);
-  assert.equal(result.coverage.complete, true);
+  assert.equal(result.coverage.complete, false);
   assert.equal(result.coverage.runtimeComplete, false);
   assert.ok(result.references.some(r => r.kind === 'jsx-use' && r.symbol === 'Button' && r.localName === 'Action' &&
     r.resolution.targetPath === 'src/Button.tsx' && r.line === 4));
@@ -136,7 +175,7 @@ test('declared aliases resolve exact manifest files; packages require a pinned i
     asset('images/hero.png')]);
   input.resolver = { aliases: { '@images/*': 'images/*' }, packages: { react: { version: '18.3.1', sha256: sha('approved-package') } } };
   const result = analyze(input);
-  assert.equal(result.coverage.complete, true);
+  assert.equal(result.coverage.complete, false);
   assert.ok(result.references.some(r => r.resolution.status === 'approved-package' && r.resolution.package === 'react'));
   input.resolver.packages.react.sha256 = 'invented';
   assert.throws(() => analyze(input), /identity/);
@@ -177,7 +216,7 @@ test('JSON reference fields are an explicit resolver contract, not a search over
   const result = analyze(input);
   assert.equal(result.references.length, 1);
   assert.equal(result.references[0].resolution.targetPath, 'hero.png');
-  assert.equal(result.coverage.complete, true);
+  assert.equal(result.coverage.complete, false);
 });
 
 test('source identity, case collisions, source kinds and budgets are rejected before analysis', () => {

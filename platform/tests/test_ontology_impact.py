@@ -99,3 +99,27 @@ def test_superseded_source_authority_never_retains_approved_item_evidence():
                          "unknown": ["historical-source-revisions"]}
     result = run(value)
     assert all(item["evidenceKind"] == "candidate" and item["staleWitness"] for item in result["items"])
+
+
+def test_converging_paths_and_cycles_retain_all_authorized_evidence():
+    value = graph([node(key) for key in ["icon", "b", "c", "a"]],
+                  [edge(name, src, dst, sourceRefs=[ref(name)])
+                   for name, src, dst in [("bi", "b", "icon"), ("ci", "c", "icon"),
+                                          ("ab", "a", "b"), ("ac", "a", "c"), ("ba", "b", "a")]])
+    result = run(value)
+    item = next(item for item in result["items"] if item["nodeId"] == "a")
+    assert set(item["witnessEdges"]) == {"bi", "ci", "ab", "ac", "ba"}
+    assert {r["sourceId"] for r in item["sourceRefs"]} == {"icon", "a", "b", "c", "bi", "ci", "ab", "ac", "ba"}
+    hidden = run(value, can_read=lambda refs: all(r["sourceId"] != "ac" for r in refs))
+    assert "ac" not in next(item for item in hidden["items"] if item["nodeId"] == "a")["witnessEdges"]
+
+
+def test_change_kind_and_source_revisions_bind_the_receipt_even_with_identical_results():
+    value = fixture()
+    generation = schema.digest(value)
+    change = {"id": "same-id", "kind": "asset", "baseGeneration": generation, "nodeIds": ["icon"]}
+    receipts = [analyze(value, request, generation=generation, can_read=lambda refs: True)
+                for request in [change, {**change, "kind": "code"}, {**change, "oldSource": ref("old")},
+                                {**change, "newSource": ref("new")}]]
+    assert len({receipt["hash"] for receipt in receipts}) == 4
+    assert receipts[0]["items"] == receipts[1]["items"]

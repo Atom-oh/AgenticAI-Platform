@@ -75,10 +75,12 @@ function prepare(input) {
 function analyze(input) {
   const { files, resolver, bytes } = prepare(input);
   const references = [], exports = [], unresolved = [], diagnostics = [];
+  const truncatedFiles = new Set(), observations = new Map();
   let visited = 0, truncated = false;
+  const truncate = file => { truncated = true; truncatedFiles.add(typeof file === 'string' ? file : file.path); };
   const addExport = value => {
     if (exports.length < LIMITS.references) exports.push(value);
-    else truncated = true;
+    else truncate(value.path);
   };
   const virtual = new Map([...files.values()].filter(file => file.kind === 'code')
     .map(file => ['/analysis/' + file.path, ts.createSourceFile('/analysis/' + file.path, file.text, ts.ScriptTarget.Latest, true)]));
@@ -95,8 +97,18 @@ function analyze(input) {
   });
   const checker = program.getTypeChecker();
   const problem = (file, reason, line = 1, column = 0) => {
+    // Generic calls are counted once per file/reason so they cannot consume
+    // the entire location-bound dependency budget before later files run.
+    const aggregate = ['call-semantics-not-inspected', 'constructor-semantics-not-inspected'].includes(reason);
+    const key = file.path + ':' + reason;
+    if (aggregate && observations.has(key)) { observations.get(key).count++; return; }
+    if (aggregate) {
+      const value = { path: file.path, sourceHash: file.sha256, line, column, reason, count: 1 };
+      observations.set(key, value);
+      return;
+    }
     if (unresolved.length < LIMITS.references) unresolved.push({ path: file.path, sourceHash: file.sha256, line, column, reason });
-    else truncated = true;
+    else truncate(file);
   };
   function resolve(from, specifier, resourceRelative = false) {
     if (typeof specifier !== 'string' || !specifier || specifier.length > 1024) return { status: 'unresolved', reason: 'invalid-reference' };
@@ -135,14 +147,17 @@ function analyze(input) {
       ...(specifier !== withoutQuery ? { transform: 'unverified-query-or-fragment' } : {}) };
   }
   function reference(file, kind, specifier, at, detail = {}) {
-    if (references.length >= LIMITS.references) { truncated = true; return; }
+    if (references.length >= LIMITS.references) { truncate(file); return; }
     const resolution = resolve(file.path, specifier, kind.startsWith('style-') || kind === 'json-asset' || kind === 'html-resource' || kind === 'module-url');
     if (resolution.status === 'unresolved') problem(file, resolution.reason, at.line, at.column);
     if (resolution.transform) problem(file, resolution.transform, at.line, at.column);
     references.push({ path: file.path, sourceHash: file.sha256, kind, specifier, ...at, ...detail, resolution });
   }
   for (const file of [...files.values()].sort((a, b) => compare(a.path, b.path))) {
-    if (file.kind === 'asset') continue;
+    if (file.kind === 'asset') {
+      if (file.path.toLowerCase().endsWith('.svg')) problem(file, 'opaque-svg-dependencies-not-inspected');
+      continue;
+    }
     if (file.kind === 'code') {
       const source = program.getSourceFile('/analysis/' + file.path);
       const position = node => {
@@ -155,6 +170,12 @@ function analyze(input) {
         problem(file, 'parse-error'); continue;
       }
       const imports = new Map();
+      function exportedBinding(binding) {
+        if (ts.isIdentifier(binding)) addExport({ path: file.path, name: binding.text, ...position(binding) });
+        else if (ts.isObjectBindingPattern(binding) || ts.isArrayBindingPattern(binding)) {
+          for (const element of binding.elements) if (ts.isBindingElement(element)) exportedBinding(element.name);
+        }
+      }
       for (const statement of source.statements) {
         if (ts.isImportEqualsDeclaration(statement)) {
           const module = statement.moduleReference;
@@ -178,6 +199,9 @@ function analyze(input) {
             reference(file, 're-export', statement.moduleSpecifier.text, position(statement), { typeOnly: !!statement.isTypeOnly });
           if (statement.exportClause && ts.isNamedExports(statement.exportClause))
             for (const element of statement.exportClause.elements) addExport({ path: file.path, name: element.name.text, ...position(element) });
+          else if (statement.exportClause && ts.isNamespaceExport(statement.exportClause))
+            addExport({ path: file.path, name: statement.exportClause.name.text, ...position(statement.exportClause) });
+          else if (!statement.exportClause) problem(file, 'star-export-bindings-not-enumerated', position(statement).line, position(statement).column);
         } else if (ts.isExportAssignment(statement)) {
           addExport({ path: file.path, name: statement.isExportEquals ? 'export=' : 'default', ...position(statement) });
           if (statement.isExportEquals) problem(file, 'commonjs-export-semantics', position(statement).line, position(statement).column);
@@ -186,7 +210,7 @@ function analyze(input) {
           const name = statement.modifiers.some(m => m.kind === ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name?.text;
           if (name) addExport({ path: file.path, name, ...position(statement) });
           if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations)
-            if (ts.isIdentifier(declaration.name)) addExport({ path: file.path, name: declaration.name.text, ...position(declaration) });
+            exportedBinding(declaration.name);
         }
       }
       function importBinding(expression, seen = new Set()) {
@@ -206,7 +230,11 @@ function analyze(input) {
         return null;
       }
       function walk(node) {
-        if (++visited > LIMITS.nodes) { truncated = true; return; }
+        if (++visited > LIMITS.nodes) { truncate(file); return; }
+        if (ts.isTaggedTemplateExpression(node))
+          problem(file, 'tagged-template-transform-not-inspected', position(node).line, position(node).column);
+        if (ts.isBinaryExpression(node) && /^(?:module(?:\.|\[)|exports(?:\.|\[|$))/.test(node.left.getText(source)))
+          problem(file, 'commonjs-export-bindings-not-enumerated', position(node).line, position(node).column);
         const globalName = (expression, name) => ts.isIdentifier(expression) && expression.text === name &&
           !checker.getSymbolAtLocation(expression)?.declarations?.length;
         const importMeta = expression => ts.isMetaProperty(expression) &&
@@ -265,6 +293,10 @@ function analyze(input) {
           else if (/^[A-Z]/.test(tag) || tag.includes('.'))
             problem(file, 'local-jsx-binding-not-traced', position(node).line, position(node).column);
           for (const attr of node.attributes.properties) {
+            if (ts.isJsxSpreadAttribute(attr)) {
+              problem(file, 'jsx-spread-not-inspected', position(attr).line, position(attr).column);
+              continue;
+            }
             if (!ts.isJsxAttribute(attr) || !['src', 'href', 'poster'].includes(attr.name.getText(source))) continue;
             const init = attr.initializer, at = position(attr);
             if (init && ts.isStringLiteral(init) || init && ts.isJsxExpression(init) && init.expression && ts.isStringLiteral(init.expression))
@@ -282,7 +314,7 @@ function analyze(input) {
       try {
         const css = postcss.parse(file.text, { from: file.path, map: false });
         css.walk(node => {
-          if (++visited > LIMITS.nodes) { truncated = true; return false; }
+          if (++visited > LIMITS.nodes) { truncate(file); return false; }
           const at = { line: node.source?.start?.line || 1, column: Math.max(0, (node.source?.start?.column || 1) - 1) };
           if (node.type === 'comment' && /sourceMappingURL/.test(node.text || ''))
             problem(file, 'source-map-not-loaded', at.line, at.column);
@@ -331,7 +363,7 @@ function analyze(input) {
           attributes.add(name);
         },
         onopentag(name, attrs) {
-          if (++visited > LIMITS.nodes) { truncated = true; return; }
+          if (++visited > LIMITS.nodes) { truncate(file); return; }
           stack.push(name);
           const position = at(Math.max(0, parser.startIndex));
           if (name === 'base' && attrs.href) { base = true; problem(file, 'html-base-url', position.line, position.column); }
@@ -372,11 +404,16 @@ function analyze(input) {
       } catch { diagnostics.push({ path: file.path, code: 'json-parse-error' }); problem(file, 'json-parse-error'); }
     }
   }
+  for (const observation of observations.values()) {
+    if (unresolved.length < LIMITS.references) unresolved.push(observation);
+    else truncate(observation.path);
+  }
   const result = { schemaVersion: 1, analyzer: { name: 'platform-source-analyzer', version: '1.0.0', typescript: ts.version },
     inputHash: sha(canonical(input.files.map(f => ({ path: f.path, sha256: f.sha256 })).sort((a, b) => compare(a.path, b.path)))),
     resolverHash: sha(canonical(resolver)), references, exports, unresolved, diagnostics,
-    coverage: { scope: 'static-source-manifest', complete: !unresolved.length && !diagnostics.length && !truncated,
-      runtimeComplete: false, truncated, files: files.size, bytes } };
+    coverage: { scope: 'observed-static-references', complete: false,
+      runtimeComplete: false, truncated, truncatedFiles: [...truncatedFiles].sort(), files: files.size, bytes,
+      observedReferences: references.length, unresolvedObservations: unresolved.length } };
   result.hash = sha(canonical(result));
   return result;
 }

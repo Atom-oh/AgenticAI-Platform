@@ -9,14 +9,16 @@ type Node = { id: string; type: string; title: string; revision: number; reviewS
   sourceRefs: SourceRef[]; properties?: Record<string, unknown> };
 type Edge = { id: string; type: string; src: { id: string }; dst: { id: string }; sourceRefs: SourceRef[]; provenance: string };
 type Graph = { nodes: Node[]; edges: Edge[]; generation: string | null; cursor?: string | null; coverage: unknown; backend: string };
-type Impact = { items: { nodeId: string; title: string; type: string; evidenceKind: string; witnessPath: string[] }[];
+type Impact = { items: { nodeId: string; title: string; type: string; evidenceKind: string; witnessPath: string[];
+  witnessEdges?: unknown[]; sourceRefs?: SourceRef[]; staleWitness?: boolean }[];
   generation: string; coverage: unknown };
 type AnalysisArtifact = { id: string; status: string; coverage?: unknown; execution?: { backend?: string; [key: string]: unknown } };
 const LEVELS = ['Foundation', 'Atom', 'Molecule', 'Organism', 'Pattern', 'PageTemplate', 'Screen', 'Procedure'];
 const STATUS: Record<string, string> = { candidate: '검토 후보', reviewed: '검토 완료', approved: '승인', rejected: '반려', deprecated: '폐기' };
 const KIND: Record<string, string> = { Foundation: '기초 자산', Atom: '기본 요소', Molecule: '소규모 조합', Organism: '업무 영역',
   Pattern: '재사용 패턴', PageTemplate: '페이지 틀', Screen: '화면', Procedure: '업무 흐름', CodeFile: '코드 파일',
-  CodeSymbol: '코드 기호', Component: '분류 전 컴포넌트', Product: '상품', PolicyRule: '업무 규칙', Team: '담당 팀' };
+  CodeSymbol: '코드 기호', Component: '분류 전 컴포넌트', Product: '상품', PolicyRule: '업무 규칙', Team: '담당 팀',
+  API: 'API', Test: '테스트', Asset: '파일 자산', Document: '문서', Skill: '스킬' };
 
 export default function OntologyView() {
   const { client, project, overview, navigate } = useWorkbench();
@@ -43,7 +45,7 @@ export default function OntologyView() {
     edges: (state.data?.edges || []).filter(edge => ids.has(edge.src.id) && ids.has(edge.dst.id)).map(edge =>
       ({ src: edge.src.id, dst: edge.dst.id, rel: edge.type, sourceRef: edge.sourceRefs, provenance: edge.provenance })) };
   const roles = selected && ['Product', 'PolicyRule', 'Procedure'].includes(selected.type) ? ['owner', 'planner'] :
-    selected && ['CodeFile', 'CodeSymbol', 'Test'].includes(selected.type) ? ['owner', 'developer'] :
+    selected && ['CodeFile', 'CodeSymbol', 'Test', 'API', 'Skill'].includes(selected.type) ? ['owner', 'developer'] :
       selected?.type === 'Team' ? ['owner'] : ['owner', 'designer'];
   const canReview = roles.includes(overview.role);
   const review = (decision: string) => {
@@ -60,7 +62,7 @@ export default function OntologyView() {
       <p className="wb-muted">{LEVELS.map(level => KIND[level]).join(' → ')}</p>
       <p className="wb-muted">8단계는 디자인과 업무 흐름의 분류입니다. 상품·규정·코드는 이 단계들을 가로질러 연결됩니다.</p>
       <div className="wb-toolbar"><Field label="현재 페이지의 자산 유형"><select value={kind} onChange={event => { setKind(event.target.value); choose(null); }}>
-        <option value="">전체 유형</option>{[...LEVELS, 'Component', 'Product', 'PolicyRule', 'CodeFile', 'CodeSymbol', 'Team'].map(value =>
+        <option value="">전체 유형</option>{Object.keys(KIND).map(value =>
           <option key={value} value={value}>{KIND[value]} · {value}</option>)}
       </select></Field><button onClick={() => { setCursor(''); setHistory([]); choose(null); state.refresh(); }}>온톨로지 새로 조회</button></div>
       <LoadState state={state}>{state.data && <>
@@ -125,7 +127,7 @@ export default function OntologyView() {
           void operation.run(signal => client.post<Impact>('/ontology/impact', {
             changeId: crypto.randomUUID(), kind: selected.type === 'PolicyRule' ? 'rule' :
               selected.type === 'Product' ? 'product-condition' : selected.type === 'Procedure' ? 'procedure' :
-              ['CodeFile', 'CodeSymbol'].includes(selected.type) ? 'code' : 'asset',
+              ['CodeFile', 'CodeSymbol', 'API', 'Test', 'Skill'].includes(selected.type) ? 'code' : 'asset',
             nodeIds: [target.id], expectedGeneration: state.data!.generation,
           }, signal), value => setImpact(value), '현재 권한 범위에서 영향 경로를 조회했습니다.');
         }}>이 항목 변경 영향 보기</button></div>
@@ -141,7 +143,9 @@ export default function OntologyView() {
         {impact.items.map(item => <article className="wb-artifact" key={item.nodeId}><strong>{item.title}</strong>
           <p>{item.evidenceKind === 'candidate' ? '추정 연결 · 확인 필요' : item.evidenceKind === 'approved-declared' ? '승인된 선언 관계' :
             item.evidenceKind === 'observed-structural' ? '확인된 구조 참조' : '근거 확인 필요'}</p>
-          <Details title="영향 경로의 식별자" value={item.witnessPath} /></article>)}
+          <Details title="영향 경로의 식별자" value={item.witnessPath} />
+          <Details title="경로 전체의 관계·원본 근거" value={{ edges: item.witnessEdges, sources: item.sourceRefs,
+            staleWitness: item.staleWitness }} /></article>)}
         {!impact.items.length && <Empty>확인 가능한 영향 경로가 없습니다. 미매핑·권한 제한을 확인해야 하며, 영향이 없다는 판정은 아닙니다.</Empty>}
         <Details title="영향 분석 범위와 미확인 항목" value={impact.coverage} />
       </section>}

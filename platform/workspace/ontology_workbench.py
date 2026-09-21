@@ -41,14 +41,23 @@ def graph(ctx, target_id=None, *, historical=False):
 
 
 def import_legacy(ctx, body):
-    fields(body, {"requestId", "expectedGeneration"})
+    fields(body, {"requestId", "expectedGeneration", "nodeIds"})
     ctx.fresh({"owner"})
     from workbench import knowledge
     baseline = ctx.storage.get(ctx.owner, "wb_index", "current")
     if not baseline:
         from workbench.service import fail
         fail(409, "legacy-not-indexed", "기존 지식 자료의 수집·색인을 먼저 완료하세요.")
-    old = knowledge.legacy_graph(ctx)
+    selected = body.get("nodeIds")
+    if selected is not None:
+        if not isinstance(selected, list) or not 1 <= len(selected) <= 20:
+            from workbench.service import fail
+            fail(422, "legacy-import-scope", "가져올 기존 노드를 1~20개 선택하세요.")
+        selected = sorted({schema._identifier(identifier) for identifier in selected})
+    old = knowledge.legacy_graph(ctx, selected_ids=selected) if selected is not None else knowledge.legacy_graph(ctx)
+    if old["coverage"].get("truncated") or old["coverage"].get("conflictingNodeIds"):
+        from workbench.service import fail
+        fail(422, "legacy-import-incomplete", "일부만 조회된 기존 그래프는 교체할 수 없습니다. 원본 범위를 나누고 충돌을 해결하세요.")
     if baseline and baseline.get("generation") != old.get("generation"):
         from workbench.service import fail
         fail(409, "legacy-source-changed", "가져오는 동안 기존 지식 그래프가 변경되었습니다.")
@@ -118,7 +127,8 @@ def import_legacy(ctx, body):
     value = {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": nodes, "edges": projected_edges,
              "coverage": {"complete": False, "scope": "explicit-workbench-migration",
                           "truncated": old["coverage"].get("truncated", False),
-                          "unknown": sorted(missing | {"legacy-mappings-require-review"})}}
-    return Ontology(ctx).publish_candidate("legacy-workbench", value,
+                          "unknown": sorted(missing | set(old["coverage"].get("unknown", [])) | {"legacy-mappings-require-review"})}}
+    name = schema.identity("legacy-scope", selected) if selected is not None else "legacy-workbench"
+    return Ontology(ctx).publish_candidate(name, value,
         expected_generation=body.get("expectedGeneration"), request_id=body.get("requestId"),
         additional_checks=[ctx.check("wb_index", baseline)] if baseline else [])

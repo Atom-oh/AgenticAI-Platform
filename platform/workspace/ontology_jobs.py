@@ -80,7 +80,7 @@ def submit(ctx, body):
     return {"artifact": saved, "job": ctx.queue_job(job_id, pinned, saved["requestHash"])}
 
 
-def process(ctx, pinned):
+def process(ctx, pinned, job=None):
     artifact = ctx.get("wb_artifact", pinned["artifactId"])
     if artifact.get("kind") != "ontology-analysis" or artifact["jobInput"] != pinned:
         fail(409, "ontology-job-mismatch", "분석 작업의 승인 입력이 다릅니다.")
@@ -88,6 +88,10 @@ def process(ctx, pinned):
         return {"artifactId": artifact["id"], "generation": artifact["generation"]}
     if artifact["status"] not in {"queued", "processing"}:
         fail(409, "ontology-job-state", "분석 가능한 작업 상태가 아닙니다.")
+    job = job or ctx.get("job", artifact["jobId"])
+    if (job["id"] != artifact["jobId"] or job.get("input") != pinned
+            or job.get("task") != "workbench" or job.get("status") not in {"queued", "running"}):
+        fail(409, "ontology-job-state", "현재 실행 작업과 승인 입력이 다릅니다.")
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
     if not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
@@ -131,12 +135,16 @@ def process(ctx, pinned):
 
     def completion(marker):
         refs.recheck()
+        result = {"artifactId": artifact["id"], "generation": marker["generation"],
+                  "coverage": result_coverage}
         return [ctx.write("wb_artifact", {**artifact, "status": "completed",
             "analysisKey": key, "analysisHash": digest, "graphKey": graph_key, "graphHash": graph_hash,
-            "execution": result["execution"], "coverage": result["analysis"]["coverage"],
+            "execution": execution, "coverage": result_coverage,
             "generation": marker["generation"], "partitionId": marker["partitionId"],
-            "identities": marker["identities"]}, artifact["version"])]
+            "identities": marker["identities"]}, artifact["version"]),
+            ctx.write("job", {**job, "status": "completed", "progress": 100, "result": result}, job["version"])]
 
+    execution, result_coverage = result["execution"], result["analysis"]["coverage"]
     from workspace.collaboration import CollaborationError
     for attempt in range(3):
         try:

@@ -21,7 +21,9 @@ def _same_source(left, right):
 def analyze(graph, change, *, generation, can_read):
     schema.validate_graph(graph, diagnostic=True)
     schema._hash(generation)
-    schema._fields(change, {"id", "kind", "baseGeneration"}, {"oldSource", "nodeIds", "newSource"})
+    schema._fields(change, {"id", "kind", "baseGeneration"}, {"oldSource", "nodeIds", "newSource", "requestHash"})
+    if "requestHash" in change:
+        schema._hash(change["requestHash"])
     schema._identifier(change["id"])
     if change["baseGeneration"] != generation:
         raise ValueError("Impact must use the selected manifest generation")
@@ -33,8 +35,7 @@ def analyze(graph, change, *, generation, can_read):
     for seed in seeds:
         schema._identifier(seed)
     old = schema.source_ref(change["oldSource"]) if change.get("oldSource") else None
-    if change.get("newSource"):
-        schema.source_ref(change["newSource"])
+    new = schema.source_ref(change["newSource"]) if change.get("newSource") else None
     nodes = {node["id"]: node for node in graph["nodes"]}
     visible = {identifier for identifier, node in nodes.items()
                if node["reviewState"] != "rejected" and can_read(node["sourceRefs"])}
@@ -100,6 +101,38 @@ def analyze(graph, change, *, generation, can_read):
             seen_edges.add(edge["id"])
             if source not in seen:
                 pending.append((source, [*path, source], [*witnesses, edge]))
+    # Keep one display path, but retain every authorized dependency witness
+    # within the inspected result subgraph, including convergence and cycles.
+    included = {item["nodeId"] for item in items}
+    outgoing = {}
+    for edges in reverse.values():
+        for edge in edges:
+            if (edge["src"]["id"] in included and edge["dst"]["id"] in included
+                    and edge["id"] in seen_edges):
+                outgoing.setdefault(edge["src"]["id"], []).append(edge)
+    for item in items:
+        pending_proofs, proof_nodes, proof_edges = [item["nodeId"]], set(), {}
+        while pending_proofs:
+            identifier = pending_proofs.pop()
+            if identifier in proof_nodes:
+                continue
+            proof_nodes.add(identifier)
+            for edge in outgoing.get(identifier, []):
+                proof_edges[edge["id"]] = edge
+                pending_proofs.append(edge["dst"]["id"])
+        evidence = [nodes[key] for key in sorted(proof_nodes)] + list(proof_edges.values())
+        stale = ("historical-source-revisions" in graph.get("coverage", {}).get("unknown", [])
+                 or any(entry["tombstone"] or entry["reviewState"] == "deprecated" for entry in evidence)
+                 or any(nodes[edge[end]["id"]]["revision"] != edge[end]["revision"]
+                        for edge in proof_edges.values() for end in ("src", "dst")))
+        candidate = stale or "restricted-source-boundary" in graph.get("coverage", {}).get("unknown", []) or any(
+            entry["reviewState"] != "approved" or entry["provenance"] == "model-inferred" for entry in evidence)
+        item.update(
+            witnessEdges=sorted(proof_edges),
+            sourceRefs=list({schema.digest(ref): ref for entry in evidence for ref in entry["sourceRefs"]}.values()),
+            staleWitness=stale, action="investigate" if candidate else "revalidate",
+            evidenceKind="candidate" if candidate else "approved-declared" if any(
+                entry["provenance"] == "declared" for entry in evidence) else "observed-structural")
     unknown = set(graph.get("coverage", {}).get("unknown", []))
     if hidden_boundary:
         unknown.add("restricted-or-unmapped")
@@ -111,7 +144,13 @@ def analyze(graph, change, *, generation, can_read):
         unknown.add("truncated")
     # A bounded project snapshot cannot certify dependencies outside its scope.
     unknown.add("outside-snapshot-not-certified")
+    # Bind opaque historical input through its digest without disclosing its
+    # metadata; the API separately verifies current authority for a new source.
     result = {"schemaVersion": 1, "changeId": change["id"], "generation": generation,
+              "change": {"kind": change["kind"], "oldSourceHash": schema.digest(old) if old else None,
+                         "newSourceHash": schema.digest(new) if new else None,
+                         "selectionHash": schema.digest(sorted(set(change.get("nodeIds", [])))),
+                         "requestHash": change.get("requestHash", schema.digest(change))},
               "items": items, "coverage": {"complete": False, "truncated": truncated or graph.get("coverage", {}).get("truncated", False),
                                          "unknown": sorted(unknown), "scope": "authorized-manifest-snapshot"}}
     result["hash"] = schema.digest(result)

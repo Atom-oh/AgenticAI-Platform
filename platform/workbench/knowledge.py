@@ -302,9 +302,12 @@ def authorize_refs(ctx, refs, *, authority="legacy"):
     if not isinstance(refs, list) or len(refs) > (30000 if authority == "canonical" else 50):
         fail(400, "invalid-evidence", "근거 목록이 올바르지 않습니다.")
     if authority == "canonical":
-        from workspace.ontology_sources import Sources
+        from workspace.ontology_sources import Sources, authority_identity
         reader = Sources(ctx, max_sources=90)
-        for ref in refs:
+        unique = {authority_identity(ref): ref for ref in refs}
+        if len(unique) > reader.max_sources:
+            fail(422, "ontology-source-limit", "서로 다른 원본 근거 수 제한을 초과했습니다. 범위를 나누세요.")
+        for ref in unique.values():
             reader.authorize(ref)
         return reader.recheck()
     if authority != "legacy":
@@ -487,7 +490,7 @@ def graph(ctx, target_id=None, *, historical=False):
     return legacy_graph(ctx, target_id)
 
 
-def legacy_graph(ctx, target_id=None):
+def legacy_graph(ctx, target_id=None, *, selected_ids=None):
     """Explicit migration/reference reader; not the canonical-mode write authority."""
     manifest, active, coverage = projections(ctx)
     observed_role = ctx.scope["role"]
@@ -514,6 +517,14 @@ def legacy_graph(ctx, target_id=None):
     nodes = {k: v for k, v in nodes.items() if k not in conflicts}
     edges = [edge for edge in edges if edge["src"] in nodes and edge["dst"] in nodes]
     edges = list({_hash(edge): edge for edge in edges}.values())
+    scoped_boundary = False
+    if selected_ids is not None:
+        selected = set(selected_ids)
+        if selected - nodes.keys():
+            fail(409, "legacy-selection-unavailable", "선택한 기존 노드의 현재 원본을 확인하지 못했습니다.")
+        scoped_boundary = any((edge["src"] in selected) != (edge["dst"] in selected) for edge in edges)
+        nodes = {key: node for key, node in nodes.items() if key in selected}
+        edges = [edge for edge in edges if edge["src"] in nodes and edge["dst"] in nodes]
     if target_id:
         _id(target_id)
         selected = {target_id}
@@ -526,7 +537,8 @@ def legacy_graph(ctx, target_id=None):
     nodes = dict(sorted(nodes.items())[:MAX_NODES])
     edges = sorted((edge for edge in edges if edge["src"] in nodes and edge["dst"] in nodes),
                    key=lambda edge: (edge["src"], edge["rel"], edge["dst"]))[:MAX_EDGES]
-    coverage = {**coverage, "complete": False, "unknown": ["unmapped-dependencies"],
+    coverage = {**coverage, "complete": False,
+                "unknown": ["unmapped-dependencies"] + (["outside-selected-legacy-scope"] if scoped_boundary else []),
                 "conflictingNodeIds": len(conflicts), "truncated": truncated,
                 "scope": "declared-or-connector-extracted-dependencies"}
     ctx.fresh()

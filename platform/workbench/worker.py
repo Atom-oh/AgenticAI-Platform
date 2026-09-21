@@ -30,7 +30,7 @@ def process(worker, owner, job):
         ctx = Service(worker, scope, claims)
         if operation == "ontology-analyze":
             from workspace.ontology_jobs import process
-            return process(ctx, pinned)
+            return process(ctx, pinned, job)
         from workbench import knowledge, skills
         for source_id, binding in pinned.get("sourceVersions", {}).items():
             source = ctx.get("wb_source", source_id)

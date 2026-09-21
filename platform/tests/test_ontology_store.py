@@ -62,6 +62,17 @@ def test_declared_marker_cannot_alias_a_trusted_parser_publication(wb):
     assert error.value.code == "ontology-changed"
 
 
+def test_partition_cannot_keep_active_edges_to_nodes_it_removes(wb):
+    value = candidate(wb)
+    first = publish(wb, value)
+    value["nodes"] = [value["nodes"][1]]
+    value["edges"][0] = schema.seal({**value["edges"][0],
+        "dst": {"id": first["identities"]["image"], "revision": 1}})
+    with pytest.raises(CollaborationError) as error:
+        publish(wb, value, request="remove-target", generation=first["generation"])
+    assert error.value.code == "ontology-removed-endpoint"
+
+
 def test_read_page_does_not_inherit_the_atomic_write_authority_limit(wb):
     generation = None
     for part in range(2):

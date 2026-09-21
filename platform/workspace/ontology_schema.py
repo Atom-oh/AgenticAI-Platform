@@ -43,6 +43,7 @@ PROPERTIES = {
     "Document": {"documentId", "description"},
     "Skill": {"skillId", "description"},
 }
+PROPERTIES["Pattern"] = DESIGN_PROPERTIES | {"usageBindings"}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
 
@@ -223,10 +224,19 @@ def validate_node(value):
             raise ValueError("Invalid design references")
     if "required" in properties and type(properties["required"]) is not bool:
         raise ValueError("Invalid policy requirement flag")
+    if "usageBindings" in properties:
+        bindings = properties["usageBindings"]
+        if not isinstance(bindings, list) or len(bindings) > 20:
+            raise ValueError("Invalid pattern approval bindings")
+        for binding in bindings:
+            _fields(binding, {"id", "revision", "contentHash"})
+            _identifier(binding["id"])
+            _revision(binding["revision"])
+            _hash(binding["contentHash"])
     hashes = {"fileHash", "analyzerHash", "normalizedImageHash", "sourceHash"}
     for key in properties.keys() & hashes:
         _hash(properties[key])
-    for key in properties.keys() - hashes - {"bytes", "width", "height", "usageIds", "slots", "required"}:
+    for key in properties.keys() - hashes - {"bytes", "width", "height", "usageIds", "slots", "required", "usageBindings"}:
         _text(properties[key], 8000)
     aliases = value.get("aliases", [])
     if not isinstance(aliases, list) or len(aliases) > 20:

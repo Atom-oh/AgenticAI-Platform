@@ -42,6 +42,8 @@ def route(host, scope, claims, method, parts, body, query):
         current = ontology.current()
         if not current or current["generation"] != body.get("expectedGeneration"):
             fail(409, "ontology-changed", "영향 분석 기준이 변경되었습니다.")
+        if body.get("newSource"):
+            ontology.sources.verify([body["newSource"]], recheck=False)
         raw_seeds = body.get("nodeIds", [])
         if not isinstance(raw_seeds, list) or len(raw_seeds) > 20:
             fail(400, "ontology-selection", "시작 노드 목록이 올바르지 않습니다.")
@@ -50,15 +52,14 @@ def route(host, scope, claims, method, parts, body, query):
         seeds = list(raw_seeds)
         if body.get("oldSource"):
             seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True))
-        if not seeds:
-            ontology._recheck(current)
-            return 200, {"items": [], "generation": current["generation"],
-                         "coverage": {"complete": False, "unknown": ["unmapped-or-inaccessible-seed"]}}
         seeds = sorted(set(seeds))
-        graph = ontology.closure(seeds[:20], direction="dependents", max_nodes=500, historical=True)
+        graph = (ontology.closure(seeds[:20], direction="dependents", max_nodes=500, historical=True) if seeds else
+                 {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": [], "edges": [], "impactSeeds": [],
+                  "coverage": {"complete": False, "truncated": False, "unknown": ["unmapped-or-inaccessible-seed"],
+                               "scope": "authorized-manifest-snapshot"}})
         impact_seeds = graph.pop("impactSeeds")
         change = {"id": body.get("changeId"), "kind": body.get("kind"), "baseGeneration": current["generation"],
-                  "nodeIds": impact_seeds}
+                  "nodeIds": impact_seeds, "requestHash": schema.digest({**body, "nodeIds": sorted(set(raw_seeds))})}
         if body.get("oldSource"):
             change["oldSource"] = body["oldSource"]
         if body.get("newSource"):

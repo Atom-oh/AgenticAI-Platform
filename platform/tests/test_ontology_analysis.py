@@ -212,6 +212,22 @@ def test_interrupted_claim_becomes_a_terminal_failure_on_job_or_artifact_read(wb
     assert wb.storage.claim_job(wb.owner, queued["job"]["id"]) is None
 
 
+def test_timeout_artifact_repair_retries_after_job_is_already_failed(wb, monkeypatch):
+    from workbench import worker
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "repair", "name": "example", "files": collection(wb)})
+    wb.now += 17 * 60 * 1000
+    wb.storage.clock = lambda: wb.now
+    original = worker._mark_failed
+    monkeypatch.setattr(worker, "_mark_failed", lambda *args: None)
+    expired = wb.api._expire_job(wb.owner, queued["job"], context(wb).scope)
+    assert expired["status"] == "failed"
+    assert wb.storage.get(wb.owner, "wb_artifact", queued["artifact"]["id"])["status"] == "queued"
+    monkeypatch.setattr(worker, "_mark_failed", original)
+    wb.api._expire_job(wb.owner, expired, context(wb).scope)
+    assert wb.storage.get(wb.owner, "wb_artifact", queued["artifact"]["id"])["status"] == "failed"
+
+
 def test_orphaned_artifact_is_reconciled_without_dispatching_paid_work(wb, monkeypatch):
     from test_ontology_api import call as api_call
     wb.api.ontology_analyzer_ready = True
@@ -231,12 +247,54 @@ def test_orphaned_artifact_is_reconciled_without_dispatching_paid_work(wb, monke
     assert error.value.code == "ontology-analysis-interrupted"
 
 
-def test_queued_source_change_and_actor_revocation_block_analysis(wb):
+def test_queued_source_change_blocks_the_real_configured_analyzer(wb, monkeypatch):
     wb.api.ontology_analyzer_ready = True
     queued = submit(context(wb), {"requestId": "analysis", "name": "example", "files": collection(wb)})
     row = wb.storage.get(wb.owner, "asset", "code-app")
     wb.storage.put(wb.owner, "asset", {**row, "archived": True}, row["version"])
     worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab,
-                             ontology_analyzer=lambda payload: pytest.fail("must not run"))
-    with pytest.raises(CollaborationError):
+                             ontology_analyzer=local_analyze, allow_offline_ontology_analysis=True)
+    monkeypatch.setattr("workspace.ontology_analysis.subprocess.run", lambda *a, **k: pytest.fail("must not run"))
+    with pytest.raises(CollaborationError) as error:
         process(worker, wb.owner, queued["job"])
+    assert error.value.code == "ontology-source-stale"
+
+
+def test_revoked_actor_cannot_start_the_real_configured_analyzer(wb, monkeypatch):
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "revoke-actor", "name": "example", "files": collection(wb)})
+    project = wb.storage.get(wb.owner, "project", wb.project["id"])
+    wb.storage.put(wb.owner, "project", {**project, "members": {
+        key: member for key, member in project["members"].items() if key != "alice"}}, project["version"])
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab,
+                             ontology_analyzer=local_analyze, allow_offline_ontology_analysis=True)
+    monkeypatch.setattr("workspace.ontology_analysis.subprocess.run", lambda *a, **k: pytest.fail("must not run"))
+    with pytest.raises(CollaborationError) as error:
+        process(worker, wb.owner, queued["job"])
+    assert error.value.status == 403
+
+
+def test_terminal_job_and_partition_publish_in_one_transaction_without_later_update(wb, monkeypatch):
+    from workspace.worker import Worker
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "job-atomic", "name": "example", "files": collection(wb)})
+    worker = Worker(storage=wb.storage)
+    worker.collaboration = wb.collab
+    worker.ontology_analyzer = local_analyze
+    worker.allow_offline_ontology_analysis = True
+    original, publications = wb.storage.put_many, []
+
+    def observe(writes, *args, **kwargs):
+        if any(write["kind"] == "ontology" for write in writes):
+            terminal = next(write for write in writes if write["kind"] == "job")
+            assert terminal["item"]["status"] == "completed"
+            assert any(write["kind"] == "wb_artifact" and write["item"]["status"] == "completed" for write in writes)
+            publications.append(terminal["item"]["result"])
+        return original(writes, *args, **kwargs)
+
+    monkeypatch.setattr(wb.storage, "put_many", observe)
+    monkeypatch.setattr(worker, "_update", lambda *a, **k: pytest.fail("unfenced terminal write"))
+    assert worker.handle({"owner": wb.owner, "jobId": queued["job"]["id"]})["status"] == "completed"
+    job = wb.storage.get(wb.owner, "job", queued["job"]["id"])
+    assert publications == [job["result"]]
+    assert job["result"]["generation"] == wb.storage.get(wb.owner, "ontology", "project-current")["generation"]

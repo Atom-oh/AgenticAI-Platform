@@ -404,7 +404,9 @@ def _report_sources(api, scope, claims, body):
         tasks = [t for t in _list(api, scope, "wb_task") if current_impact
                  and t.get("changeId") == change["id"] and t.get("impactHash") == change["impactHash"]]
         for task in tasks:
-            knowledge.verify_refs(ctx, task.get("sourceRefs", []), authority=task.get("graphAuthority", "legacy"))
+            authority = task.get("graphAuthority", "legacy")
+            validate = knowledge.authorize_refs if authority == "canonical" else knowledge.verify_refs
+            validate(ctx, task.get("sourceRefs", []), authority=authority)
             references.append({"kind": "wb_task", "id": task["id"], "version": task["version"],
                                "changeId": change["id"], "impactHash": task["impactHash"],
                                "sourceRefs": copy.deepcopy(task.get("sourceRefs", [])),

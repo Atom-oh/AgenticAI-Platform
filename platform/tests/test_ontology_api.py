@@ -81,6 +81,18 @@ def test_bad_fields_and_forged_actor_are_not_project_authority(wb):
     assert call(wb, "POST", "/context", {"nodeIds": [], "projectId": "other"})[0] == 400
 
 
+def test_new_impact_source_requires_current_authority_and_empty_results_have_bound_receipts(wb):
+    from test_ontology_schema import ref
+    published = setup_graph(wb)
+    body = {"changeId": "empty-impact", "kind": "asset", "expectedGeneration": published["generation"]}
+    status, empty = call(wb, "POST", "/impact", body)
+    assert status == 200 and empty["items"] == [] and empty["hash"]
+    assert call(wb, "POST", "/impact", {**body, "newSource": ref("missing")})[0] == 404
+    source = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**source, "archived": True}, source["version"])
+    assert call(wb, "POST", "/impact", {**body, "newSource": asset_reference(source)})[0] == 409
+
+
 def test_pattern_approval_requires_two_current_reviewed_usages(wb):
     from test_ontology_sources import asset
     from test_ontology_schema import node
@@ -99,6 +111,31 @@ def test_pattern_approval_requires_two_current_reviewed_usages(wb):
         "requestId": "approve-pattern", "expectedGeneration": reviewed["generation"], "revision": 1,
         "decision": "approved", "reason": "No usage evidence"})
     assert status == 409 and denied["code"] == "ontology-pattern-usages"
+
+
+def test_pattern_approval_tracks_exact_usage_screen_hashes(wb):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node
+    from workspace.ontology_store import Ontology
+    nodes = [node(name, kind, project=wb.project["id"], sourceRefs=[asset_reference(asset(wb, name))],
+                  properties={"usageIds": ["first", "second"]} if kind == "Pattern" else {})
+             for name, kind in [("first", "Screen"), ("second", "Screen"), ("pattern", "Pattern")]]
+    result = Ontology(context(wb)).publish_candidate("usage", {
+        "schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": []},
+        expected_generation=None, request_id="usage")
+    ids, generation = result["identities"], result["generation"]
+    for name in ["first", "second", "pattern"]:
+        result = Ontology(context(wb)).review_node(ids[name], expected_generation=generation, revision=1,
+            decision="reviewed", reason="Synthetic usage review", request_id="review-" + name)
+        generation = result["generation"]
+    result = Ontology(context(wb)).review_node(ids["pattern"], expected_generation=generation, revision=1,
+        decision="approved", reason="Two reviewed usages", request_id="approve-pattern")
+    assert len(result["node"]["properties"]["usageBindings"]) == 2
+    assert len(result["review"]["sourceRefs"]) == 3
+    assert ids["pattern"] in {node["id"] for node in Ontology(context(wb)).read()["nodes"]}
+    Ontology(context(wb)).review_node(ids["first"], expected_generation=result["generation"], revision=1,
+        decision="rejected", reason="Usage no longer valid", request_id="reject-usage")
+    assert ids["pattern"] not in {node["id"] for node in Ontology(context(wb)).read()["nodes"]}
 
 
 def test_one_opaque_seed_can_expand_to_more_than_twenty_readable_dependents(wb):
@@ -196,7 +233,7 @@ def test_review_fences_active_external_sources_but_retired_edges_do_not_lock_the
     removed = Ontology(context(wb)).publish_candidate("external", {**graph, "edges": []},
         expected_generation=added["generation"], request_id="remove")
     status, result = call(wb, "POST", f"/nodes/{added['identities']['screen']}/review", {
-        "requestId": "allowed", "revision": 2, "expectedGeneration": removed["generation"],
+        "requestId": "allowed", "revision": 1, "expectedGeneration": removed["generation"],
         "decision": "reviewed", "reason": "The unusable relationship is retired"})
     assert status == 200, result
 

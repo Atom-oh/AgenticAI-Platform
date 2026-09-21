@@ -10,7 +10,9 @@ ROLE_FOR_LABEL = {"Product": "planner", "Flow": "planner", "Guideline": "planner
                   "Component": "designer", "Icon": "designer", "Screen": "designer",
                   "API": "developer", "Test": "developer", "Skill": "developer", "Document": "planner",
                   "Foundation": "designer", "Pattern": "designer", "Asset": "designer",
-                  "CodeFile": "developer", "CodeSymbol": "developer"}
+                  "CodeFile": "developer", "CodeSymbol": "developer", "Atom": "designer",
+                  "Molecule": "designer", "Organism": "designer", "PageTemplate": "designer",
+                  "Procedure": "planner", "PolicyRule": "planner", "Team": "owner"}
 MAX_IMPACT = 50
 
 
@@ -60,7 +62,7 @@ def traversal(graph, target_id):
         stale = any(edge.get("tombstone") or any(
             nodes.get(edge[end], {}).get("revision") != edge["canonical"][end]["revision"] for end in ("src", "dst"))
             for edge in witness_edges if "canonical" in edge)
-        role = node.get("role") or ROLE_FOR_LABEL.get(node["label"], "planner") if node else "planner"
+        role = (node.get("role") or ROLE_FOR_LABEL.get(node.get("canonicalType", node["label"]), "planner")) if node else "planner"
         items.append({"targetId": identifier, "title": node["title"] if node else "매핑되지 않은 대상",
                       "role": role, "reason": "변경 대상" if len(path) == 1 else "의존 관계를 통해 영향 가능",
                       "witnessPath": path, "witnessEdges": witness_edges, "sourceRefs": refs,
@@ -96,7 +98,9 @@ def traversal(graph, target_id):
                 for ref in (entry.get("sourceRefs") or [entry["sourceRef"]])}
         item["sourceRefs"] = list(refs.values())
         item["witnessEdges"] = list(proof_edges.values())
-        item["staleWitness"] = ("historical-source-revisions" in graph["coverage"].get("unknown", []) or any(
+        item["staleWitness"] = (any(entry.get("tombstone") or entry.get("reviewState") == "deprecated"
+                                   for entry in evidence) or
+                               "historical-source-revisions" in graph["coverage"].get("unknown", []) or any(
             edge.get("tombstone") or any(nodes[edge[end]].get("revision") != edge["canonical"][end]["revision"]
                                        for end in ("src", "dst"))
             for edge in proof_edges.values() if "canonical" in edge))

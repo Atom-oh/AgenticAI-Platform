@@ -35,6 +35,10 @@ the revision; changed relations require republication for current context, while
 impact reports stale witnesses.
 Removed nodes/edges remain tombstones within the bounded partition; reintroduction
 advances the existing identity's revision rather than restarting at one.
+Pattern approval stores exact usage-screen revision/hash bindings and explicit
+evidence relationships. Current reads and context reuse require those screens
+and their source audiences to remain current; a later rejection, revision or
+source change invalidates that approval basis.
 Existing product-guideline
 projection IDs and hashes are preserved; canonical publication adds a project
 manifest in the same product-publication transaction.
@@ -67,6 +71,9 @@ unrelated collaboration writes do not revoke it. The commit still fences the
 latest project record and every observed source. Bounded project-CAS retries
 reuse already computed analysis; changed membership, sources or graph generation
 fail instead of running the analyzer again.
+Visibility checks are memoized by source authority within one request. The
+final authority, source-version and expiry checks are always repeated before
+returning data or committing a mutation.
 
 The v1 schema reserves publication, UX-contract and run-round reference kinds
 for later adapters. Until those adapters are installed, reads fail unavailable.
@@ -86,7 +93,7 @@ All endpoints use the existing `/studio-api` JWT authorizer and
 | `POST /ontology/nodes/:id/review` | `{requestId,revision,expectedGeneration,decision,reason}` records an authorized human decision |
 | `POST /ontology/context` | `{nodeIds}` returns a bounded, source-bound context fingerprint |
 | `POST /ontology/impact` | `{changeId,kind,expectedGeneration,oldSource?,newSource?,nodeIds?}` returns authorized reverse paths |
-| `POST /ontology/import-workbench` | Owner-only, explicit legacy migration with source and legacy-index fences |
+| `POST /ontology/import-workbench` | Owner-only, explicit legacy migration with source and legacy-index fences; optional `nodeIds` selects 1–20 nodes into a stable separate partition |
 | `POST /ontology/analyses` | `{requestId,name,files:[{assetId,path}],resolverProfileId?,expectedGeneration?}` queues source analysis |
 | `GET /ontology/analyses/:id` | Authorized analysis artifact, coverage and actual execution receipt |
 
@@ -117,8 +124,10 @@ revisions and permissions before analysis and publication. A missing configured
 analyzer blocks submission/execution. `local_analyze` is an explicit offline test
 adapter and requires a separate test opt-in; production cannot silently use it.
 The trusted adapter identity and publication role/partition ownership are checked
-before invocation. Completion metadata, execution receipt pointers, the partition
-and request marker commit atomically; an artifact conflict publishes none of them.
+before invocation. Terminal durable-job state, artifact completion, execution
+receipt pointers, the partition and request marker commit atomically; an artifact
+or job conflict publishes none of them. The worker does not append a separate
+terminal-state write after this publication.
 The AgentCore adapter is a separate deployment milestone.
 Manual partitions always retain incomplete, declared coverage. Source deadlines
 are rechecked immediately before submitting the version-fenced transaction;
@@ -128,6 +137,8 @@ The existing `Worker.handle` atomically claims a queued durable job before
 dispatching `ontology_jobs.process`; duplicate deliveries cannot enter the analyzer.
 The existing 16-minute stale-job check also reconciles the linked workbench
 artifact. Artifact reads reconcile interrupted dispatches with no job record.
+An already-timeout-failed job retries its linked artifact repair on later reads,
+including an interruption between the job and artifact transitions.
 Recovery records failure and requires a new authorized request; it never repeats
 paid execution under an old authorization. Retrying an unexpired dispatch request
 can finish creating its missing job.
@@ -152,6 +163,12 @@ Each impact item keeps a representative display path and the union of node/edge
 evidence across converging paths in the inspected result subgraph. Report and task
 checks retain that complete evidence union; truncation remains explicit.
 Legacy evidence APIs cannot choose canonical resolution through caller fields.
+Impact receipts bind the requested change kind, selection and old/new source
+references through hashes. New sources require current authority even when no
+dependent nodes are found. Historical opaque source metadata stays hidden.
+Incomplete or conflicting legacy snapshots cannot replace a prior import.
+Owners can split imports with explicit node selections; each selection has its
+own stable partition and reports dependencies crossing the selected scope.
 Canonical impacts/tasks/reports carry their server-selected authority through
 read and completion. Import combines parallel relationship evidence, preserving
 all references in bounded chunks, and reports unsupported legacy shapes.

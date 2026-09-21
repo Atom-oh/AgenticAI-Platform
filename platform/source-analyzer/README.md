@@ -29,3 +29,12 @@ resource observations, exported symbols, unresolved references and bounded
 diagnostics. Structural manifest coverage is not runtime completeness,
 customer-package approval or an executed UX test. See the
 [ontology contract](../workspace/ONTOLOGY_CONTRACT.md).
+
+Coverage remains incomplete even when every recorded literal reference resolves:
+these rules cannot certify all program behavior, opaque resources or unconfigured
+transforms. Reference counts and location-bound unknown observations describe
+what was actually inspected.
+Generic call/constructor observations aggregate counts per file and reason,
+preserving the first location. When a parser, reference, export or observation
+budget is exhausted, `coverage.truncatedFiles` identifies each affected file.
+Uninspected locations are never represented as complete coverage.
