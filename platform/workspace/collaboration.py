@@ -208,6 +208,7 @@ def _projection(project_id, product_id, guideline_id, revision, draft):
 class Collaboration:
     def __init__(self, storage, directory=None):
         self.storage, self.directory = storage, directory
+        self.ontology_enabled = False
 
     def resolve_scope(self, actor, project_id):
         actor = _actor(actor)
@@ -507,10 +508,15 @@ class Collaboration:
         updated = {**product, "status": "published", "publishedGuidelineId": guideline_id,
                    "publishedRevision": revision, "publishedFromVersion": version, "ontologyHash": ontology["hash"],
                    "guideAssetId": asset_id, "guideLineageId": asset["lineageId"], "updatedBy": scope["actor"]}
+        canonical_writes = []
+        if self.ontology_enabled:
+            from workspace.ontology_product import prepare_product
+            canonical_writes, publication = prepare_product(self, scope, updated, guideline, ontology)
+            updated["ontologyPublication"] = publication
         records = self._commit(scope, [self._write(owner, "product", updated, version),
                                        self._write(owner, "guideline", guideline),
                                        self._write(owner, "ontology", metadata),
-                                       self._write(owner, "asset", asset)])
+                                       self._write(owner, "asset", asset), *canonical_writes])
         return 200, {"product": records[0], "guideline": records[1], "ontology": ontology, "assetId": asset_id}
 
     def _read(self, owner, key, limit, expected_sha):

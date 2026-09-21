@@ -121,6 +121,16 @@ source, browser, release and permission checks remain authoritative.
 
 ## Source map
 
+The ontology foundation in `workspace/ontology_*.py` adds source-bound canonical
+partitions, typed static analysis, human mapping review and reverse dependency
+paths. `source-analyzer/` parses TS/TSX/HTML/CSS without executing inputs.
+`PROJECT_ONTOLOGY_MODE=canonical` explicitly enables product publication and
+workbench projection against the workspace authority; the initial default remains
+`legacy`. Analyzer execution is separately configured and cannot silently use
+the offline test adapter. Read the [ontology contract](workspace/ONTOLOGY_CONTRACT.md)
+and [AgentCore implementation plan](docs/ONTOLOGY_AGENTCORE_PLAN.md).
+This data foundation does not establish the later AgentCore service/cutover gates.
+
 The 2026-09-21 UX change workflow adds saved change requests, screen/overlay/slot
 scope, source ID mappings and guarded transitions. An approved React baseline
 can be changed only within an explicit source-file allowlist, with actual file

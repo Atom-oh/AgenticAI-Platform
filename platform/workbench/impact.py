@@ -8,7 +8,9 @@ from workbench.service import ROLES, _hash, _id, _version, fail, fields, text
 
 ROLE_FOR_LABEL = {"Product": "planner", "Flow": "planner", "Guideline": "planner", "Rule": "planner",
                   "Component": "designer", "Icon": "designer", "Screen": "designer",
-                  "API": "developer", "Test": "developer", "Skill": "developer", "Document": "planner"}
+                  "API": "developer", "Test": "developer", "Skill": "developer", "Document": "planner",
+                  "Foundation": "designer", "Pattern": "designer", "Asset": "designer",
+                  "CodeFile": "developer", "CodeSymbol": "developer"}
 MAX_IMPACT = 50
 
 
@@ -45,7 +47,8 @@ def traversal(graph, target_id):
         node = nodes.get(identifier)
         if node is not None and node["label"] == "Role":
             continue
-        refs = ([node["sourceRef"]] if node else []) + [edge["sourceRef"] for edge in witness_edges]
+        refs = [ref for entry in ([node] if node else []) + witness_edges
+                for ref in (entry.get("sourceRefs") or [entry["sourceRef"]])]
         for ref in refs:
             references[_hash(ref)] = ref
         confidence = "unknown" if not node else "confirmed" if all(
@@ -70,16 +73,18 @@ def analyze(ctx, identifier, body):
     change = ctx.get("wb_change", identifier)
     if _version(body.get("version")) != change["version"]:
         fail(409, "conflict", "변경 요청 버전이 바뀌었습니다.")
-    graph = knowledge.graph(ctx)
+    graph = knowledge.graph(ctx, change["targetId"]) if getattr(ctx.host, "ontology_mode", "legacy") == "canonical" else knowledge.graph(ctx)
     impact = traversal(graph, change["targetId"])
     digest = _hash({"changeId": identifier, "change": {k: change[k] for k in
                     ("targetId", "changeType", "before", "after", "reason")}, "impact": impact})
     impact["impactHash"] = digest
     checks = knowledge.verify_refs(ctx, impact["sourceRefs"])
     # Pin the same manifest even when the graph has no source evidence.
-    manifest = ctx.storage.get(ctx.owner, "wb_index", "current")
+    canonical = getattr(ctx.host, "ontology_mode", "legacy") == "canonical"
+    manifest_kind, manifest_id = ("ontology", "project-current") if canonical else ("wb_index", "current")
+    manifest = ctx.storage.get(ctx.owner, manifest_kind, manifest_id)
     if manifest:
-        checks.append(ctx.check("wb_index", manifest))
+        checks.append(ctx.check(manifest_kind, manifest))
     key, sha = ctx.put_json("wb_change", identifier, digest + "/impact.json", impact)
     tasks, writes = [], []
     for item in impact["items"]:
@@ -97,7 +102,7 @@ def analyze(ctx, identifier, body):
         tasks.append(task)
     updated = {**change, "status": "analyzed", "impactHash": digest, "impactKey": key, "impactSha": sha,
                "generation": impact["generation"], "sourceRefs": impact["sourceRefs"],
-               "taskIds": [task["id"] for task in tasks]}
+               "taskIds": [task["id"] for task in tasks], "graphAuthority": "canonical" if canonical else "legacy"}
     saved = ctx.commit([ctx.write("wb_change", updated, change["version"]), *writes], checks)
     tasks_by_id = {task["id"]: task for task in saved[1:]}
     return {"change": saved[0], "impact": impact, "tasks": [tasks_by_id.get(t["id"], t) for t in tasks]}
@@ -109,14 +114,15 @@ def read_impact(ctx, identifier):
     if not change.get("impactKey"):
         fail(409, "analysis-required", "영향 분석을 먼저 실행하세요.")
     knowledge.verify_refs(ctx, change["sourceRefs"])
-    manifest = ctx.storage.get(ctx.owner, "wb_index", "current") or {}
+    manifest_kind, manifest_id = ("ontology", "project-current") if change.get("graphAuthority") == "canonical" else ("wb_index", "current")
+    manifest = ctx.storage.get(ctx.owner, manifest_kind, manifest_id) or {}
     if manifest.get("generation") != change.get("generation"):
         fail(409, "stale-impact", "그래프가 변경되어 재분석이 필요합니다.")
     result = ctx.read_json(change["impactKey"], change["impactSha"])
     ctx.fresh()
     current = ctx.get("wb_change", identifier)
     knowledge.verify_refs(ctx, current["sourceRefs"])
-    active = ctx.storage.get(ctx.owner, "wb_index", "current") or {}
+    active = ctx.storage.get(ctx.owner, manifest_kind, manifest_id) or {}
     if (current["version"] != change["version"]
             or current.get("impactHash") != change.get("impactHash")
             or current.get("impactSha") != change.get("impactSha")

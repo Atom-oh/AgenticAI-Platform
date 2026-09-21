@@ -19,6 +19,7 @@ export const MENU_GROUPS: MenuGroup[] = [
     { id: 'wb-pension', label: '연금 상담' }, { id: 'wb-reports', label: '보고서 작업실' },
   ] },
   { id: 'common', label: '공통 작업', items: [
+    { id: 'wb-ontology', label: '프로젝트 온톨로지' },
     { id: 'explore', label: '온톨로지 탐색기' },
     { id: 'wb-development', label: '내 할 일 · 진행 현황' }, { id: 'wb-skills', label: 'Skill 제작실' },
     { id: 'wb-knowledge', label: '규정집 · 위키 검색' }, { id: 'guide', label: '설명 · 가이드북' },

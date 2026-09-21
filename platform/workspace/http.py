@@ -111,6 +111,12 @@ class WorkspaceAPI:
             from workspace.directory import CognitoDirectory
             directory = CognitoDirectory(os.environ["WORKSPACE_USER_POOL_ID"])
         self.collaboration = collaboration if collaboration is not None else Collaboration(self.storage, directory=directory)
+        self.ontology_mode = os.environ.get("PROJECT_ONTOLOGY_MODE", "legacy")
+        if self.ontology_mode not in {"legacy", "canonical"}:
+            raise ValueError("Unknown project ontology backend")
+        if self.ontology_mode == "canonical":
+            self.collaboration.ontology_enabled = True
+        self.ontology_analyzer_ready = os.environ.get("ONTOLOGY_ANALYZER_BACKEND") == "agentcore"
         from workspace.git_service import configured_connections
         self.git_connections = git_connections or configured_connections
         from workbench.runtime import install
@@ -156,6 +162,12 @@ class WorkspaceAPI:
                 if response is not None:
                     return _json(response[0], response[1])
             scope = self.collaboration.resolve_scope(owner, project_id)
+            if segments[0] == "ontology":
+                from workspace.ontology_api import route
+                scope = self.collaboration.require(scope, "read")
+                result = route(self, scope, claims, method, segments[1:],
+                               _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
+                return _json(result[0], result[1])
             if segments[0] == "workbench":
                 from workbench.api import route
                 scope = self.collaboration.require(scope, "read")

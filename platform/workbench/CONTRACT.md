@@ -106,6 +106,15 @@ Bound size, page all results and expose incomplete coverage.
 
 ## Change and task objects
 
+When explicitly configured with `PROJECT_ONTOLOGY_MODE=canonical`, dependency
+reads project the workspace canonical ontology instead of independently
+publishing workbench graph state. An owner may explicitly import the accessible
+legacy graph into candidate canonical mappings. Current source ACLs, generations
+and project fences still apply. Canonical-mode legacy dependency mutation is
+rejected; use the source-bound human review APIs in
+[`workspace/ONTOLOGY_CONTRACT.md`](../workspace/ONTOLOGY_CONTRACT.md).
+The default remains `legacy` until the separate cutover gate.
+
 Nodes: `{id,label,title,version,role?,sourceRef?,provenance}`.
 Edges: `{src,rel,dst,sourceRef?,provenance}`.
 Use dependency edge types; ownership is terminal assignment metadata. An impact

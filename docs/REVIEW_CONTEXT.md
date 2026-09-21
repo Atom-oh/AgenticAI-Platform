@@ -107,6 +107,17 @@ prompt; a steering file alone is insufficient. See [review invocation](pr-review
 
 ## Workbench scope amendment
 
+The ontology extension chooses workspace project `ontology` records as the
+canonical authority when `PROJECT_ONTOLOGY_MODE=canonical` is explicitly enabled.
+Existing per-product guideline projections retain their IDs/hashes; workbench
+typed-graph/impact consumers become a projection with explicit legacy import.
+The bank local/Neptune graph remains a separate reference source. This is not
+three interchangeable stores or a claim that all sources have migrated.
+Default execution and graph mode remain legacy until the cutover gates.
+Source-analysis/offline tests and configured readiness are not live AgentCore
+Runtime/Interpreter/Browser/Memory/Identity/Gateway evidence. The new planned
+Gateway/Lambda must not inherit the bank target's private-plane capabilities.
+
 SPEC §17 applies only to the new `/studio-api/workbench` module. Its private
 feature-hash vector and typed-graph artifacts are an explicit initial backend,
 not a claim that OpenSearch/Neptune are deployed for this module. MCP registration

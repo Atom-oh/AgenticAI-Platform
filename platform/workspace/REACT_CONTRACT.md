@@ -188,6 +188,11 @@ Git adapter interface (`workspace/git_export.py`):
 
 ## UI scope
 
+The additive canonical ontology interfaces are in [ONTOLOGY_CONTRACT.md](ONTOLOGY_CONTRACT.md).
+The current default execution remains the existing isolated browser/compiler.
+AgentCore transport and generation/release context binding are subsequent gated
+implementation work, not implied by the presence of ontology APIs.
+
 Project selection is explicit and remounts project-bound panels. Use a project-bound HTTP client via React context;
 never mutate a global client's owner/scope while async downloads/polling are active.
 The planning/discussion/developer sidebar stays tied to the selected product/run/page and exposes actual permissions.

@@ -212,3 +212,12 @@ reviewer does not turn an older description into a requirement for unrelated cod
 These notes document behavior and integration risks; they do not waive applicable
 security or output requirements. Source/runtime corrections require a separately
 scoped code change.
+
+## Canonical ontology extension
+
+`/studio-api/ontology` reuses the workspace JWT and project-membership boundary.
+Its versioned schema, candidate publication, review, source-analysis and impact
+interfaces are defined in [`workspace/ONTOLOGY_CONTRACT.md`](../workspace/ONTOLOGY_CONTRACT.md).
+The data foundation is distinct from AgentCore execution readiness. Existing
+bank Gateway/Harness contracts are retained; the planned ontology Gateway is
+a separate target and permission boundary.

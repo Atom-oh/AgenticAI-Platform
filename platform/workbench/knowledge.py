@@ -271,6 +271,10 @@ def verify_refs(ctx, refs):
     for ref in refs:
         if not isinstance(ref, dict):
             fail(400, "invalid-evidence", "정확한 소스 버전 근거가 필요합니다.")
+        if "sourceKind" in ref:
+            from workspace.ontology_sources import Sources
+            checks.extend(Sources(ctx).verify([ref]))
+            continue
         source = ctx.get("wb_source", ref.get("sourceId"))
         if (not visible(ctx, source, ref) or not isinstance(ref.get("generation"), str)
                 or ref.get("accessExpiresAt") != source["accessExpiresAt"]):
@@ -294,6 +298,10 @@ def authorize_refs(ctx, refs):
     for ref in refs:
         if not isinstance(ref, dict):
             fail(400, "invalid-evidence", "문서 근거가 필요합니다.")
+        if "sourceKind" in ref:
+            from workspace.ontology_sources import Sources
+            Sources(ctx).verify([ref])
+            continue
         source = ctx.get("wb_source", ref.get("sourceId"))
         access = source.get("access", {}).get(ref.get("documentId"), {})
         if (not source_current(ctx, source) or access.get("tombstone") is not False
@@ -461,6 +469,14 @@ def read_document(ctx, identifier):
 
 
 def graph(ctx, target_id=None):
+    if getattr(ctx.host, "ontology_mode", "legacy") == "canonical":
+        from workspace.ontology_workbench import graph as canonical_graph
+        return canonical_graph(ctx, target_id)
+    return legacy_graph(ctx, target_id)
+
+
+def legacy_graph(ctx, target_id=None):
+    """Explicit migration/reference reader; not the canonical-mode write authority."""
     manifest, active, coverage = projections(ctx)
     observed_role = ctx.scope["role"]
     nodes, edges, conflicts = {}, [], set()
@@ -511,6 +527,8 @@ def graph(ctx, target_id=None):
 
 
 def declare_graph(ctx, body):
+    if getattr(ctx.host, "ontology_mode", "legacy") == "canonical":
+        fail(409, "canonical-ontology-required", "관계 변경은 프로젝트 온톨로지 검토 API를 사용하세요.")
     fields(body, {"requestId", "nodes", "edges", "sourceRef"})
     ctx.fresh()
     ref = body.get("sourceRef")
