@@ -19,6 +19,9 @@ manifest changes cancel the transaction. Failed immutable writes cannot advance
 the manifest. Per-partition limits are 500 nodes/1,000 edges, with up to 1,000
 partitions and bounded sharded indexes. There is no global 500-node storage claim.
 Read pages and dependency closures remain bounded and disclose incomplete scope.
+Source verification admits at most 90 distinct authority records; publication
+also checks the complete DynamoDB transaction against its 100-operation limit.
+Oversized operations fail with a split-scope error before publication.
 
 Canonical IDs are allocated within a partition namespace. Input-local IDs are
 retained as aliases, not trusted as another partition's ownership. Node revision
@@ -32,6 +35,11 @@ Foundation resources use `USES`, including Atom → Foundation/Icon.
 `ontology_impact.py` performs reverse traversal with source-revision seeds,
 witness paths, candidate/approved-declared/observed evidence, and inaccessible
 boundary handling. It never certifies dependencies outside the inspected snapshot.
+Historical impact retains source-to-node indexes and stale endpoint witnesses.
+Archived readable sources remain diagnostic candidates. Revoked source metadata
+is hidden; an opaque changed seed can expose only independently readable dependent
+nodes/evidence and reports a restricted boundary. Context/reuse/approval still
+require current sources.
 
 ## Source authority
 
@@ -93,6 +101,9 @@ Static manifest coverage is distinct from runtime completeness.
 revisions and permissions before analysis and publication. A missing configured
 analyzer blocks submission/execution. `local_analyze` is an explicit offline test
 adapter and requires a separate test opt-in; production cannot silently use it.
+The trusted adapter identity and publication role/partition ownership are checked
+before invocation. Completion metadata, execution receipt pointers, the partition
+and request marker commit atomically; an artifact conflict publishes none of them.
 The AgentCore adapter is a separate deployment milestone.
 
 ## Workbench compatibility
@@ -108,6 +119,10 @@ references; source reindex/import must complete before they become usable again.
 Canonical-mode impact records name their graph authority, use that manifest
 for freshness and preserve all source references. Existing bank local/Neptune
 graph and Gateway are not merged or reconfigured by this module.
+Legacy evidence APIs cannot choose canonical resolution through caller fields.
+Canonical impacts/tasks/reports carry their server-selected authority through
+read and completion. Import combines parallel relationship evidence, preserving
+all references in bounded chunks, and reports unsupported legacy shapes.
 
 ## Verification
 

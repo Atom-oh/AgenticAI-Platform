@@ -35,7 +35,10 @@ def traversal(graph, target_id):
     nodes = {node["id"]: node for node in graph["nodes"]}
     reverse = {}
     for edge in graph["edges"]:
-        if edge["rel"] in knowledge.DEPENDENCIES:
+        from workspace.ontology_schema import DEPENDENCIES
+        dependency = (edge["canonicalRelation"] in DEPENDENCIES if "canonicalRelation" in edge
+                      else edge["rel"] in knowledge.DEPENDENCIES)
+        if dependency and not edge.get("tombstone") and edge.get("reviewState") not in {"rejected", "deprecated"}:
             reverse.setdefault(edge["dst"], []).append(edge)
     pending = deque([(target_id, [target_id], [])])
     visited, items, references = set(), [], {}
@@ -78,11 +81,14 @@ def analyze(ctx, identifier, body):
     digest = _hash({"changeId": identifier, "change": {k: change[k] for k in
                     ("targetId", "changeType", "before", "after", "reason")}, "impact": impact})
     impact["impactHash"] = digest
-    checks = knowledge.verify_refs(ctx, impact["sourceRefs"])
-    # Pin the same manifest even when the graph has no source evidence.
     canonical = getattr(ctx.host, "ontology_mode", "legacy") == "canonical"
+    authority = "canonical" if canonical else "legacy"
+    checks = knowledge.verify_refs(ctx, impact["sourceRefs"], authority=authority)
+    # Pin the same manifest even when the graph has no source evidence.
     manifest_kind, manifest_id = ("ontology", "project-current") if canonical else ("wb_index", "current")
     manifest = ctx.storage.get(ctx.owner, manifest_kind, manifest_id)
+    if (manifest or {}).get("generation") != impact["generation"]:
+        fail(409, "stale-impact", "분석 중 그래프가 변경되었습니다.")
     if manifest:
         checks.append(ctx.check(manifest_kind, manifest))
     key, sha = ctx.put_json("wb_change", identifier, digest + "/impact.json", impact)
@@ -98,6 +104,7 @@ def analyze(ctx, identifier, body):
                 "title": item["title"], "role": item["role"], "status": "open",
                 "assigneeSub": None, "evidenceRefs": [], "sourceRefs": item["sourceRefs"],
                 "generation": impact["generation"], "confidence": item["confidence"]}
+        task["graphAuthority"] = authority
         writes.append(ctx.write("wb_task", task))
         tasks.append(task)
     updated = {**change, "status": "analyzed", "impactHash": digest, "impactKey": key, "impactSha": sha,
@@ -113,7 +120,7 @@ def read_impact(ctx, identifier):
     change = ctx.get("wb_change", identifier)
     if not change.get("impactKey"):
         fail(409, "analysis-required", "영향 분석을 먼저 실행하세요.")
-    knowledge.verify_refs(ctx, change["sourceRefs"])
+    knowledge.verify_refs(ctx, change["sourceRefs"], authority=change.get("graphAuthority", "legacy"))
     manifest_kind, manifest_id = ("ontology", "project-current") if change.get("graphAuthority") == "canonical" else ("wb_index", "current")
     manifest = ctx.storage.get(ctx.owner, manifest_kind, manifest_id) or {}
     if manifest.get("generation") != change.get("generation"):
@@ -121,7 +128,7 @@ def read_impact(ctx, identifier):
     result = ctx.read_json(change["impactKey"], change["impactSha"])
     ctx.fresh()
     current = ctx.get("wb_change", identifier)
-    knowledge.verify_refs(ctx, current["sourceRefs"])
+    knowledge.verify_refs(ctx, current["sourceRefs"], authority=current.get("graphAuthority", "legacy"))
     active = ctx.storage.get(ctx.owner, manifest_kind, manifest_id) or {}
     if (current["version"] != change["version"]
             or current.get("impactHash") != change.get("impactHash")
@@ -137,7 +144,8 @@ def update_task(ctx, identifier, body):
     ctx.fresh()
     task = ctx.get("wb_task", identifier)
     ctx.fresh({"owner", task["role"]})
-    knowledge.authorize_refs(ctx, task.get("sourceRefs", []))
+    authority = task.get("graphAuthority", "legacy")
+    knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority)
     if _version(body.get("version")) != task["version"]:
         fail(409, "conflict", "작업 버전이 변경되었습니다.")
     status = body.get("status")
@@ -149,7 +157,7 @@ def update_task(ctx, identifier, body):
         if not member or member["role"] not in {"owner", task["role"]}:
             fail(400, "invalid-assignee", "해당 역할의 현재 프로젝트 구성원만 배정할 수 있습니다.")
     refs = body.get("evidenceRefs", task.get("evidenceRefs", []))
-    checks = knowledge.verify_refs(ctx, refs)
+    checks = knowledge.verify_refs(ctx, refs, authority=authority)
     if status == "done":
         change = ctx.get("wb_change", task["changeId"])
         impact = read_impact(ctx, task["changeId"])
@@ -157,11 +165,12 @@ def update_task(ctx, identifier, body):
             fail(409, "stale-task", "현재 영향 분석에 해당하지 않는 작업입니다.")
         if not refs or not any(ref in task["sourceRefs"] for ref in refs):
             fail(422, "evidence-required", "이 작업의 현재 소스 근거가 필요합니다.")
-        checks.extend(knowledge.verify_refs(ctx, task["sourceRefs"]))
+        checks.extend(knowledge.verify_refs(ctx, task["sourceRefs"], authority=authority))
         checks.append(ctx.check("wb_change", change))
-        manifest = ctx.storage.get(ctx.owner, "wb_index", "current")
+        kind, manifest_id = ("ontology", "project-current") if authority == "canonical" else ("wb_index", "current")
+        manifest = ctx.storage.get(ctx.owner, kind, manifest_id)
         if manifest:
-            checks.append(ctx.check("wb_index", manifest))
+            checks.append(ctx.check(kind, manifest))
     updated = {**task, "status": status, "assigneeSub": assignee, "evidenceRefs": refs,
                "completedBy": ctx.actor if status == "done" else None,
                "completedAt": ctx.storage.clock() if status == "done" else None}

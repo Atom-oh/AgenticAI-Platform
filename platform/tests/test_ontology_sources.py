@@ -96,3 +96,49 @@ def test_only_current_published_product_guidance_is_a_current_source(wb):
     wb.storage.put(wb.owner, "product", {**changed, "publishedGuidelineId": "other"}, changed["version"])
     with pytest.raises(CollaborationError):
         Sources(context(wb)).resolve(reference)
+
+
+def test_workbench_expiry_is_rechecked_without_a_record_mutation(wb):
+    indexed(wb)
+    hit = call(wb, "GET", "knowledge")["items"][0]
+    evidence = call(wb, "GET", "knowledge/" + hit["id"])["evidence"]
+    ctx = context(wb)
+    ctx.claims["exp"] += 30 * 86400
+    reader = Sources(ctx)
+    reader.resolve(workbench_reference(evidence))
+    wb.now += 2 * 86400 * 1000
+    wb.storage.clock = lambda: wb.now
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+
+
+def test_authority_budget_is_measured_in_condition_records(wb):
+    reader = Sources(context(wb))
+    for number in range(90):
+        reader._remember("asset", {"id": f"asset-{number}", "version": 1})
+    with pytest.raises(CollaborationError) as error:
+        reader._remember("asset", {"id": "over-limit", "version": 1})
+    assert error.value.status == 422
+
+
+def test_document_library_approval_audience_and_post_read_revocation(wb):
+    from test_documents_library import upload, finalize, approve
+    project = wb.project["id"]
+    uploaded = upload(wb.api, data=b"Synthetic ontology policy.", project=project)
+    finalized = finalize(wb.api, uploaded, project=project)
+    status, approved = approve(wb.api, finalized, project=project)
+    assert status == 200
+    revision = approved["revision"]
+    document = wb.storage.get(wb.owner, "document", uploaded["document"]["id"])
+    reference = {"sourceKind": "document-revision", "sourceId": document["id"],
+        "revision": revision["id"], "sha256": revision["sha256"],
+        "audienceRevision": str(document["aclVersion"]), "allowedRoles": document["readRoles"]}
+    reader = Sources(context(wb, "bob"))
+    assert "Synthetic ontology policy." in reader.resolve(reference, text=True)["text"]
+    assert reader.recheck()
+    wb.storage.put(wb.owner, "document", {**document, "readRoles": ["owner"],
+        "aclVersion": document["aclVersion"] + 1}, document["version"])
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+    with pytest.raises(CollaborationError):
+        Sources(context(wb, "bob")).authorize(reference)

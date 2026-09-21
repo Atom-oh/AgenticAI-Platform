@@ -25,7 +25,7 @@ def workbench_reference(reference):
     return {"sourceKind": "workbench-document", "sourceId": reference["sourceId"],
             "revision": reference["generation"], "sha256": reference["contentHash"],
             "audienceRevision": str(reference["permissionVersion"]),
-            "location": {"documentId": reference["documentId"]}}
+            "location": {"documentId": reference["documentId"]}, "allowedRoles": reference["allowedRoles"]}
 
 
 class Sources:
@@ -34,6 +34,8 @@ class Sources:
         self.storage = context.storage
         self.observed = {}
         self.package_hashes = set()
+        self.workbench_refs = {}
+        self.historical_refs = {}
         self.ctx.fresh()
         self.authority = self._authority()
 
@@ -52,6 +54,8 @@ class Sources:
         if prior and prior != check:
             fail(409, "ontology-source-changed", "온톨로지 원본이 조회 중 변경되었습니다.")
         self.observed[key] = check
+        if len(self.observed) > 90:
+            fail(422, "ontology-authority-limit", "원자적으로 확인할 근거 레코드는 90개 이하여야 합니다. 분석 단위를 나누세요.")
         return record
 
     def _blob(self, key, expected, maximum=2_000_000):
@@ -71,7 +75,7 @@ class Sources:
         kind = ref["sourceKind"]
         if kind == "asset":
             asset = self._remember("asset", self.ctx.get("asset", ref["sourceId"]))
-            if asset.get("archived") or asset.get("uploadStatus") != "stored":
+            if asset.get("archived") or asset.get("accessRevoked") or asset.get("tombstone") or asset.get("uploadStatus") != "stored":
                 fail(409, "ontology-source-stale", "보관 완료된 활성 원본이 필요합니다.")
             expected = asset_reference(asset)
             self._identity(ref, expected)
@@ -111,6 +115,9 @@ class Sources:
             self._identity(ref, expected)
             if ref.get("location", {}).get("documentId") != expected["location"]["documentId"]:
                 fail(409, "ontology-source-stale", "지식 원본 문서가 변경되었습니다.")
+            if "allowedRoles" in ref and ref["allowedRoles"] != expected["allowedRoles"]:
+                fail(409, "ontology-source-stale", "원본의 기록된 읽기 권한이 다릅니다.")
+            self.workbench_refs[schema.digest(result["evidence"])] = result["evidence"]
             for check in knowledge.verify_refs(self.ctx, [result["evidence"]]):
                 record = self.storage.get(check["owner"], check["kind"], check["id"])
                 if not record or record["version"] != check["version"]:
@@ -127,6 +134,8 @@ class Sources:
                 revision = library.revision(document, ref["revision"], approved=True)
                 if revision["sha256"] != ref["sha256"] or str(document["aclVersion"]) != ref["audienceRevision"]:
                     fail(409, "ontology-source-stale", "문서 원본 또는 읽기 권한이 변경되었습니다.")
+                if "allowedRoles" in ref and ref["allowedRoles"] != document["readRoles"]:
+                    fail(409, "ontology-source-stale", "문서의 기록된 읽기 권한이 다릅니다.")
                 self._remember("document", document)
                 self._remember("docrevision", revision)
                 projection = library.projection(document, revision) if text else None
@@ -146,6 +155,53 @@ class Sources:
         # adapters of publications, approved UX contracts or generated rounds.
         fail(503, "ontology-source-adapter-unavailable", "이 원본 유형의 권한 연결이 아직 준비되지 않았습니다.")
 
+    def authorize(self, reference, *, remember=True):
+        """Authorize historical metadata, never reuse/approval or original bytes."""
+        ref = schema.source_ref(reference)
+        self._fresh()
+        kind = ref["sourceKind"]
+        if "allowedRoles" in ref and self.ctx.scope["role"] not in ref["allowedRoles"]:
+            fail(403, "ontology-source-forbidden", "기록된 원본 읽기 권한이 없습니다.")
+        if kind == "asset":
+            asset = self._remember("asset", self.ctx.get("asset", ref["sourceId"]))
+            if asset.get("accessRevoked") or asset.get("tombstone") or asset.get("status") == "deleted":
+                fail(403, "ontology-source-forbidden", "원본의 읽기 권한이 회수되었습니다.")
+            if ref["audienceRevision"] != PROJECT_AUDIENCE:
+                fail(403, "ontology-source-forbidden", "기록된 원본 권한을 확인하지 못했습니다.")
+        elif kind == "product-guideline":
+            self._remember("guideline", self.ctx.get("guideline", ref["sourceId"]))
+            if ref["audienceRevision"] != PROJECT_AUDIENCE:
+                fail(403, "ontology-source-forbidden", "기록된 지침 권한을 확인하지 못했습니다.")
+        elif kind == "document-revision":
+            from documents.library import Library
+            from documents.errors import DocumentError
+            try:
+                library = Library(self.ctx.host, self.ctx.scope)
+                document = library.document(ref["sourceId"])
+                revision = library.revision(document, ref["revision"])
+                if "allowedRoles" not in ref and str(document["aclVersion"]) != ref["audienceRevision"]:
+                    fail(403, "ontology-source-forbidden", "과거 문서의 읽기 권한 근거가 없습니다.")
+                self._remember("document", document)
+                self._remember("docrevision", revision)
+            except DocumentError as error:
+                fail(error.status, error.code, error.message)
+        elif kind == "workbench-document":
+            from workbench import knowledge
+            source = self._remember("wb_source", self.ctx.get("wb_source", ref["sourceId"]))
+            access = source.get("access", {}).get(ref.get("location", {}).get("documentId"), {})
+            if (not knowledge.source_current(self.ctx, source) or access.get("tombstone") is not False
+                    or self.ctx.scope["role"] not in access.get("allowedRoles", [])
+                    or "allowedRoles" not in ref and str(source["permissionVersion"]) != ref["audienceRevision"]):
+                fail(403, "ontology-source-forbidden", "과거 지식의 현재 읽기 권한을 확인하지 못했습니다.")
+        elif kind == "package":
+            if ref["sourceId"] != "studio-ui" or ref["audienceRevision"] != "platform-package-v1":
+                fail(403, "ontology-source-forbidden", "허용된 플랫폼 패키지가 아닙니다.")
+        else:
+            self.resolve(ref)
+        if remember:
+            self.historical_refs[schema.digest(ref)] = ref
+        return True
+
     @staticmethod
     def _identity(actual, expected):
         if any(actual.get(key) != expected.get(key) for key in
@@ -164,6 +220,11 @@ class Sources:
 
     def recheck(self):
         self._fresh()
+        if self.workbench_refs:
+            from workbench import knowledge
+            knowledge.verify_refs(self.ctx, list(self.workbench_refs.values()))
+        for ref in list(self.historical_refs.values()):
+            self.authorize(ref, remember=False)
         if self.package_hashes:
             from workspace.component_catalog import read_catalog
             if self.package_hashes != {read_catalog()["hash"]}:

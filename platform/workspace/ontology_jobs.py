@@ -17,6 +17,14 @@ def submit(ctx, body):
     if not getattr(ctx.host, "ontology_analyzer_ready", False):
         fail(503, "ontology-analyzer-unavailable", "소스 분석 실행 환경이 아직 구성되지 않았습니다.")
     name = schema._identifier(body.get("name"))
+    store = Ontology(ctx)
+    store.authorize_publication(name)
+    identifier = ctx.identity("wb_artifact", body.get("requestId"))
+    prior = ctx.existing("wb_artifact", identifier, body)
+    if prior:
+        Sources(ctx).verify(prior["sourceRefs"])
+        job = ctx.storage.get(ctx.owner, "job", prior["jobId"])
+        return {"artifact": prior, "job": job or ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])}
     files = body.get("files")
     if not isinstance(files, list) or not 1 <= len(files) <= 100:
         fail(422, "ontology-analysis-limit", "분석 단위는 파일 1~100개로 구성하세요.")
@@ -39,11 +47,6 @@ def submit(ctx, body):
     current = Ontology(ctx).current()
     if (current or {}).get("generation") != body.get("expectedGeneration"):
         fail(409, "ontology-changed", "온톨로지 기준이 변경되었습니다.")
-    identifier = ctx.identity("wb_artifact", body.get("requestId"))
-    prior = ctx.existing("wb_artifact", identifier, body)
-    if prior:
-        job = ctx.storage.get(ctx.owner, "job", prior["jobId"])
-        return {"artifact": prior, "job": job or ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])}
     job_id = schema.identity("ontology-job", identifier)
     pinned = {**ctx.authorization(), "operation": "ontology-analyze", "artifactId": identifier,
               "name": name, "files": copy.deepcopy(files), "sourceRefs": refs,
@@ -67,6 +70,15 @@ def process(ctx, pinned):
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
     if not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
+    backend = getattr(analyzer, "backend", None)
+    if backend == "local-offline" and not getattr(ctx.host, "allow_offline_ontology_analysis", False):
+        fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")
+    if backend not in {"local-offline", "agentcore-code-interpreter"}:
+        fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
+    store = Ontology(ctx)
+    current, _ = store.authorize_publication(pinned["name"])
+    if (current or {}).get("generation") != pinned["expectedGeneration"]:
+        fail(409, "ontology-changed", "온톨로지 기준이 변경되었습니다.")
     refs = Sources(ctx)
     refs.verify(pinned["sourceRefs"])
     payload, bindings = source_input(ctx, pinned["files"], pinned["resolver"])
@@ -76,23 +88,24 @@ def process(ctx, pinned):
     if not isinstance(result, dict) or not isinstance(result.get("execution"), dict) or "analysis" not in result:
         fail(503, "ontology-analysis-incomplete", "분석 실행 근거를 확인하지 못했습니다.")
     validate_execution(result["execution"])
-    if result["execution"].get("backend") == "local-offline" and not getattr(ctx.host, "allow_offline_ontology_analysis", False):
-        fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")
+    if result["execution"]["backend"] != backend:
+        fail(503, "ontology-analysis-backend", "구성된 분석 환경과 실행 근거가 다릅니다.")
     validate_analysis(payload, result["analysis"])
     graph = project_analysis(ctx, pinned["name"], payload, bindings, result["analysis"])
     refs.recheck()
     key, digest = ctx.put_json("wb_artifact", artifact["id"], "analysis.json", result)
     graph_key, graph_hash = ctx.put_json("wb_artifact", artifact["id"], "candidate.json", graph)
-    published = Ontology(ctx).publish_candidate(pinned["name"], graph,
-        expected_generation=pinned["expectedGeneration"], request_id=artifact["id"], _producer="parser-extracted")
-    current = ctx.get("wb_artifact", artifact["id"])
-    # Publishing changes the project fence. Re-authorize for the final metadata
-    # transition; all source revisions are independently verified again.
-    ctx.fresh()
-    checks = Sources(ctx).verify(pinned["sourceRefs"])
-    saved = ctx.commit([ctx.write("wb_artifact", {**current, "status": "completed",
-        "analysisKey": key, "analysisHash": digest, "graphKey": graph_key, "graphHash": graph_hash,
-        "execution": result["execution"], "coverage": result["analysis"]["coverage"],
-        "generation": published["generation"], "partitionId": published["partitionId"],
-        "identities": published["identities"]}, current["version"])], checks)[0]
-    return {"artifactId": saved["id"], "generation": saved["generation"], "coverage": saved["coverage"]}
+
+    def completion(marker):
+        refs.recheck()
+        return [ctx.write("wb_artifact", {**artifact, "status": "completed",
+            "analysisKey": key, "analysisHash": digest, "graphKey": graph_key, "graphHash": graph_hash,
+            "execution": result["execution"], "coverage": result["analysis"]["coverage"],
+            "generation": marker["generation"], "partitionId": marker["partitionId"],
+            "identities": marker["identities"]}, artifact["version"])]
+
+    published = store.publish_candidate(pinned["name"], graph,
+        expected_generation=pinned["expectedGeneration"], request_id=artifact["id"],
+        _producer="parser-extracted", _completion_writes=completion)
+    return {"artifactId": artifact["id"], "generation": published["generation"],
+            "coverage": result["analysis"]["coverage"]}

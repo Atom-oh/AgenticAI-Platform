@@ -39,6 +39,7 @@ class Ontology:
         self.sources = Sources(context)
         self._parts = {}
         self._indexes = {}
+        self._historical_stale = False
 
     def current(self):
         self.ctx.fresh()
@@ -112,13 +113,23 @@ class Ontology:
             fail(409, "ontology-integrity", "온톨로지 노드 인덱스가 원본과 다릅니다.")
         return node
 
-    def _visible(self, refs):
+    def _visible(self, refs, *, historical=False):
         from workspace.collaboration import CollaborationError
         try:
-            self.sources.verify(refs)
+            if historical:
+                for ref in refs:
+                    self.sources.authorize(ref)
+                    try:
+                        self.sources.resolve(ref)
+                    except CollaborationError as error:
+                        if error.status not in (403, 404, 409):
+                            raise
+                        self._historical_stale = True
+            else:
+                self.sources.verify(refs)
             return True
         except CollaborationError as error:
-            if error.status in (400, 403, 404, 409, 422, 503):
+            if error.status in (403, 404, 409):
                 return False
             raise
 
@@ -128,15 +139,24 @@ class Ontology:
         if (current or {}).get("generation") != (manifest or {}).get("generation"):
             fail(409, "ontology-changed", "조회 중 온톨로지가 변경되었습니다. 다시 조회하세요.")
 
-    def publish_candidate(self, name, graph, *, expected_generation, request_id, additional_checks=(), _producer="declared"):
+    def authorize_publication(self, name):
+        """Check the destination before any paid analysis or other side effect."""
         self.ctx.fresh({"owner", "planner", "designer", "developer"})
         schema._identifier(name)
         if name.startswith(("product-", "system-", "publication-")):
             fail(403, "ontology-managed-partition", "게시 원본 파티션은 해당 원본의 관리 API에서 변경하세요.")
+        current = self.current()
+        prior = self._part(current, schema.identity("partition", name)) if current else None
+        if prior and prior["createdBy"] != self.ctx.actor and self.ctx.scope["role"] != "owner":
+            fail(403, "ontology-owner-required", "기존 매핑 작성자 또는 프로젝트 관리자가 수정할 수 있습니다.")
+        return current, prior
+
+    def publish_candidate(self, name, graph, *, expected_generation, request_id, additional_checks=(),
+                          _producer="declared", _completion_writes=None):
+        current, prior = self.authorize_publication(name)
         schema._identifier(request_id)
         if _producer not in {"declared", "parser-extracted"}:
             raise ValueError("Unsupported trusted ontology producer")
-        current = self.current()
         partition = schema.identity("partition", name)
         request_hash = schema.digest({"name": name, "graph": graph, "expectedGeneration": expected_generation})
         marker_id = schema.identity("ontology-request", self.ctx.actor, request_id)
@@ -149,9 +169,6 @@ class Ontology:
                     "identities": marker["identities"]}
         if (current or {}).get("generation") != expected_generation:
             fail(409, "ontology-changed", "온톨로지 기준이 변경되었습니다.")
-        prior = self._part(current, partition) if current else None
-        if prior and prior["createdBy"] != self.ctx.actor and self.ctx.scope["role"] != "owner":
-            fail(403, "ontology-owner-required", "기존 매핑 작성자 또는 프로젝트 관리자가 수정할 수 있습니다.")
         schema._fields(graph, {"schemaVersion", "projectId", "nodes", "edges"}, {"coverage"})
         if not isinstance(graph["nodes"], list) or not isinstance(graph["edges"], list):
             fail(400, "ontology-input", "노드와 관계 목록이 필요합니다.")
@@ -180,7 +197,8 @@ class Ontology:
                     properties[field] = [identities.get(item, item) for item in properties[field]]
             if "fileId" in properties:
                 properties["fileId"] = identities.get(properties["fileId"], properties["fileId"])
-            aliases = value.get("aliases", [])
+            aliases = list({schema.digest(alias): alias for alias in [
+                *(old.get("aliases", []) if old else []), *value.get("aliases", [])]}.values())
             if not old:
                 aliases = [*aliases, {"namespace": "partition-local", "value": original_id}]
             normalized["nodes"][i] = schema.seal({**value, "id": identifier, "properties": properties, "aliases": aliases,
@@ -217,10 +235,13 @@ class Ontology:
         updated["generation"] = schema.digest({"partitions": updated["partitions"], "indexes": updated["indexes"]})
         marker = {"id": marker_id, "projectId": self.ctx.project_id, "requestHash": request_hash,
                   "generation": updated["generation"], "partitionId": partition, "identities": identities}
+        completion = (_completion_writes(copy.deepcopy(marker)) if _completion_writes else [])
+        self.sources.recheck()
         self.ctx.commit([self.ctx.write("ontology", updated, current["version"] if current else None),
-                         self.ctx.write("ontology", marker)], checks)
+                         self.ctx.write("ontology", marker), *completion], checks)
         return {"generation": updated["generation"], "partitionId": partition,
-                "nodes": len(normalized["nodes"]), "edges": len(normalized["edges"]), "identities": identities}
+                "nodes": len(normalized["nodes"]), "edges": len(normalized["edges"]), "identities": identities,
+                "coverage": normalized.get("coverage", {"complete": False})}
 
     def _replace_indexes(self, updated, current, partition, old, new):
         changes = {}
@@ -237,8 +258,20 @@ class Ontology:
                 key = source_identity(ref)
                 values = bucket("sources", key).get(key, [])
                 bucket("sources", key)[key] = [value for value in values if value != node["id"]]
+                history = bucket("historical-sources", key).setdefault(key, [])
+                if node["id"] not in history:
+                    history.append(node["id"])
+                    history.sort()
         for edge in old["edges"]:
             bucket("edges", edge["id"]).pop(edge["id"], None)
+            for ref in edge["sourceRefs"]:
+                key = source_identity(ref)
+                values = bucket("edge-sources", key).get(key, [])
+                bucket("edge-sources", key)[key] = [value for value in values if value != edge["id"]]
+                history = bucket("historical-sources", key).setdefault(key, [])
+                if edge["src"]["id"] not in history:
+                    history.append(edge["src"]["id"])
+                    history.sort()
             for end in ("src", "dst"):
                 key = edge[end]["id"]
                 values = bucket("adjacency", key).get(key, [])
@@ -257,6 +290,12 @@ class Ontology:
             if existing and existing["partition"] != partition:
                 fail(409, "ontology-edge-conflict", "다른 파티션이 소유한 관계 ID입니다.")
             bucket("edges", edge["id"])[edge["id"]] = {"partition": partition, "contentHash": edge["contentHash"]}
+            for ref in edge["sourceRefs"]:
+                key = source_identity(ref)
+                values = bucket("edge-sources", key).setdefault(key, [])
+                if edge["id"] not in values:
+                    values.append(edge["id"])
+                    values.sort()
             for end in ("src", "dst"):
                 key = edge[end]["id"]
                 values = bucket("adjacency", key).setdefault(key, [])
@@ -334,12 +373,13 @@ class Ontology:
                 "id": next_cursor, "projectId": self.ctx.project_id, "fingerprint": fingerprint,
                 "position": position, "expiresAt": self.storage.clock() + 300000,
                 "ttl": self.storage.clock() // 1000 + 300})
+            self._recheck(current)
         return {"schemaVersion": 1, "nodes": selected, "edges": list(edges.values()), "generation": current["generation"],
                 "cursor": next_cursor, "backend": "workspace-project-ontology",
                 "coverage": {"complete": False, "unknown": ["outside-page-or-inaccessible"] +
                              (["stale-endpoint-revisions"] if stale_edges else []), "truncated": more}}
 
-    def closure(self, node_ids, *, direction="dependencies", max_nodes=50):
+    def closure(self, node_ids, *, direction="dependencies", max_nodes=50, historical=False):
         if direction not in {"dependencies", "dependents", "both"} or not 1 <= max_nodes <= schema.MAX_NODES:
             fail(400, "ontology-scope", "지원되는 관계 조회 범위가 필요합니다.")
         if not isinstance(node_ids, list) or not 1 <= len(node_ids) <= 20:
@@ -351,6 +391,7 @@ class Ontology:
             fail(409, "ontology-not-indexed", "프로젝트 온톨로지가 아직 등록되지 않았습니다.")
         pending = deque((identifier, 0) for identifier in sorted(set(node_ids)))
         nodes, edges, unknown = {}, {}, {"outside-snapshot-not-certified"}
+        impact_seeds = set(node_ids)
         visited = set()
         while pending:
             identifier, depth = pending.popleft()
@@ -361,10 +402,15 @@ class Ontology:
                 break
             visited.add(identifier)
             node = self._node(current, identifier)
-            if not node or node["tombstone"] or not self._visible(node["sourceRefs"]):
+            readable = node and (historical or not node["tombstone"]) and self._visible(node["sourceRefs"], historical=historical)
+            opaque_seed = historical and identifier in node_ids and not readable
+            if not readable and not opaque_seed:
                 unknown.add("unmapped-or-inaccessible")
                 continue
-            nodes[identifier] = node
+            if readable:
+                nodes[identifier] = node
+            else:
+                unknown.add("restricted-source-boundary")
             adjacent = self._index(current, "adjacency", _bucket(identifier)).get(identifier, [])
             if depth >= 12:
                 if adjacent:
@@ -381,29 +427,40 @@ class Ontology:
                 edge = next((item for item in part["graph"]["edges"] if item["id"] == edge_id), None)
                 if not edge or edge["contentHash"] != loc["contentHash"]:
                     fail(409, "ontology-integrity", "관계 원본과 인덱스가 일치하지 않습니다.")
-                if edge["type"] not in schema.DEPENDENCIES or edge["tombstone"]:
+                if edge["type"] not in schema.DEPENDENCIES or edge["tombstone"] or edge["reviewState"] in {"rejected", "deprecated"}:
                     continue
                 if direction == "dependencies" and edge["src"]["id"] != identifier or (
                         direction == "dependents" and edge["dst"]["id"] != identifier):
                     continue
                 other = edge["dst"]["id"] if edge["src"]["id"] == identifier else edge["src"]["id"]
                 target = self._node(current, other)
-                if not target or target["tombstone"] or not self._visible(target["sourceRefs"]) or not self._visible(edge["sourceRefs"]):
+                if (not target or not historical and target["tombstone"]
+                        or not self._visible(target["sourceRefs"], historical=historical)
+                        or not self._visible(edge["sourceRefs"], historical=historical)):
                     unknown.add("unmapped-or-inaccessible")
                     continue
-                versions = {identifier: node["revision"], other: target["revision"]}
+                versions = {identifier: node["revision"] if node else None, other: target["revision"]}
                 if any(versions[edge[end]["id"]] != edge[end]["revision"] for end in ("src", "dst")):
                     unknown.add("stale-endpoint-revisions")
-                    continue
-                edges[edge_id] = edge
+                    if not historical:
+                        continue
+                if not opaque_seed:
+                    edges[edge_id] = edge
+                else:
+                    impact_seeds.add(other)
                 pending.append((other, depth + 1))
         edges = {key: edge for key, edge in edges.items() if edge["src"]["id"] in nodes and edge["dst"]["id"] in nodes}
         self._recheck(current)
-        return {"schemaVersion": 1, "projectId": self.ctx.project_id, "generation": current["generation"],
+        if self._historical_stale:
+            unknown.add("historical-source-revisions")
+        result = {"schemaVersion": 1, "projectId": self.ctx.project_id, "generation": current["generation"],
                 "nodes": sorted(nodes.values(), key=lambda node: node["id"]),
                 "edges": sorted(edges.values(), key=lambda edge: edge["id"]),
                 "coverage": {"complete": False, "scope": "authorized-dependency-closure",
                              "truncated": "truncated" in unknown, "unknown": sorted(unknown)}}
+        if historical:
+            result["impactSeeds"] = sorted(impact_seeds & nodes.keys())
+        return result
 
     def context(self, node_ids):
         graph = self.closure(node_ids, direction="both", max_nodes=50)
@@ -415,20 +472,28 @@ class Ontology:
         return {**payload, "generation": graph["generation"], "hash": schema.digest(payload),
                 "sourceRefs": _references(graph)}
 
-    def source_nodes(self, reference):
+    def source_nodes(self, reference, *, for_impact=False):
         ref = schema.source_ref(reference)
         current = self.current()
-        if not current or not self._visible([ref]):
+        if not current or not for_impact and not self._visible([ref]):
             return []
         key = source_identity(ref)
-        values = self._index(current, "sources", _bucket(key)).get(key, [])
+        values = list(self._index(current, "sources", _bucket(key)).get(key, []))
+        if for_impact:
+            values.extend(self._index(current, "historical-sources", _bucket(key)).get(key, []))
+        for edge_id in self._index(current, "edge-sources", _bucket(key)).get(key, []):
+            loc = self._index(current, "edges", _bucket(edge_id)).get(edge_id)
+            part = self._part(current, loc["partition"]) if loc else None
+            edge = next((item for item in part["graph"]["edges"] if item["id"] == edge_id), None) if part else None
+            if edge and (for_impact or self._visible(edge["sourceRefs"])):
+                values.append(edge["src"]["id"])
         result = []
         for identifier in values[:500]:
             node = self._node(current, identifier)
-            if node and not node["tombstone"] and self._visible(node["sourceRefs"]):
+            if for_impact or node and not node["tombstone"] and self._visible(node["sourceRefs"]):
                 result.append(identifier)
         self._recheck(current)
-        return result
+        return sorted(set(result))
 
     def review_node(self, identifier, *, expected_generation, revision, decision, reason, request_id):
         schema._identifier(identifier)

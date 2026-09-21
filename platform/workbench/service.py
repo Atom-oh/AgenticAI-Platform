@@ -134,10 +134,24 @@ class Service:
         project = self.scope["project"]
         if self.claims.get("exp") is not None and int(self.claims["exp"]) * 1000 <= self.storage.clock():
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        if len(writes) + 1 > 100:
+            fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         if not checks:
             return self.collaboration._commit(self.scope, writes)
-        written = {(w["kind"], w["item"]["id"]) for w in writes}
-        unique = {(c["kind"], c["id"]): c for c in checks if (c["kind"], c["id"]) not in written}
+        unique = {}
+        for check in checks:
+            key = check["owner"], check["kind"], check["id"]
+            if key in unique and unique[key] != check:
+                fail(409, "source-changed", "같은 원본의 서로 다른 버전이 관찰되었습니다.")
+            unique[key] = check
+        for write in writes:
+            key = write["owner"], write["kind"], write["item"]["id"]
+            if key in unique:
+                if unique[key]["version"] != write.get("expected_version"):
+                    fail(409, "source-changed", "검증한 원본과 저장 기준 버전이 다릅니다.")
+                del unique[key]
+        if len(writes) + len(unique) + 1 > 100:
+            fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         fence = self.write("project", project, project["version"])
         try:
             return self.storage.put_many([*writes, fence], checks=list(unique.values()))[:-1]

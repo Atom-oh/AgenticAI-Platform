@@ -42,16 +42,20 @@ def route(host, scope, claims, method, parts, body, query):
         current = ontology.current()
         if not current or current["generation"] != body.get("expectedGeneration"):
             fail(409, "ontology-changed", "영향 분석 기준이 변경되었습니다.")
-        seeds = list(body.get("nodeIds", []))
+        raw_seeds = body.get("nodeIds", [])
+        if not isinstance(raw_seeds, list) or any(not isinstance(seed, str) for seed in raw_seeds):
+            fail(400, "ontology-selection", "시작 노드 목록이 올바르지 않습니다.")
+        seeds = list(raw_seeds)
         if body.get("oldSource"):
-            seeds.extend(ontology.source_nodes(body["oldSource"]))
+            seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True))
         if not seeds:
             return 200, {"items": [], "generation": current["generation"],
                          "coverage": {"complete": False, "unknown": ["unmapped-or-inaccessible-seed"]}}
         seeds = sorted(set(seeds))
-        graph = ontology.closure(seeds[:20], direction="dependents", max_nodes=500)
+        graph = ontology.closure(seeds[:20], direction="dependents", max_nodes=500, historical=True)
+        impact_seeds = graph.pop("impactSeeds")
         change = {"id": body.get("changeId"), "kind": body.get("kind"), "baseGeneration": current["generation"],
-                  "nodeIds": seeds[:20]}
+                  "nodeIds": impact_seeds}
         if body.get("oldSource"):
             change["oldSource"] = body["oldSource"]
         if body.get("newSource"):
@@ -60,7 +64,7 @@ def route(host, scope, claims, method, parts, body, query):
             graph["coverage"]["truncated"] = True
             graph["coverage"]["unknown"].append("seed-limit")
         result = analyze({key: value for key, value in graph.items() if key != "generation"},
-                         change, generation=current["generation"], can_read=ontology._visible)
+                         change, generation=current["generation"], can_read=lambda refs: ontology._visible(refs, historical=True))
         ontology._recheck(current)
         return 200, result
     if parts == ["analyses"] and method == "POST":
@@ -71,9 +75,13 @@ def route(host, scope, claims, method, parts, body, query):
         if artifact.get("kind") != "ontology-analysis":
             fail(404, "not-found", "분석 작업이 없습니다.")
         from workspace.ontology_sources import Sources
-        Sources(ctx).verify(artifact["sourceRefs"])
+        sources = Sources(ctx)
+        sources.verify(artifact["sourceRefs"])
         response = {"artifact": public(artifact)}
         if artifact.get("analysisKey"):
             response["analysis"] = ctx.read_json(artifact["analysisKey"], artifact["analysisHash"], 4_000_000)
+        sources.recheck()
+        if ctx.get("wb_artifact", parts[1])["version"] != artifact["version"]:
+            fail(409, "ontology-analysis-changed", "조회 중 분석 기록이 변경되었습니다.")
         return 200, response
     fail(404, "not-found", "온톨로지 경로를 찾을 수 없습니다.")

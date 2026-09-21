@@ -5,6 +5,18 @@ const text = (path, source, kind = 'code') => ({ path, kind, text: source, sha25
 const asset = path => ({ path, kind: 'asset', sha256: sha(path) });
 const request = files => ({ schemaVersion: 1, files });
 
+test('import equals and import type retain literal dependencies; namespace aliases remain unknown', () => {
+  const result = analyze(request([
+    text('App.tsx', 'import Button = require("./Button");type Props = import("./Button").Props;export const App=()=> <Button/>'),
+    text('Button.tsx', 'export type Props = {};export = function Button(){return <button/>}'),
+  ]));
+  for (const kind of ['import-equals', 'type-import', 'jsx-use'])
+    assert.ok(result.references.some(r => r.kind === kind && r.resolution.targetPath === 'Button.tsx'));
+  const alias = analyze(request([text('Alias.ts', 'namespace A {export const B=1;}import B=A.B;')]));
+  assert.equal(alias.coverage.complete, false);
+  assert.ok(alias.unresolved.some(r => r.reason === 'namespace-import-alias'));
+});
+
 test('real TS parser connects imports, JSX symbols, image imports and CSS resources', () => {
   const input = request([
     text('src/App.tsx', `import {Button as Action} from './Button';

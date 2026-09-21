@@ -19,7 +19,7 @@ def _same_source(left, right):
 
 
 def analyze(graph, change, *, generation, can_read):
-    schema.validate_graph(graph)
+    schema.validate_graph(graph, diagnostic=True)
     schema._hash(generation)
     schema._fields(change, {"id", "kind", "baseGeneration"}, {"oldSource", "nodeIds", "newSource"})
     schema._identifier(change["id"])
@@ -38,15 +38,21 @@ def analyze(graph, change, *, generation, can_read):
     if not seeds and old is None:
         raise ValueError("An exact source revision or canonical node seed is required")
     nodes = {node["id"]: node for node in graph["nodes"]}
-    visible = {identifier for identifier, node in nodes.items() if not node["tombstone"] and can_read(node["sourceRefs"])}
+    visible = {identifier for identifier, node in nodes.items()
+               if node["reviewState"] not in {"rejected", "deprecated"} and can_read(node["sourceRefs"])}
     if old:
         seeds = [*seeds, *(node["id"] for node in nodes.values()
                           if any(_same_source(ref, old) for ref in node["sourceRefs"]))]
+        seeds.extend(edge["src"]["id"] for edge in graph["edges"]
+                     if edge["type"] in CHANGE_EDGES[change["kind"]]
+                     and any(_same_source(ref, old) for ref in edge["sourceRefs"])
+                     and can_read(edge["sourceRefs"]))
+    missing_seeds = bool(set(seeds) - visible)
     seeds = sorted(set(seed for seed in seeds if seed in visible))
     reverse = {}
     hidden_boundary = False
     for edge in graph["edges"]:
-        if edge["tombstone"] or edge["type"] not in CHANGE_EDGES[change["kind"]]:
+        if edge["tombstone"] or edge["reviewState"] in {"rejected", "deprecated"} or edge["type"] not in CHANGE_EDGES[change["kind"]]:
             continue
         reverse.setdefault(edge["dst"]["id"], []).append(edge)
     for edges in reverse.values():
@@ -66,8 +72,11 @@ def analyze(graph, change, *, generation, can_read):
         if node["type"] == "Team":
             continue
         evidence = [node, *witnesses, *(nodes[prior] for prior in path[:-1])]
-        candidate = any(item["reviewState"] not in {"reviewed", "approved"} or item["provenance"] == "model-inferred"
-                        for item in evidence)
+        stale = any(any(nodes[edge[end]["id"]]["revision"] != edge[end]["revision"] for end in ("src", "dst"))
+                    for edge in witnesses)
+        candidate = stale or "restricted-source-boundary" in graph.get("coverage", {}).get("unknown", []) or any(
+            item["tombstone"] or item["reviewState"] != "approved"
+            or item["provenance"] == "model-inferred" for item in evidence)
         method = "candidate" if candidate else "approved-declared" if any(
             item["provenance"] == "declared" for item in evidence) else "observed-structural"
         refs = {schema.digest(ref): ref for item in evidence for ref in item["sourceRefs"]}
@@ -75,6 +84,7 @@ def analyze(graph, change, *, generation, can_read):
                       "type": node["type"], "evidenceKind": method,
                       "action": "investigate" if candidate else "revalidate",
                       "witnessPath": path, "witnessEdges": [edge["id"] for edge in witnesses],
+                      "staleWitness": stale,
                       "sourceRefs": list(refs.values())})
         if len(witnesses) >= LIMITS["hops"]:
             if reverse.get(identifier):
@@ -94,7 +104,7 @@ def analyze(graph, change, *, generation, can_read):
     unknown = set(graph.get("coverage", {}).get("unknown", []))
     if hidden_boundary:
         unknown.add("restricted-or-unmapped")
-    if not seeds:
+    if not seeds or missing_seeds:
         unknown.add("unmapped-or-inaccessible-seed")
     if any(item["evidenceKind"] == "candidate" for item in items):
         unknown.add("unreviewed-dependencies")

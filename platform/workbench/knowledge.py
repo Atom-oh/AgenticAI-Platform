@@ -264,17 +264,23 @@ def visible(ctx, source, ref):
             and all(access.get(k) == ref.get(k) for k in ("revision", "contentHash")))
 
 
-def verify_refs(ctx, refs):
+def verify_refs(ctx, refs, *, authority="legacy"):
     if not isinstance(refs, list) or len(refs) > 50:
         fail(400, "invalid-evidence", "근거 목록이 올바르지 않습니다.")
     checks = []
+    if authority == "canonical":
+        from workspace.ontology_sources import Sources
+        reader = Sources(ctx)
+        checks = reader.verify(refs)
+        reader.recheck()
+        return checks
+    if authority != "legacy":
+        fail(400, "invalid-authority", "근거 저장소가 올바르지 않습니다.")
     for ref in refs:
         if not isinstance(ref, dict):
             fail(400, "invalid-evidence", "정확한 소스 버전 근거가 필요합니다.")
         if "sourceKind" in ref:
-            from workspace.ontology_sources import Sources
-            checks.extend(Sources(ctx).verify([ref]))
-            continue
+            fail(400, "invalid-evidence", "기존 지식 자료에는 기존 소스 근거가 필요합니다.")
         source = ctx.get("wb_source", ref.get("sourceId"))
         if (not visible(ctx, source, ref) or not isinstance(ref.get("generation"), str)
                 or ref.get("accessExpiresAt") != source["accessExpiresAt"]):
@@ -287,7 +293,7 @@ def verify_refs(ctx, refs):
     return checks
 
 
-def authorize_refs(ctx, refs):
+def authorize_refs(ctx, refs, *, authority="legacy"):
     """Require both the bound historical audience and the current source audience.
 
     This does not assert freshness of historical evidence and is never sufficient
@@ -295,13 +301,20 @@ def authorize_refs(ctx, refs):
     """
     if not isinstance(refs, list) or len(refs) > 50:
         fail(400, "invalid-evidence", "근거 목록이 올바르지 않습니다.")
+    if authority == "canonical":
+        from workspace.ontology_sources import Sources
+        reader = Sources(ctx)
+        for ref in refs:
+            reader.authorize(ref)
+        reader.recheck()
+        return
+    if authority != "legacy":
+        fail(400, "invalid-authority", "근거 저장소가 올바르지 않습니다.")
     for ref in refs:
         if not isinstance(ref, dict):
             fail(400, "invalid-evidence", "문서 근거가 필요합니다.")
         if "sourceKind" in ref:
-            from workspace.ontology_sources import Sources
-            Sources(ctx).verify([ref])
-            continue
+            fail(400, "invalid-evidence", "기존 지식 자료에는 기존 소스 근거가 필요합니다.")
         source = ctx.get("wb_source", ref.get("sourceId"))
         access = source.get("access", {}).get(ref.get("documentId"), {})
         if (not source_current(ctx, source) or access.get("tombstone") is not False

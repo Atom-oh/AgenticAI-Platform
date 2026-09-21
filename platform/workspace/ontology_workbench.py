@@ -27,6 +27,9 @@ def graph(ctx, target_id=None):
     edges = [{**edge, "src": edge["src"]["id"], "dst": edge["dst"]["id"],
               "rel": RELATIONS.get(edge["type"], edge["type"]), "canonicalRelation": edge["type"],
               "sourceRef": edge["sourceRefs"][0]} for edge in value["edges"]]
+    for edge in edges:
+        if edge["canonicalRelation"] == "OWNED_BY":
+            edge["src"], edge["dst"] = edge["dst"], edge["src"]
     return {"nodes": nodes, "edges": edges, "generation": value["generation"], "coverage": value["coverage"],
             "backend": "workspace-project-ontology", "cursor": value.get("cursor")}
 
@@ -40,7 +43,7 @@ def import_legacy(ctx, body):
     if baseline and baseline.get("generation") != old.get("generation"):
         from workbench.service import fail
         fail(409, "legacy-source-changed", "가져오는 동안 기존 지식 그래프가 변경되었습니다.")
-    nodes, edges, ids, missing = [], [], set(), set()
+    nodes, edges, ids, missing = [], {}, set(), set()
     types = {"Flow": "Procedure", "Guideline": "Document", "Rule": "PolicyRule", "Role": "Team", "Icon": "Foundation"}
     property_ids = {"Product": "productId", "Document": "documentId", "PolicyRule": "ruleId",
                     "Team": "teamId", "API": "apiId", "Test": "testId", "Skill": "skillId"}
@@ -57,7 +60,12 @@ def import_legacy(ctx, body):
                "properties": properties, "aliases": [{"namespace": "workbench-v1", "value": old_node["id"]}]}
         if kind == "Foundation":
             row["subtype"] = "icon"
-        nodes.append(schema.seal(row))
+        try:
+            node = schema.validate_node(schema.seal(row))
+        except (ValueError, TypeError):
+            missing.add("unmapped-legacy-node-shape")
+            continue
+        nodes.append(node)
         ids.add(row["id"])
     relations = {"DEPENDS_ON": "USES", "CONFORMS_TO": "GOVERNED_BY", "REQUIRES": "USES"}
     node_types = {node["id"]: node["type"] for node in nodes}
@@ -74,11 +82,31 @@ def import_legacy(ctx, body):
         if kind not in schema.EDGE_TYPES or kind == "GOVERNED_BY" and node_types[target] != "PolicyRule":
             missing.add("unmapped-legacy-relation")
             continue
-        edges.append(schema.seal({"id": schema.identity("legacy-edge", source, kind, target), "type": kind,
+        row = {"id": schema.identity("legacy-edge", source, kind, target), "type": kind,
             "src": {"id": source, "revision": 1}, "dst": {"id": target, "revision": 1},
             "sourceRefs": [workbench_reference(old_edge["sourceRef"])], "provenance": "declared",
-            "reviewState": "candidate", "tombstone": False}))
-    value = {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": nodes, "edges": edges,
+            "reviewState": "candidate", "tombstone": False}
+        try:
+            schema.validate_graph({"schemaVersion": 1, "projectId": ctx.project_id,
+                "nodes": nodes, "edges": [schema.seal(row)]})
+        except (ValueError, TypeError):
+            missing.add("unmapped-legacy-edge-shape")
+            continue
+        # Preserve parallel evidence without colliding identities or silently
+        # dropping references at the per-edge schema limit.
+        identity = row["id"]
+        ref = row["sourceRefs"][0]
+        group = edges.setdefault(identity, {**row, "sourceRefs": []})["sourceRefs"]
+        if ref not in group:
+            group.append(ref)
+    projected_edges = []
+    for identity, row in sorted(edges.items()):
+        refs = row["sourceRefs"]
+        refs.sort(key=schema.digest)
+        for offset in range(0, len(refs), schema.MAX_REFS):
+            projected_edges.append(schema.seal({**row, "id": schema.identity("legacy-evidence", identity, offset),
+                "sourceRefs": refs[offset:offset + schema.MAX_REFS]}))
+    value = {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": nodes, "edges": projected_edges,
              "coverage": {"complete": False, "scope": "explicit-workbench-migration",
                           "truncated": old["coverage"].get("truncated", False),
                           "unknown": sorted(missing | {"legacy-mappings-require-review"})}}

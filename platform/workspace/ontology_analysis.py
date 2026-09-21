@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 from pathlib import Path
 
 from workbench.service import fail
@@ -25,14 +26,17 @@ def source_input(ctx, items, resolver=None):
     if not isinstance(items, list) or not 1 <= len(items) <= 100:
         fail(422, "ontology-analysis-limit", "분석 단위는 파일 1~100개로 구성하세요.")
     reader, files, bindings = Sources(ctx), [], {}
-    total = 0
+    total, folded = 0, set()
     for item in items:
         schema._fields(item, {"assetId", "path"})
         schema._identifier(item["assetId"])
         file = item["path"]
-        if (not isinstance(file, str) or len(file) > 500 or file.startswith("/") or "\\" in file
-                or any(part in {"", ".", ".."} for part in file.split("/")) or file in bindings):
+        if (not isinstance(file, str) or len(file) > 500 or len(file.encode()) > 1024
+                or file != unicodedata.normalize("NFC", file) or file.startswith("/")
+                or any(c in "\\:?#" or ord(c) < 32 or ord(c) == 127 for c in file)
+                or any(part in {"", ".", ".."} for part in file.split("/")) or file.lower() in folded):
             fail(400, "ontology-analysis-path", "파일 경로가 올바르지 않거나 중복됩니다.")
+        folded.add(file.lower())
         kind = KINDS.get(Path(file).suffix.lower())
         if kind is None:
             fail(422, "ontology-analysis-format", "지원되는 코드·스타일·이미지 원본을 선택하세요.")
@@ -44,6 +48,8 @@ def source_input(ctx, items, resolver=None):
         entry = {"path": file, "kind": kind, "sha256": record["sha256"]}
         if kind != "asset":
             entry["text"] = value["text"]
+            if len(value["text"].encode()) > 102400:
+                fail(422, "ontology-analysis-limit", "각 분석 파일의 텍스트는 100 KiB 이하여야 합니다.")
             total += len(value["text"].encode())
         files.append(entry)
         bindings[file] = {"ref": ref, "record": record, "kind": kind}
@@ -76,6 +82,9 @@ def local_analyze(payload):
     return {"analysis": value, "execution": {"backend": "local-offline", "sourceExecuted": False,
         "analyzerCodeHash": hashlib.sha256((ANALYZER_ROOT / "analyze.cjs").read_bytes()).hexdigest(),
         "dependencyLockHash": hashlib.sha256((ANALYZER_ROOT / "package-lock.json").read_bytes()).hexdigest()}}
+
+
+local_analyze.backend = "local-offline"
 
 
 def validate_execution(value):
@@ -182,6 +191,8 @@ def project_analysis(ctx, name, payload, bindings, analysis):
             add_edge(source, components[key], "USES", [reference])
     reasons = sorted({item["reason"] for item in value["unresolved"]} |
                      {"unreviewed-design-mappings", "outside-source-unit-not-certified"})
+    if any(item["resolution"]["status"] == "approved-package" for item in value["references"]):
+        reasons.append("package-dependencies-not-projected")
     if value["diagnostics"]:
         reasons.append("parser-errors")
     graph = {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": list(nodes.values()), "edges": list(edges.values()),

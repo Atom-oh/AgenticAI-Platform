@@ -70,3 +70,22 @@ def test_generation_mismatch_and_missing_authorization_are_rejected():
         analyze(value, change, generation="b" * 64, can_read=lambda refs: True)
     with pytest.raises(ValueError, match="authorization"):
         analyze(value, change, generation="a" * 64, can_read=None)
+
+
+def test_source_attached_only_to_an_edge_seeds_the_dependent():
+    value = fixture()
+    value["edges"][0] = schema.seal({**value["edges"][0], "sourceRefs": [ref("mapping-document")]})
+    generation = schema.digest(value)
+    result = analyze(value, {"id": "edge-change", "kind": "asset", "baseGeneration": generation,
+                            "oldSource": ref("mapping-document")}, generation=generation, can_read=lambda refs: True)
+    assert "button" in {item["nodeId"] for item in result["items"]}
+    assert "code" in {item["nodeId"] for item in result["items"]}
+
+
+def test_stale_endpoint_remains_a_potential_witness_in_diagnostic_impact():
+    value = fixture()
+    value["nodes"][0] = schema.seal({**value["nodes"][0], "revision": 2})
+    result = run(value)
+    code = next(item for item in result["items"] if item["nodeId"] == "code")
+    assert code["staleWitness"] is True
+    assert code["evidenceKind"] == "candidate"

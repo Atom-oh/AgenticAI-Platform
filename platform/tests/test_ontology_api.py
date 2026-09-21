@@ -79,3 +79,60 @@ def test_bad_fields_and_forged_actor_are_not_project_authority(wb):
         "name": "example", "requestId": "first", "graph": value, "actor": "admin"})
     assert status == 400
     assert call(wb, "POST", "/context", {"nodeIds": [], "projectId": "other"})[0] == 400
+
+
+def test_archived_image_still_identifies_readable_dependents_as_historical_impact(wb):
+    published = setup_graph(wb)
+    row = wb.storage.get(wb.owner, "asset", "image")
+    old = asset_reference(row)
+    wb.storage.put(wb.owner, "asset", {**row, "archived": True}, row["version"])
+    status, result = call(wb, "POST", "/impact", {"changeId": "archived-image", "kind": "asset",
+        "oldSource": old, "expectedGeneration": published["generation"]})
+    assert status == 200, result
+    assert "control" in {item["title"] for item in result["items"]}
+    assert "historical-source-revisions" in result["coverage"]["unknown"]
+    assert call(wb, "POST", "/context", {"nodeIds": [published["identities"]["image"]]})[0] == 409
+
+
+def test_reviewed_node_keeps_cross_partition_dependents_as_stale_witnesses(wb):
+    from test_ontology_sources import asset
+    from test_ontology_schema import node, edge
+    published = setup_graph(wb)
+    source = asset(wb, "screen-source")
+    external = published["identities"]["control"]
+    graph = {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": [
+        node("screen", "Screen", project=wb.project["id"], sourceRefs=[asset_reference(source)])],
+        "edges": [edge("cross", "screen", external, sourceRefs=[asset_reference(source)])]}
+    status, added = call(wb, "POST", "/partitions", {"name": "screens", "requestId": "cross",
+        "expectedGeneration": published["generation"], "graph": graph})
+    assert status == 201, added
+    status, reviewed = call(wb, "POST", f"/nodes/{external}/review", {
+        "requestId": "review-cross", "expectedGeneration": added["generation"], "revision": 1,
+        "decision": "reviewed", "reason": "Synthetic review"})
+    assert status == 200, reviewed
+    status, impact = call(wb, "POST", "/impact", {"changeId": "review-impact", "kind": "design",
+        "nodeIds": [external], "expectedGeneration": reviewed["generation"]})
+    assert status == 200, impact
+    screen = next(item for item in impact["items"] if item["title"] == "screen")
+    assert screen["staleWitness"] and screen["evidenceKind"] == "candidate"
+    assert len(screen["witnessPath"]) == 2
+
+
+def test_revoked_source_is_an_opaque_boundary_not_a_leaked_witness(wb):
+    published = setup_graph(wb)
+    row = wb.storage.get(wb.owner, "asset", "image")
+    old = asset_reference(row)
+    wb.storage.put(wb.owner, "asset", {**row, "accessRevoked": True}, row["version"])
+    status, result = call(wb, "POST", "/impact", {"changeId": "revoked-image", "kind": "asset",
+        "oldSource": old, "expectedGeneration": published["generation"]})
+    assert status == 200, result
+    assert [item["title"] for item in result["items"]] == ["control"]
+    assert published["identities"]["image"] not in json.dumps(result)
+    assert "restricted-source-boundary" in result["coverage"]["unknown"]
+
+
+def test_malformed_impact_seed_types_are_client_errors(wb):
+    published = setup_graph(wb)
+    for bad in (None, 7, "not-a-list", [None]):
+        assert call(wb, "POST", "/impact", {"changeId": "bad", "kind": "asset",
+            "nodeIds": bad, "expectedGeneration": published["generation"]})[0] == 400

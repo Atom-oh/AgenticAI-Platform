@@ -70,13 +70,59 @@ def test_analysis_is_a_durable_job_and_local_backend_requires_explicit_test_opt_
     assert wb.storage.get(wb.owner, "wb_index", "current") is None
 
 
-def test_production_cannot_silently_fall_back_to_the_offline_analyzer(wb):
+def test_production_cannot_silently_fall_back_to_the_offline_analyzer(wb, monkeypatch):
     wb.api.ontology_analyzer_ready = True
     queued = submit(context(wb), {"requestId": "analysis", "name": "example", "files": collection(wb)})
     worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze)
+    monkeypatch.setattr("workspace.ontology_analysis.subprocess.run", lambda *a, **k: pytest.fail("local execution prohibited"))
     with pytest.raises(CollaborationError, match="로컬"):
         process(worker, wb.owner, queued["job"])
     assert wb.storage.get(wb.owner, "ontology", "project-current") is None
+
+
+def test_receipt_conflict_cannot_publish_a_parser_partition(wb, monkeypatch):
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "atomic", "name": "example", "files": collection(wb)})
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    original = wb.storage.put_many
+
+    def conflict(writes, *args, **kwargs):
+        if any(w["kind"] == "ontology" for w in writes):
+            assert any(w["kind"] == "wb_artifact" and w["item"]["status"] == "completed" for w in writes)
+            row = wb.storage.get(wb.owner, "wb_artifact", queued["artifact"]["id"])
+            wb.storage.put(wb.owner, "wb_artifact", {**row, "status": "cancelled"}, row["version"])
+        return original(writes, *args, **kwargs)
+
+    monkeypatch.setattr(wb.storage, "put_many", conflict)
+    with pytest.raises(CollaborationError):
+        process(worker, wb.owner, queued["job"])
+    assert wb.storage.get(wb.owner, "ontology", "project-current") is None
+
+
+def test_analysis_retry_after_publication_returns_the_same_receipt(wb):
+    wb.api.ontology_analyzer_ready = True
+    body = {"requestId": "retry", "name": "example", "files": collection(wb)}
+    queued = submit(context(wb), body)
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    process(worker, wb.owner, queued["job"])
+    assert submit(context(wb), body)["artifact"]["status"] == "completed"
+
+
+def test_denied_partition_never_invokes_analyzer(wb):
+    wb.api.ontology_analyzer_ready = True
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), {"requestId": "denied", "name": "product-protected", "files": collection(wb)})
+    assert error.value.code == "ontology-managed-partition"
+
+
+def test_korean_paths_and_exports_have_identical_python_node_hashes(wb):
+    files = collection(wb)
+    files[0]["path"] = "화면.tsx"
+    payload, bindings = source_input(context(wb), files)
+    result = local_analyze(payload)
+    assert project_analysis(context(wb), "korean", payload, bindings, result["analysis"])["nodes"]
 
 
 def test_queued_source_change_and_actor_revocation_block_analysis(wb):

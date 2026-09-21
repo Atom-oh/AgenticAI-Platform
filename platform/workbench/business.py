@@ -395,18 +395,20 @@ def _report_sources(api, scope, claims, body):
         from workbench.service import Service
         from workbench import impact, knowledge
         ctx = Service(api, scope, claims)
-        knowledge.authorize_refs(ctx, change.get("sourceRefs", []))
+        knowledge.authorize_refs(ctx, change.get("sourceRefs", []), authority=change.get("graphAuthority", "legacy"))
         current_impact = impact.read_impact(ctx, change["id"]) if change.get("impactHash") else None
         references.append({"kind": "wb_change", "id": change["id"], "version": change["version"],
                            "impactHash": change.get("impactHash"), "generation": change.get("generation"),
-                           "sourceRefs": copy.deepcopy(change.get("sourceRefs", []))})
+                           "sourceRefs": copy.deepcopy(change.get("sourceRefs", [])),
+                           "graphAuthority": change.get("graphAuthority", "legacy")})
         tasks = [t for t in _list(api, scope, "wb_task") if current_impact
                  and t.get("changeId") == change["id"] and t.get("impactHash") == change["impactHash"]]
         for task in tasks:
-            knowledge.verify_refs(ctx, task.get("sourceRefs", []))
+            knowledge.verify_refs(ctx, task.get("sourceRefs", []), authority=task.get("graphAuthority", "legacy"))
             references.append({"kind": "wb_task", "id": task["id"], "version": task["version"],
                                "changeId": change["id"], "impactHash": task["impactHash"],
-                               "sourceRefs": copy.deepcopy(task.get("sourceRefs", []))})
+                               "sourceRefs": copy.deepcopy(task.get("sourceRefs", [])),
+                               "graphAuthority": task.get("graphAuthority", "legacy")})
         sections += ["## 변경 영향", f"변경: {_literal(change.get('title', change['id']))}",
                      f"사유: {_literal(change.get('reason', '미기록'))}",
                      "| 대상 | 담당 역할 | 상태 |", "|---|---|---|"]
@@ -510,10 +512,13 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                 ctx = Service(api, scope, claims)
                 # Historical output retains its own bindings. Current read access
                 # must hold for both those bindings and the current record.
-                knowledge.authorize_refs(ctx, reference.get("sourceRefs", []))
-                knowledge.authorize_refs(ctx, current.get("sourceRefs", []))
+                authority = reference.get("graphAuthority", "legacy")
+                knowledge.authorize_refs(ctx, reference.get("sourceRefs", []), authority=authority)
+                knowledge.authorize_refs(ctx, current.get("sourceRefs", []),
+                                         authority=current.get("graphAuthority", "legacy"))
                 if exact:
-                    if current.get("sourceRefs", []) != reference.get("sourceRefs", []):
+                    if (current.get("sourceRefs", []) != reference.get("sourceRefs", [])
+                            or current.get("graphAuthority", "legacy") != authority):
                         raise CollaborationError(409, "source-changed", "간접 원본 근거가 변경되었습니다.")
                     if current.get("impactHash") != reference.get("impactHash"):
                         raise CollaborationError(409, "source-changed", "영향 분석 버전이 변경되었습니다.")
@@ -522,11 +527,12 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                         analyzed = impact.read_impact(ctx, change_id)
                         if analyzed["impactHash"] != reference.get("impactHash"):
                             raise CollaborationError(409, "source-changed", "작업의 영향 분석이 변경되었습니다.")
-                        manifest = api.storage.get(scope["owner"], "wb_index", "current")
+                        kind, manifest_id = ("ontology", "project-current") if authority == "canonical" else ("wb_index", "current")
+                        manifest = api.storage.get(scope["owner"], kind, manifest_id)
                         if manifest:
-                            check = ctx.check("wb_index", manifest)
+                            check = ctx.check(kind, manifest)
                             checks[(check["kind"], check["id"])] = check
-                    for check in knowledge.verify_refs(ctx, reference.get("sourceRefs", [])):
+                    for check in knowledge.verify_refs(ctx, reference.get("sourceRefs", []), authority=authority):
                         checks[(check["kind"], check["id"])] = check
             if exact and current["version"] != reference["version"]:
                 raise CollaborationError(409, "source-changed", "보고서 원본 자료가 변경되었습니다.")

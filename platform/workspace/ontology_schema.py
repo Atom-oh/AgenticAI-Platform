@@ -79,9 +79,9 @@ def digest(value):
 
 
 def identity(namespace, *parts):
-    if not _ID.fullmatch(namespace):
+    if not _ID.fullmatch(namespace) or len(namespace) > 32:
         raise ValueError("Invalid ontology namespace")
-    return namespace[:32] + "-" + digest(list(parts))[:48]
+    return namespace + "-" + digest(list(parts))[:48]
 
 
 def _fields(value, required, optional=()):
@@ -116,15 +116,18 @@ def _revision(value):
 
 
 def source_ref(value):
-    _fields(value, {"sourceKind", "sourceId", "revision", "sha256", "audienceRevision"}, {"location"})
+    _fields(value, {"sourceKind", "sourceId", "revision", "sha256", "audienceRevision"}, {"location", "allowedRoles"})
     if value["sourceKind"] not in SOURCE_KINDS:
         raise ValueError("Unknown ontology source kind")
     _identifier(value["sourceId"])
     _text(value["revision"], 128)
     _text(value["audienceRevision"], 128)
     _hash(value["sha256"])
+    if "allowedRoles" in value and (not isinstance(value["allowedRoles"], list) or not value["allowedRoles"]
+            or any(role not in {"owner", "planner", "designer", "developer"} for role in value["allowedRoles"])):
+        raise ValueError("Invalid bound source audience")
     location = value.get("location")
-    if location is not None:
+    if "location" in value:
         _fields(location, set(), {"path", "originalPath", "exportName", "line", "column", "page", "round", "region", "documentId"})
         if "path" in location:
             file = _text(location["path"], 500)
@@ -220,6 +223,11 @@ def validate_node(value):
             raise ValueError("Invalid design references")
     if "required" in properties and type(properties["required"]) is not bool:
         raise ValueError("Invalid policy requirement flag")
+    hashes = {"fileHash", "analyzerHash", "normalizedImageHash", "sourceHash"}
+    for key in properties.keys() & hashes:
+        _hash(properties[key])
+    for key in properties.keys() - hashes - {"bytes", "width", "height", "usageIds", "slots", "required"}:
+        _text(properties[key], 8000)
     aliases = value.get("aliases", [])
     if not isinstance(aliases, list) or len(aliases) > 20:
         raise ValueError("Invalid namespace mappings")
@@ -251,12 +259,19 @@ def validate_edge(value):
                                                                 "symbol", "resolution", "conditional"}
             or len(canonical(properties)) > 8000):
         raise ValueError("Edge metadata exceeds the contract")
+    for key in properties.keys() & {"line", "column"}:
+        if type(properties[key]) is not int or properties[key] < (0 if key == "column" else 1):
+            raise ValueError("Invalid edge source position")
+    if "conditional" in properties and type(properties["conditional"]) is not bool:
+        raise ValueError("Invalid conditional dependency")
+    for key in properties.keys() - {"line", "column", "conditional"}:
+        _text(properties[key], 4000)
     if _hash(value["contentHash"]) != digest({k: v for k, v in value.items() if k != "contentHash"}):
         raise ValueError("Edge content hash mismatch")
     return copy.deepcopy(value)
 
 
-def validate_graph(value, *, external_nodes=()):
+def validate_graph(value, *, external_nodes=(), diagnostic=False):
     _fields(value, {"schemaVersion", "projectId", "nodes", "edges"}, {"coverage"})
     if value["schemaVersion"] != SCHEMA_VERSION:
         raise ValueError("Unsupported ontology schema")
@@ -282,7 +297,7 @@ def validate_graph(value, *, external_nodes=()):
         seen.add(edge["id"])
         for end in ("src", "dst"):
             node = nodes.get(edge[end]["id"])
-            if node is None or node["revision"] != edge[end]["revision"]:
+            if node is None or not diagnostic and node["revision"] != edge[end]["revision"]:
                 raise ValueError("Edge endpoint revision is missing")
         source, target = nodes[edge["src"]["id"]], nodes[edge["dst"]["id"]]
         if edge["type"] == "COMPOSES":

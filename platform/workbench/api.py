@@ -10,7 +10,7 @@ from workbench.service import Service, TOOL_NAMES, _id, _version, fail, fields, 
 
 def _readable(ctx, record):
     try:
-        knowledge.verify_refs(ctx, record.get("sourceRefs", []))
+        knowledge.verify_refs(ctx, record.get("sourceRefs", []), authority=record.get("graphAuthority", "legacy"))
         return True
     except CollaborationError as error:
         if error.status in (400, 404, 409):
@@ -230,7 +230,7 @@ def _route(ctx, method, parts, body, query):
         return 201, {"change": impact.create_change(ctx, body)}
     if len(parts) == 2 and parts[0] == "changes" and method == "GET":
         change = ctx.get("wb_change", parts[1])
-        knowledge.verify_refs(ctx, change.get("sourceRefs", []))
+        knowledge.verify_refs(ctx, change.get("sourceRefs", []), authority=change.get("graphAuthority", "legacy"))
         return 200, {"change": change}
     if len(parts) == 3 and parts[0] == "changes":
         if parts[2] == "analyze" and method == "POST":

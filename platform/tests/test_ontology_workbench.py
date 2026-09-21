@@ -47,3 +47,43 @@ def test_non_owner_cannot_migrate_or_overwrite_canonical_authority(wb):
     indexed(wb)
     with pytest.raises(CollaborationError):
         import_legacy(context(wb, "bob"), {"requestId": "import", "expectedGeneration": None})
+
+
+def test_legacy_refs_cannot_select_a_different_authority(wb):
+    from workbench import knowledge
+    from test_ontology_sources import asset
+    from workspace.ontology_sources import asset_reference
+    reference = asset_reference(asset(wb))
+    with pytest.raises(CollaborationError) as error:
+        knowledge.verify_refs(context(wb), [reference])
+    assert error.value.code == "invalid-evidence"
+    assert knowledge.verify_refs(context(wb), [reference], authority="canonical")
+
+
+def test_import_preserves_parallel_evidence_and_marks_invalid_next(wb, monkeypatch):
+    from workbench import knowledge
+    indexed(wb)
+    original = knowledge.legacy_graph(context(wb))
+    relation = next(e for e in original["edges"] if e["rel"] == "DEPENDS_ON")
+    original["edges"].append({**relation, "rel": "REQUIRES"})
+    different = {**relation, "sourceRef": dict(original["nodes"][-1]["sourceRef"])}
+    original["edges"].append(different)
+    original["edges"].append({**relation, "rel": "NEXT"})
+    monkeypatch.setattr(knowledge, "legacy_graph", lambda ctx: original)
+    imported = import_legacy(context(wb), {"requestId": "parallel", "expectedGeneration": None})
+    graph = Ontology(context(wb)).read()
+    assert len([e for e in graph["edges"] if e["type"] == "USES"]) == 1
+    assert "unmapped-legacy-edge-shape" in imported["coverage"]["unknown"]
+
+
+def test_canonical_impact_excludes_order_containment_and_provenance():
+    from workbench.impact import traversal
+    from test_ontology_schema import ref
+    source = ref("test")
+    nodes = [{"id": identifier, "label": "Screen", "title": identifier, "sourceRef": source,
+              "sourceRefs": [source], "provenance": "declared"} for identifier in ["changed", "real", "next", "part", "derived"]]
+    edges = [{"src": identifier, "dst": "changed", "rel": relation, "canonicalRelation": relation,
+              "sourceRefs": [source], "provenance": "declared"}
+             for identifier, relation in [("real", "USES"), ("next", "NEXT"), ("part", "PART_OF"), ("derived", "DERIVED_FROM")]]
+    result = traversal({"nodes": nodes, "edges": edges, "generation": "g", "coverage": {}}, "changed")
+    assert {item["targetId"] for item in result["items"]} == {"changed", "real"}

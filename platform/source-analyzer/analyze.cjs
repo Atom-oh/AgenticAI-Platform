@@ -76,6 +76,10 @@ function analyze(input) {
   const { files, resolver, bytes } = prepare(input);
   const references = [], exports = [], unresolved = [], diagnostics = [];
   let visited = 0, truncated = false;
+  const addExport = value => {
+    if (exports.length < LIMITS.references) exports.push(value);
+    else truncated = true;
+  };
   const virtual = new Map([...files.values()].filter(file => file.kind === 'code')
     .map(file => ['/analysis/' + file.path, ts.createSourceFile('/analysis/' + file.path, file.text, ts.ScriptTarget.Latest, true)]));
   const program = ts.createProgram([...virtual.keys()], {
@@ -152,6 +156,14 @@ function analyze(input) {
       }
       const imports = new Map();
       for (const statement of source.statements) {
+        if (ts.isImportEqualsDeclaration(statement)) {
+          const module = statement.moduleReference;
+          if (ts.isExternalModuleReference(module) && module.expression && ts.isStringLiteral(module.expression)) {
+            const specifier = module.expression.text;
+            reference(file, 'import-equals', specifier, position(statement), { typeOnly: !!statement.isTypeOnly });
+            imports.set(checker.getSymbolAtLocation(statement.name), { specifier, symbol: '*' });
+          } else problem(file, 'namespace-import-alias', position(statement).line, position(statement).column);
+        }
         if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
           const specifier = statement.moduleSpecifier.text, clause = statement.importClause;
           reference(file, 'import', specifier, position(statement), { typeOnly: !!clause?.isTypeOnly });
@@ -165,17 +177,22 @@ function analyze(input) {
           if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier))
             reference(file, 're-export', statement.moduleSpecifier.text, position(statement), { typeOnly: !!statement.isTypeOnly });
           if (statement.exportClause && ts.isNamedExports(statement.exportClause))
-            for (const element of statement.exportClause.elements) exports.push({ path: file.path, name: element.name.text, ...position(element) });
-        } else if (ts.isExportAssignment(statement)) exports.push({ path: file.path, name: 'default', ...position(statement) });
+            for (const element of statement.exportClause.elements) addExport({ path: file.path, name: element.name.text, ...position(element) });
+        } else if (ts.isExportAssignment(statement)) addExport({ path: file.path, name: 'default', ...position(statement) });
         else if (statement.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
           const name = statement.modifiers.some(m => m.kind === ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name?.text;
-          if (name) exports.push({ path: file.path, name, ...position(statement) });
+          if (name) addExport({ path: file.path, name, ...position(statement) });
           if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations)
-            if (ts.isIdentifier(declaration.name)) exports.push({ path: file.path, name: declaration.name.text, ...position(declaration) });
+            if (ts.isIdentifier(declaration.name)) addExport({ path: file.path, name: declaration.name.text, ...position(declaration) });
         }
       }
       function walk(node) {
         if (++visited > LIMITS.nodes) { truncated = true; return; }
+        if (ts.isImportTypeNode(node)) {
+          if (ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal))
+            reference(file, 'type-import', node.argument.literal.text, position(node), { typeOnly: true });
+          else problem(file, 'computed-type-import', position(node).line, position(node).column);
+        }
         if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
             ts.isIdentifier(node.expression) && node.expression.text === 'require')) {
           problem(file, 'dynamic-or-commonjs-dependency', position(node).line, position(node).column);
@@ -207,7 +224,7 @@ function analyze(input) {
       try {
         const css = postcss.parse(file.text, { from: file.path });
         css.walk(node => {
-          if (++visited > LIMITS.nodes) { truncated = true; return; }
+          if (++visited > LIMITS.nodes) { truncated = true; return false; }
           const at = { line: node.source?.start?.line || 1, column: Math.max(0, (node.source?.start?.column || 1) - 1) };
           const value = node.type === 'decl' ? node.value : node.type === 'atrule' ? node.params : '';
           if (!value) return;
