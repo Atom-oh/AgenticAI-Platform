@@ -1,4 +1,5 @@
 import type { Action, Asset, EditableContract, Purpose, Round, Rule, Run, Step, StyleProperty } from './types';
+import { stateCoverageIssues } from './workflow';
 
 export const PURPOSES = {
   prototype: 'HTML 화면 시안', reference: '화면 기준 이미지', component: '컴포넌트·아이콘 자산',
@@ -11,6 +12,7 @@ export function suggestedPurpose(name: string): Purpose {
   if (['png', 'jpg', 'jpeg'].includes(extension || '')) return 'reference';
   if (extension === 'svg') return 'component';
   if (extension === 'fig') return 'archive';
+  if (['tsx', 'ts', 'jsx', 'js', 'scss', 'zip', 'xlsx'].includes(extension || '')) return 'archive';
   if (/^skill\.m(?:d|arkdown)$/i.test(name)) return 'skill';
   return 'guide';
 }
@@ -78,7 +80,7 @@ export function contractProblems(contract: EditableContract): string[] {
       problems.push(`${name}: 선택한 파일과 원문 근거를 확인하세요.`);
     }
   }
-  return [...new Set(problems)];
+  return [...new Set([...problems, ...stateCoverageIssues(contract)])];
 }
 export const roundApprovable = (round?: Round) => round?.passed === true && /^[a-f0-9]{64}$/i.test(round.artifactSha256) &&
   round.hasHtml === true && round.hasReport === true && round.hasScreenshot === true &&
@@ -92,6 +94,9 @@ export function editable(contract: EditableContract): EditableContract {
     ...Object.fromEntries(['projectId', 'productId', 'guidelineId', 'guidelineAssetId', 'ontologyHash', 'catalogHash']
       .filter(key => contract[key as keyof EditableContract] !== undefined).map(key => [key, contract[key as keyof EditableContract]])),
     viewport: { ...contract.viewport }, rules: structuredClone(contract.rules), unresolved: [...(contract.unresolved || [])],
+    ...(contract.guideRefs?.length ? { guideRefs: structuredClone(contract.guideRefs) } : {}),
+    ...(contract.requiredStates?.length ? { requiredStates: [...contract.requiredStates] } : {}),
+    ...(contract.changeRequest ? { changeRequest: structuredClone(contract.changeRequest) } : {}),
     ...(contract.bindings !== undefined ? { bindings: { ...contract.bindings } } : {}) };
 }
 export const manualAssets = (assets: Asset[]) => assets.filter(asset => !asset.system && !asset.archived);
@@ -99,7 +104,11 @@ export function applyManualAssets(draft: EditableContract, assets: Asset[], sele
   const allowed = new Set(manualAssets(assets).map(asset => asset.id));
   const fixed = draft.assetIds.filter(id => id === draft.guidelineAssetId || assets.some(asset => asset.id === id && asset.system));
   if (draft.guidelineAssetId) fixed.push(draft.guidelineAssetId);
-  return { ...draft, assetIds: [...new Set([...selected.filter(id => allowed.has(id)), ...fixed])] };
+  const assetIds = [...new Set([...selected.filter(id => allowed.has(id)), ...fixed])];
+  return { ...draft, assetIds, ...(draft.guideRefs ? { guideRefs: draft.guideRefs.filter(ref => assetIds.includes(ref.assetId)) } : {}),
+    ...(draft.changeRequest ? { changeRequest: { ...draft.changeRequest, screens: draft.changeRequest.screens.map(screen => ({
+      ...screen, ...(screen.sourceRefs ? { sourceRefs: screen.sourceRefs.filter(ref => assetIds.includes(ref.assetId)) } : {}),
+    })) } } : {}) };
 }
 export function importedHtmlAssets(assets: Asset[], contract?: Pick<EditableContract, 'assetIds'> | null): Asset[] {
   return assets.filter(asset => contract?.assetIds.includes(asset.id) && asset.uploadStatus === 'stored' &&

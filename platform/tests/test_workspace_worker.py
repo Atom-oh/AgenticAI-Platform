@@ -1,3 +1,4 @@
+import os
 import base64
 import hashlib
 import json
@@ -72,7 +73,7 @@ def test_fig_and_corrupt_file_can_be_stored_without_claiming_interpretation():
 def test_frozen_contract_real_browser_repair_and_exact_artifact_approval(monkeypatch):
     from workspace.browser import evaluate_html
     local_browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
-    if local_browser.is_file():
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and local_browser.is_file():
         monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(local_browser))
     calls = []
     def model(system, user, images, model_id, max_tokens, trace_id, purpose):
@@ -130,7 +131,7 @@ def test_existing_html_can_be_verified_without_ai_rewriting(monkeypatch):
     import re
     from workspace.browser import evaluate_html
     local_browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
-    if local_browser.is_file():
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and local_browser.is_file():
         monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(local_browser))
     def no_generation(*args, **kwargs):
         raise AssertionError("Source verification must not invoke generation")

@@ -1,3 +1,4 @@
+import os
 import json
 import sys
 from pathlib import Path
@@ -23,7 +24,7 @@ export default function App(){
 
 def test_planning_ontology_drives_a_real_page_and_changed_guidelines_block_release(monkeypatch):
     browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
-    if browser.is_file():
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
         monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
     api = make_api()
     project = shared(api)

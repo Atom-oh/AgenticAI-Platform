@@ -15,6 +15,24 @@ STYLE_PROPERTIES = {"color", "backgroundColor", "fontSize", "fontWeight", "fontF
                     "padding", "margin", "gap", "minHeight", "height", "width", "borderColor", "borderWidth", "display"}
 CRITERIA_IDS = ("projectId", "productId", "guidelineId", "guidelineAssetId")
 CRITERIA_HASHES = ("catalogHash", "ontologyHash")
+UX_STATES = {"entry": "첫 진입", "input": "입력·선택", "consent": "동의", "error": "오류·수정",
+             "empty": "결과 없음", "loading": "처리 중", "back": "이전·재진입", "cancel": "취소·이탈", "complete": "완료"}
+
+
+def normalize_required_states(value):
+    if (not isinstance(value, list) or len(value) > len(UX_STATES)
+            or any(not isinstance(state, str) or state not in UX_STATES for state in value)
+            or len(set(value)) != len(value)):
+        raise ValueError("검토할 UX 상태는 지원하는 항목을 중복 없이 선택하세요.")
+    return list(value)
+
+
+def state_coverage_issues(contract):
+    states = normalize_required_states(contract.get("requiredStates", []))
+    covered = {rule.get("scenario") for rule in contract.get("rules", [])
+               if rule.get("required", True) and any(step.get("action") in EXPECT_ACTIONS for step in rule.get("steps", []))}
+    from workspace.change_requests import coverage_issues
+    return [f"{UX_STATES[state]} 상태에 연결된 필수 검증 규칙을 작성하세요." for state in states if state not in covered] + coverage_issues(contract)
 
 
 def _text(value, label: str, maximum: int, *, empty: bool = False) -> str:
@@ -55,6 +73,21 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
         "unresolved": [],
         "bindings": {},
     }
+    if "changeRequest" in data:
+        from workspace.change_requests import normalize_request
+        normalized["changeRequest"] = normalize_request(data["changeRequest"])
+    if data.get("guideRefs"):
+        from workspace.guidelines import normalize_refs
+        normalized["guideRefs"] = normalize_refs(data["guideRefs"], asset_ids)
+    elif "guideRefs" in data and data["guideRefs"] != []:
+        raise ValueError("가이드 페이지 선택은 배열이어야 합니다.")
+    for screen in normalized.get("changeRequest", {}).get("screens", []):
+        if any(ref not in normalized.get("guideRefs", []) for ref in screen.get("sourceRefs", [])):
+            raise ValueError("화면의 원문 연결은 이 규칙에 선택한 원본·페이지·해시여야 합니다.")
+    if "requiredStates" in data:
+        states = normalize_required_states(data["requiredStates"])
+        if states:
+            normalized["requiredStates"] = states
     for name in CRITERIA_IDS:
         if name in data:
             value = data[name]
@@ -85,7 +118,7 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
         raise ValueError("미정의 요구사항은 최대 30개까지 기록할 수 있습니다.")
     normalized["unresolved"] = [_text(x, "미정의 요구사항", 1000) for x in unresolved]
     rules = data.get("rules")
-    if not isinstance(rules, list) or not 1 <= len(rules) <= 20:
+    if not isinstance(rules, list) or not (0 if "changeRequest" in normalized else 1) <= len(rules) <= 20:
         raise ValueError("검증할 동작 규칙을 1~20개 작성하세요.")
     ids = set()
     for rule in rules:
@@ -119,6 +152,14 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
             clean_source["quote"] = _text(source["quote"], "참고 설명", 2000)
         if "page" in source:
             clean_source["page"] = _integer(source["page"], "출처 페이지", 1, 10000)
+        if "sourceId" in source:
+            source_id = source["sourceId"]
+            if not isinstance(source_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", source_id):
+                raise ValueError("가이드 원본 식별자가 올바르지 않습니다.")
+            if not any(ref["assetId"] == clean_source.get("assetId") and ref["sourceId"] == source_id
+                       and ref["page"] == clean_source.get("page") for ref in normalized.get("guideRefs", [])):
+                raise ValueError("규칙의 원본·페이지가 선택한 가이드 근거에 없습니다.")
+            clean_source["sourceId"] = source_id
         steps = rule.get("steps")
         if not isinstance(steps, list) or not 1 <= len(steps) <= 20:
             raise ValueError(f"{rid}: 조작과 확인 단계를 1~20개 지정하세요.")
@@ -163,9 +204,18 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
             "id": rid, "title": _text(rule.get("title"), "동작 설명", 500),
             "required": rule.get("required", True), "source": clean_source, "steps": clean_steps,
         })
-    if not any(r["required"] for r in normalized["rules"]):
+        if "scenario" in rule:
+            if not isinstance(rule["scenario"], str) or rule["scenario"] not in UX_STATES:
+                raise ValueError("규칙에 연결할 UX 상태를 확인하세요.")
+            normalized["rules"][-1]["scenario"] = rule["scenario"]
+        for field, collection in (("screenId", "screens"), ("transitionId", "transitions")):
+            if field in rule:
+                if not isinstance(rule[field], str) or rule[field] not in {item["id"] for item in normalized.get("changeRequest", {}).get(collection, [])}:
+                    raise ValueError("규칙의 화면·연결은 변경 요청에 있는 항목이어야 합니다.")
+                normalized["rules"][-1][field] = rule[field]
+    if rules and not any(r["required"] for r in normalized["rules"]):
         raise ValueError("최소 한 개의 필수 동작 규칙이 필요합니다.")
-    if not any(step["action"] in EXPECT_ACTIONS and
+    if rules and not any(step["action"] in EXPECT_ACTIONS and
                (step["action"] != "expectVisible" or step["value"] is True)
                for rule in normalized["rules"] for step in rule["steps"]):
         raise ValueError("실제로 존재하는 화면 요소를 확인하는 단계를 최소 하나 추가하세요.")
@@ -180,7 +230,7 @@ def contract_hash(contract: dict) -> str:
 
 def report_passes(contract: dict, report: dict, *, visual_required: bool = False) -> bool:
     """A passing boolean alone is never sufficient evidence."""
-    if (not isinstance(report, dict) or report.get("passed") is not True
+    if (state_coverage_issues(contract) or not isinstance(report, dict) or report.get("passed") is not True
             or report.get("functionalStatus") != "pass"
             or report.get("networkRequests") != [] or report.get("consoleErrors") != []
             or report.get("blockingFindings") != []):

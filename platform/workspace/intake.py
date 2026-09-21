@@ -13,7 +13,8 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
 MAX_IMAGE_PIXELS = 24_000_000
 MAX_PDF_PAGES = 20
-EXTENSIONS = ("html", "htm", "png", "jpg", "jpeg", "svg", "pdf", "fig", "md", "markdown", "txt", "json", "css")
+EXTENSIONS = ("html", "htm", "png", "jpg", "jpeg", "svg", "pdf", "fig", "md", "markdown", "txt", "json", "css",
+              "pptx", "xlsx", "tsx", "ts", "jsx", "js", "scss", "zip")
 
 
 class TextOnly(HTMLParser):
@@ -189,6 +190,27 @@ def extract_file(name: str, data: bytes) -> dict:
     extension = PurePath(name).suffix.lower().lstrip(".")
     if extension not in EXTENSIONS:
         raise ValueError("지원하지 않는 파일 형식입니다.")
+    if extension in ("pptx", "xlsx", "tsx", "ts", "jsx", "js", "scss", "zip") or (
+            extension == "txt" and re.search(rb"(?:import\s+[\s\S]{0,300}\bfrom\s+['\"]|export\s+(?:default|const))", data)):
+        from workspace.prepare_sources import source_record
+        from workspace.prepare_guidelines import archive_entries
+        from workspace.guidelines import FORMAT, MAX_PACK_BYTES, summaries, validate_pack
+        import zipfile
+        sources = []
+        if extension == "zip":
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                for entry in archive_entries(archive):
+                    if not entry.is_dir():
+                        sources.append(source_record(entry.filename, archive.read(entry)))
+        else:
+            sources.append(source_record(name, data))
+        pack = validate_pack({"format": FORMAT, "schemaVersion": 1, "sources": sources})
+        if len(json.dumps(pack, ensure_ascii=False).encode()) > MAX_PACK_BYTES:
+            raise ValueError("자료 묶음이 큽니다. 문서별 준비 도구로 나누어 반입하세요.")
+        result = _base(FORMAT)
+        result.update(guidelinePack=pack, guidelineSources=summaries(pack, originals_stored=True), pages=sum(s["pageCount"] for s in sources))
+        result["warnings"] = ["원본 상태·식별자는 참고 정보이며 승인이 아닙니다. 코드는 실행하지 않았고 이미지·배치 해석은 포함하지 않습니다."]
+        return result
     if extension in ("png", "jpg", "jpeg"):
         return _image(data, extension)
     if extension == "svg":
@@ -221,9 +243,19 @@ def extract_file(name: str, data: bytes) -> dict:
     else:
         if extension == "json":
             try:
-                json.loads(text)
+                value = json.loads(text)
             except (ValueError, RecursionError) as error:
                 raise ValueError("올바른 JSON 파일이 아닙니다.") from error
+            from workspace.guidelines import FORMAT, MAX_PACK_BYTES, summaries, validate_pack
+            if isinstance(value, dict) and value.get("format") == FORMAT:
+                if len(data) > MAX_PACK_BYTES:
+                    raise ValueError("UX 가이드 묶음은 16MiB 이하여야 합니다.")
+                pack = validate_pack(value)
+                result.update(format=FORMAT, guidelinePack=pack, guidelineSources=summaries(pack),
+                              pages=sum(source["pageCount"] for source in pack["sources"]))
+                result["warnings"] = ["페이지별 텍스트 추출본입니다. 원본 PDF/PPTX의 이미지·배치와 대조한 뒤 규칙을 승인하세요.",
+                                      "원본 PDF/PPTX는 로컬에 별도 보관됩니다. 이 파일에는 원본 파일이 포함되지 않습니다."]
+                return result
         result["text"] = text
         if extension == "css":
             from studio.artifacts import external_references

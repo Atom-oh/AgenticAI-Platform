@@ -37,7 +37,7 @@ export default function Studio() {
 
   return (
     <div>
-      <div className="studio-summary panel p-5 mb-4 flex items-center gap-6" style={{ background: 'linear-gradient(105deg, #eaf5f4 0%, #ffffff 55%, #faf7ef 100%)' }}>
+      {!workspaceActive && <div className="studio-summary panel p-5 mb-4 flex items-center gap-6" style={{ background: 'linear-gradient(105deg, #eaf5f4 0%, #ffffff 55%, #faf7ef 100%)' }}>
         <div>
           <div className="text-lg font-bold text-[#0b4f4b]">디자인 스튜디오</div>
           <div className="text-sm text-slate-500 mt-1">
@@ -68,12 +68,15 @@ export default function Studio() {
             </div>
           ))}
         </div>}
-      </div>
+      </div>}
       {tab !== 'workspace' && loadError && <div role="alert" className="mb-3 text-sm text-rose-700">{loadError} <button className="underline" onClick={load}>다시 조회</button></div>}
-      <div className="studio-tabs flex items-center gap-2 mb-4">
-        {([['workspace', '파일·스킬 작업실'], ['gallery', '🖼 시안 갤러리'], ['play', '✨ 플레이그라운드'], ['process', '🧭 프로세스 생성 (명세서→PRD)'], ['assets', '🎨 디자인 자산']] as const).map(([id, label]) => (
+      <div className="studio-tabs">
+        <button aria-pressed={workspaceActive} onClick={() => setTab('workspace')}>UX 설계 작업실</button>
+        <details className="studio-legacy-tools"><summary>이전 시안·참고 도구</summary><div>
+        {([['gallery', '🖼 시안 갤러리'], ['play', '✨ 플레이그라운드'], ['process', '🧭 프로세스 생성 (명세서→PRD)'], ['assets', '🎨 디자인 자산']] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} className={`px-4 py-2 rounded-xl text-sm font-semibold border ${tab === id ? 'bg-[#008485] text-white border-[#008485]' : 'bg-white text-slate-600 border-slate-200 hover:border-teal-400'}`}>{label}</button>
         ))}
+        </div></details>
       </div>
       <div hidden={tab !== 'workspace'}><Workspace /></div>
       {tab === 'gallery' && <Gallery drafts={drafts} canWrite={canWrite} reload={load} onEdit={openInPlayground} />}

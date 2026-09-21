@@ -9,8 +9,9 @@ type PendingFile = {
   id: string; file: File; purpose: Purpose; parentId?: string; checkpoint?: UploadCheckpoint;
   progress: number; state: 'ready' | 'uploading' | 'sent' | 'failed'; error?: string; job?: Job;
 };
-export default function IntakePanel({ config, assets, selected, onSelected, refresh, onContinue }: {
+export default function IntakePanel({ config, assets, selected, onSelected, refresh, onContinue, initialAssetId }: {
   config: WorkspaceConfig; assets: Asset[]; selected: string[]; onSelected: (ids: string[]) => void; refresh: () => void; onContinue: () => void;
+  initialAssetId?: string;
 }) {
   const workspaceClient = useWorkspaceClient();
   const [purpose, setPurpose] = useState<Purpose | 'auto'>('auto');
@@ -20,13 +21,20 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
   const [inspect, setInspect] = useState<Asset | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [batch, setBatch] = useState(false);
+  const stopBatch = useRef(false);
   const supportsCss = config.extensions.some(extension => extension.replace(/^\./, '').toLowerCase() === 'css');
   const input = useRef<HTMLInputElement>(null);
   const control = useRef<AbortController | null>(null);
-  useEffect(() => () => control.current?.abort(), []);
+  const openedAsset = useRef('');
+  useEffect(() => {
+    const asset = assets.find(item => item.id === initialAssetId && !item.system && !item.archived);
+    if (asset && openedAsset.current !== asset.id) { openedAsset.current = asset.id; setInspect(asset); }
+  }, [assets, initialAssetId]);
+  useEffect(() => () => { stopBatch.current = true; control.current?.abort(); }, []);
   const add = (chosen: FileList | File[]) => {
     const incoming = Array.from(chosen);
-    if (incoming.length > 20) { setError('한 번에 최대 20개 파일을 추가하세요.'); return; }
+    if (incoming.length + files.length > 500) { setError('한 번에 최대 500개 파일을 준비하세요. 생성에 적용할 자료는 별도로 선택합니다.'); return; }
     setError('');
     setFiles(previous => [...previous, ...incoming.map(file => ({
       id: crypto.randomUUID(), file, purpose: parent?.purpose || (purpose === 'auto' ? suggestedPurpose(file.name) : purpose), parentId: parent?.id,
@@ -61,11 +69,21 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
     else if (selected.length >= 20) setError('생성에 사용할 파일은 최대 20개까지 선택할 수 있습니다.');
     else { setError(''); onSelected([...selected, asset.id]); }
   };
+  const uploadAll = async () => {
+    if (batch || busy) return;
+    stopBatch.current = false; setBatch(true);
+    try {
+      for (const file of files.filter(file => file.state === 'ready' || file.state === 'failed')) {
+        if (stopBatch.current) break;
+        await start(file);
+      }
+    } finally { setBatch(false); }
+  };
   const active = manualAssets(assets).filter(asset => !filter || asset.purpose === filter);
   const inspected = inspect && assets.find(asset => asset.id === inspect.id);
   return <div className="ws-intake">
     <section className="ws-section">
-      <div className="ws-section-heading"><div><h2>HTML 시안과 이미지로 시작하세요</h2><p>HTML은 화면 시안으로, PNG/JPG는 화면 기준으로, SVG는 아이콘·벡터 자산으로 준비합니다.</p></div>
+      <div className="ws-section-heading"><div><h2>업무 자료를 한 번에 등록하세요</h2><p>설계서·소스·IA와 화면 자료를 비공개 보관하고, 이번 변경에 사용할 근거를 선택합니다.</p></div>
         <button onClick={onContinue} className="ws-primary" disabled={!selected.length}>선택한 {selected.length}개로 규칙 만들기</button></div>
       <div className="ws-drop" onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
         onDrop={event => { event.preventDefault(); add(event.dataTransfer.files); }}>
@@ -82,6 +100,11 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
           multiple={!parent} className="ws-file-input" onChange={event => { if (event.target.files) add(event.target.files); event.target.value = ''; }} />
       </div>
       <details className="ws-intake-help"><summary>PDF·FIG·가이드 파일과 반입 안내</summary>
+        <p>PPTX·XLSX·TSX와 소스가 담긴 TXT를 직접 반입할 수 있습니다. ZIP은 원본 20개 이내의 작은 묶음을 지원합니다.
+          소스는 실행하지 않으며 삭제 상태, 화면 ID와 패키지 의존성을 참고 정보로 보존합니다.</p>
+        <p>큰 자료집은 운영 담당자가 문서별 준비 도구로 나눕니다. 준비한 JSON 파일들을 선택해 일괄 보관할 수 있습니다.
+          파일별 전송 실패는 다시 시도할 수 있고, 읽지 못한 원본은 준비 보고서에서 확인합니다.</p>
+        <p>고객의 PDF·PPTX를 페이지별로 준비한 UX 가이드 묶음(JSON)은 기준·자산의 ‘고객 가이드’에서 검색하고 규칙 제안에 연결합니다.</p>
         <p>PDF는 지원 가능한 페이지를 확인합니다. FIG는 원본 보관용이며 내부 화면 해석과 미리보기는 지원하지 않습니다.
           Markdown·TXT·JSON 가이드와 스킬도 추가할 수 있습니다. 스킬은 참고 지침이며 파일 안의 프로그램을 실행하지 않습니다.</p>
         <p>정해진 반입 절차를 거친 외부 산출물을 사용하세요. Figma 연결이나 플러그인은 필요하지 않습니다.</p>
@@ -90,16 +113,20 @@ export default function IntakePanel({ config, assets, selected, onSelected, refr
       {parent && <Notice>{parent.name}의 새 반입 버전으로 추가할 파일을 선택하세요. 이전 원본과 이력은 보존됩니다.</Notice>}
       {error && <Notice error>{error}</Notice>}
       {files.length > 0 && <div className="ws-upload-list">
+        <div className="ws-actions"><button className="ws-primary" disabled={busy || batch || !files.some(file => file.state !== 'sent')}
+          onClick={() => void uploadAll()}>준비한 파일 모두 보관</button>
+          {batch && <button onClick={() => { stopBatch.current = true; }}>현재 파일 후 중지</button>}
+          <span>전송 완료 {files.filter(file => file.state === 'sent').length}/{files.length} · 해석 결과는 파일별로 확인하세요.</span></div>
         {files.map(file => <div className="ws-upload-row" key={file.id}>
           <div><strong>{file.file.name}</strong><small>{(file.file.size / 1024).toFixed(1)}KB{file.parentId ? ' · 새 반입 버전' : ''}</small>
             <progress aria-label={`${file.file.name} 전송률`} value={file.progress} max={100} /></div>
           <label className="ws-field"><span className="ws-sr">용도: {file.file.name}</span>
-            <select value={file.purpose} disabled={!!file.checkpoint || busy || file.state === 'sent'} onChange={event => patch(file.id, { purpose: event.target.value as Purpose })}>
+            <select value={file.purpose} disabled={!!file.checkpoint || busy || batch || file.state === 'sent'} onChange={event => patch(file.id, { purpose: event.target.value as Purpose })}>
               {Object.entries(PURPOSES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select></label>
-          {file.state !== 'sent' && <button onClick={() => void start(file)} disabled={busy} className="ws-primary">
+          {file.state !== 'sent' && <button onClick={() => void start(file)} disabled={busy || batch} className="ws-primary">
             {file.state === 'uploading' ? '전송 중…' : file.state === 'failed' ? '전송 다시 시도' : '비공개 보관하기'}</button>}
-          <button disabled={file.state === 'uploading'} onClick={() => setFiles(previous => previous.filter(item => item.id !== file.id))}>
+          <button disabled={batch || file.state === 'uploading'} onClick={() => setFiles(previous => previous.filter(item => item.id !== file.id))}>
             {file.state === 'sent' ? '진행 표시 닫기' : '목록에서 빼기'}</button>
           {file.error && <Notice error>{file.error}</Notice>}
           {file.job && <JobProgress job={file.job} label={`${file.file.name} 확인`} onComplete={refresh} onFailure={refresh} />}

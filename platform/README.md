@@ -109,7 +109,27 @@ variation acceptance preserves the measured comparison and requires explicit
 review. Figma integration, customer packages and real financial APIs are not
 implied by a passing platform demo.
 
+The Studio and asset portal also share a private, page-searchable
+[customer guideline library](workspace/GUIDELINES.md). Local PDF/PPTX preparation
+creates a text-only JSON pack; the original documents stay local. Selected page
+hashes and citations are fixed in the rule contract and reused by generation.
+Guideline names do not imply that a customer's React package is installed.
+The [UX workflow](workspace/WORKFLOW.md) makes definition, criteria/assets,
+stateful design, verification and developer handoff explicit stages. Required
+states must have required assertions before criteria approval; the existing
+source, browser, release and permission checks remain authoritative.
+
 ## Source map
+
+The 2026-09-21 UX change workflow adds saved change requests, screen/overlay/slot
+scope, source ID mappings and guarded transitions. An approved React baseline
+can be changed only within an explicit source-file allowlist, with actual file
+deltas included in the private release manifest. See `workspace/WORKFLOW.md`.
+
+PPTX/XLSX and React source are private reference inputs; large corpora use the
+resumable `workspace.prepare_sources` tool and batched authenticated upload.
+Imported status never becomes approval, and references do not supply a missing
+customer SDK or establish frontend integration. See `workspace/GUIDELINES.md`.
 
 | Directory | Responsibility |
 | --- | --- |

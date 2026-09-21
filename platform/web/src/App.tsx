@@ -104,7 +104,7 @@ export default function App() {
   const go = (v: string) => {
     const current = new URLSearchParams(location.hash.split('?')[1] || '');
     const projectId = current.get('projectId') || current.get('project');
-    location.hash = '#/' + v + (projectId && (v.startsWith('wb-') || ['studio', 'documents', 's1'].includes(v))
+    location.hash = '#/' + v + (projectId && (v.startsWith('wb-') || ['studio', 'portal', 'documents', 's1'].includes(v))
       ? '?projectId=' + encodeURIComponent(projectId) : '');
   };
   const [cfg, setCfg] = useState<{ graphBackend?: string; planeDeployed?: boolean } | null>(null);

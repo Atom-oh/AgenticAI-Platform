@@ -143,8 +143,7 @@ function prepare() {
     const plugin = {
       name: 'portal-integration-boundaries',
       setup(builder) {
-        builder.onResolve({ filter: /^\.\.\/lib$/ }, args => args.importer.endsWith('/views/Portal.tsx')
-          ? { path: 'sock', namespace: 'portal-test' } : null);
+        builder.onResolve({ filter: /(^|\/)lib$/ }, () => ({ path: 'sock', namespace: 'portal-test' }));
         builder.onResolve({ filter: /\/portal\/ReactComponentPreview$/ }, () =>
           ({ path: 'react-preview', namespace: 'portal-test' }));
         builder.onResolve({ filter: /\/portal\/reactCatalog$/ }, () =>
@@ -152,6 +151,7 @@ function prepare() {
         builder.onLoad({ filter: /.*/, namespace: 'portal-test' }, ({ path: name }) => ({
           loader: 'tsx', resolveDir: web,
           contents: name === 'sock' ? `
+export const auth={token:null};
 export const sock={request:async(action,payload={})=>{
   const response=await fetch('/test-sock/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const value=await response.json(); window.portalCompleted.push({action,payload});
@@ -219,10 +219,10 @@ async function mount(t, versionRenderer) {
   await context.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.origin !== ORIGIN) { external.push(url.href); await route.abort(); return; }
-    if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body:
-      '<!doctype html><html lang="ko"><head><title>Portal integration fixture</title><link rel="stylesheet" href="/test-app.css"></head>' +
+    if (url.pathname === '/') return route.fulfill({ contentType: 'text/html; charset=utf-8', body:
+      '<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Portal integration fixture</title><link rel="stylesheet" href="/test-app.css"></head>' +
       '<body><main class="app-main"><div class="app-content"><div id="portal-root"></div></div></main><script src="/test-app.js"></script></body></html>' });
-    if (url.pathname === '/test-app.js') return route.fulfill({ contentType: 'text/javascript', body: assets.script });
+    if (url.pathname === '/test-app.js') return route.fulfill({ contentType: 'text/javascript; charset=utf-8', body: assets.script });
     if (url.pathname === '/test-app.css') return route.fulfill({ contentType: 'text/css', body: assets.css });
     if (url.pathname === '/test-react-catalog.json') return route.fulfill({ contentType: 'application/json', body: JSON.stringify(CATALOG) });
     if (versionRenderer && url.pathname === '/portal-renderers/versions/index.json') return route.fulfill({
@@ -276,7 +276,10 @@ async function mount(t, versionRenderer) {
     } finally { await browser.close(); }
   });
   await page.goto(ORIGIN + '/#/portal');
-  await page.getByRole('complementary', { name: 'Button React 컴포넌트 상세' }).waitFor();
+  await page.getByRole('complementary', { name: 'Button React 컴포넌트 상세' }).waitFor().catch(error => {
+    t.diagnostic(JSON.stringify({ pageErrors, consoleErrors, unexpected }));
+    throw error;
+  });
   function hold(action, payload) {
     let arrived, release;
     const seen = new Promise(resolve => { arrived = resolve; });

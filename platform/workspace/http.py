@@ -23,11 +23,11 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 CHUNK_BYTES = 2 * 1024 * 1024
 MAX_JSON_BYTES = 256 * 1024
 STALE_JOB_MS = 16 * 60 * 1000
-EXTENSIONS = ("html", "htm", "png", "jpg", "jpeg", "svg", "pdf", "fig", "md", "markdown", "txt", "json", "css")
+from workspace.intake import EXTENSIONS
 PURPOSES = frozenset({"reference", "component", "token", "skill", "guide", "prototype", "archive"})
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
 _REQUEST = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
-_EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules", "unresolved", "bindings")
+_EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules", "unresolved", "bindings", "guideRefs", "requiredStates", "changeRequest")
 _BASE_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
 _JOB_TARGETS = {"finalize": ("asset", "assetId"), "run": ("run", "runId"), "release": ("release", "releaseId"),
                 "git": ("gitexport", "exportId"), "document-finalize": ("docrevision", "revisionId"),
@@ -290,6 +290,16 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Route not found")
         kind = {"assets": "asset", "contracts": "contract", "runs": "run", "jobs": "job"}[parts[0]]
         record = self._get(owner, kind, parts[1])
+        if kind == "run" and len(parts) == 3 and parts[2] == "baseline" and method == "GET":
+            from workspace.releases import approved_artifacts
+            from workspace.react_artifacts import generated_files
+            try:
+                number = int(query.get("round", (record.get("approval") or {}).get("round", 0)))
+                row, project, _ = approved_artifacts(self.storage, owner, record, number)
+            except (ValueError, TypeError) as error:
+                raise HTTPError(409, "baseline-unavailable", "기준 시안의 현재 승인을 확인할 수 없습니다.") from error
+            return _json(200, {"baseline": {"runId": record["id"], "round": number, "sourceHash": row["sourceHash"]},
+                               "files": sorted(generated_files(project))})
         if len(parts) == 2 and method == "GET":
             if kind == "job":
                 if record.get("task") in ("document-finalize", "document-analysis"):
@@ -310,6 +320,8 @@ class WorkspaceAPI:
                 payload["analysis"] = json.loads(self.storage.get_blob(key))
             return _json(200, payload)
         if kind == "asset":
+            if len(parts) == 3 and parts[2] == "guidelines" and method == "GET":
+                return self._guidelines(owner, record, query)
             if len(parts) == 4 and parts[2] == "parts" and method == "PUT":
                 if not re.fullmatch(r"0|[1-9][0-9]{0,2}", parts[3]):
                     raise HTTPError(400, "invalid-part", "Invalid part index")
@@ -541,7 +553,32 @@ class WorkspaceAPI:
                 raise HTTPError(409, "asset-changed", "Selected file bytes do not match the stored identity")
         return assets
 
-    def _asset_texts(self, owner, assets):
+    def _guidelines(self, owner, asset, query):
+        from workspace.guidelines import load_pack, summaries
+        import unicodedata
+        if asset.get("archived") or asset.get("uploadStatus") != "stored":
+            raise HTTPError(409, "asset-not-ready", "가이드 파일의 보관 상태를 확인하세요.")
+        pack = load_pack(self.storage, owner, asset)
+        source_id = _text(query.get("sourceId", ""), "sourceId", 128, empty=True)
+        search = unicodedata.normalize("NFKC", _text(query.get("q", ""), "query", 120, empty=True)).casefold()
+        cursor = query.get("cursor", "0")
+        if not isinstance(cursor, str) or not re.fullmatch(r"[0-9]{1,5}", cursor):
+            raise HTTPError(400, "invalid-input", "가이드 페이지 위치를 확인하세요.")
+        rows = []
+        for source in pack["sources"]:
+            if source_id and source["id"] != source_id:
+                continue
+            for page in source["pages"]:
+                searchable = page["text"] + " " + source["name"] + " " + json.dumps(source.get("metadata", {}), ensure_ascii=False)
+                if search and search not in unicodedata.normalize("NFKC", searchable).casefold():
+                    continue
+                rows.append({**page, "sourceId": source["id"], "sourceName": source["name"],
+                             "sourceSha256": source["sha256"], "category": source["category"]})
+        start = int(cursor)
+        return _json(200, {"sources": summaries(pack, originals_stored=bool(asset.get("name")) and not asset["name"].lower().endswith(".json")), "pages": rows[start:start + 8], "total": len(rows),
+                           "cursor": str(start + 8) if start + 8 < len(rows) else None})
+
+    def _asset_texts(self, owner, assets, guide_refs=None):
         texts = {}
         for asset in assets:
             text = ""
@@ -554,12 +591,21 @@ class WorkspaceAPI:
                 if not isinstance(text, str):
                     raise HTTPError(409, "invalid-analysis", "Extracted source text is unavailable")
             texts[asset["id"]] = text
+            if asset.get("guidelinesKey"):
+                from workspace.guidelines import context_for, load_pack
+                selected = [ref for ref in guide_refs or [] if ref["assetId"] == asset["id"]]
+                texts[asset["id"]], _ = context_for(load_pack(self.storage, owner, asset), selected)
         return texts
 
     def _validated_contract(self, owner, data):
         assets = self._assets(owner, data.get("assetIds", []))
         try:
-            normalized = self.rules().validate_contract(data, asset_texts=self._asset_texts(owner, assets))
+            from workspace.guidelines import validate_citations, validate_selection
+            refs, pages = validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
+            normalized = self.rules().validate_contract(data, asset_texts=self._asset_texts(owner, assets, refs))
+            validate_citations(normalized, pages)
+            from workspace.change_requests import baseline_project
+            baseline_project(self.storage, owner, normalized.get("changeRequest", {}))
         except ValueError as error:
             raise HTTPError(400, "invalid-contract", str(error)[:240]) from error
         return normalized, assets
@@ -567,10 +613,10 @@ class WorkspaceAPI:
     @staticmethod
     def _snapshot_assets(assets):
         fields = ("id", "version", "importRevision", "lineageId", "parentId", "sha256", "name", "size",
-                  "purpose", "originalKey", "analysisKey", "previews", "parseStatus")
+                  "purpose", "originalKey", "analysisKey", "previews", "parseStatus", "guidelinesKey", "guidelinesSha256")
         return [{key: asset[key] for key in fields if key in asset} for asset in assets]
 
-    def _criteria(self, owner, body, scope, previous=None):
+    def _criteria(self, owner, body, scope, previous=None, allow_request_draft=False):
         from workspace.component_catalog import read_catalog
         catalog = read_catalog()
         if previous and previous.get("catalogHash") and previous["catalogHash"] != catalog["hash"]:
@@ -585,6 +631,8 @@ class WorkspaceAPI:
                 raise HTTPError(400, "project-required", "상품 기준은 프로젝트에서 선택하세요.")
             return criteria
         if not product_id:
+            if allow_request_draft:
+                return criteria
             raise HTTPError(409, "guideline-required", "기획에서 확정한 상품 기준을 먼저 선택하세요.")
         if previous and previous.get("productId") and previous["productId"] != product_id:
             raise HTTPError(409, "product-changed", "다른 상품은 새 규칙으로 생성하세요.")
@@ -611,7 +659,7 @@ class WorkspaceAPI:
 
     def _contract_create(self, owner, body, scope=None):
         data = self._with_criteria({key: body[key] for key in _EDITABLE if key in body},
-                                   self._criteria(owner, body, scope))
+                                   self._criteria(owner, body, scope, allow_request_draft=isinstance(body.get("changeRequest"), dict)))
         normalized, _ = self._validated_contract(owner, data)
         record = self.storage.put(owner, "contract", {**normalized, "id": uuid.uuid4().hex, "status": "draft"})
         return _json(201, {"contract": record})
@@ -621,7 +669,8 @@ class WorkspaceAPI:
         if version != record["version"]:
             raise Conflict("Contract changed")
         editable = {key: body.get(key, record.get(key)) for key in _EDITABLE if key in body or key in record}
-        editable = self._with_criteria(editable, self._criteria(owner, body, scope, record))
+        editable = self._with_criteria(editable, self._criteria(owner, body, scope, record,
+                                      allow_request_draft=isinstance(editable.get("changeRequest"), dict)))
         normalized, _ = self._validated_contract(owner, editable)
         revisions = list(record.get("revisions", []))
         if record.get("status") == "approved":
@@ -651,6 +700,10 @@ class WorkspaceAPI:
         if record.get("catalogHash"):
             self._criteria(owner, {}, scope, record)
         normalized, _ = self._validated_contract(owner, record)
+        from workspace.rules import state_coverage_issues
+        coverage_issues = state_coverage_issues(normalized)
+        if coverage_issues:
+            raise HTTPError(409, "contract-states-incomplete", " ".join(coverage_issues))
         if normalized.get("unresolved") or not normalized.get("rules"):
             raise HTTPError(409, "contract-unresolved", "Resolve every requirement before approving")
         if normalized.get("productId"):
@@ -695,6 +748,18 @@ class WorkspaceAPI:
         data = {"assetIds": body.get("assetIds", []), "brief": _text(body.get("brief", ""), "brief", 4000, empty=True),
                 "model": model_catalog.resolve(body.get("model"))}
         data = self._with_criteria(data, self._criteria(owner, body, scope))
+        if body.get("guideRefs") is not None:
+            from workspace.guidelines import normalize_refs
+            data["guideRefs"] = normalize_refs(body["guideRefs"], data["assetIds"])
+        if "requiredStates" in body:
+            from workspace.rules import normalize_required_states
+            data["requiredStates"] = normalize_required_states(body["requiredStates"])
+        if "changeRequest" in body:
+            from workspace.change_requests import baseline_project, normalize_request
+            data["changeRequest"] = normalize_request(body["changeRequest"])
+            baseline_project(self.storage, owner, data["changeRequest"])
+            if any(ref not in data.get("guideRefs", []) for screen in data["changeRequest"]["screens"] for ref in screen.get("sourceRefs", [])):
+                raise HTTPError(400, "source-reference-mismatch", "화면별 원문 연결을 현재 선택한 페이지와 다시 대조하세요.")
         data["actor"] = scope["actor"] if scope else owner
         fingerprint = self._fingerprint(data)
         job = self._existing_job(owner, identifier, fingerprint)
@@ -703,6 +768,8 @@ class WorkspaceAPI:
         if not job:
             self._worker_ready()
             assets = self._assets(owner, data["assetIds"])
+            from workspace.guidelines import validate_selection
+            validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
             job = self._new_job(owner, identifier, "propose", {
                 **data, "assetSnapshots": self._snapshot_assets(assets)}, fingerprint)
         self._invoke(owner, job)
@@ -927,7 +994,13 @@ class WorkspaceAPI:
                 if hashlib.sha256(contents).hexdigest() != selected.get(kind + "ArchiveSha256"):
                     raise HTTPError(409, "artifact-changed", "검증된 React 산출물 파일이 변경되었습니다.")
                 try:
-                    read_archive(contents, selected["sourceHash" if kind == "source" else "bundleHash"])
+                    project = read_archive(contents, selected["sourceHash" if kind == "source" else "bundleHash"])
+                    if kind == "source" and run["contract"].get("changeRequest"):
+                        from workspace.change_requests import baseline_project, enforce_scope
+                        from workspace.react_artifacts import generated_files
+                        change = run["contract"]["changeRequest"]
+                        baseline = baseline_project(self.storage, owner, change)
+                        enforce_scope(change, generated_files(baseline) if baseline else {}, generated_files(project))
                 except ValueError as error:
                     raise HTTPError(409, "artifact-changed", "검증된 React 파일 구성과 해시가 일치하지 않습니다.") from error
             extra_approval.update(sourceHash=selected["sourceHash"], bundleHash=selected["bundleHash"],

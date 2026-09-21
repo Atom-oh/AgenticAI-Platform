@@ -12,6 +12,7 @@ import VersionComponentDetail from '../portal/VersionComponentDetail';
 import type { Binding } from '../../portal-versions/client';
 import { loadReactCatalog, usageSnippet, type ReactCatalog } from '../portal/reactCatalog';
 import ImagePreview from '../portal/ImagePreview';
+import Workspace from '../workspace/Workspace';
 import { imageSource } from '../portal/image-source';
 import '../portal/portal.css';
 
@@ -561,6 +562,34 @@ function DetailPanel({ d, busy, publishRes, syncRes, onClose, onOpen, onImpact, 
 
 /* ---------------- Main portal ---------------- */
 export default function Portal() {
+  const [area, setArea] = useState<'reference' | 'guides'>(() =>
+    new URLSearchParams(location.hash.split('?')[1]).get('tab') === 'guides' ? 'guides' : 'reference');
+  const chooseArea = (next: 'reference' | 'guides') => {
+    const params = new URLSearchParams(location.hash.split('?')[1]);
+    for (const key of ['step', 'runId', 'round', 'contractId', 'assetId', 'id', 'component']) params.delete(key);
+    if (next === 'guides') { params.set('tab', 'guides'); params.set('step', 'assets'); } else params.delete('tab');
+    history.replaceState(null, '', '#/portal' + (params.size ? '?' + params.toString() : ''));
+    setArea(next);
+  };
+  return <div>
+    <nav className="portal-area-switch" aria-label="UX 자산 작업 영역">
+      <button aria-pressed={area === 'reference'} onClick={() => chooseArea('reference')}>컴포넌트 · 설계 자산</button>
+      <button aria-pressed={area === 'guides'} onClick={() => chooseArea('guides')}>프로젝트 UX 기준·자산</button>
+    </nav>
+    {area === 'guides' ? <Workspace initialStep="guides" /> : <ReferencePortal />}
+  </div>;
+}
+
+function referenceHash(patch: Record<string, string> = {}) {
+  const current = new URLSearchParams(location.hash.split('?')[1]);
+  const params = new URLSearchParams(patch);
+  for (const key of ['projectId', 'productId']) {
+    const value = current.get(key); if (value) params.set(key, value);
+  }
+  return '#/portal' + (params.size ? '?' + params.toString() : '');
+}
+
+function ReferencePortal() {
   const root = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef(false);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -659,12 +688,12 @@ export default function Portal() {
   }, [clearSelection]);
   const openCode = useCallback((name: string) => {
     clearSelection(); rememberSelection(); changeCategory('Components'); setComponentView('react'); setCodeName(name); setQ('');
-    history.replaceState(null, '', '#/portal?component=' + encodeURIComponent(name));
+    history.replaceState(null, '', referenceHash({ component: name }));
   }, [clearSelection, changeCategory, rememberSelection]);
   const openDetail = useCallback(async (id: string) => {
     clearSelection(); rememberSelection(); const request = ++detailRequest.current; selectedId.current = id;
     setComponentView('ontology'); setBusy('detail');
-    history.replaceState(null, '', '#/portal?id=' + encodeURIComponent(id));
+    history.replaceState(null, '', referenceHash({ id }));
     try {
       const e = await sock.request('portal_detail', { id });
       if (request !== detailRequest.current) return;
@@ -691,7 +720,7 @@ export default function Portal() {
   const chooseCategory = (category: string) => {
     clearSelection(); changeCategory(category); setQ('');
     if (category === 'Components') { setComponentView('react'); setCodeName('Button'); }
-    history.replaceState(null, '', '#/portal');
+    history.replaceState(null, '', referenceHash());
   };
   const runImpact = async () => {
     if (!detail) return; const id = detail.id, request = detailRequest.current;

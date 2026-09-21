@@ -82,12 +82,20 @@ def run_react(worker, owner, run, job, lambda_context=None):
     catalog = read_catalog()
     system = SYSTEM + "\nActual code-owned component APIs:\n" + json.dumps(catalog["components"], ensure_ascii=False)
     preferred = (run["referenceAssetId"], run.get("referencePage", 1)) if run.get("referenceAssetId") else None
-    context, images, resources, _, warnings, local_files = worker._context(owner, run["assetSnapshots"], preferred)
+    context, images, resources, _, warnings, local_files = worker._context(
+        owner, run["assetSnapshots"], preferred, run["contract"].get("guideRefs"))
     for local in local_files.values():
         if local["kind"] == "image" and local["id"] in resources:
             resources[local["id"]] = local["uri"]
     reference = worker._read(owner, run["referenceKey"], run["referenceSha256"]) if run.get("referenceKey") else None
     previous = {}
+    from workspace.change_requests import baseline_project, enforce_scope
+    change_request = approved.get("changeRequest", {})
+    baseline = baseline_project(worker.storage, owner, change_request)
+    baseline_files = generated_files(baseline) if baseline else {}
+    if baseline:
+        previous = baseline_files
+        resources = {**frozen_assets(baseline), **resources}
     if run.get("baseSourceKey"):
         source = worker._read(owner, run["baseSourceKey"], run.get("baseSourceArchiveSha256"))
         project = read_archive(source, run["baseSourceHash"])
@@ -111,6 +119,10 @@ def run_react(worker, owner, run, job, lambda_context=None):
                 f"Imported reference material:\n{context}\n")
         if previous:
             user += "\nPrevious generated React source:\n" + json.dumps(previous, ensure_ascii=False)
+        if change_request:
+            user += ("\nPreserve every unchanged baseline file byte-for-byte. Only allowedFiles may change when a baseline is pinned."
+                     "\nThe approved changeRequest includes the exact screen/overlay/slot identities and transitions."
+                     " Render each scope item with testId equal to its id, including overlays/slots.")
         if findings:
             user += "\nActual failed build/browser evidence; fix source, not the criteria:\n" + json.dumps(findings, ensure_ascii=False)[:30000]
         identifiers = [asset["id"] for asset in run["assetSnapshots"]] + list(resources) + ontology["identifiers"]
@@ -122,6 +134,7 @@ def run_react(worker, owner, run, job, lambda_context=None):
         files = None
         try:
             files = parse_project(output)
+            changes = enforce_scope(change_request, baseline_files, files)
             worker._update(owner, "job", job["id"], progress={"stage": "build_verify", "round": number,
                 "percent": 20 + int(75 * (number - 1) / run["maxRounds"]), "message": f"{number}라운드 React 타입·빌드·브라우저 검증"})
             payload = {"kind": "react", "files": files, "assets": resources, "catalogHash": run["catalogHash"],
@@ -131,6 +144,7 @@ def run_react(worker, owner, run, job, lambda_context=None):
             report = worker.react_call(payload)
             if not isinstance(report, dict):
                 raise RuntimeError("Invalid React verifier response")
+            report["fileChanges"] = changes
         except ValueError as error:
             report = _failed(str(error)[:500])
         except Exception as error:
@@ -197,6 +211,7 @@ def run_react(worker, owner, run, job, lambda_context=None):
                "build": build, "pageSources": build.get("pageSources", []),
                "functionalStatus": report.get("functionalStatus", "incomplete"),
                "visualStatus": report.get("visual", {}).get("status", "incomplete"),
+               "fileChanges": report.get("fileChanges", []),
                "blockingFindings": report.get("blockingFindings", []),
                "checks": {status: sum(check.get("status") == status for check in checks) for status in ("pass", "fail", "incomplete")}}
         rounds.append(row)

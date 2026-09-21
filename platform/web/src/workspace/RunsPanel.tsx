@@ -6,16 +6,19 @@ import { BuildGates } from './ReleasePanel';
 import { contractProblems, importedHtmlAssets, isOriginalHtmlCheck, roundApprovable, stateLabel } from './rules';
 import { JobProgress, ModelPicker, Notice, PrivatePreview, useDownload } from './shared';
 import VerificationLoop, { deriveVerificationLoop, hasExactApproval } from './VerificationLoop';
+import { StateEvidence } from './StatePlan';
 import type { Asset, Batch, Contract, Job, Product, Round, Run, Selection, WorkspaceConfig } from './types';
 
 type Attempt = { id: string; label: string; payload: Record<string, unknown>; job?: Job; run?: Run; error?: string };
 const VARIANTS = { balanced: '기본 구성', baseline: '엄격 기준안', layout: '배치 변형', dense: '정보를 한눈에',
   emphasis: '핵심 강조', flow: '진행 흐름 강조', information: '정보 순서 변형' } as const;
 
-export default function RunsPanel({ config, assets, contracts, runs, refresh, preferredContract, editing, onSelection, product }: {
+export default function RunsPanel({ config, assets, contracts, runs, refresh, preferredContract, editing, onSelection, product,
+  initialRunId, initialRound, onHandoff }: {
   config: WorkspaceConfig; assets: Asset[]; contracts: Contract[]; runs: Run[]; refresh: () => void;
   preferredContract: string; editing: { id: string; dirty: boolean };
   onSelection?: (selection: Selection) => void; product?: Product;
+  initialRunId?: string; initialRound?: number; onHandoff?: (runId: string, round: number) => void;
 }) {
   const { client: workspaceClient, role } = useWorkspaceScope();
   const mayGenerate = can(role, 'generate'), mayApprove = can(role, 'approve');
@@ -40,9 +43,9 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [error, setError] = useState('');
-  const [runId, setRunId] = useState('');
+  const [runId, setRunId] = useState(initialRunId || '');
   const [run, setRun] = useState<Run | null>(null);
-  const [roundNumber, setRoundNumber] = useState(0);
+  const [roundNumber, setRoundNumber] = useState(initialRound || 0);
   const [pageId, setPageId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [instruction, setInstruction] = useState('');
@@ -57,6 +60,9 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const downloading = useDownload();
   const currentRunVersion = runs.find(item => item.id === runId)?.version;
   useEffect(() => () => action.current?.abort(), []);
+  useEffect(() => {
+    if (initialRunId) { setRunId(initialRunId); setRoundNumber(initialRound || 0); }
+  }, [initialRunId, initialRound]);
   useEffect(() => {
     const controller = new AbortController();
     listAll<Batch>(workspaceClient, 'batches', controller.signal).then(value => {
@@ -87,9 +93,11 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
     if (runId) workspaceClient.get<{ run: Run }>(`/runs/${resource(runId)}`, controller.signal)
       .then(value => {
         if (controller.signal.aborted) return;
+        if (value.run?.id !== runId || (product && value.run.productId !== product.id)) throw new Error('선택한 작업의 시안을 확인하지 못했습니다.');
         setRun(value.run);
+        if (initialRunId === value.run.id && !contractId) setContractId(value.run.contractId);
         setRoundNumber(previous => value.run.rounds?.some(round => round.number === previous) ? previous :
-          value.run.bestRound || value.run.rounds?.[0]?.number || 0);
+          (value.run.id === initialRunId && initialRound) || value.run.bestRound || value.run.rounds?.[0]?.number || 0);
       })
       .catch(reason => { if (!controller.signal.aborted) setError(messageOf(reason)); });
     return () => controller.abort();
@@ -307,6 +315,8 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         {downloading.error && <Notice error>{downloading.error}</Notice>}
         <VerificationLoop run={run?.id === runId ? run : null} round={run?.id === runId ? selectedRound : undefined}
           evidence={run?.id === runId ? currentEvidence : undefined} />
+        {run?.contract?.requiredStates?.length ? <StateEvidence contract={run.contract}
+          evidence={verification.nodes.find(node => node.id === 'evidence')?.state === 'recorded' ? currentEvidence : undefined} /> : null}
         {!run ? <div className="ws-empty">{runId ? '시안 기록을 불러오고 있습니다…' : '확인할 시안을 선택하세요.'}</div> : <>
           <div className="ws-section-heading"><div><h2>{inspectingOriginal ? '원본 HTML 검사' : '라운드별 결과 확인'}</h2><p>규칙 버전 {run.contractVersion} · {stateLabel(run.status)}</p></div>
             <button onClick={() => setRefreshKey(value => value + 1)}>진행 새로 조회</button></div>
@@ -380,6 +390,8 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               <button onClick={() => void approve()} disabled={!mayApprove || !approvalReady || !approvedCheck ||
                 (verification.needsVariationReview && !variationAccepted) || approving || sending}>
                 라운드 {selectedRound.number} 시안 승인</button>
+              {onHandoff && run.outputType === 'react' && hasExactApproval(run, selectedRound) &&
+                <button className="ws-primary" disabled={!verification.complete} onClick={() => onHandoff(run.id, selectedRound.number)}>승인본 개발 전달</button>}
               {!roundApprovable(selectedRound) && <p>필수 검사 통과와 HTML·검수 기록·실행 화면 근거가 모두 있어야 승인할 수 있습니다.</p>}</div>
           </> : <Notice>아직 검수가 끝난 라운드가 없습니다. 작업 진행을 확인하거나 결과를 다시 조회하세요.</Notice>}
         </>}

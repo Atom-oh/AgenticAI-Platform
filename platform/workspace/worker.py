@@ -35,7 +35,19 @@ expectStyle(string,property:color|backgroundColor|fontSize|fontWeight|fontFamily
 borderRadius|padding|margin|gap|minHeight|height|width|borderColor|borderWidth|display).
 For design-token/style guides, include actual computed-style assertions, e.g.
 expectStyle target=primaryButton property=backgroundColor value=#008485.
-Every rule needs a real expectation. Max 8 rules, max 12 steps each.
+Every rule needs a real expectation. Max 12 rules, max 12 steps each.
+When requiredStates are supplied, cover every requested state with a required
+rule whose scenario is that exact state ID. Supported IDs: entry,input,consent,
+error,empty,loading,back,cancel,complete. Include meaningful actions and
+assertions for reaching and observing each state; the label alone proves nothing.
+When changeRequest is provided, preserve its screen IDs and guarded transitions.
+Each screen/state rule needs screenId, scenario and expectVisible=true on that
+screen ID, plus meaningful state assertions. A transition rule needs transitionId,
+expectVisible=true on its source, the real navigation action, and expectVisible=true
+on its destination, in that order. Test conditions and retained values as specified.
+Keep UIUX, developer and canonical IDs separate. Source status is not approval.
+Honor source-specific validation timing, back/reentry, cancellation and completion
+behavior. Do not assume every invalid form needs a disabled primary button.
 For supplied HTML, also return bindings mapping semantic target IDs to actual
 CSS selectors in that HTML (prefer #id and stable names; no XPath or JS).
 This permits checking the supplied HTML unchanged even without data-testid.
@@ -45,6 +57,12 @@ Include normal, invalid/empty input, consent gating, back/reentry and value
 propagation where the supplied guide defines them. Do not invent bank policies.
 Explicit quotes must occur verbatim in extracted text; design interpretations
 from images/HTML behavior are inferred, never fabricated quoted requirements.
+For UX guideline packs, explicit sources MUST include assetId, sourceId and the
+physical page from the selected references. Only those pages are in scope.
+Separate interaction, visual foundation, graphic, content and writing guidance.
+Honor precedence explicitly stated in the selected sources; filenames, examples,
+and revision-history entries do not establish the active rule by themselves.
+Conflicting guidance or missing component implementations belong in unresolved.
 Record genuinely undefined necessary conditions in unresolved. A human will
 edit and approve the rules; do not self-approve or claim tests passed.
 Default viewport390x844 unless source clearly supplies another supported size.
@@ -315,6 +333,13 @@ class Worker:
         except ValueError as error:
             analysis = {"format": Path(asset["name"]).suffix[1:], "text": "", "parseStatus": "failed",
                         "warnings": [str(error)], "previews": [], "pages": 0, "resources": []}
+        guideline_fields = {}
+        if "guidelinePack" in analysis:
+            key = key_for(owner, "asset", asset["id"], "guidelines.json")
+            encoded = _json_bytes(analysis.pop("guidelinePack"))
+            self.storage.put_blob_once(key, encoded, "application/json")
+            guideline_fields = {"guidelinesKey": key, "guidelinesSha256": hashlib.sha256(encoded).hexdigest(),
+                                "guidelineSources": analysis["guidelineSources"]}
         previews = []
         ocr_texts = []
         for preview in analysis.pop("previews", []):
@@ -357,17 +382,28 @@ class Worker:
         self.storage.put_blob_once(analysis_key, _json_bytes(analysis), "application/json")
         self._update(owner, "asset", asset["id"], status="stored", uploadStatus="stored",
                      parseStatus=analysis["parseStatus"], analysisKey=analysis_key,
-                     previews=previews, warnings=analysis.get("warnings", []), error=None)
+                     previews=previews, warnings=analysis.get("warnings", []), error=None, **guideline_fields)
         return {"assetId": asset["id"], "parseStatus": analysis["parseStatus"]}
 
-    def _context(self, owner, snapshots, preferred=None):
+    def _context(self, owner, snapshots, preferred=None, guide_refs=None):
+        from workspace.guidelines import context_for, load_pack, validate_selection
+        guide_refs, _ = validate_selection(self.storage, owner, snapshots, guide_refs or [])
         blocks, images, resources, texts, warnings = [], [], {}, {}, []
         local_files, duplicate_names = {}, set()
-        ordered = sorted(snapshots, key=lambda asset: 0 if preferred and asset["id"] == preferred[0] else 1)
+        selected_guides = {ref["assetId"] for ref in guide_refs}
+        ordered = sorted(snapshots, key=lambda asset: (
+            0 if asset["id"] in selected_guides else 1, 0 if preferred and asset["id"] == preferred[0] else 1))
         for asset in ordered:
             original = self._read(owner, asset["originalKey"], asset["sha256"])
             analysis = json.loads(self._read(owner, asset["analysisKey"])) if asset.get("analysisKey") else {}
             text = analysis.get("text", "")
+            if asset.get("guidelinesKey"):
+                selected = [ref for ref in guide_refs if ref["assetId"] == asset["id"]]
+                text, _ = context_for(load_pack(self.storage, owner, asset), selected)
+                if not selected:
+                    warnings.append(f"{asset['name']}: AI에 적용할 가이드 페이지를 선택하지 않았습니다.")
+                elif text:
+                    text = "텍스트 추출본: 그림·레이아웃·원본 파일은 포함하지 않습니다.\n\n" + text
             texts[asset["id"]] = text
             local = None
             if asset["name"].lower().endswith(".css") and len(original) <= 200_000:
@@ -389,9 +425,10 @@ class Worker:
                 warnings.append(f"{asset['name']}: 원본 보관만 지원하며 자동 해석하지 못했습니다.")
             if analysis.get("parseStatus") == "partial":
                 warnings.extend(f"{asset['name']}: {warning}" for warning in analysis.get("warnings", []))
-            if len(text) > 60_000 or analysis.get("truncated"):
+            if (len(text) > 60_000 and not asset.get("guidelinesKey")) or analysis.get("truncated"):
                 warnings.append(f"{asset['name']}: AI 문맥에는 추출 텍스트 앞부분만 포함됩니다. 적용 범위를 확인하세요.")
-            block = f"자산 ID: {asset['id']}\n이름: {asset['name']}\n용도: {asset.get('purpose')}\n추출 내용:\n{text[:60000]}"
+            excerpt = text if asset.get("guidelinesKey") else text[:60000]
+            block = f"자산 ID: {asset['id']}\n이름: {asset['name']}\n용도: {asset.get('purpose')}\n추출 내용:\n{excerpt}"
             if asset["name"].lower().endswith((".html", ".htm")):
                 if len(original) <= 300_000:
                     def inline(match):
@@ -452,13 +489,18 @@ class Worker:
         from workspace.criteria import criteria_fields, notice_coverage_issues, resolve_generation_context
         source = job["input"]
         ontology = resolve_generation_context(self.storage, owner, source, "edit_rules")
-        context, images, resources, texts, warnings, _ = self._context(owner, source["assetSnapshots"])
+        context, images, resources, texts, warnings, _ = self._context(
+            owner, source["assetSnapshots"], guide_refs=source.get("guideRefs"))
         if not source.get("brief", "").strip() and not any(texts.values()) and not images:
             raise ValueError("해석 가능한 가이드·이미지 또는 화면 설명을 먼저 준비하세요.")
         self._update(owner, "job", job["id"], progress={"percent": 25, "stage": "rules", "message": "가이드에서 동작 규칙 정리"})
         ids = [asset["id"] for asset in source["assetSnapshots"]]
         user = (f"확정된 상품 온톨로지:\n{ontology['prompt']}\n"
                 f"화면 설명:\n{source.get('brief', '')}\n선택 자산 ID:{json.dumps(ids)}\n\n반입 자료:\n{context}")
+        if source.get("requiredStates"):
+            user += "\n설계자가 선택한 requiredStates:\n" + json.dumps(source["requiredStates"], ensure_ascii=False)
+        if source.get("changeRequest"):
+            user += "\n담당자가 지정한 변경 요청과 화면별 범위:\n" + json.dumps(source["changeRequest"], ensure_ascii=False)
         if source.get("catalogHash"):
             from workspace.component_catalog import read_catalog
             catalog = read_catalog()
@@ -471,6 +513,18 @@ class Worker:
         text = _restore_metadata(text, aliases)
         proposal = _parse_json(text)
         proposal.update(assetIds=ids, brief=source.get("brief", ""))
+        if source.get("changeRequest"):
+            proposal["changeRequest"] = source["changeRequest"]
+        else:
+            proposal.pop("changeRequest", None)
+        if source.get("guideRefs"):
+            proposal["guideRefs"] = source["guideRefs"]
+        else:
+            proposal.pop("guideRefs", None)
+        if source.get("requiredStates"):
+            proposal["requiredStates"] = source["requiredStates"]
+        else:
+            proposal.pop("requiredStates", None)
         proposal.update(criteria_fields(source))
         for rule in proposal.get("rules", []):
             if isinstance(rule, dict) and (not isinstance(rule.get("source"), dict) or rule["source"].get("kind") == "manual"):
@@ -478,6 +532,9 @@ class Worker:
         proposal["unresolved"] = list(proposal.get("unresolved", [])) + warnings
         proposal["unresolved"] += notice_coverage_issues(proposal, ontology["pages"])
         normalized = validate_contract(proposal, asset_texts=texts)
+        from workspace.guidelines import validate_citations, validate_selection
+        _, pages = validate_selection(self.storage, owner, source["assetSnapshots"], normalized.get("guideRefs", []))
+        validate_citations(normalized, pages)
         record = self.storage.put(owner, "contract", {**normalized, "id": uuid.uuid4().hex, "status": "draft",
                                                       "model": info.get("modelId", source["model"]), "usage": usage})
         return {"contractId": record["id"], "model": record["model"], "usage": usage}
@@ -497,7 +554,8 @@ class Worker:
         self._update(owner, "run", run["id"], status="running")
         started = self.clock()
         preferred = (run["referenceAssetId"], run.get("referencePage", 1)) if run.get("referenceAssetId") else None
-        context, images, resources, _, warnings, local_files = self._context(owner, run["assetSnapshots"], preferred)
+        context, images, resources, _, warnings, local_files = self._context(
+            owner, run["assetSnapshots"], preferred, approved.get("guideRefs"))
         reference = self._read(owner, run["referenceKey"], run["referenceSha256"]) if run.get("referenceKey") else None
         previous = self._read(owner, run["baseHtmlKey"], run["baseArtifactSha256"]).decode() if run.get("baseHtmlKey") else ""
         verifying = run.get("mode") == "verify"

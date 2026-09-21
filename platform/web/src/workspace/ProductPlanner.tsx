@@ -10,7 +10,9 @@ type Draft = Pick<Product, 'title' | 'description' | 'conditions' | 'steps' | 'n
 const fields = (value?: Product): Draft => value ? { title: value.title, description: value.description,
   conditions: value.conditions, steps: value.steps, notices: value.notices } : { title: '', description: '', conditions: [], steps: [], notices: [] };
 const newId = () => 'item-' + crypto.randomUUID();
-export default function ProductPlanner({ product, onSaved, refresh }: { product?: Product; onSaved: (product: Product) => void; refresh: () => void }) {
+export default function ProductPlanner({ product, onSaved, refresh, onEditing }: {
+  product?: Product; onSaved: (product: Product) => void; refresh: () => void; onEditing?: (dirty: boolean) => void;
+}) {
   const { client, role } = useWorkspaceScope();
   const [draft, setDraft] = useState<Draft>(() => fields(product));
   const [base, setBase] = useState(product);
@@ -24,6 +26,7 @@ export default function ProductPlanner({ product, onSaved, refresh }: { product?
   const request = useRef({ fingerprint: '', id: '' });
   const dirty = JSON.stringify(draft) !== JSON.stringify(fields(base));
   const allowed = can(role, 'publish');
+  useEffect(() => { onEditing?.(dirty); }, [dirty, onEditing]);
   useEffect(() => () => operation.current?.abort(), []);
   useEffect(() => {
     // New server data must not erase an unsaved planner draft.

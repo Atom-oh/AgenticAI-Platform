@@ -14,6 +14,17 @@ export type Asset = {
   uploadStatus: 'uploading' | 'processing' | 'stored' | 'failed';
   parseStatus: 'pending' | 'complete' | 'partial' | 'unsupported' | 'failed';
   previews?: Preview[]; warnings?: string[]; error?: string; archived?: boolean; jobId?: string;
+  guidelineSources?: GuideSource[];
+};
+export type GuideCategory = 'foundation' | 'interaction' | 'graphics' | 'content' | 'writing' | 'general' | 'specification' | 'source' | 'inventory';
+export type GuideSource = {
+  id: string; name: string; sha256: string; category: GuideCategory; pageCount: number; extractedPages: number;
+  nonemptyPages: number; truncatedPages: number; originalStatus: 'local-only' | 'stored'; reviewStatus: 'unreviewed';
+  metadata?: Record<string, string>;
+};
+export type GuideRef = { assetId: string; sourceId: string; page: number; sourceSha256: string; textSha256: string };
+export type GuidePage = Omit<GuideRef, 'assetId'> & {
+  sourceName: string; category: GuideCategory; text: string; truncated: boolean;
 };
 export type Analysis = { text?: string; format?: string; pages?: number; warnings?: string[]; resources?: unknown; parseStatus?: string };
 export type Job = {
@@ -25,16 +36,30 @@ export type StyleProperty = 'color' | 'backgroundColor' | 'fontSize' | 'fontWeig
   'padding' | 'margin' | 'gap' | 'minHeight' | 'height' | 'width' | 'borderColor' | 'borderWidth' | 'display';
 export type Action = 'fill' | 'click' | 'check' | 'select' | 'press' | 'expectText' | 'expectValue' | 'expectVisible' | 'expectEnabled' | 'expectChecked' | 'expectStyle';
 export type Step = { action: Action; target: string; targetLabel: string; value?: string | boolean; match?: 'contains' | 'equals'; property?: StyleProperty; normalizeWhitespace?: boolean };
+export type UXState = 'entry' | 'input' | 'consent' | 'error' | 'empty' | 'loading' | 'back' | 'cancel' | 'complete';
 export type Rule = {
   id: string; title: string; required: boolean;
-  source: { kind: 'explicit' | 'inferred' | 'manual'; assetId?: string; quote?: string; page?: number };
+  scenario?: UXState;
+  screenId?: string; transitionId?: string;
+  source: { kind: 'explicit' | 'inferred' | 'manual'; assetId?: string; sourceId?: string; quote?: string; page?: number };
   steps: Step[];
+};
+export type ChangeRequest = {
+  kind: 'new' | 'change' | 'fix'; channel: string; requester: string; dueDate: string; baselineNote: string; preserve: string;
+  baseline?: { runId: string; round: number; sourceHash: string }; allowedFiles: string[];
+  screens: { id: string; title: string; kind: 'page' | 'bottom-sheet' | 'popup' | 'tab' | 'slot';
+    change: 'add' | 'modify' | 'keep' | 'remove'; instruction: string; uiuxId: string; developerId: string;
+    canonicalId: string; sourceNote: string; states: UXState[]; sourceRefs?: GuideRef[] }[];
+  transitions: { id: string; from: string; to: string; action: string; condition: string; retention: string }[];
 };
 export type EditableContract = {
   projectId?: string; productId?: string; guidelineId?: string; guidelineAssetId?: string; ontologyHash?: string; catalogHash?: string;
   schemaVersion?: number; title: string; brief: string; assetIds: string[];
   viewport: { width: number; height: number }; rules: Rule[]; unresolved: string[];
   bindings?: Record<string, string>;
+  guideRefs?: GuideRef[];
+  requiredStates?: UXState[];
+  changeRequest?: ChangeRequest;
 };
 export type Contract = EditableContract & {
   id: string; version: number; status: string; hash?: string; approval?: unknown;
@@ -46,6 +71,7 @@ export type BuildEvidence = {
   diagnostics?: unknown[];
 };
 export type Round = BuildEvidence & {
+  fileChanges?: { path: string; change: string; beforeSha256?: string | null; afterSha256?: string | null }[];
   number: number; passed: boolean; artifactSha256: string;
   hasHtml?: boolean; hasScreenshot?: boolean; hasDiff?: boolean; hasReport?: boolean;
   checks?: { pass: number; fail: number; incomplete: number }; blockingFindings?: unknown[]; functionalStatus?: string; visualStatus?: string;
