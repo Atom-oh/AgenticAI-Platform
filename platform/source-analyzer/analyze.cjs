@@ -34,7 +34,7 @@ function prepare(input) {
   const files = new Map(), folded = new Set(); let bytes = 0;
   for (const file of input.files) {
     fields(file, ['path', 'sha256', 'text', 'kind']);
-    if (!safePath(file.path) || !SHA.test(file.sha256 || '') ||
+    if (!safePath(file.path) || typeof file.sha256 !== 'string' || !SHA.test(file.sha256) ||
         !['code', 'style', 'json', 'html', 'asset'].includes(file.kind) || files.has(file.path) ||
         folded.has(file.path.toLocaleLowerCase('en-US'))) throw new Error('Invalid or ambiguous source path');
     if (file.kind !== 'asset') {
@@ -101,9 +101,9 @@ function analyze(input) {
   function resolve(from, specifier, resourceRelative = false) {
     if (typeof specifier !== 'string' || !specifier || specifier.length > 1024) return { status: 'unresolved', reason: 'invalid-reference' };
     if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(specifier)) return { status: 'unresolved', reason: 'external-url' };
-    if (specifier.startsWith('#')) return { status: 'local-fragment' };
+    if (specifier.startsWith('#') && resourceRelative) return { status: 'local-fragment' };
     if (/[\\\x00-\x1f\x7f]/.test(specifier)) return { status: 'unresolved', reason: 'unsafe-reference' };
-    const [withoutQuery] = specifier.split(/[?#]/);
+    const withoutQuery = specifier.startsWith('#') ? specifier : specifier.split(/[?#]/)[0];
     const candidates = [];
     if (withoutQuery.startsWith('.') || resourceRelative && !withoutQuery.startsWith('/'))
       candidates.push(path.normalize(path.join(path.dirname(from), withoutQuery)));
@@ -136,7 +136,7 @@ function analyze(input) {
   }
   function reference(file, kind, specifier, at, detail = {}) {
     if (references.length >= LIMITS.references) { truncated = true; return; }
-    const resolution = resolve(file.path, specifier, kind.startsWith('style-') || kind === 'json-asset' || kind === 'html-resource');
+    const resolution = resolve(file.path, specifier, kind.startsWith('style-') || kind === 'json-asset' || kind === 'html-resource' || kind === 'module-url');
     if (resolution.status === 'unresolved') problem(file, resolution.reason, at.line, at.column);
     if (resolution.transform) problem(file, resolution.transform, at.line, at.column);
     references.push({ path: file.path, sourceHash: file.sha256, kind, specifier, ...at, ...detail, resolution });
@@ -178,7 +178,10 @@ function analyze(input) {
             reference(file, 're-export', statement.moduleSpecifier.text, position(statement), { typeOnly: !!statement.isTypeOnly });
           if (statement.exportClause && ts.isNamedExports(statement.exportClause))
             for (const element of statement.exportClause.elements) addExport({ path: file.path, name: element.name.text, ...position(element) });
-        } else if (ts.isExportAssignment(statement)) addExport({ path: file.path, name: 'default', ...position(statement) });
+        } else if (ts.isExportAssignment(statement)) {
+          addExport({ path: file.path, name: statement.isExportEquals ? 'export=' : 'default', ...position(statement) });
+          if (statement.isExportEquals) problem(file, 'commonjs-export-semantics', position(statement).line, position(statement).column);
+        }
         else if (statement.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
           const name = statement.modifiers.some(m => m.kind === ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name?.text;
           if (name) addExport({ path: file.path, name, ...position(statement) });
@@ -188,13 +191,36 @@ function analyze(input) {
       }
       function walk(node) {
         if (++visited > LIMITS.nodes) { truncated = true; return; }
+        const globalName = (expression, name) => ts.isIdentifier(expression) && expression.text === name &&
+          !checker.getSymbolAtLocation(expression)?.declarations?.length;
+        const importMeta = expression => ts.isMetaProperty(expression) &&
+          expression.keywordToken === ts.SyntaxKind.ImportKeyword && expression.name.text === 'meta';
+        if (ts.isNewExpression(node) && globalName(node.expression, 'URL')) {
+          const [value, base] = node.arguments || [];
+          if (value && ts.isStringLiteral(value) && base && ts.isPropertyAccessExpression(base) &&
+              base.name.text === 'url' && importMeta(base.expression))
+            reference(file, 'module-url', value.text, position(node));
+          else problem(file, 'computed-url-reference', position(node).line, position(node).column);
+        }
+        if (ts.isNewExpression(node) && ['Worker', 'SharedWorker'].some(name => globalName(node.expression, name)))
+          problem(file, 'worker-runtime-semantics', position(node).line, position(node).column);
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+          const expression = node.expression;
+          if (globalName(expression.expression, 'require') && expression.name.text === 'resolve') {
+            problem(file, 'runtime-module-resolution', position(node).line, position(node).column);
+            if (node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]))
+              reference(file, 'conditional-import', node.arguments[0].text, position(node), { conditional: true });
+          }
+          if (importMeta(expression.expression))
+            problem(file, 'bundler-meta-transform', position(node).line, position(node).column);
+        }
         if (ts.isImportTypeNode(node)) {
           if (ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal))
             reference(file, 'type-import', node.argument.literal.text, position(node), { typeOnly: true });
           else problem(file, 'computed-type-import', position(node).line, position(node).column);
         }
         if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-            ts.isIdentifier(node.expression) && node.expression.text === 'require')) {
+            globalName(node.expression, 'require'))) {
           problem(file, 'dynamic-or-commonjs-dependency', position(node).line, position(node).column);
           if (node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]))
             reference(file, 'conditional-import', node.arguments[0].text, position(node), { conditional: true });
@@ -234,7 +260,7 @@ function analyze(input) {
             if (token.type === 'function' && token.value.toLowerCase() === 'url') {
               const children = token.nodes.filter(n => !['space', 'comment'].includes(n.type));
               if (children.length === 1 && ['string', 'word'].includes(children[0].type) && !/[\\{}$]/.test(children[0].value))
-                reference(file, 'style-asset', children[0].value, at);
+                reference(file, node.type === 'atrule' && node.name.toLowerCase() === 'import' ? 'style-import' : 'style-asset', children[0].value, at);
               else problem(file, 'computed-style-reference', at.line, at.column);
               return false;
             }

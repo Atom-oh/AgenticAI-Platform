@@ -87,3 +87,50 @@ def test_canonical_impact_excludes_order_containment_and_provenance():
              for identifier, relation in [("real", "USES"), ("next", "NEXT"), ("part", "PART_OF"), ("derived", "DERIVED_FROM")]]
     result = traversal({"nodes": nodes, "edges": edges, "generation": "g", "coverage": {}}, "changed")
     assert {item["targetId"] for item in result["items"]} == {"changed", "real"}
+
+
+def test_missing_legacy_authority_cannot_publish_an_unfenced_empty_import(wb):
+    with pytest.raises(CollaborationError) as error:
+        import_legacy(context(wb), {"requestId": "empty", "expectedGeneration": None})
+    assert error.value.code == "legacy-not-indexed"
+    assert wb.storage.get(wb.owner, "ontology", "project-current") is None
+
+
+def test_parallel_impact_evidence_and_prior_truncation_survive_projection():
+    from workbench.impact import traversal
+    from test_ontology_schema import ref
+    nodes = [{"id": key, "label": "Screen", "title": key, "sourceRef": ref(key), "provenance": "declared"}
+             for key in ["root", "dependent"]]
+    edges = [{"src": "dependent", "dst": "root", "rel": "USES", "canonicalRelation": "USES",
+              "sourceRefs": [ref(f"evidence-{i}") for i in range(start, start + 20)], "provenance": "declared"}
+             for start in [0, 20]]
+    result = traversal({"nodes": nodes, "edges": edges, "generation": "g",
+                        "coverage": {"truncated": True}}, "root")
+    dependent = next(item for item in result["items"] if item["targetId"] == "dependent")
+    assert len(dependent["sourceRefs"]) == 41
+    assert result["coverage"]["truncated"] is True
+
+
+def test_task_budget_retains_all_source_checks_and_discloses_reduced_scope(wb):
+    from test_ontology_sources import asset
+    from test_ontology_schema import node, edge
+    from workspace.ontology_sources import asset_reference
+    nodes, edges = [], []
+    for number in range(50):
+        name = f"item-{number}"
+        reference = asset_reference(asset(wb, name))
+        nodes.append(node(name, "Screen", project=wb.project["id"], sourceRefs=[reference]))
+        if number:
+            edges.append(edge(f"edge-{number}", name, "item-0", sourceRefs=[reference]))
+    published = Ontology(context(wb)).publish_candidate("tasks", {
+        "schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": edges},
+        expected_generation=None, request_id="tasks")
+    wb.api.ontology_mode = "canonical"
+    change = call(wb, "POST", "changes", {"requestId": "bounded", "title": "Synthetic wide impact",
+        "targetId": published["identities"]["item-0"], "changeType": "update",
+        "before": "", "after": "", "reason": "Synthetic scope"})["change"]
+    result = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
+    assert len(result["tasks"]) == 47
+    assert len(result["impact"]["sourceRefs"]) == 50
+    assert result["impact"]["coverage"]["truncated"]
+    assert "atomic-task-limit" in result["impact"]["coverage"]["unknown"]

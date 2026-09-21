@@ -125,6 +125,72 @@ def test_korean_paths_and_exports_have_identical_python_node_hashes(wb):
     assert project_analysis(context(wb), "korean", payload, bindings, result["analysis"])["nodes"]
 
 
+def test_source_replaced_between_verification_and_loading_never_runs_analysis(wb, monkeypatch):
+    from workspace import ontology_jobs
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "race", "name": "example", "files": collection(wb)})
+    original = ontology_jobs.source_input
+
+    def changed(ctx, files, resolver):
+        row = wb.storage.get(wb.owner, "asset", "code-app")
+        key = wb.storage.key_for(wb.owner, "asset", row["id"], "new-original")
+        raw = b"export default ()=>null;"
+        wb.storage.put_blob_once(key, raw, "text/plain")
+        wb.storage.put(wb.owner, "asset", {**row, "originalKey": key, "sha256": hashlib.sha256(raw).hexdigest(),
+                       "size": len(raw), "importRevision": 2}, row["version"])
+        return original(ctx, files, resolver)
+
+    monkeypatch.setattr(ontology_jobs, "source_input", changed)
+    monkeypatch.setattr("workspace.ontology_analysis.subprocess.run", lambda *a, **k: pytest.fail("must not execute changed source"))
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    with pytest.raises(CollaborationError) as error:
+        process(worker, wb.owner, queued["job"])
+    assert error.value.code == "ontology-source-changed"
+
+
+def test_unrelated_project_commit_during_analysis_does_not_discard_the_result(wb, monkeypatch):
+    from workspace import ontology_analysis
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "collaborative", "name": "example", "files": collection(wb)})
+    original = ontology_analysis.subprocess.run
+
+    def analyze(*args, **kwargs):
+        result = original(*args, **kwargs)
+        row = wb.storage.get(wb.owner, "project", wb.project["id"])
+        wb.storage.put(wb.owner, "project", {**row, "name": "Updated project title"}, row["version"])
+        return result
+
+    monkeypatch.setattr(ontology_analysis.subprocess, "run", analyze)
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    result = process(worker, wb.owner, queued["job"])
+    assert wb.storage.get(wb.owner, "wb_artifact", result["artifactId"])["status"] == "completed"
+
+
+def test_real_worker_claim_prevents_duplicate_analyzer_delivery(wb, monkeypatch):
+    from workspace.worker import Worker
+    from workspace import ontology_analysis
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "delivery", "name": "example", "files": collection(wb)})
+    worker = Worker(storage=wb.storage)
+    worker.collaboration = wb.collab
+    worker.ontology_analyzer = local_analyze
+    worker.allow_offline_ontology_analysis = True
+    event = {"owner": wb.owner, "jobId": queued["job"]["id"]}
+    original, calls = ontology_analysis.subprocess.run, []
+
+    def overlap(*args, **kwargs):
+        calls.append(1)
+        assert worker.handle(event)["status"] == "duplicate-or-unavailable"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ontology_analysis.subprocess, "run", overlap)
+    worker.handle(event)
+    assert worker.handle(event)["status"] == "duplicate-or-unavailable"
+    assert len(calls) == 1
+
+
 def test_queued_source_change_and_actor_revocation_block_analysis(wb):
     wb.api.ontology_analyzer_ready = True
     queued = submit(context(wb), {"requestId": "analysis", "name": "example", "files": collection(wb)})

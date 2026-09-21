@@ -33,10 +33,28 @@ def _references(graph):
                  for ref in item["sourceRefs"]}.values())
 
 
+def retain_tombstones(previous, graph):
+    """Keep removed identities and dependency witnesses without making them usable."""
+    result = copy.deepcopy(graph)
+    ids = {node["id"] for node in graph["nodes"]}
+    for node in previous.get("nodes", []):
+        if node["id"] not in ids:
+            result["nodes"].append(node if node["tombstone"] else schema.seal({
+                **node, "revision": node["revision"] + 1, "tombstone": True, "reviewState": "deprecated"}))
+    ids = {edge["id"] for edge in graph["edges"]}
+    for edge in previous.get("edges", []):
+        if edge["id"] not in ids:
+            result["edges"].append(edge if edge["tombstone"] else schema.seal({
+                **edge, "tombstone": True, "reviewState": "deprecated"}))
+    if len(result["nodes"]) > schema.MAX_NODES or len(result["edges"]) > schema.MAX_EDGES:
+        fail(422, "ontology-history-capacity", "삭제 이력을 포함한 파티션 한도를 초과했습니다. 새 매핑 단위로 분리하세요.")
+    return result
+
+
 class Ontology:
     def __init__(self, context):
         self.ctx, self.storage = context, context.storage
-        self.sources = Sources(context)
+        self.sources = Sources(context, max_records=2500)
         self._parts = {}
         self._indexes = {}
         self._historical_stale = False
@@ -126,7 +144,7 @@ class Ontology:
                             raise
                         self._historical_stale = True
             else:
-                self.sources.verify(refs)
+                self.sources.verify(refs, recheck=False)
             return True
         except CollaborationError as error:
             if error.status in (403, 404, 409):
@@ -141,6 +159,7 @@ class Ontology:
 
     def authorize_publication(self, name):
         """Check the destination before any paid analysis or other side effect."""
+        self.sources.max_records = 90
         self.ctx.fresh({"owner", "planner", "designer", "developer"})
         schema._identifier(name)
         if name.startswith(("product-", "system-", "publication-")):
@@ -221,8 +240,12 @@ class Ontology:
             identifier = value["id"] if value["id"] in old_edge_ids else schema.identity("edge", partition, value["id"])
             normalized["edges"][i] = schema.seal({**value, "id": identifier, "provenance": _producer, "reviewState": "candidate"})
         normalized = schema.validate_graph(normalized, external_nodes=list(externals.values()))
+        normalized["coverage"] = {**normalized["coverage"], "complete": False,
+            "scope": "static-source-unit" if _producer == "parser-extracted" else "declared-project-partition",
+            "unknown": sorted(set(normalized["coverage"]["unknown"]) | {"unreviewed-design-mappings"})}
         refs = _references(normalized) + [ref for node in externals.values() for ref in node["sourceRefs"]]
         checks = [*self.sources.verify(list({schema.digest(ref): ref for ref in refs}.values())), *additional_checks]
+        normalized = retain_tombstones(prior["graph"] if prior else {}, normalized)
         part = {"partitionId": partition, "name": name, "createdBy": prior["createdBy"] if prior else self.ctx.actor,
                 "updatedBy": self.ctx.actor, "graph": normalized}
         part_hash = self._put_json(partition, part)
@@ -427,7 +450,9 @@ class Ontology:
                 edge = next((item for item in part["graph"]["edges"] if item["id"] == edge_id), None)
                 if not edge or edge["contentHash"] != loc["contentHash"]:
                     fail(409, "ontology-integrity", "관계 원본과 인덱스가 일치하지 않습니다.")
-                if edge["type"] not in schema.DEPENDENCIES or edge["tombstone"] or edge["reviewState"] in {"rejected", "deprecated"}:
+                if (edge["type"] not in schema.DEPENDENCIES
+                        or not historical and (edge["tombstone"] or edge["reviewState"] in {"rejected", "deprecated"})
+                        or edge["reviewState"] == "rejected"):
                     continue
                 if direction == "dependencies" and edge["src"]["id"] != identifier or (
                         direction == "dependents" and edge["dst"]["id"] != identifier):
@@ -488,7 +513,9 @@ class Ontology:
             if edge and (for_impact or self._visible(edge["sourceRefs"])):
                 values.append(edge["src"]["id"])
         result = []
-        for identifier in values[:500]:
+        if len(set(values)) > 500:
+            fail(422, "ontology-impact-scope", "원본의 영향 시작점이 500개를 초과합니다. 노드를 선택해 범위를 나누세요.")
+        for identifier in values:
             node = self._node(current, identifier)
             if for_impact or node and not node["tombstone"] and self._visible(node["sourceRefs"]):
                 result.append(identifier)
@@ -496,6 +523,7 @@ class Ontology:
         return sorted(set(result))
 
     def review_node(self, identifier, *, expected_generation, revision, decision, reason, request_id):
+        self.sources.max_records = 90
         schema._identifier(identifier)
         schema._identifier(request_id)
         schema._revision(revision)
@@ -549,8 +577,6 @@ class Ontology:
         for i, original in enumerate(graph["edges"]):
             edge = copy.deepcopy(original)
             for end in ("src", "dst"):
-                if edge[end]["id"] == identifier:
-                    edge[end]["revision"] = revision + 1
                 if edge[end]["id"] not in own:
                     external = self._node(current, edge[end]["id"])
                     if not external or not self._visible(external["sourceRefs"]):
@@ -559,8 +585,11 @@ class Ontology:
             if decision in {"rejected", "deprecated"} and identifier in (edge["src"]["id"], edge["dst"]["id"]):
                 edge["reviewState"] = "candidate"
             graph["edges"][i] = schema.seal(edge)
-        graph = schema.validate_graph(graph, external_nodes=list(externals.values()))
-        checks = self.sources.verify(_references(graph) + [ref for node in externals.values() for ref in node["sourceRefs"]])
+        graph = schema.validate_graph(graph, external_nodes=list(externals.values()), diagnostic=True)
+        active = {"nodes": [n for n in graph["nodes"] if not n["tombstone"]],
+                  "edges": [e for e in graph["edges"] if not e["tombstone"]]}
+        checks = self.sources.verify(_references(active) + target["sourceRefs"]
+                                     + [ref for node in externals.values() for ref in node["sourceRefs"]])
         part = {**prior, "graph": graph, "updatedBy": self.ctx.actor,
                 "reviews": {**prior.get("reviews", {}), identifier: audit_id}}
         updated = copy.deepcopy(current)

@@ -69,10 +69,13 @@ def test_business_source_partition_cannot_be_overwritten_or_reapproved_as_manual
     published = publish(wb, product(wb))
     current = wb.storage.get(wb.owner, "ontology", CURRENT)
     store = Ontology(context(wb))
-    with pytest.raises(CollaborationError):
-        store.publish_candidate("product-" + published["product"]["id"], {},
+    from test_ontology_store import candidate
+    with pytest.raises(CollaborationError) as error:
+        store.publish_candidate("product-" + published["product"]["id"], candidate(wb),
                                 expected_generation=current["generation"], request_id="overwrite")
-    with pytest.raises(CollaborationError):
+    assert error.value.code == "ontology-managed-partition"
+    with pytest.raises(CollaborationError) as error:
         store.review_node(published["product"]["ontologyPublication"]["nodeId"],
                           expected_generation=current["generation"], revision=1, decision="reviewed",
                           reason="Cannot alter source authority", request_id="review")
+    assert error.value.code == "ontology-source-review"

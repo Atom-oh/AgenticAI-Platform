@@ -17,6 +17,33 @@ test('import equals and import type retain literal dependencies; namespace alias
   assert.ok(alias.unresolved.some(r => r.reason === 'namespace-import-alias'));
 });
 
+test('package subpath imports require an explicit alias; code # is not an HTML fragment', () => {
+  const input = request([text('App.ts', "import tokens from '#design/tokens';"), text('tokens.ts', 'export default {}')]);
+  assert.equal(analyze(input).coverage.complete, false);
+  input.resolver = { aliases: { '#design/tokens': 'tokens.ts' }, packages: {}, jsonAssetFields: [] };
+  assert.equal(analyze(input).references[0].resolution.targetPath, 'tokens.ts');
+});
+
+test('module URLs and require.resolve preserve dependencies; workers and transforms stay unknown', () => {
+  const result = analyze(request([
+    text('App.ts', 'const icon=new URL("./icon.svg",import.meta.url);const w=new Worker(new URL("./worker.ts",import.meta.url));require.resolve("./theme.css");import.meta.glob("./*.ts");'),
+    asset('icon.svg'), text('worker.ts', 'export const worker=true;'), text('theme.css', '.test{}', 'style'),
+  ]));
+  for (const target of ['icon.svg', 'worker.ts', 'theme.css'])
+    assert.ok(result.references.some(ref => ref.resolution.targetPath === target));
+  assert.equal(result.coverage.complete, false);
+  for (const reason of ['worker-runtime-semantics', 'runtime-module-resolution', 'bundler-meta-transform'])
+    assert.ok(result.unresolved.some(item => item.reason === reason));
+});
+
+test('a local require or URL function is not fabricated parser dependency evidence', () => {
+  const result = analyze(request([
+    text('App.ts', 'function require(x:string){return x;}class URL{constructor(...x:any[]) {}} require("./data.json");new URL("./icon.svg",import.meta.url);'),
+    text('data.json', '{}', 'json'), asset('icon.svg'),
+  ]));
+  assert.equal(result.references.length, 0);
+});
+
 test('real TS parser connects imports, JSX symbols, image imports and CSS resources', () => {
   const input = request([
     text('src/App.tsx', `import {Button as Action} from './Button';

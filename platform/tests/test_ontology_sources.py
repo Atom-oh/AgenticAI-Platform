@@ -121,6 +121,12 @@ def test_authority_budget_is_measured_in_condition_records(wb):
     assert error.value.status == 422
 
 
+def test_source_locations_do_not_multiply_the_authority_budget(wb):
+    reference = asset_reference(asset(wb))
+    refs = [{**reference, "location": {"path": "App.tsx", "line": number + 1}} for number in range(100)]
+    assert len(Sources(context(wb)).verify(refs)) == 1
+
+
 def test_document_library_approval_audience_and_post_read_revocation(wb):
     from test_documents_library import upload, finalize, approve
     project = wb.project["id"]

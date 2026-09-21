@@ -44,6 +44,30 @@ def test_workspace_ontology_is_the_only_new_write_authority(wb):
     assert again["historical"] is False
 
 
+def test_manual_coverage_cannot_claim_complete_runtime_dependencies(wb):
+    value = candidate(wb)
+    value["coverage"] = {"complete": True, "scope": "runtime-complete", "unknown": [], "truncated": False}
+    result = publish(wb, value)
+    assert result["coverage"]["complete"] is False
+    assert result["coverage"]["scope"] == "declared-project-partition"
+    assert "unreviewed-design-mappings" in result["coverage"]["unknown"]
+
+
+def test_read_page_does_not_inherit_the_atomic_write_authority_limit(wb):
+    generation = None
+    for part in range(2):
+        nodes = []
+        for number in range(50):
+            identifier = f"asset-{part}-{number}"
+            source = asset(wb, identifier)
+            nodes.append(node(identifier, project=wb.project["id"], sourceRefs=[asset_reference(source)]))
+        result = Ontology(context(wb)).publish_candidate(f"read-{part}", {
+            "schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": []},
+            expected_generation=generation, request_id=f"read-{part}")
+        generation = result["generation"]
+    assert len(Ontology(context(wb)).read(limit=100)["nodes"]) == 100
+
+
 def test_publication_rechecks_source_versions_atomically(wb, monkeypatch):
     data = candidate(wb)
     original = wb.storage.put_blob_once

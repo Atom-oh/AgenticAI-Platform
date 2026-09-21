@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 
 from workbench.service import fail, fields
 from workspace import ontology_schema as schema
-from workspace.ontology_analysis import source_input, project_analysis, validate_analysis, validate_execution
+from workspace.ontology_analysis import source_input, project_analysis, validate_analysis, validate_execution, local_analyze, ANALYZER_ROOT
 from workspace.ontology_sources import Sources, asset_reference
 from workspace.ontology_store import Ontology
 
@@ -70,11 +71,16 @@ def process(ctx, pinned):
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
     if not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
-    backend = getattr(analyzer, "backend", None)
-    if backend == "local-offline" and not getattr(ctx.host, "allow_offline_ontology_analysis", False):
-        fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")
-    if backend not in {"local-offline", "agentcore-code-interpreter"}:
+    # Unit A intentionally admits only this exact offline implementation.
+    # The separately reviewed cloud adapter must install its own pinned factory;
+    # an arbitrary callable's mutable backend label confers no execution trust.
+    if analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
+    backend = "local-offline"
+    if not getattr(ctx.host, "allow_offline_ontology_analysis", False):
+        fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")
+    expected = {"analyzerCodeHash": hashlib.sha256((ANALYZER_ROOT / "analyze.cjs").read_bytes()).hexdigest(),
+                "dependencyLockHash": hashlib.sha256((ANALYZER_ROOT / "package-lock.json").read_bytes()).hexdigest()}
     store = Ontology(ctx)
     current, _ = store.authorize_publication(pinned["name"])
     if (current or {}).get("generation") != pinned["expectedGeneration"]:
@@ -84,12 +90,19 @@ def process(ctx, pinned):
     payload, bindings = source_input(ctx, pinned["files"], pinned["resolver"])
     if schema.digest(payload["resolver"]) != pinned["resolverHash"]:
         fail(409, "ontology-resolver-changed", "분석 프로필이 변경되었습니다.")
+    if (len(pinned["files"]) != len(pinned["sourceRefs"]) or any(
+            bindings[file["path"]]["ref"] != ref for file, ref in zip(pinned["files"], pinned["sourceRefs"]))):
+        fail(409, "ontology-source-changed", "분석 요청의 원본 버전이 변경되었습니다.")
+    refs.recheck()
     result = analyzer(payload)
     if not isinstance(result, dict) or not isinstance(result.get("execution"), dict) or "analysis" not in result:
         fail(503, "ontology-analysis-incomplete", "분석 실행 근거를 확인하지 못했습니다.")
     validate_execution(result["execution"])
     if result["execution"]["backend"] != backend:
         fail(503, "ontology-analysis-backend", "구성된 분석 환경과 실행 근거가 다릅니다.")
+    if (result["execution"]["inputHash"] != schema.digest(payload)
+            or any(result["execution"].get(key) != digest for key, digest in expected.items())):
+        fail(409, "ontology-analysis-integrity", "분석 실행 근거가 요청·도구 버전과 다릅니다.")
     validate_analysis(payload, result["analysis"])
     graph = project_analysis(ctx, pinned["name"], payload, bindings, result["analysis"])
     refs.recheck()
@@ -104,8 +117,19 @@ def process(ctx, pinned):
             "generation": marker["generation"], "partitionId": marker["partitionId"],
             "identities": marker["identities"]}, artifact["version"])]
 
-    published = store.publish_candidate(pinned["name"], graph,
-        expected_generation=pinned["expectedGeneration"], request_id=artifact["id"],
-        _producer="parser-extracted", _completion_writes=completion)
+    from workspace.collaboration import CollaborationError
+    for attempt in range(3):
+        try:
+            published = store.publish_candidate(pinned["name"], graph,
+                expected_generation=pinned["expectedGeneration"], request_id=artifact["id"],
+                _producer="parser-extracted", _completion_writes=completion)
+            break
+        except CollaborationError as error:
+            if error.code != "conflict" or attempt == 2:
+                raise
+            # Retry only publication, never the paid analysis. Membership,
+            # source, artifact and graph fences must all still be current.
+            refs.recheck()
+            store = Ontology(ctx)
     return {"artifactId": artifact["id"], "generation": published["generation"],
             "coverage": result["analysis"]["coverage"]}

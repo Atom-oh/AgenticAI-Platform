@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from workbench.service import Service
 from workspace import ontology_schema as schema
 from workspace.ontology_sources import guideline_reference
-from workspace.ontology_store import Ontology, CURRENT
+from workspace.ontology_store import Ontology, CURRENT, MAX_PARTITIONS, retain_tombstones
+from workbench.service import fail
 
 
 def prepare_product(collaboration, scope, product, guideline, legacy):
@@ -69,12 +70,15 @@ def prepare_product(collaboration, scope, product, guideline, legacy):
         unknown.append("business-steps-not-linked-to-screens")
     graph = schema.validate_graph({"schemaVersion": 1, "projectId": ctx.project_id, "nodes": nodes, "edges": edges,
         "coverage": {"complete": False, "scope": "published-product-partition", "truncated": False, "unknown": unknown}})
+    graph = retain_tombstones(prior["graph"] if prior else {}, graph)
     part = {"partitionId": partition, "name": name, "kind": "published-product",
             "createdBy": prior["createdBy"] if prior else scope["actor"], "updatedBy": scope["actor"],
             "guidelineId": guideline["id"], "legacyProjectionHash": legacy["hash"], "graph": graph}
     updated = copy.deepcopy(current or {"id": CURRENT, "schemaVersion": 1, "projectId": ctx.project_id,
                                        "partitions": {}, "indexes": {}})
     updated["partitions"][partition] = store._put_json(partition, part)
+    if len(updated["partitions"]) > MAX_PARTITIONS:
+        fail(422, "ontology-capacity", "프로젝트 파티션 수 제한을 초과했습니다.")
     store._replace_indexes(updated, current or {}, partition, prior["graph"] if prior else {"nodes": [], "edges": []}, graph)
     updated["generation"] = schema.digest({"partitions": updated["partitions"], "indexes": updated["indexes"]})
     return [collaboration._write(ctx.owner, "ontology", updated, current["version"] if current else None)], {

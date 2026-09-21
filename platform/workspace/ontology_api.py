@@ -43,8 +43,10 @@ def route(host, scope, claims, method, parts, body, query):
         if not current or current["generation"] != body.get("expectedGeneration"):
             fail(409, "ontology-changed", "영향 분석 기준이 변경되었습니다.")
         raw_seeds = body.get("nodeIds", [])
-        if not isinstance(raw_seeds, list) or any(not isinstance(seed, str) for seed in raw_seeds):
+        if not isinstance(raw_seeds, list) or len(raw_seeds) > 20:
             fail(400, "ontology-selection", "시작 노드 목록이 올바르지 않습니다.")
+        for seed in raw_seeds:
+            schema._identifier(seed)
         seeds = list(raw_seeds)
         if body.get("oldSource"):
             seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True))

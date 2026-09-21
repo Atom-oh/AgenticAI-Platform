@@ -29,18 +29,23 @@ def workbench_reference(reference):
 
 
 class Sources:
-    def __init__(self, context):
+    def __init__(self, context, *, max_records=90, max_sources=50):
         self.ctx = context
         self.storage = context.storage
         self.observed = {}
         self.package_hashes = set()
         self.workbench_refs = {}
         self.historical_refs = {}
+        self.max_records = max_records
+        self.max_sources = max_sources
         self.ctx.fresh()
         self.authority = self._authority()
 
     def _authority(self):
-        return (self.ctx.actor, self.ctx.project_id, self.ctx.scope["role"], self.ctx.scope["project"]["version"])
+        project = self.ctx.scope["project"]
+        membership = {actor: member["role"] for actor, member in project["members"].items()}
+        return (self.ctx.actor, self.ctx.project_id, self.ctx.scope["role"],
+                schema.digest(membership), project.get("status"), project.get("archived", False))
 
     def _fresh(self):
         self.ctx.fresh()
@@ -54,8 +59,8 @@ class Sources:
         if prior and prior != check:
             fail(409, "ontology-source-changed", "온톨로지 원본이 조회 중 변경되었습니다.")
         self.observed[key] = check
-        if len(self.observed) > 90:
-            fail(422, "ontology-authority-limit", "원자적으로 확인할 근거 레코드는 90개 이하여야 합니다. 분석 단위를 나누세요.")
+        if len(self.observed) > self.max_records:
+            fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
         return record
 
     def _blob(self, key, expected, maximum=2_000_000):
@@ -75,7 +80,8 @@ class Sources:
         kind = ref["sourceKind"]
         if kind == "asset":
             asset = self._remember("asset", self.ctx.get("asset", ref["sourceId"]))
-            if asset.get("archived") or asset.get("accessRevoked") or asset.get("tombstone") or asset.get("uploadStatus") != "stored":
+            if (asset.get("archived") or asset.get("accessRevoked") or asset.get("tombstone")
+                    or asset.get("status") == "deleted" or asset.get("uploadStatus") != "stored"):
                 fail(409, "ontology-source-stale", "보관 완료된 활성 원본이 필요합니다.")
             expected = asset_reference(asset)
             self._identity(ref, expected)
@@ -208,21 +214,29 @@ class Sources:
                ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")):
             fail(409, "ontology-source-stale", "온톨로지의 원본 버전 또는 권한 기준이 변경되었습니다.")
 
-    def verify(self, references):
+    def verify(self, references, *, recheck=True):
         if not isinstance(references, list) or len(references) > 30000:
             fail(422, "ontology-source-limit", "한 번에 확인할 원본 근거가 너무 많습니다.")
-        unique = {schema.digest(schema.source_ref(ref)): ref for ref in references}
-        if len(unique) > 50:
-            fail(422, "ontology-source-limit", "분석 단위의 서로 다른 원본 근거는 50개 이하여야 합니다.")
+        unique = {}
+        for raw in references:
+            ref = schema.source_ref(raw)
+            authority = {key: value for key, value in ref.items() if key != "location"}
+            if ref.get("location", {}).get("documentId"):
+                authority["documentId"] = ref["location"]["documentId"]
+            unique[schema.digest(authority)] = ref
+        if len(unique) > self.max_sources:
+            fail(422, "ontology-source-limit", "서로 다른 원본 근거 수 제한을 초과했습니다. 범위를 나누세요.")
         for ref in unique.values():
             self.resolve(ref)
-        return self.recheck()
+        return self.recheck() if recheck else list(self.observed.values())
 
     def recheck(self):
         self._fresh()
         if self.workbench_refs:
             from workbench import knowledge
-            knowledge.verify_refs(self.ctx, list(self.workbench_refs.values()))
+            refs = list(self.workbench_refs.values())
+            for offset in range(0, len(refs), 50):
+                knowledge.verify_refs(self.ctx, refs[offset:offset + 50])
         for ref in list(self.historical_refs.values()):
             self.authorize(ref, remember=False)
         if self.package_hashes:

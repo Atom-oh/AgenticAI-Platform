@@ -118,6 +118,30 @@ def test_reviewed_node_keeps_cross_partition_dependents_as_stale_witnesses(wb):
     assert len(screen["witnessPath"]) == 2
 
 
+def test_partition_removal_preserves_past_impact_and_does_not_reuse_revisions(wb):
+    from workspace.ontology_store import Ontology
+    from test_ontology_sources import context
+    original = candidate(wb)
+    status, first = call(wb, "POST", "/partitions", {
+        "name": "lifecycle", "requestId": "initial", "expectedGeneration": None, "graph": original})
+    assert status == 201
+    reduced = {**original, "nodes": [original["nodes"][1]], "edges": []}
+    status, removed = call(wb, "POST", "/partitions", {
+        "name": "lifecycle", "requestId": "remove", "expectedGeneration": first["generation"], "graph": reduced})
+    assert status == 201, removed
+    status, result = call(wb, "POST", "/impact", {"changeId": "removed-image", "kind": "asset",
+        "oldSource": original["nodes"][0]["sourceRefs"][0], "expectedGeneration": removed["generation"]})
+    assert status == 200, result
+    dependent = next(item for item in result["items"] if item["title"] == "control")
+    assert dependent["staleWitness"] and dependent["evidenceKind"] == "candidate"
+    assert {n["title"] for n in Ontology(context(wb)).read()["nodes"]} == {"control"}
+    status, restored = call(wb, "POST", "/partitions", {
+        "name": "lifecycle", "requestId": "reintroduce", "expectedGeneration": removed["generation"], "graph": original})
+    assert status == 201, restored
+    image = next(n for n in Ontology(context(wb)).read()["nodes"] if n["title"] == "image")
+    assert image["id"] == first["identities"]["image"] and image["revision"] == 3
+
+
 def test_revoked_source_is_an_opaque_boundary_not_a_leaked_witness(wb):
     published = setup_graph(wb)
     row = wb.storage.get(wb.owner, "asset", "image")

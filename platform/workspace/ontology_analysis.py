@@ -80,6 +80,7 @@ def local_analyze(payload):
             raise ValueError("Offline source analysis did not produce valid evidence")
         value = json.loads(output.read_bytes())
     return {"analysis": value, "execution": {"backend": "local-offline", "sourceExecuted": False,
+        "inputHash": schema.digest(payload),
         "analyzerCodeHash": hashlib.sha256((ANALYZER_ROOT / "analyze.cjs").read_bytes()).hexdigest(),
         "dependencyLockHash": hashlib.sha256((ANALYZER_ROOT / "package-lock.json").read_bytes()).hexdigest()}}
 
@@ -88,11 +89,11 @@ local_analyze.backend = "local-offline"
 
 
 def validate_execution(value):
-    schema._fields(value, {"backend", "sourceExecuted"}, {"analyzerCodeHash", "dependencyLockHash", "toolArchiveHash",
+    schema._fields(value, {"backend", "sourceExecuted", "inputHash"}, {"analyzerCodeHash", "dependencyLockHash", "toolArchiveHash",
         "interpreterId", "sessionId", "requestId", "nodeVersion", "architecture", "region", "elapsedMs"})
     if value["backend"] not in {"local-offline", "agentcore-code-interpreter"} or value["sourceExecuted"] is not False:
         fail(503, "ontology-analysis-incomplete", "입력 소스를 실행하지 않은 분석 근거가 필요합니다.")
-    for key in ("analyzerCodeHash", "dependencyLockHash", "toolArchiveHash"):
+    for key in ("inputHash", "analyzerCodeHash", "dependencyLockHash", "toolArchiveHash"):
         if key in value:
             schema._hash(value[key])
     if value["backend"] == "agentcore-code-interpreter":

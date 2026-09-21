@@ -48,6 +48,15 @@ def test_icon_to_atom_to_screen_and_code_references_are_representable():
     assert result["coverage"]["complete"] is False
 
 
+def test_external_and_diagnostic_patterns_do_not_require_unrelated_usage_nodes():
+    pattern = node("pattern", "Pattern", reviewState="approved", properties={"usageIds": ["screen-a", "screen-b"]})
+    with pytest.raises(ValueError, match="usages"):
+        schema.validate_graph(graph([pattern], []))
+    assert schema.validate_graph(graph([node("consumer")], [edge("use", "consumer", "pattern")]),
+                                 external_nodes=[pattern])
+    assert schema.validate_graph(graph([pattern], []), diagnostic=True)
+
+
 def test_visual_composition_cannot_reverse_levels_or_hide_cycles_as_nesting():
     nodes = [node("atom"), node("molecule", "Molecule"), node("other", "Molecule"),
              node("icon", "Foundation", subtype="icon")]

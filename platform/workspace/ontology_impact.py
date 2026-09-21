@@ -39,7 +39,7 @@ def analyze(graph, change, *, generation, can_read):
         raise ValueError("An exact source revision or canonical node seed is required")
     nodes = {node["id"]: node for node in graph["nodes"]}
     visible = {identifier for identifier, node in nodes.items()
-               if node["reviewState"] not in {"rejected", "deprecated"} and can_read(node["sourceRefs"])}
+               if node["reviewState"] != "rejected" and can_read(node["sourceRefs"])}
     if old:
         seeds = [*seeds, *(node["id"] for node in nodes.values()
                           if any(_same_source(ref, old) for ref in node["sourceRefs"]))]
@@ -52,7 +52,7 @@ def analyze(graph, change, *, generation, can_read):
     reverse = {}
     hidden_boundary = False
     for edge in graph["edges"]:
-        if edge["tombstone"] or edge["reviewState"] in {"rejected", "deprecated"} or edge["type"] not in CHANGE_EDGES[change["kind"]]:
+        if edge["reviewState"] == "rejected" or edge["type"] not in CHANGE_EDGES[change["kind"]]:
             continue
         reverse.setdefault(edge["dst"]["id"], []).append(edge)
     for edges in reverse.values():
@@ -72,7 +72,7 @@ def analyze(graph, change, *, generation, can_read):
         if node["type"] == "Team":
             continue
         evidence = [node, *witnesses, *(nodes[prior] for prior in path[:-1])]
-        stale = any(any(nodes[edge[end]["id"]]["revision"] != edge[end]["revision"] for end in ("src", "dst"))
+        stale = any(edge["tombstone"] or any(nodes[edge[end]["id"]]["revision"] != edge[end]["revision"] for end in ("src", "dst"))
                     for edge in witnesses)
         candidate = stale or "restricted-source-boundary" in graph.get("coverage", {}).get("unknown", []) or any(
             item["tombstone"] or item["reviewState"] != "approved"
@@ -113,7 +113,7 @@ def analyze(graph, change, *, generation, can_read):
     # A bounded project snapshot cannot certify dependencies outside its scope.
     unknown.add("outside-snapshot-not-certified")
     result = {"schemaVersion": 1, "changeId": change["id"], "generation": generation,
-              "items": items, "coverage": {"complete": False, "truncated": truncated,
+              "items": items, "coverage": {"complete": False, "truncated": truncated or graph.get("coverage", {}).get("truncated", False),
                                          "unknown": sorted(unknown), "scope": "authorized-manifest-snapshot"}}
     result["hash"] = schema.digest(result)
     return result

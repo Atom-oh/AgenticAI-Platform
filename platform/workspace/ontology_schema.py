@@ -312,7 +312,8 @@ def validate_graph(value, *, external_nodes=(), diagnostic=False):
             raise ValueError("Executable transitions require Screen endpoints")
         edges.append(edge)
     for node in nodes.values():
-        if node["type"] == "Pattern" and node["reviewState"] == "approved" and not node["tombstone"]:
+        if (not diagnostic and node["id"] in owned and node["type"] == "Pattern"
+                and node["reviewState"] == "approved" and not node["tombstone"]):
             usages = node.get("properties", {}).get("usageIds", [])
             if not isinstance(usages, list) or len(set(usages)) < 2 or any(
                     value not in nodes or nodes[value]["type"] != "Screen"

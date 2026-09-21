@@ -11,6 +11,7 @@ type Edge = { id: string; type: string; src: { id: string }; dst: { id: string }
 type Graph = { nodes: Node[]; edges: Edge[]; generation: string | null; cursor?: string | null; coverage: unknown; backend: string };
 type Impact = { items: { nodeId: string; title: string; type: string; evidenceKind: string; witnessPath: string[] }[];
   generation: string; coverage: unknown };
+type AnalysisArtifact = { id: string; status: string; coverage?: unknown; execution?: { backend?: string; [key: string]: unknown } };
 const LEVELS = ['Foundation', 'Atom', 'Molecule', 'Organism', 'Pattern', 'PageTemplate', 'Screen', 'Procedure'];
 const STATUS: Record<string, string> = { candidate: '검토 후보', reviewed: '검토 완료', approved: '승인', rejected: '반려', deprecated: '폐기' };
 const KIND: Record<string, string> = { Foundation: '기초 자산', Atom: '기본 요소', Molecule: '소규모 조합', Organism: '업무 영역',
@@ -24,6 +25,7 @@ export default function OntologyView() {
   const [reason, setReason] = useState(''), [impact, setImpact] = useState<Impact | null>(null);
   const [collectionName, setCollectionName] = useState('source-collection');
   const [files, setFiles] = useState<Record<string, string>>({});
+  const [receipt, setReceipt] = useState<AnalysisArtifact | null>(null);
   const operation = useAction();
   const analysis = useAction();
   const query = cursor ? '?cursor=' + resource(cursor) : '';
@@ -72,7 +74,7 @@ export default function OntologyView() {
           <button disabled={!state.data.cursor} onClick={() => { setHistory(items => [...items, cursor]); setCursor(state.data?.cursor || ''); }}>다음 페이지</button></div>
         <Details title="정본 버전·조회 범위" value={{ generation: state.data.generation, coverage: state.data.coverage, backend: state.data.backend }} />
       </>}</LoadState>
-      {configuration.data && <p className="wb-muted">코드 분석 실행 환경: {configuration.data.analyzerConfigured ? '설정됨 · 실행 근거는 작업별 확인' : '미구성 · 등록만으로 코드 분석 완료를 뜻하지 않습니다.'}</p>}
+      <LoadState state={configuration}>{configuration.data && <p className="wb-muted">코드 분석 실행 환경: {configuration.data.analyzerConfigured ? '설정됨 · 실행 근거는 작업별 확인' : '미구성 · 등록만으로 코드 분석 완료를 뜻하지 않습니다.'}</p>}</LoadState>
     </Section>
     <Section title="등록한 원본에서 연결 추출" description="HTML·React·스타일·이미지를 같은 소스 묶음으로 선택하고 원래 상대 경로를 지정하세요. 원본 코드는 실행하지 않습니다.">
       <Field label="소스 묶음 ID"><input disabled={analysis.busy} value={collectionName} onChange={event => setCollectionName(event.target.value)}
@@ -90,19 +92,29 @@ export default function OntologyView() {
       <button disabled={analysis.busy || !configuration.data?.analyzerConfigured || !Object.keys(files).length ||
         Object.keys(files).length > 50 || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(collectionName)}
         onClick={() => void analysis.run(async (signal, update) => {
+          setReceipt(null);
           const payload = { name: collectionName, files: Object.entries(files).map(([assetId, path]) => ({ assetId, path })),
             expectedGeneration: state.data?.generation ?? null };
           const queued = await client.post<{ artifact: { id: string }; job: { id: string } }>('/ontology/analyses', {
             ...payload, requestId: analysis.requestId(JSON.stringify(payload)),
           }, signal);
           await waitForJob(client, queued.job.id, { signal, onUpdate: update });
-          return client.get<{ artifact: { status: string; coverage?: unknown; execution?: unknown } }>(
+          const result = await client.get<{ artifact: AnalysisArtifact }>(
             `/ontology/analyses/${resource(queued.artifact.id)}`, signal);
-        }, result => { if (result.artifact.status !== 'completed') throw new Error('분석 완료 기록을 확인하지 못했습니다.');
+          if (result.artifact.status !== 'completed' || !result.artifact.execution?.backend || !result.artifact.coverage)
+            throw new Error('분석 완료 기록과 실행 근거를 확인하지 못했습니다.');
+          return result;
+        }, result => { setReceipt(result.artifact);
           setCursor(''); setHistory([]); state.refresh(); }, '원본 참조를 추출했습니다. 후보 관계와 미해결 항목을 검토하세요.')}>
         원본 분석·매핑 후보 등록
       </button>
       <ActionState action={analysis} />
+      {receipt && <section aria-label="원본 분석 실행 근거">
+        <p>실제 분석 환경: {receipt.execution?.backend === 'local-offline' ? '로컬 테스트 실행' :
+          receipt.execution?.backend === 'agentcore-code-interpreter' ? 'AgentCore Code Interpreter' : '확인되지 않은 실행 환경'}</p>
+        <Details title="분석 작업·실행 증거" value={{ artifactId: receipt.id, execution: receipt.execution }} />
+        <Details title="분석 범위·미해결 항목" value={receipt.coverage} />
+      </section>}
     </Section>
     {selected && <Section title={selected.title} description={`${KIND[selected.type] || selected.type} · ${STATUS[selected.reviewState]} · 정확한 원본 버전과 연결을 검토합니다.`}>
       <Details title="원본 근거·코드 매핑" value={{ id: selected.id, sourceRefs: selected.sourceRefs, properties: selected.properties, provenance: selected.provenance }} />
@@ -111,7 +123,9 @@ export default function OntologyView() {
         <button disabled={operation.busy || !state.data?.generation} onClick={() => {
           const target = selected;
           void operation.run(signal => client.post<Impact>('/ontology/impact', {
-            changeId: crypto.randomUUID(), kind: selected.type === 'PolicyRule' ? 'rule' : 'asset',
+            changeId: crypto.randomUUID(), kind: selected.type === 'PolicyRule' ? 'rule' :
+              selected.type === 'Product' ? 'product-condition' : selected.type === 'Procedure' ? 'procedure' :
+              ['CodeFile', 'CodeSymbol'].includes(selected.type) ? 'code' : 'asset',
             nodeIds: [target.id], expectedGeneration: state.data!.generation,
           }, signal), value => setImpact(value), '현재 권한 범위에서 영향 경로를 조회했습니다.');
         }}>이 항목 변경 영향 보기</button></div>
@@ -125,7 +139,8 @@ export default function OntologyView() {
       <ActionState action={operation} />
       {impact && <section><h3>변경 영향 경로</h3>
         {impact.items.map(item => <article className="wb-artifact" key={item.nodeId}><strong>{item.title}</strong>
-          <p>{item.evidenceKind === 'candidate' ? '추정 연결 · 확인 필요' : item.evidenceKind === 'approved-declared' ? '승인된 선언 관계' : '확인된 구조 참조'}</p>
+          <p>{item.evidenceKind === 'candidate' ? '추정 연결 · 확인 필요' : item.evidenceKind === 'approved-declared' ? '승인된 선언 관계' :
+            item.evidenceKind === 'observed-structural' ? '확인된 구조 참조' : '근거 확인 필요'}</p>
           <Details title="영향 경로의 식별자" value={item.witnessPath} /></article>)}
         {!impact.items.length && <Empty>확인 가능한 영향 경로가 없습니다. 미매핑·권한 제한을 확인해야 하며, 영향이 없다는 판정은 아닙니다.</Empty>}
         <Details title="영향 분석 범위와 미확인 항목" value={impact.coverage} />

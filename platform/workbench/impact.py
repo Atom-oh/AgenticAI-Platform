@@ -62,11 +62,14 @@ def traversal(graph, target_id):
                       "witnessPath": path, "witnessEdges": witness_edges, "sourceRefs": refs,
                       "sourceRevision": node["sourceRef"]["revision"] if node else None,
                       "confidence": confidence})
+        parallel = {}
         for edge in sorted(reverse.get(identifier, []), key=lambda e: (e["src"], e["rel"])):
-            if edge["src"] not in visited:
-                pending.append((edge["src"], path + [edge["src"]], witness_edges + [edge]))
+            parallel.setdefault(edge["src"], []).append(edge)
+        for source, supporting in parallel.items():
+            if source not in visited:
+                pending.append((source, path + [source], witness_edges + supporting))
     return {"items": items, "generation": graph["generation"], "sourceRefs": list(references.values()),
-            "coverage": {**graph["coverage"], "complete": False, "truncated": bool(pending),
+            "coverage": {**graph["coverage"], "complete": False, "truncated": bool(pending) or graph["coverage"].get("truncated", False),
                          "unknown": sorted(set(graph["coverage"].get("unknown", []) + ["unmapped-dependencies"]))}}
 
 
@@ -78,9 +81,6 @@ def analyze(ctx, identifier, body):
         fail(409, "conflict", "변경 요청 버전이 바뀌었습니다.")
     graph = knowledge.graph(ctx, change["targetId"]) if getattr(ctx.host, "ontology_mode", "legacy") == "canonical" else knowledge.graph(ctx)
     impact = traversal(graph, change["targetId"])
-    digest = _hash({"changeId": identifier, "change": {k: change[k] for k in
-                    ("targetId", "changeType", "before", "after", "reason")}, "impact": impact})
-    impact["impactHash"] = digest
     canonical = getattr(ctx.host, "ontology_mode", "legacy") == "canonical"
     authority = "canonical" if canonical else "legacy"
     checks = knowledge.verify_refs(ctx, impact["sourceRefs"], authority=authority)
@@ -91,6 +91,20 @@ def analyze(ctx, identifier, body):
         fail(409, "stale-impact", "분석 중 그래프가 변경되었습니다.")
     if manifest:
         checks.append(ctx.check(manifest_kind, manifest))
+    # Reserve one change write and the project fence. Keep every inspected
+    # authority check; disclose reduced task coverage instead of exceeding the
+    # atomic transaction or dropping evidence to make it fit.
+    unique_checks = {(check["owner"], check["kind"], check["id"]) for check in checks}
+    capacity = 98 - len(unique_checks)
+    if capacity < 1:
+        fail(422, "impact-scope-limit", "영향 분석 근거 범위를 나누세요.")
+    if len(impact["items"]) > capacity:
+        impact["items"] = impact["items"][:capacity]
+        impact["coverage"]["truncated"] = True
+        impact["coverage"]["unknown"] = sorted(set(impact["coverage"]["unknown"]) | {"atomic-task-limit"})
+    digest = _hash({"changeId": identifier, "change": {k: change[k] for k in
+                    ("targetId", "changeType", "before", "after", "reason")}, "impact": impact})
+    impact["impactHash"] = digest
     key, sha = ctx.put_json("wb_change", identifier, digest + "/impact.json", impact)
     tasks, writes = [], []
     for item in impact["items"]:

@@ -265,12 +265,12 @@ def visible(ctx, source, ref):
 
 
 def verify_refs(ctx, refs, *, authority="legacy"):
-    if not isinstance(refs, list) or len(refs) > 50:
+    if not isinstance(refs, list) or len(refs) > (30000 if authority == "canonical" else 50):
         fail(400, "invalid-evidence", "근거 목록이 올바르지 않습니다.")
     checks = []
     if authority == "canonical":
         from workspace.ontology_sources import Sources
-        reader = Sources(ctx)
+        reader = Sources(ctx, max_sources=90)
         checks = reader.verify(refs)
         reader.recheck()
         return checks
@@ -299,11 +299,11 @@ def authorize_refs(ctx, refs, *, authority="legacy"):
     This does not assert freshness of historical evidence and is never sufficient
     for approval, execution, task completion, or publication.
     """
-    if not isinstance(refs, list) or len(refs) > 50:
+    if not isinstance(refs, list) or len(refs) > (30000 if authority == "canonical" else 50):
         fail(400, "invalid-evidence", "근거 목록이 올바르지 않습니다.")
     if authority == "canonical":
         from workspace.ontology_sources import Sources
-        reader = Sources(ctx)
+        reader = Sources(ctx, max_sources=90)
         for ref in refs:
             reader.authorize(ref)
         reader.recheck()

@@ -22,10 +22,18 @@ Read pages and dependency closures remain bounded and disclose incomplete scope.
 Source verification admits at most 90 distinct authority records; publication
 also checks the complete DynamoDB transaction against its 100-operation limit.
 Oversized operations fail with a split-scope error before publication.
+Each publication accepts at most 50 distinct source references. Read snapshots
+use a separate 2,500-record verification budget and perform their final version
+recheck once, rather than inheriting the atomic-write limit.
 
 Canonical IDs are allocated within a partition namespace. Input-local IDs are
 retained as aliases, not trusted as another partition's ownership. Node revision
-and content hash change with a reviewed revision. Existing product-guideline
+and content hash change with a reviewed revision. Review never rebinds incident
+edges automatically, regardless of partition ownership: exact relations must be
+republished for current context, while impact reports stale witnesses.
+Removed nodes/edges remain tombstones within the bounded partition; reintroduction
+advances the existing identity's revision rather than restarting at one.
+Existing product-guideline
 projection IDs and hashes are preserved; canonical publication adds a project
 manifest in the same product-publication transaction.
 
@@ -52,6 +60,11 @@ project membership. Document-library ACL/revision checks remain in `Library`;
 workbench expiry/generation checks remain in the workbench source adapter.
 Authority is frozen during a read, and all observed record versions are rechecked.
 Unknown source adapters fail closed; they are not generic ID lookups.
+The frozen authority is actor, project, role, membership and project lifecycle;
+unrelated collaboration writes do not revoke it. The commit still fences the
+latest project record and every observed source. Bounded project-CAS retries
+reuse already computed analysis; changed membership, sources or graph generation
+fail instead of running the analyzer again.
 
 The v1 schema reserves publication, UX-contract and run-round reference kinds
 for later adapters. Until those adapters are installed, reads fail unavailable.
@@ -105,6 +118,15 @@ The trusted adapter identity and publication role/partition ownership are checke
 before invocation. Completion metadata, execution receipt pointers, the partition
 and request marker commit atomically; an artifact conflict publishes none of them.
 The AgentCore adapter is a separate deployment milestone.
+Manual partitions always retain incomplete, declared coverage. Source deadlines
+are rechecked immediately before submitting the version-fenced transaction;
+source validity is never extended by publication. Reads, reuse and approval
+independently reject expired sources, including expiry after that observation.
+The existing `Worker.handle` atomically claims a queued durable job before
+dispatching `ontology_jobs.process`; duplicate deliveries cannot enter the analyzer.
+This foundation accepts only the exact offline adapter with explicit test opt-in
+and verifies its input/code/lock hashes. Cloud adapter installation belongs to
+the separate adapter PR; a callable's backend label is insufficient.
 
 ## Workbench compatibility
 

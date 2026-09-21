@@ -39,6 +39,9 @@ def import_legacy(ctx, body):
     ctx.fresh({"owner"})
     from workbench import knowledge
     baseline = ctx.storage.get(ctx.owner, "wb_index", "current")
+    if not baseline:
+        from workbench.service import fail
+        fail(409, "legacy-not-indexed", "기존 지식 자료의 수집·색인을 먼저 완료하세요.")
     old = knowledge.legacy_graph(ctx)
     if baseline and baseline.get("generation") != old.get("generation"):
         from workbench.service import fail
