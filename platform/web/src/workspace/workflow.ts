@@ -63,6 +63,8 @@ export function workflowHash(hash: string, selection: {
   const route = hash.split('?')[0] === '#/portal' ? '#/portal' : '#/studio';
   const params = new URLSearchParams();
   if (route === '#/portal') params.set('tab', 'guides');
+  const tool = new URLSearchParams(hash.split('?')[1] || '').get('tool');
+  if (route === '#/studio' && tool && ['play', 'process', 'gallery', 'assets'].includes(tool)) params.set('tool', tool);
   for (const [key, value] of Object.entries(selection)) if (value !== undefined && value !== '') params.set(key, String(value));
   const current = readWorkflowRoute(hash);
   if (selection.assetId === undefined && selection.step && current.assetId &&

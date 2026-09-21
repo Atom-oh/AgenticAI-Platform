@@ -45,6 +45,21 @@ test('scope links do not depend on URLSearchParams.size support', () => {
   } finally { global.URLSearchParams = Original; }
 });
 
+test('background workspace result updates preserve the visible Studio tool for history and reload', () => {
+  const { workflowHash, readWorkflowRoute } = load('workflow');
+  for (const tool of ['play', 'process', 'gallery', 'assets']) {
+    const hash = workflowHash(`#/studio?projectId=p&productId=product&step=review&tool=${tool}`,
+      { projectId: 'p', productId: 'product', step: 'review', runId: 'completed-run', round: 2 });
+    const params = new URLSearchParams(hash.split('?')[1]);
+    assert.equal(params.get('tool'), tool);
+    assert.equal(readWorkflowRoute(hash).runId, 'completed-run');
+    assert.equal(readWorkflowRoute(hash).round, 2);
+  }
+  for (const hash of ['#/studio', '#/studio?tool=workspace', '#/studio?tool=unknown', '#/portal?tool=process']) {
+    assert.equal(new URLSearchParams(workflowHash(hash, { projectId: 'p', step: 'review' }).split('?')[1]).has('tool'), false);
+  }
+});
+
 test('state results do not pass missing, duplicated or malformed evidence', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
