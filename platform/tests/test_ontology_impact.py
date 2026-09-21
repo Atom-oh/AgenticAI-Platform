@@ -89,3 +89,13 @@ def test_stale_endpoint_remains_a_potential_witness_in_diagnostic_impact():
     code = next(item for item in result["items"] if item["nodeId"] == "code")
     assert code["staleWitness"] is True
     assert code["evidenceKind"] == "candidate"
+
+
+def test_superseded_source_authority_never_retains_approved_item_evidence():
+    value = fixture()
+    value["nodes"] = [schema.seal({**n, "reviewState": "approved"}) for n in value["nodes"]]
+    value["edges"] = [schema.seal({**e, "reviewState": "approved"}) for e in value["edges"]]
+    value["coverage"] = {"complete": False, "truncated": False, "scope": "historical",
+                         "unknown": ["historical-source-revisions"]}
+    result = run(value)
+    assert all(item["evidenceKind"] == "candidate" and item["staleWitness"] for item in result["items"])

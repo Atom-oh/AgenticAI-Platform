@@ -198,6 +198,39 @@ def test_real_worker_claim_prevents_duplicate_analyzer_delivery(wb, monkeypatch)
     assert len(calls) == 1
 
 
+def test_interrupted_claim_becomes_a_terminal_failure_on_job_or_artifact_read(wb):
+    from test_ontology_api import call as api_call
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "interrupted", "name": "example", "files": collection(wb)})
+    assert wb.storage.claim_job(wb.owner, queued["job"]["id"])
+    wb.now += 17 * 60 * 1000
+    wb.storage.clock = lambda: wb.now
+    status, result = api_call(wb, "GET", "/analyses/" + queued["artifact"]["id"])
+    assert status == 200
+    assert result["artifact"]["status"] == "failed"
+    assert wb.storage.get(wb.owner, "job", queued["job"]["id"])["errorCode"] == "job-timeout"
+    assert wb.storage.claim_job(wb.owner, queued["job"]["id"]) is None
+
+
+def test_orphaned_artifact_is_reconciled_without_dispatching_paid_work(wb, monkeypatch):
+    from test_ontology_api import call as api_call
+    wb.api.ontology_analyzer_ready = True
+    body = {"requestId": "orphan", "name": "example", "files": collection(wb)}
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("synthetic process interruption before job creation")
+    monkeypatch.setattr(wb.api, "_new_job", interrupted)
+    with pytest.raises(RuntimeError):
+        submit(context(wb), body)
+    identifier = context(wb).identity("wb_artifact", "orphan")
+    wb.now += 17 * 60 * 1000
+    wb.storage.clock = lambda: wb.now
+    status, result = api_call(wb, "GET", "/analyses/" + identifier)
+    assert status == 200 and result["artifact"]["status"] == "failed"
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), body)
+    assert error.value.code == "ontology-analysis-interrupted"
+
+
 def test_queued_source_change_and_actor_revocation_block_analysis(wb):
     wb.api.ontology_analyzer_ready = True
     queued = submit(context(wb), {"requestId": "analysis", "name": "example", "files": collection(wb)})

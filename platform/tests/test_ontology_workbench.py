@@ -43,6 +43,21 @@ def test_canonical_workbench_impacts_keep_the_same_manifest_and_all_source_refs(
     assert loaded["generation"] == graph["generation"]
 
 
+def test_archived_readable_source_keeps_canonical_change_detail_available(wb):
+    from test_ontology_store import candidate
+    data = candidate(wb)
+    published = Ontology(context(wb)).publish_candidate("changes", data, expected_generation=None, request_id="changes")
+    wb.api.ontology_mode = "canonical"
+    change = call(wb, "POST", "changes", {"requestId": "historical-detail", "title": "Synthetic image change",
+        "targetId": published["identities"]["image"], "changeType": "update",
+        "before": "", "after": "", "reason": "Synthetic"})["change"]
+    analyzed = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
+    source = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**source, "archived": True}, source["version"])
+    assert call(wb, "GET", f"changes/{change['id']}")["change"]["id"] == change["id"]
+    assert call(wb, "GET", f"changes/{change['id']}/impact")["impact"]["impactHash"] == analyzed["impact"]["impactHash"]
+
+
 def test_non_owner_cannot_migrate_or_overwrite_canonical_authority(wb):
     indexed(wb)
     with pytest.raises(CollaborationError):
@@ -109,8 +124,22 @@ def test_parallel_impact_evidence_and_prior_truncation_survive_projection():
     result = traversal({"nodes": nodes, "edges": edges, "generation": "g",
                         "coverage": {"truncated": True}}, "root")
     dependent = next(item for item in result["items"] if item["targetId"] == "dependent")
-    assert len(dependent["sourceRefs"]) == 41
+    assert len(dependent["sourceRefs"]) == 42
     assert result["coverage"]["truncated"] is True
+
+
+def test_converging_paths_keep_all_intermediate_and_edge_sources():
+    from workbench.impact import traversal
+    from test_ontology_schema import ref
+    nodes = [{"id": key, "label": "Screen", "title": key, "sourceRef": ref(key), "provenance": "declared"}
+             for key in ["root", "b", "c", "a"]]
+    edges = [{"src": src, "dst": dst, "rel": "USES", "sourceRef": ref(evidence), "provenance": "declared"}
+             for src, dst, evidence in [("b", "root", "b-root"), ("c", "root", "c-root"),
+                                        ("a", "b", "a-b"), ("a", "c", "a-c")]]
+    result = traversal({"nodes": nodes, "edges": edges, "generation": "g", "coverage": {}}, "root")
+    item = next(item for item in result["items"] if item["targetId"] == "a")
+    assert {ref["sourceId"] for ref in item["sourceRefs"]} == {"root", "a", "b", "c", "a-b", "a-c", "b-root", "c-root"}
+    assert len(item["witnessEdges"]) == 4
 
 
 def test_task_budget_retains_all_source_checks_and_discloses_reduced_scope(wb):

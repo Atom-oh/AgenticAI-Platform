@@ -126,6 +126,11 @@ source validity is never extended by publication. Reads, reuse and approval
 independently reject expired sources, including expiry after that observation.
 The existing `Worker.handle` atomically claims a queued durable job before
 dispatching `ontology_jobs.process`; duplicate deliveries cannot enter the analyzer.
+The existing 16-minute stale-job check also reconciles the linked workbench
+artifact. Artifact reads reconcile interrupted dispatches with no job record.
+Recovery records failure and requires a new authorized request; it never repeats
+paid execution under an old authorization. Retrying an unexpired dispatch request
+can finish creating its missing job.
 This foundation accepts only the exact offline adapter with explicit test opt-in
 and verifies its input/code/lock hashes. Cloud adapter installation belongs to
 the separate adapter PR; a callable's backend label is insufficient.
@@ -143,6 +148,9 @@ references; source reindex/import must complete before they become usable again.
 Canonical-mode impact records name their graph authority, use that manifest
 for freshness and preserve all source references. Existing bank local/Neptune
 graph and Gateway are not merged or reconfigured by this module.
+Each impact item keeps a representative display path and the union of node/edge
+evidence across converging paths in the inspected result subgraph. Report and task
+checks retain that complete evidence union; truncation remains explicit.
 Legacy evidence APIs cannot choose canonical resolution through caller fields.
 Canonical impacts/tasks/reports carry their server-selected authority through
 read and completion. Import combines parallel relationship evidence, preserving

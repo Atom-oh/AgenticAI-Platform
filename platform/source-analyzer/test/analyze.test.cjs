@@ -74,6 +74,32 @@ test('CSS module dependencies are recorded with unresolved transform semantics',
   assert.equal(extension.references.some(item => item.resolution.status === 'resolved-local'), false);
 });
 
+test('CSS source-map discovery cannot inspect host files', () => {
+  const PreviousMap = require('../node_modules/postcss/lib/previous-map');
+  const original = PreviousMap.prototype.loadFile;
+  let attempted = false;
+  PreviousMap.prototype.loadFile = () => { attempted = true; throw new Error('unexpected host file read'); };
+  try {
+    const result = analyze(request([text('app.css', '.button{color:red}/*# sourceMappingURL=sentinel.map */', 'style')]));
+    assert.equal(attempted, false);
+    assert.deepEqual(result.diagnostics, []);
+    assert.ok(result.unresolved.some(item => item.reason === 'source-map-not-loaded'));
+  } finally { PreviousMap.prototype.loadFile = original; }
+});
+
+test('uninspected calls, constructors and HTML navigation never claim full coverage', () => {
+  const code = analyze(request([text('app.ts', 'fetch(endpoint);new EventSource(endpoint);location.assign(nextUrl);')]));
+  assert.equal(code.coverage.complete, false);
+  assert.ok(code.unresolved.some(item => item.reason === 'call-semantics-not-inspected'));
+  const html = analyze(request([text('index.html',
+    '<form action="/submit"><object data="./diagram.svg"></object></form><meta http-equiv="refresh" content="0;url=/next">', 'html'),
+    asset('diagram.svg')]));
+  assert.equal(html.coverage.complete, false);
+  assert.ok(html.references.some(item => item.resolution.targetPath === 'diagram.svg'));
+  for (const reason of ['html-form-submission', 'html-active-content', 'html-navigation'])
+    assert.ok(html.unresolved.some(item => item.reason === reason));
+});
+
 test('real TS parser connects imports, JSX symbols, image imports and CSS resources', () => {
   const input = request([
     text('src/App.tsx', `import {Button as Action} from './Button';

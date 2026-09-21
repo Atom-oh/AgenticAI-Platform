@@ -176,6 +176,31 @@ def test_review_keeps_current_relations_and_mapping_changes_keep_stale_witnesses
     assert len(screen["witnessPath"]) == 2
 
 
+def test_review_fences_active_external_sources_but_retired_edges_do_not_lock_the_partition(wb):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node, edge
+    from workspace.ontology_store import Ontology
+    published = setup_graph(wb)
+    source = asset(wb, "screen-source")
+    graph = {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": [
+        node("screen", "Screen", project=wb.project["id"], sourceRefs=[asset_reference(source)])],
+        "edges": [edge("external", "screen", published["identities"]["control"], sourceRefs=[asset_reference(source)])]}
+    added = Ontology(context(wb)).publish_candidate("external", graph,
+        expected_generation=published["generation"], request_id="external")
+    control = wb.storage.get(wb.owner, "asset", "control")
+    wb.storage.put(wb.owner, "asset", {**control, "accessRevoked": True}, control["version"])
+    status, result = call(wb, "POST", f"/nodes/{added['identities']['screen']}/review", {
+        "requestId": "denied", "revision": 1, "expectedGeneration": added["generation"],
+        "decision": "reviewed", "reason": "An external source is now revoked"})
+    assert status == 409 and result["code"] == "ontology-reference-unavailable"
+    removed = Ontology(context(wb)).publish_candidate("external", {**graph, "edges": []},
+        expected_generation=added["generation"], request_id="remove")
+    status, result = call(wb, "POST", f"/nodes/{added['identities']['screen']}/review", {
+        "requestId": "allowed", "revision": 2, "expectedGeneration": removed["generation"],
+        "decision": "reviewed", "reason": "The unusable relationship is retired"})
+    assert status == 200, result
+
+
 def test_partition_removal_preserves_past_impact_and_does_not_reuse_revisions(wb):
     from workspace.ontology_store import Ontology
     from test_ontology_sources import context

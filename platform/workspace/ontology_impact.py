@@ -70,8 +70,9 @@ def analyze(graph, change, *, generation, can_read):
         if node["type"] == "Team":
             continue
         evidence = [node, *witnesses, *(nodes[prior] for prior in path[:-1])]
-        stale = any(edge["tombstone"] or any(nodes[edge[end]["id"]]["revision"] != edge[end]["revision"] for end in ("src", "dst"))
-                    for edge in witnesses)
+        stale = ("historical-source-revisions" in graph.get("coverage", {}).get("unknown", []) or
+                 any(edge["tombstone"] or any(nodes[edge[end]["id"]]["revision"] != edge[end]["revision"] for end in ("src", "dst"))
+                     for edge in witnesses))
         candidate = stale or "restricted-source-boundary" in graph.get("coverage", {}).get("unknown", []) or any(
             item["tombstone"] or item["reviewState"] != "approved"
             or item["provenance"] == "model-inferred" for item in evidence)

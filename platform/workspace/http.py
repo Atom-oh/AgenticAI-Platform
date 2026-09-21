@@ -269,11 +269,15 @@ class WorkspaceAPI:
                 or now - updated <= STALE_JOB_MS):
             return job
         try:
-            return self.storage.put(owner, "job", {
+            saved = self.storage.put(owner, "job", {
                 **job, "status": "failed", "stopReason": "timeout", "errorCode": "job-timeout",
                 "error": "작업 진행이 16분 이상 갱신되지 않아 종료했습니다. 다시 실행해 주세요.",
                 "finishedAt": now,
             }, job["version"])
+            if job.get("task") == "workbench":
+                from workbench.worker import _mark_failed
+                _mark_failed(self, owner, saved, "job-timeout")
+            return saved
         except Conflict:
             return self._get(owner, "job", job["id"])
 

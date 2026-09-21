@@ -72,6 +72,37 @@ def traversal(graph, target_id):
         for source, supporting in parallel.items():
             if source not in visited:
                 pending.append((source, path + [source], witness_edges + supporting))
+    # Retain a display path and all evidence inside the inspected result
+    # subgraph. Converging paths and cycles must not discard source authority.
+    included = {item["targetId"] for item in items}
+    outgoing = {}
+    for edges in reverse.values():
+        for edge in edges:
+            if edge["src"] in included and edge["dst"] in included:
+                outgoing.setdefault(edge["src"], []).append(edge)
+    references = {}
+    for item in items:
+        pending_proofs, proof_nodes, proof_edges = [item["targetId"]], set(), {}
+        while pending_proofs:
+            identifier = pending_proofs.pop()
+            if identifier in proof_nodes:
+                continue
+            proof_nodes.add(identifier)
+            for edge in outgoing.get(identifier, []):
+                proof_edges[_hash(edge)] = edge
+                pending_proofs.append(edge["dst"])
+        evidence = [nodes[key] for key in sorted(proof_nodes) if key in nodes] + list(proof_edges.values())
+        refs = {_hash(ref): ref for entry in evidence
+                for ref in (entry.get("sourceRefs") or [entry["sourceRef"]])}
+        item["sourceRefs"] = list(refs.values())
+        item["witnessEdges"] = list(proof_edges.values())
+        item["staleWitness"] = ("historical-source-revisions" in graph["coverage"].get("unknown", []) or any(
+            edge.get("tombstone") or any(nodes[edge[end]].get("revision") != edge["canonical"][end]["revision"]
+                                       for end in ("src", "dst"))
+            for edge in proof_edges.values() if "canonical" in edge))
+        item["confidence"] = ("unknown" if item["targetId"] not in nodes else "confirmed" if
+            not item["staleWitness"] and all(entry.get("provenance") == "connector-extracted" for entry in evidence) else "candidate")
+        references.update(refs)
     return {"items": items, "generation": graph["generation"], "sourceRefs": list(references.values()),
             "coverage": {**graph["coverage"], "complete": False, "truncated": bool(pending) or graph["coverage"].get("truncated", False),
                          "unknown": sorted(set(graph["coverage"].get("unknown", []) + ["unmapped-dependencies"]))}}
@@ -126,7 +157,8 @@ def analyze(ctx, identifier, body):
         task["graphAuthority"] = authority
         writes.append(ctx.write("wb_task", task))
         tasks.append(task)
-    updated = {**change, "status": "analyzed", "impactHash": digest, "impactKey": key, "impactSha": sha,
+    updated = {**change, "status": "analyzed" if impact["items"] else "needs-mapping",
+               "impactHash": digest, "impactKey": key, "impactSha": sha,
                "generation": impact["generation"], "sourceRefs": impact["sourceRefs"],
                "taskIds": [task["id"] for task in tasks], "graphAuthority": "canonical" if canonical else "legacy"}
     validate(ctx, impact["sourceRefs"], authority=authority)

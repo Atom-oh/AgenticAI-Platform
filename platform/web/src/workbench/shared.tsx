@@ -18,7 +18,7 @@ export const LABELS: Record<string, string> = {
   model: '모델 생성 응답', 'deterministic-baseline': '결정론적 기준 응답',
   behaviorEvaluation: 'Skill 행동 평가', knowledge: '지식 검색', externalSources: '외부 원본 연결',
   mcp: 'MCP 제공', available: '사용 가능', configured: '설정됨', 'configured-only': '개별 연결 설정 필요',
-  registered: '등록됨', indexing: '색인 중', analyzed: '분석됨', vectors: '벡터 항목', PROPOSING: '초안 생성 중',
+  registered: '등록됨', indexing: '색인 중', analyzed: '분석됨', 'needs-mapping': '매핑 확인 필요', vectors: '벡터 항목', PROPOSING: '초안 생성 중',
   VALIDATING: '행동 평가 중', answered: '응답 생성됨', refused: '요청 거부', 'insufficient-evidence': '근거 부족',
 };
 export const label = (value?: string) => value ? LABELS[value] || value : '미확인';

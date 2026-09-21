@@ -593,8 +593,8 @@ class Ontology:
             for end in ("src", "dst"):
                 if edge[end]["id"] not in own:
                     external = self._node(current, edge[end]["id"])
-                    if not external:
-                        fail(409, "ontology-reference-unavailable", "관계 대상의 현재 버전을 확인하지 못했습니다.")
+                    if not external or not self._visible(external["sourceRefs"]):
+                        fail(409, "ontology-reference-unavailable", "활성 관계 대상의 현재 원본 권한을 확인하지 못했습니다.")
                     externals[external["id"]] = external
             if decision in {"rejected", "deprecated"} and identifier in (edge["src"]["id"], edge["dst"]["id"]):
                 edge["reviewState"] = "candidate"
@@ -605,7 +605,8 @@ class Ontology:
                               external_nodes=list(externals.values()), diagnostic=True)
         active = {"nodes": [n for n in graph["nodes"] if not n["tombstone"]],
                   "edges": [e for e in graph["edges"] if not e["tombstone"]]}
-        checks = self.sources.verify(_references(active) + target["sourceRefs"])
+        checks = self.sources.verify(_references(active) + target["sourceRefs"]
+                                     + [ref for node in externals.values() for ref in node["sourceRefs"]])
         part = {**prior, "graph": graph, "updatedBy": self.ctx.actor,
                 "reviews": {**prior.get("reviews", {}), identifier: audit_id}}
         updated = copy.deepcopy(current)

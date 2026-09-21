@@ -211,6 +211,12 @@ function analyze(input) {
           !checker.getSymbolAtLocation(expression)?.declarations?.length;
         const importMeta = expression => ts.isMetaProperty(expression) &&
           expression.keywordToken === ts.SyntaxKind.ImportKeyword && expression.name.text === 'meta';
+        if (ts.isCallExpression(node) && node.expression.kind !== ts.SyntaxKind.ImportKeyword &&
+            !globalName(node.expression, 'require') && !(ts.isPropertyAccessExpression(node.expression) &&
+              globalName(node.expression.expression, 'require') && node.expression.name.text === 'resolve'))
+          problem(file, 'call-semantics-not-inspected', position(node).line, position(node).column);
+        if (ts.isNewExpression(node) && !globalName(node.expression, 'URL'))
+          problem(file, 'constructor-semantics-not-inspected', position(node).line, position(node).column);
         if (ts.isNewExpression(node) && globalName(node.expression, 'URL')) {
           const [value, base] = node.arguments || [];
           if (value && ts.isStringLiteral(value) && base && ts.isPropertyAccessExpression(base) &&
@@ -274,10 +280,12 @@ function analyze(input) {
       walk(source);
     } else if (file.kind === 'style') {
       try {
-        const css = postcss.parse(file.text, { from: file.path });
+        const css = postcss.parse(file.text, { from: file.path, map: false });
         css.walk(node => {
           if (++visited > LIMITS.nodes) { truncated = true; return false; }
           const at = { line: node.source?.start?.line || 1, column: Math.max(0, (node.source?.start?.column || 1) - 1) };
+          if (node.type === 'comment' && /sourceMappingURL/.test(node.text || ''))
+            problem(file, 'source-map-not-loaded', at.line, at.column);
           if (node.type === 'rule' && /[#$]\{/.test(node.selector || ''))
             problem(file, 'computed-style-reference', at.line, at.column);
           const value = node.type === 'decl' ? node.value : node.type === 'atrule' ? node.params : '';
@@ -327,8 +335,14 @@ function analyze(input) {
           stack.push(name);
           const position = at(Math.max(0, parser.startIndex));
           if (name === 'base' && attrs.href) { base = true; problem(file, 'html-base-url', position.line, position.column); }
-          for (const key of ['src', 'href', 'poster']) if (attrs[key] && name !== 'base')
+          for (const key of ['src', 'href', 'poster', 'data', 'background', 'longdesc', 'cite']) if (attrs[key] && name !== 'base')
             found.push({ value: attrs[key], at: position });
+          if (name === 'form' || attrs.action || attrs.formaction)
+            problem(file, 'html-form-submission', position.line, position.column);
+          if (name === 'object' || name === 'embed' || attrs.srcdoc || attrs.manifest || attrs.codebase || attrs.archive || attrs.ping)
+            problem(file, 'html-active-content', position.line, position.column);
+          if (name === 'meta' && String(attrs['http-equiv']).toLowerCase() === 'refresh')
+            problem(file, 'html-navigation', position.line, position.column);
           if (attrs.srcset) problem(file, 'html-srcset-semantics', position.line, position.column);
           if (attrs.style) problem(file, 'inline-style-references', position.line, position.column);
           if (Object.keys(attrs).some(key => key.startsWith('on'))) problem(file, 'inline-script-not-executed', position.line, position.column);

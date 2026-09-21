@@ -11,6 +11,22 @@ from workspace.ontology_sources import Sources, asset_reference
 from workspace.ontology_store import Ontology
 
 
+def reconcile(ctx, artifact):
+    """Read-triggered recovery never reruns paid work or revives old authorization."""
+    if artifact.get("status") not in {"queued", "processing"}:
+        return artifact
+    job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
+    if job:
+        job = ctx.host._expire_job(ctx.owner, job, ctx.scope)
+    if (job and job.get("status") == "failed" or not job and
+            ctx.storage.clock() - artifact.get("updatedAt", ctx.storage.clock()) > 16 * 60 * 1000):
+        from workbench.worker import _mark_failed
+        _mark_failed(ctx.host, ctx.owner, job or {"id": artifact["jobId"], "input": artifact["jobInput"]},
+                     (job or {}).get("errorCode", "dispatch-interrupted"))
+        return ctx.get("wb_artifact", artifact["id"])
+    return artifact
+
+
 def submit(ctx, body):
     fields(body, {"requestId", "name", "files", "resolverProfileId", "expectedGeneration"})
     ctx.fresh()
@@ -23,8 +39,11 @@ def submit(ctx, body):
     identifier = ctx.identity("wb_artifact", body.get("requestId"))
     prior = ctx.existing("wb_artifact", identifier, body)
     if prior:
+        prior = reconcile(ctx, prior)
         Sources(ctx).verify(prior["sourceRefs"])
         job = ctx.storage.get(ctx.owner, "job", prior["jobId"])
+        if prior["status"] == "failed" and not job:
+            fail(409, "ontology-analysis-interrupted", "작업 전달이 중단되었습니다. 새 요청으로 다시 실행하세요.")
         return {"artifact": prior, "job": job or ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])}
     files = body.get("files")
     if not isinstance(files, list) or not 1 <= len(files) <= 100:

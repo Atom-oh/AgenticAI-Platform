@@ -74,9 +74,11 @@ def route(host, scope, claims, method, parts, body, query):
         from workspace.ontology_jobs import submit
         return 202, public(submit(ctx, body))
     if len(parts) == 2 and parts[0] == "analyses" and method == "GET":
+        from workspace.ontology_jobs import reconcile
         artifact = ctx.get("wb_artifact", parts[1])
         if artifact.get("kind") != "ontology-analysis":
             fail(404, "not-found", "분석 작업이 없습니다.")
+        artifact = reconcile(ctx, artifact)
         from workspace.ontology_sources import Sources
         sources = Sources(ctx)
         sources.verify(artifact["sourceRefs"])
