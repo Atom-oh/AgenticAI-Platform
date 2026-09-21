@@ -74,11 +74,15 @@ def test_planning_ontology_drives_a_real_page_and_changed_guidelines_block_relea
     assert worker.handle({"owner": owner, "jobId": release["job"]["id"]})["status"] == "completed"
     assert api.storage.get(owner, "release", release["release"]["id"])["status"] == "ready"
     assert len(calls) == 1
+    assert request(api, "GET", "/runs/" + run["id"], actor="dana", project=project["id"])[1]["run"]["needsRevalidation"] is False
     _, changed = request(api, "PUT", f"/products/{product['id']}", {"version": product["version"], "description": "변경된 기준"},
                           actor="bob", project=project["id"])
     assert request(api, "POST", f"/products/{product['id']}/publish", {"version": changed["product"]["version"]},
                    actor="bob", project=project["id"])[0] == 200
     assert request(api, "POST", "/releases", {"runId": run["id"], "round": 1, "requestId": "stale-release"},
                    actor="dana", project=project["id"])[0] == 409
+    assert request(api, "GET", "/runs/" + run["id"], actor="dana", project=project["id"])[1]["run"]["needsRevalidation"] is True
+    _, history = request(api, "GET", "/runs", actor="dana", project=project["id"])
+    assert next(item for item in history["runs"] if item["id"] == run["id"])["needsRevalidation"] is True
     _, impact = request(api, "GET", f"/products/{product['id']}/impact", actor="dana", project=project["id"])
     assert any(item["id"] == run["id"] for item in impact["affectedRuns"])

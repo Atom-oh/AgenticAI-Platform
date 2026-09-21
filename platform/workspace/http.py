@@ -194,6 +194,36 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Resource not found")
         return record
 
+    def _run_view(self, owner, record, scope, cache=None):
+        """Report current criteria independently of the browser's product filter."""
+        cache = {} if cache is None else cache
+        def read(kind, identifier):
+            if not identifier:
+                return None
+            key = kind, identifier
+            if key not in cache:
+                cache[key] = self.storage.get(owner, kind, identifier)
+            return cache[key]
+        contract = read("contract", record.get("contractId"))
+        stale = (not contract or contract.get("status") != "approved"
+                 or contract.get("version") != record.get("contractVersion")
+                 or (contract.get("approval") or {}).get("hash") != record.get("contractHash"))
+        project_id = (scope.get("project") or {}).get("id") if scope else None
+        if record.get("projectId") != project_id:
+            stale = True
+        if record.get("productId"):
+            product = read("product", record["productId"])
+            stale = stale or (not product or product.get("publishedGuidelineId") != record.get("guidelineId")
+                              or product.get("ontologyHash") != record.get("ontologyHash"))
+        elif project_id:
+            stale = True
+        if record.get("catalogHash"):
+            if "catalogHash" not in cache:
+                from workspace.component_catalog import read_catalog
+                cache["catalogHash"] = read_catalog()["hash"]
+            stale = stale or record["catalogHash"] != cache["catalogHash"]
+        return {**record, "needsRevalidation": bool(stale)}
+
     def _expire_job(self, owner, job, scope=None):
         """One CAS attempt per read; a concurrent heartbeat or completion wins."""
         if job.get("task") in ("document-finalize", "document-analysis"):
@@ -277,6 +307,9 @@ class WorkspaceAPI:
         if len(parts) == 1 and parts[0] in ("assets", "contracts", "runs") and method == "GET":
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
             page = self.storage.list_page(owner, kind, limit=100, cursor=query.get("cursor"))
+            if kind == "run":
+                cache = {}
+                page["items"] = [self._run_view(owner, record, scope, cache) for record in page["items"]]
             return _json(200, {parts[0]: page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
         if parts == ["assets"] and method == "POST":
             return self._create_asset(owner, _body(event))
@@ -301,6 +334,8 @@ class WorkspaceAPI:
             return _json(200, {"baseline": {"runId": record["id"], "round": number, "sourceHash": row["sourceHash"]},
                                "files": sorted(generated_files(project))})
         if len(parts) == 2 and method == "GET":
+            if kind == "run":
+                record = self._run_view(owner, record, scope)
             if kind == "job":
                 if record.get("task") in ("document-finalize", "document-analysis"):
                     from documents.errors import DocumentError
