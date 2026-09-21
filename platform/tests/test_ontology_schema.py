@@ -57,6 +57,12 @@ def test_external_and_diagnostic_patterns_do_not_require_unrelated_usage_nodes()
     assert schema.validate_graph(graph([pattern], []), diagnostic=True)
 
 
+def test_team_is_only_an_assignment_endpoint():
+    team = node("team", "Team", properties={"teamId": "design"})
+    with pytest.raises(ValueError, match="assignment"):
+        schema.validate_graph(graph([node("screen", "Screen"), team], [edge("use", "screen", "team")]))
+
+
 def test_visual_composition_cannot_reverse_levels_or_hide_cycles_as_nesting():
     nodes = [node("atom"), node("molecule", "Molecule"), node("other", "Molecule"),
              node("icon", "Foundation", subtype="icon")]

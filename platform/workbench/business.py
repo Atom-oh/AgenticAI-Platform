@@ -486,6 +486,13 @@ def _create_report(api, scope, claims, body):
 
 def _validate_report_sources(api, scope, claims, report, exact=True):
     checks = {}
+
+    def remember(check):
+        key = check["owner"], check["kind"], check["id"]
+        if key in checks and checks[key] != check:
+            raise CollaborationError(409, "source-changed", "보고서 원본이 검증 중 변경되었습니다.")
+        checks[key] = check
+
     for reference in report["sourceRefs"]:
         if reference["kind"] == "knowledge":
             from workbench.api import route as core_route
@@ -503,7 +510,7 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                 if value.get("evidence") != reference.get("evidence"):
                     raise CollaborationError(409, "source-changed", "보고서 원본 버전 또는 권한이 변경되었습니다.")
                 for check in verify_refs(Service(api, scope, claims), [value["evidence"]]):
-                    checks[(check["kind"], check["id"])] = check
+                    remember(check)
         else:
             current = _get(api, scope, reference["kind"], reference["id"])
             if reference["kind"] in {"wb_change", "wb_task"}:
@@ -529,16 +536,18 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                             raise CollaborationError(409, "source-changed", "작업의 영향 분석이 변경되었습니다.")
                         kind, manifest_id = ("ontology", "project-current") if authority == "canonical" else ("wb_index", "current")
                         manifest = api.storage.get(scope["owner"], kind, manifest_id)
+                        if (manifest or {}).get("generation") != analyzed["generation"]:
+                            raise CollaborationError(409, "source-changed", "보고서의 영향 분석 기준이 변경되었습니다.")
                         if manifest:
                             check = ctx.check(kind, manifest)
-                            checks[(check["kind"], check["id"])] = check
+                            remember(check)
                     for check in knowledge.verify_refs(ctx, reference.get("sourceRefs", []), authority=authority):
-                        checks[(check["kind"], check["id"])] = check
+                        remember(check)
             if exact and current["version"] != reference["version"]:
                 raise CollaborationError(409, "source-changed", "보고서 원본 자료가 변경되었습니다.")
-            checks[(reference["kind"], reference["id"])] = {
+            remember({
                 "owner": scope["owner"], "kind": reference["kind"], "id": reference["id"],
-                "version": current["version"]}
+                "version": current["version"]})
     return list(checks.values())
 
 

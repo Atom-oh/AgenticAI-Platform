@@ -150,6 +150,11 @@ class Service:
                 if unique[key]["version"] != write.get("expected_version"):
                     fail(409, "source-changed", "검증한 원본과 저장 기준 버전이 다릅니다.")
                 del unique[key]
+        project_key = self.owner, "project", project["id"]
+        if project_key in unique:
+            if unique[project_key]["version"] != project["version"]:
+                fail(409, "source-changed", "검증한 프로젝트 권한 버전이 다릅니다.")
+            del unique[project_key]
         if len(writes) + len(unique) + 1 > 100:
             fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         fence = self.write("project", project, project["version"])

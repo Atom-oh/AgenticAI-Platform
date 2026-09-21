@@ -77,6 +77,8 @@ class Sources:
     def resolve(self, reference, *, text=False):
         ref = schema.source_ref(reference)
         self._fresh()
+        if "allowedRoles" in ref and self.ctx.scope["role"] not in ref["allowedRoles"]:
+            fail(403, "ontology-source-forbidden", "기록된 원본 읽기 권한이 없습니다.")
         kind = ref["sourceKind"]
         if kind == "asset":
             asset = self._remember("asset", self.ctx.get("asset", ref["sourceId"]))

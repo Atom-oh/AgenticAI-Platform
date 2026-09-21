@@ -51,6 +51,7 @@ def route(host, scope, claims, method, parts, body, query):
         if body.get("oldSource"):
             seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True))
         if not seeds:
+            ontology._recheck(current)
             return 200, {"items": [], "generation": current["generation"],
                          "coverage": {"complete": False, "unknown": ["unmapped-or-inaccessible-seed"]}}
         seeds = sorted(set(seeds))

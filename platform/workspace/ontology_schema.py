@@ -300,6 +300,8 @@ def validate_graph(value, *, external_nodes=(), diagnostic=False):
             if node is None or not diagnostic and node["revision"] != edge[end]["revision"]:
                 raise ValueError("Edge endpoint revision is missing")
         source, target = nodes[edge["src"]["id"]], nodes[edge["dst"]["id"]]
+        if edge["type"] in DEPENDENCIES and "Team" in {source["type"], target["type"]}:
+            raise ValueError("Team is an assignment endpoint, not a dependency")
         if edge["type"] == "COMPOSES":
             visual = LEVELS[1:7]  # Foundation dependencies use USES; Procedure is workflow.
             if source["type"] not in visual or target["type"] not in visual or visual.index(source["type"]) <= visual.index(target["type"]):

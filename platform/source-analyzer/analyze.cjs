@@ -125,7 +125,7 @@ function analyze(input) {
     const found = new Set();
     for (const candidate of candidates) {
       const options = [candidate];
-      if (!path.extname(candidate)) options.push(...['.ts', '.tsx', '.js', '.jsx', '.json'].map(ext => candidate + ext),
+      if (!resourceRelative && !path.extname(candidate)) options.push(...['.ts', '.tsx', '.js', '.jsx', '.json'].map(ext => candidate + ext),
         ...['.ts', '.tsx', '.js', '.jsx'].map(ext => candidate + '/index' + ext));
       for (const option of options) if (files.has(option)) found.add(option);
     }
@@ -189,6 +189,22 @@ function analyze(input) {
             if (ts.isIdentifier(declaration.name)) addExport({ path: file.path, name: declaration.name.text, ...position(declaration) });
         }
       }
+      function importBinding(expression, seen = new Set()) {
+        if (!expression || seen.size >= 16) return null;
+        if (ts.isPropertyAccessExpression(expression)) {
+          const base = importBinding(expression.expression, seen);
+          return base?.symbol === '*' ? { ...base, symbol: expression.name.text } : null;
+        }
+        const symbol = checker.getSymbolAtLocation(expression);
+        if (!symbol || seen.has(symbol)) return null;
+        if (imports.has(symbol)) return imports.get(symbol);
+        seen.add(symbol);
+        const declaration = symbol.valueDeclaration;
+        if (declaration && ts.isVariableDeclaration(declaration) &&
+            declaration.parent.flags & ts.NodeFlags.Const)
+          return importBinding(declaration.initializer, seen);
+        return null;
+      }
       function walk(node) {
         if (++visited > LIMITS.nodes) { truncated = true; return; }
         const globalName = (expression, name) => ts.isIdentifier(expression) && expression.text === name &&
@@ -206,6 +222,9 @@ function analyze(input) {
           problem(file, 'worker-runtime-semantics', position(node).line, position(node).column);
         if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
           const expression = node.expression;
+          if (ts.isIdentifier(expression.expression) && ['require', 'module'].includes(expression.expression.text) &&
+              !(globalName(expression.expression, 'require') && expression.name.text === 'resolve'))
+            problem(file, 'unmodeled-module-loader', position(node).line, position(node).column);
           if (globalName(expression.expression, 'require') && expression.name.text === 'resolve') {
             problem(file, 'runtime-module-resolution', position(node).line, position(node).column);
             if (node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]))
@@ -214,6 +233,11 @@ function analyze(input) {
           if (importMeta(expression.expression))
             problem(file, 'bundler-meta-transform', position(node).line, position(node).column);
         }
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require' &&
+            !globalName(node.expression, 'require'))
+          problem(file, 'shadowed-or-ambient-module-loader', position(node).line, position(node).column);
+        if (ts.isVariableDeclaration(node) && node.initializer && globalName(node.initializer, 'require'))
+          problem(file, 'module-loader-alias', position(node).line, position(node).column);
         if (ts.isImportTypeNode(node)) {
           if (ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal))
             reference(file, 'type-import', node.argument.literal.text, position(node), { typeOnly: true });
@@ -229,9 +253,11 @@ function analyze(input) {
           const tag = node.tagName.getText(source), member = tag.split('.').slice(1).join('.');
           let base = node.tagName;
           while (ts.isPropertyAccessExpression(base)) base = base.expression;
-          const binding = imports.get(checker.getSymbolAtLocation(base));
+          const binding = importBinding(base);
           if (binding) reference(file, 'jsx-use', binding.specifier, position(node),
             { symbol: binding.symbol === '*' ? member || '*' : binding.symbol, localName: tag });
+          else if (/^[A-Z]/.test(tag) || tag.includes('.'))
+            problem(file, 'local-jsx-binding-not-traced', position(node).line, position(node).column);
           for (const attr of node.attributes.properties) {
             if (!ts.isJsxAttribute(attr) || !['src', 'href', 'poster'].includes(attr.name.getText(source))) continue;
             const init = attr.initializer, at = position(attr);
@@ -252,10 +278,19 @@ function analyze(input) {
         css.walk(node => {
           if (++visited > LIMITS.nodes) { truncated = true; return false; }
           const at = { line: node.source?.start?.line || 1, column: Math.max(0, (node.source?.start?.column || 1) - 1) };
+          if (node.type === 'rule' && /[#$]\{/.test(node.selector || ''))
+            problem(file, 'computed-style-reference', at.line, at.column);
           const value = node.type === 'decl' ? node.value : node.type === 'atrule' ? node.params : '';
           if (!value) return;
           if (/[#$]\{|\$[a-zA-Z_]/.test(value)) problem(file, 'computed-style-reference', at.line, at.column);
           const parsed = valueParser(value);
+          if (node.type === 'atrule' && node.name.toLowerCase() === 'value' ||
+              node.type === 'decl' && ['composes', 'compose-with'].includes(node.prop.toLowerCase())) {
+            problem(file, 'css-module-transform', at.line, at.column);
+            const tokens = parsed.nodes.filter(token => !['space', 'comment'].includes(token.type));
+            if (tokens.at(-1)?.type === 'string' && tokens.at(-2)?.value === 'from')
+              reference(file, 'style-import', tokens.at(-1).value, at);
+          }
           parsed.walk(token => {
             if (token.type === 'function' && token.value.toLowerCase() === 'url') {
               const children = token.nodes.filter(n => !['space', 'comment'].includes(n.type));

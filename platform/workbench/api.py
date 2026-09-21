@@ -10,7 +10,9 @@ from workbench.service import Service, TOOL_NAMES, _id, _version, fail, fields, 
 
 def _readable(ctx, record):
     try:
-        knowledge.verify_refs(ctx, record.get("sourceRefs", []), authority=record.get("graphAuthority", "legacy"))
+        authority = record.get("graphAuthority", "legacy")
+        validate = knowledge.authorize_refs if authority == "canonical" else knowledge.verify_refs
+        validate(ctx, record.get("sourceRefs", []), authority=authority)
         return True
     except CollaborationError as error:
         if error.status in (400, 404, 409):

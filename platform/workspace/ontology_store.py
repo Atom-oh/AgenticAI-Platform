@@ -177,8 +177,9 @@ class Ontology:
         if _producer not in {"declared", "parser-extracted"}:
             raise ValueError("Unsupported trusted ontology producer")
         partition = schema.identity("partition", name)
-        request_hash = schema.digest({"name": name, "graph": graph, "expectedGeneration": expected_generation})
-        marker_id = schema.identity("ontology-request", self.ctx.actor, request_id)
+        request_hash = schema.digest({"name": name, "graph": graph, "expectedGeneration": expected_generation,
+                                      "producer": _producer})
+        marker_id = schema.identity("ontology-request", self.ctx.actor, _producer, request_id)
         marker = self.storage.get(self.ctx.owner, "ontology", marker_id)
         if marker:
             if marker.get("requestHash") != request_hash:
@@ -569,27 +570,42 @@ class Ontology:
         if prior.get("kind") == "published-product":
             fail(409, "ontology-source-review", "게시된 상품 기준은 상품 기획·게시 API에서 수정하세요.")
         graph = copy.deepcopy(prior["graph"])
-        updated_node = schema.seal({**target, "revision": revision + 1, "reviewState": decision,
+        next_revision = revision + 1 if decision == "deprecated" else revision
+        updated_node = schema.seal({**target, "revision": next_revision, "reviewState": decision,
                                    "tombstone": decision == "deprecated"})
+        if target["type"] == "Pattern" and decision == "approved":
+            usages = target.get("properties", {}).get("usageIds", [])
+            if len(set(usages)) < 2:
+                fail(409, "ontology-pattern-usages", "서로 다른 검토 완료 화면 두 개 이상이 필요합니다.")
+            for usage in usages:
+                screen = self._node(current, usage)
+                if (not screen or screen["type"] != "Screen" or screen["tombstone"]
+                        or screen["reviewState"] not in {"reviewed", "approved"}
+                        or not self._visible(screen["sourceRefs"])):
+                    fail(409, "ontology-pattern-usages", "패턴의 사용 화면 근거를 다시 확인하세요.")
         graph["nodes"] = [updated_node if node["id"] == identifier else node for node in graph["nodes"]]
         own = {node["id"]: node for node in graph["nodes"]}
         externals = {}
         for i, original in enumerate(graph["edges"]):
             edge = copy.deepcopy(original)
+            if edge["tombstone"]:
+                continue
             for end in ("src", "dst"):
                 if edge[end]["id"] not in own:
                     external = self._node(current, edge[end]["id"])
-                    if not external or not self._visible(external["sourceRefs"]):
-                        fail(409, "ontology-reference-unavailable", "관계 대상의 현재 권한을 확인하지 못했습니다.")
+                    if not external:
+                        fail(409, "ontology-reference-unavailable", "관계 대상의 현재 버전을 확인하지 못했습니다.")
                     externals[external["id"]] = external
             if decision in {"rejected", "deprecated"} and identifier in (edge["src"]["id"], edge["dst"]["id"]):
                 edge["reviewState"] = "candidate"
             graph["edges"][i] = schema.seal(edge)
-        graph = schema.validate_graph(graph, external_nodes=list(externals.values()), diagnostic=True)
+        # Tombstoned witnesses can retain inaccessible historical endpoints.
+        # Validate active relationships separately; history remains immutable.
+        schema.validate_graph({**graph, "edges": [e for e in graph["edges"] if not e["tombstone"]]},
+                              external_nodes=list(externals.values()), diagnostic=True)
         active = {"nodes": [n for n in graph["nodes"] if not n["tombstone"]],
                   "edges": [e for e in graph["edges"] if not e["tombstone"]]}
-        checks = self.sources.verify(_references(active) + target["sourceRefs"]
-                                     + [ref for node in externals.values() for ref in node["sourceRefs"]])
+        checks = self.sources.verify(_references(active) + target["sourceRefs"])
         part = {**prior, "graph": graph, "updatedBy": self.ctx.actor,
                 "reviews": {**prior.get("reviews", {}), identifier: audit_id}}
         updated = copy.deepcopy(current)
@@ -598,9 +614,10 @@ class Ontology:
         updated["generation"] = schema.digest({"partitions": updated["partitions"], "indexes": updated["indexes"]})
         audit = {"id": audit_id, "projectId": self.ctx.project_id, "kind": "ontology-review",
                  "actor": self.ctx.actor, "role": self.ctx.scope["role"], "nodeId": identifier,
-                 "beforeRevision": revision, "afterRevision": revision + 1,
+                 "beforeRevision": revision, "afterRevision": next_revision,
                  "decision": decision, "reason": reason, "nodeHash": updated_node["contentHash"],
                  "sourceRefs": target["sourceRefs"], "generation": updated["generation"], "requestHash": request_hash}
+        self.sources.recheck()
         self.ctx.commit([self.ctx.write("ontology", updated, current["version"]),
                          self.ctx.write("ontology", audit)], checks)
         return {"review": audit, "generation": updated["generation"], "node": updated_node}

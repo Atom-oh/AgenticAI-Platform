@@ -28,15 +28,13 @@ def analyze(graph, change, *, generation, can_read):
     if change["kind"] not in CHANGE_EDGES or not callable(can_read):
         raise ValueError("Impact requires a known change kind and authorization filter")
     seeds = change.get("nodeIds", [])
-    if not isinstance(seeds, list) or len(seeds) > 20:
+    if not isinstance(seeds, list) or len(seeds) > LIMITS["nodes"]:
         raise ValueError("Invalid impact seed list")
     for seed in seeds:
         schema._identifier(seed)
     old = schema.source_ref(change["oldSource"]) if change.get("oldSource") else None
     if change.get("newSource"):
         schema.source_ref(change["newSource"])
-    if not seeds and old is None:
-        raise ValueError("An exact source revision or canonical node seed is required")
     nodes = {node["id"]: node for node in graph["nodes"]}
     visible = {identifier for identifier, node in nodes.items()
                if node["reviewState"] != "rejected" and can_read(node["sourceRefs"])}

@@ -13,25 +13,31 @@ RELATIONS = {"COMPOSES": "DEPENDS_ON", "IMPORTS": "DEPENDS_ON", "GOVERNED_BY": "
              "OWNED_BY": "OWNS"}
 
 
-def graph(ctx, target_id=None):
+def graph(ctx, target_id=None, *, historical=False):
     store = Ontology(ctx)
     if target_id:
-        value = store.closure([target_id], direction="both", max_nodes=100)
+        value = store.closure([target_id], direction="dependents" if historical else "both", max_nodes=100,
+                              historical=historical)
     else:
         value = store.read(limit=100)
     # The compatibility fields preserve source refs and original canonical type.
     # Consumers can migrate incrementally without becoming a second authority.
-    nodes = [{**node, "label": LABELS.get(node["type"], node["type"]),
+    nodes = [{**{key: item for key, item in node.items() if key != "contentHash"},
+              "canonical": node, "label": LABELS.get(node["type"], node["type"]),
               "canonicalType": node["type"], "version": str(node["revision"]),
               "sourceRef": node["sourceRefs"][0]} for node in value["nodes"]]
-    edges = [{**edge, "src": edge["src"]["id"], "dst": edge["dst"]["id"],
+    edges = [{**{key: item for key, item in edge.items() if key != "contentHash"},
+              "canonical": edge, "src": edge["src"]["id"], "dst": edge["dst"]["id"],
               "rel": RELATIONS.get(edge["type"], edge["type"]), "canonicalRelation": edge["type"],
               "sourceRef": edge["sourceRefs"][0]} for edge in value["edges"]]
     for edge in edges:
         if edge["canonicalRelation"] == "OWNED_BY":
             edge["src"], edge["dst"] = edge["dst"], edge["src"]
-    return {"nodes": nodes, "edges": edges, "generation": value["generation"], "coverage": value["coverage"],
-            "backend": "workspace-project-ontology", "cursor": value.get("cursor")}
+    result = {"nodes": nodes, "edges": edges, "generation": value["generation"], "coverage": value["coverage"],
+              "backend": "workspace-project-ontology", "cursor": value.get("cursor"), "historical": historical}
+    if historical:
+        result["impactSeeds"] = value.get("impactSeeds", [])
+    return result
 
 
 def import_legacy(ctx, body):

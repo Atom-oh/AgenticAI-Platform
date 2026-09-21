@@ -65,7 +65,7 @@ def test_human_review_requires_role_exact_versions_and_prior_review(wb):
     assert reviewed["node"]["reviewState"] == "reviewed"
     stale = {**request, "requestId": "stale"}
     assert call(wb, "POST", f"/nodes/{identifier}/review", stale)[0] == 409
-    approved = {**request, "requestId": "approve", "decision": "approved", "revision": 2,
+    approved = {**request, "requestId": "approve", "decision": "approved", "revision": 1,
                 "expectedGeneration": reviewed["generation"]}
     status, result = call(wb, "POST", f"/nodes/{identifier}/review", approved)
     assert status == 200, result
@@ -81,6 +81,50 @@ def test_bad_fields_and_forged_actor_are_not_project_authority(wb):
     assert call(wb, "POST", "/context", {"nodeIds": [], "projectId": "other"})[0] == 400
 
 
+def test_pattern_approval_requires_two_current_reviewed_usages(wb):
+    from test_ontology_sources import asset
+    from test_ontology_schema import node
+    source = asset(wb, "pattern")
+    graph = {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": [
+        node("pattern", "Pattern", project=wb.project["id"], sourceRefs=[asset_reference(source)])], "edges": []}
+    status, published = call(wb, "POST", "/partitions", {"name": "patterns", "requestId": "pattern",
+        "expectedGeneration": None, "graph": graph})
+    assert status == 201
+    identifier = published["identities"]["pattern"]
+    status, reviewed = call(wb, "POST", f"/nodes/{identifier}/review", {
+        "requestId": "review-pattern", "expectedGeneration": published["generation"], "revision": 1,
+        "decision": "reviewed", "reason": "Review the source"})
+    assert status == 200
+    status, denied = call(wb, "POST", f"/nodes/{identifier}/review", {
+        "requestId": "approve-pattern", "expectedGeneration": reviewed["generation"], "revision": 1,
+        "decision": "approved", "reason": "No usage evidence"})
+    assert status == 409 and denied["code"] == "ontology-pattern-usages"
+
+
+def test_one_opaque_seed_can_expand_to_more_than_twenty_readable_dependents(wb):
+    from test_ontology_sources import asset
+    from test_ontology_schema import node, edge
+    secret = asset(wb, "hidden-source")
+    nodes = [node("hidden-root", "Foundation", subtype="icon", project=wb.project["id"],
+                  sourceRefs=[asset_reference(secret)])]
+    edges = []
+    for number in range(25):
+        identifier = f"dependent-{number}"
+        ref = asset_reference(asset(wb, identifier))
+        nodes.append(node(identifier, project=wb.project["id"], sourceRefs=[ref]))
+        edges.append(edge(f"edge-{number}", identifier, "hidden-root", sourceRefs=[ref]))
+    status, published = call(wb, "POST", "/partitions", {"name": "fanout", "requestId": "fanout",
+        "expectedGeneration": None, "graph": {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": edges}})
+    assert status == 201, published
+    wb.storage.put(wb.owner, "asset", {**secret, "accessRevoked": True}, secret["version"])
+    status, result = call(wb, "POST", "/impact", {"changeId": "revoked-many", "kind": "asset",
+        "nodeIds": [published["identities"]["hidden-root"]], "expectedGeneration": published["generation"]})
+    assert status == 200, result
+    assert len(result["items"]) == 25
+    assert "hidden-source" not in json.dumps(result)
+    assert published["identities"]["hidden-root"] not in json.dumps(result)
+
+
 def test_archived_image_still_identifies_readable_dependents_as_historical_impact(wb):
     published = setup_graph(wb)
     row = wb.storage.get(wb.owner, "asset", "image")
@@ -94,7 +138,7 @@ def test_archived_image_still_identifies_readable_dependents_as_historical_impac
     assert call(wb, "POST", "/context", {"nodeIds": [published["identities"]["image"]]})[0] == 409
 
 
-def test_reviewed_node_keeps_cross_partition_dependents_as_stale_witnesses(wb):
+def test_review_keeps_current_relations_and_mapping_changes_keep_stale_witnesses(wb):
     from test_ontology_sources import asset
     from test_ontology_schema import node, edge
     published = setup_graph(wb)
@@ -110,8 +154,22 @@ def test_reviewed_node_keeps_cross_partition_dependents_as_stale_witnesses(wb):
         "requestId": "review-cross", "expectedGeneration": added["generation"], "revision": 1,
         "decision": "reviewed", "reason": "Synthetic review"})
     assert status == 200, reviewed
+    status, context_result = call(wb, "POST", "/context", {"nodeIds": [external]})
+    assert status == 200 and len(context_result["edges"]) == 2
+    from workspace import ontology_schema as schema
+    from workspace.ontology_store import Ontology
+    from test_ontology_sources import context
+    store = Ontology(context(wb))
+    current = store.current()
+    partition = schema.identity("partition", "example")
+    original = store._part(current, partition)["graph"]
+    changed = {**original, "nodes": [schema.seal({**n, "properties": {
+        **n.get("properties", {}), "description": "Changed mapping"}}) if n["id"] == external else n for n in original["nodes"]]}
+    status, changed_result = call(wb, "POST", "/partitions", {"name": "example", "requestId": "change-map",
+        "expectedGeneration": reviewed["generation"], "graph": changed})
+    assert status == 201, changed_result
     status, impact = call(wb, "POST", "/impact", {"changeId": "review-impact", "kind": "design",
-        "nodeIds": [external], "expectedGeneration": reviewed["generation"]})
+        "nodeIds": [external], "expectedGeneration": changed_result["generation"]})
     assert status == 200, impact
     screen = next(item for item in impact["items"] if item["title"] == "screen")
     assert screen["staleWitness"] and screen["evidenceKind"] == "candidate"

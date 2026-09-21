@@ -149,7 +149,7 @@ async function harness() {
         const node = data.ontology.nodes.find(item => item.id === target.split('/')[3]);
         assert.equal(body.revision, node.revision); assert.equal(body.expectedGeneration, data.ontology.generation);
         assert.equal(Object.hasOwn(body, 'actor'), false);
-        node.revision++; node.reviewState = body.decision; data.ontology.generation = 'b'.repeat(64);
+        node.reviewState = body.decision; data.ontology.generation = 'b'.repeat(64);
         return json({ node, generation: data.ontology.generation });
       }
       if (target === '/workbench/dependencies') return json(data.graph);

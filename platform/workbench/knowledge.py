@@ -306,8 +306,7 @@ def authorize_refs(ctx, refs, *, authority="legacy"):
         reader = Sources(ctx, max_sources=90)
         for ref in refs:
             reader.authorize(ref)
-        reader.recheck()
-        return
+        return reader.recheck()
     if authority != "legacy":
         fail(400, "invalid-authority", "근거 저장소가 올바르지 않습니다.")
     for ref in refs:
@@ -481,10 +480,10 @@ def read_document(ctx, identifier):
     fail(404, "not-found", "읽을 수 있는 자료가 없습니다.")
 
 
-def graph(ctx, target_id=None):
+def graph(ctx, target_id=None, *, historical=False):
     if getattr(ctx.host, "ontology_mode", "legacy") == "canonical":
         from workspace.ontology_workbench import graph as canonical_graph
-        return canonical_graph(ctx, target_id)
+        return canonical_graph(ctx, target_id, historical=historical)
     return legacy_graph(ctx, target_id)
 
 

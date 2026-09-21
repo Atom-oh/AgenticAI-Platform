@@ -44,6 +44,13 @@ def test_actual_node_parser_projects_exact_source_refs_and_unclassified_componen
     assert any(node["type"] == "Foundation" for node in graph["nodes"])
     assert any(edge["type"] == "IMPLEMENTS" for edge in graph["edges"])
     assert all(node["reviewState"] == "candidate" for node in graph["nodes"])
+    from workspace.ontology_impact import analyze
+    from workspace import ontology_schema as schema
+    symbol = next(node for node in graph["nodes"] if node["type"] == "CodeSymbol" and node["title"] == "Button")
+    generation = schema.digest(graph)
+    impact = analyze(graph, {"id": "symbol-change", "kind": "code", "nodeIds": [symbol["id"]],
+        "baseGeneration": generation}, generation=generation, can_read=lambda refs: True)
+    assert "App.tsx" in {item["title"] for item in impact["items"]}
     tampered = copy.deepcopy(result["analysis"])
     tampered["inputHash"] = "0" * 64
     with pytest.raises(CollaborationError):

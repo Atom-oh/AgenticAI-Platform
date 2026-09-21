@@ -28,9 +28,11 @@ recheck once, rather than inheriting the atomic-write limit.
 
 Canonical IDs are allocated within a partition namespace. Input-local IDs are
 retained as aliases, not trusted as another partition's ownership. Node revision
-and content hash change with a reviewed revision. Review never rebinds incident
-edges automatically, regardless of partition ownership: exact relations must be
-republished for current context, while impact reports stale witnesses.
+identifies the source/mapping revision. Review and approval retain that revision
+and change the full node hash, audit record and manifest generation, so routine
+review does not break incident relations. Mapping edits and deprecation advance
+the revision; changed relations require republication for current context, while
+impact reports stale witnesses.
 Removed nodes/edges remain tombstones within the bounded partition; reintroduction
 advances the existing identity's revision rather than restarting at one.
 Existing product-guideline

@@ -116,7 +116,9 @@ class WorkspaceAPI:
             raise ValueError("Unknown project ontology backend")
         if self.ontology_mode == "canonical":
             self.collaboration.ontology_enabled = True
-        self.ontology_analyzer_ready = os.environ.get("ONTOLOGY_ANALYZER_BACKEND") == "agentcore"
+        # The foundation does not install a cloud adapter. The adapter milestone
+        # supplies a verified readiness installer; an environment label cannot.
+        self.ontology_analyzer_ready = False
         from workspace.git_service import configured_connections
         self.git_connections = git_connections or configured_connections
         from workbench.runtime import install

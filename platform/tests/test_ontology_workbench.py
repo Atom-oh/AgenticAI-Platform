@@ -66,13 +66,15 @@ def test_import_preserves_parallel_evidence_and_marks_invalid_next(wb, monkeypat
     original = knowledge.legacy_graph(context(wb))
     relation = next(e for e in original["edges"] if e["rel"] == "DEPENDS_ON")
     original["edges"].append({**relation, "rel": "REQUIRES"})
-    different = {**relation, "sourceRef": dict(original["nodes"][-1]["sourceRef"])}
+    unrelated = next(hit for hit in call(wb, "GET", "knowledge")["items"] if hit["title"] == "Synthetic pension investment")
+    different = {**relation, "sourceRef": call(wb, "GET", "knowledge/" + unrelated["id"])["evidence"]}
     original["edges"].append(different)
     original["edges"].append({**relation, "rel": "NEXT"})
     monkeypatch.setattr(knowledge, "legacy_graph", lambda ctx: original)
     imported = import_legacy(context(wb), {"requestId": "parallel", "expectedGeneration": None})
     graph = Ontology(context(wb)).read()
     assert len([e for e in graph["edges"] if e["type"] == "USES"]) == 1
+    assert len(next(e for e in graph["edges"] if e["type"] == "USES")["sourceRefs"]) == 2
     assert "unmapped-legacy-edge-shape" in imported["coverage"]["unknown"]
 
 

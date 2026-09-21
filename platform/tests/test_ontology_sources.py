@@ -127,6 +127,20 @@ def test_source_locations_do_not_multiply_the_authority_budget(wb):
     assert len(Sources(context(wb)).verify(refs)) == 1
 
 
+def test_current_sources_enforce_the_bound_audience_for_project_wide_assets(wb):
+    reference = {**asset_reference(asset(wb)), "allowedRoles": ["owner"]}
+    with pytest.raises(CollaborationError) as error:
+        Sources(context(wb, "bob")).resolve(reference)
+    assert error.value.status == 403
+
+
+def test_explicit_project_check_is_reconciled_with_the_same_commit_fence(wb):
+    ctx = context(wb)
+    result = ctx.commit([ctx.write("wb_artifact", {"id": "fenced", "projectId": wb.project["id"], "kind": "test"})],
+                       [ctx.check("project", ctx.scope["project"])])
+    assert result[0]["id"] == "fenced"
+
+
 def test_document_library_approval_audience_and_post_read_revocation(wb):
     from test_documents_library import upload, finalize, approve
     project = wb.project["id"]

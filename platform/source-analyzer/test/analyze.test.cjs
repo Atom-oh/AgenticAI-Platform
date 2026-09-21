@@ -42,6 +42,36 @@ test('a local require or URL function is not fabricated parser dependency eviden
     text('data.json', '{}', 'json'), asset('icon.svg'),
   ]));
   assert.equal(result.references.length, 0);
+  assert.equal(result.coverage.complete, false);
+});
+
+test('ambient loaders and require.context remain unknown instead of disappearing', () => {
+  const result = analyze(request([text('App.ts', 'declare const require:any;require("./x");require.context("./widgets");')]));
+  assert.equal(result.coverage.complete, false);
+  assert.ok(result.unresolved.some(item => item.reason === 'shadowed-or-ambient-module-loader'));
+  assert.ok(result.unresolved.some(item => item.reason === 'unmodeled-module-loader'));
+});
+
+test('const JSX aliases retain lexical imports while mutable aliases remain unknown', () => {
+  const result = analyze(request([
+    text('App.tsx', "import {Button} from './Button';const Primary=Button;let Dynamic=Button;export const App=()=> <><Primary/><Dynamic/></>"),
+    text('Button.tsx', 'export function Button(){return <button/>}'),
+  ]));
+  assert.ok(result.references.some(item => item.kind === 'jsx-use' && item.localName === 'Primary' && item.symbol === 'Button'));
+  assert.equal(result.references.some(item => item.kind === 'jsx-use' && item.localName === 'Dynamic'), false);
+  assert.ok(result.unresolved.some(item => item.reason === 'local-jsx-binding-not-traced'));
+});
+
+test('CSS module dependencies are recorded with unresolved transform semantics', () => {
+  const result = analyze(request([
+    text('app.css', '@value primary from "./tokens.css";.button { composes: base from "./base.css"; }', 'style'),
+    text('tokens.css', ':root{--color:red}', 'style'), text('base.css', '.base{display:flex}', 'style'),
+  ]));
+  assert.equal(result.coverage.complete, false);
+  for (const target of ['tokens.css', 'base.css'])
+    assert.ok(result.references.some(item => item.resolution.targetPath === target));
+  const extension = analyze(request([text('app.css', '@import "./theme";', 'style'), text('theme.ts', 'export const value=1')]));
+  assert.equal(extension.references.some(item => item.resolution.status === 'resolved-local'), false);
 });
 
 test('real TS parser connects imports, JSX symbols, image imports and CSS resources', () => {

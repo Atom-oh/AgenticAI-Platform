@@ -39,6 +39,7 @@ def submit(ctx, body):
         seen.add(path)
         refs.append(asset_reference(ctx.get("asset", file["assetId"])))
     profile_id = body.get("resolverProfileId", "default")
+    schema._identifier(profile_id)
     profiles = getattr(ctx.host, "ontology_resolver_profiles", {})
     profile = {"aliases": {}, "packages": {}, "jsonAssetFields": []} if profile_id == "default" else profiles.get(profile_id)
     if not isinstance(profile, dict):

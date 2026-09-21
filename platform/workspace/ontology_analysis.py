@@ -167,8 +167,9 @@ def project_analysis(ctx, name, payload, bindings, analysis):
             fail(409, "ontology-analysis-integrity", "내보내기 기호의 원본이 올바르지 않습니다.")
         ref = {**bindings[item["path"]]["ref"], "location": {
             "path": item["path"], "exportName": item["name"], "line": item["line"], "column": item["column"]}}
-        add_node(schema.identity("symbol", name, item["path"], item["name"]), "CodeSymbol",
+        symbol_id = add_node(schema.identity("symbol", name, item["path"], item["name"]), "CodeSymbol",
                  item["name"], [ref], {"path": item["path"], "exportName": item["name"], "fileId": file_ids[item["path"]]})
+        add_edge(file_ids[item["path"]], symbol_id, "IMPLEMENTS", [ref])
     for item in value["references"]:
         resolution = item["resolution"]
         if resolution["status"] != "resolved-local":
@@ -189,6 +190,9 @@ def project_analysis(ctx, name, payload, bindings, analysis):
                     [target_ref], {"componentName": key[1], "sourcePath": key[0],
                                    "description": "JSX source reference; implementation and design level require review."})
                 add_edge(target, components[key], "IMPLEMENTS", [target_ref])
+                symbol_id = schema.identity("symbol", name, *key)
+                if symbol_id in nodes:
+                    add_edge(components[key], symbol_id, "USES", [target_ref])
             add_edge(source, components[key], "USES", [reference])
     reasons = sorted({item["reason"] for item in value["unresolved"]} |
                      {"unreviewed-design-mappings", "outside-source-unit-not-certified"})

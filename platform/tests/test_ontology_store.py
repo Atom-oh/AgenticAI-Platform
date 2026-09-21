@@ -53,6 +53,15 @@ def test_manual_coverage_cannot_claim_complete_runtime_dependencies(wb):
     assert "unreviewed-design-mappings" in result["coverage"]["unknown"]
 
 
+def test_declared_marker_cannot_alias_a_trusted_parser_publication(wb):
+    value = candidate(wb)
+    publish(wb, value)
+    with pytest.raises(CollaborationError) as error:
+        Ontology(context(wb)).publish_candidate("collection", value, expected_generation=None,
+            request_id="req-1", _producer="parser-extracted", _completion_writes=lambda marker: pytest.fail("wrong producer replay"))
+    assert error.value.code == "ontology-changed"
+
+
 def test_read_page_does_not_inherit_the_atomic_write_authority_limit(wb):
     generation = None
     for part in range(2):
