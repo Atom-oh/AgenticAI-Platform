@@ -81,6 +81,46 @@ def test_bad_fields_and_forged_actor_are_not_project_authority(wb):
     assert call(wb, "POST", "/context", {"nodeIds": [], "projectId": "other"})[0] == 400
 
 
+def test_rejected_mapping_remains_reviewable_but_cannot_supply_context_or_impact(wb):
+    published = setup_graph(wb)
+    identifier = published["identities"]["control"]
+    status, rejected = call(wb, "POST", f"/nodes/{identifier}/review", {
+        "requestId": "reject", "expectedGeneration": published["generation"], "revision": 1,
+        "decision": "rejected", "reason": "Incorrect mapping"})
+    assert status == 200
+    assert call(wb, "GET", "/nodes/" + identifier)[1]["node"]["reviewState"] == "rejected"
+    assert call(wb, "POST", "/context", {"nodeIds": [identifier]})[0] == 409
+    status, result = call(wb, "POST", "/context", {"nodeIds": [published["identities"]["image"]]})
+    assert status == 200 and identifier not in {item["id"] for item in result["nodes"]}
+    status, result = call(wb, "POST", "/impact", {"changeId": "rejected-impact", "kind": "asset",
+        "nodeIds": [identifier], "expectedGeneration": rejected["generation"]})
+    assert status == 200 and result["items"] == []
+
+
+def test_policy_approval_accepts_business_authority_with_additional_code_provenance(wb):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node
+    from workspace.ontology_sources import guideline_reference
+    from workspace.ontology_store import Ontology
+    product = wb.collab.handle("POST", ["products"], {
+        "requestId": "mixed", "title": "Synthetic product", "description": "Synthetic guidance",
+        "conditions": [], "steps": [], "notices": []}, {}, "alice", wb.project["id"])[1]["product"]
+    published = wb.collab.handle("POST", ["products", product["id"], "publish"],
+        {"version": product["version"]}, {}, "alice", wb.project["id"])[1]
+    refs = [guideline_reference(published["guideline"]), asset_reference(asset(wb, "code-reference"))]
+    policy = node("policy", "PolicyRule", project=wb.project["id"],
+                  properties={"ruleId": "rule", "statement": "Synthetic rule", "required": True}, sourceRefs=refs)
+    result = Ontology(context(wb)).publish_candidate("mixed-policy", {
+        "schemaVersion": 1, "projectId": wb.project["id"], "nodes": [policy], "edges": []},
+        expected_generation=None, request_id="mixed-policy")
+    identifier = result["identities"]["policy"]
+    for decision in ["reviewed", "approved"]:
+        result = Ontology(context(wb)).review_node(identifier, expected_generation=result["generation"], revision=1,
+            decision=decision, reason="Check both current sources", request_id=decision)
+    assert result["node"]["reviewState"] == "approved"
+    assert result["node"]["sourceRefs"] == refs
+
+
 def test_new_impact_source_requires_current_authority_and_empty_results_have_bound_receipts(wb):
     from test_ontology_schema import ref
     published = setup_graph(wb)

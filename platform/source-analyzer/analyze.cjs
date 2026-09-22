@@ -121,7 +121,7 @@ function analyze(input) {
     const candidates = [];
     if (withoutQuery.startsWith('.') || resourceRelative && !withoutQuery.startsWith('/'))
       candidates.push(path.normalize(path.join(path.dirname(from), withoutQuery)));
-    else if (withoutQuery.startsWith('/')) return { status: 'unresolved', reason: 'root-url-needs-mapping' };
+    else if (resourceRelative && withoutQuery.startsWith('/')) return { status: 'unresolved', reason: 'root-url-needs-mapping' };
     else {
       for (const [alias, target] of Object.entries(resolver.aliases || {})) {
         const star = alias.indexOf('*');
@@ -134,7 +134,8 @@ function analyze(input) {
       if (!candidates.length && Object.hasOwn(resolver.packages || {}, withoutQuery))
         return { status: 'approved-package', package: withoutQuery, ...resolver.packages[withoutQuery] };
     }
-    if (!candidates.length) return { status: 'unresolved', reason: 'unmapped-package-or-alias' };
+    if (!candidates.length) return { status: 'unresolved', reason: withoutQuery.startsWith('/') ?
+      'root-url-needs-mapping' : 'unmapped-package-or-alias' };
     if (candidates.some(candidate => !safePath(candidate))) return { status: 'unresolved', reason: 'path-escape' };
     const found = new Set();
     for (const candidate of candidates) {
@@ -381,7 +382,10 @@ function analyze(input) {
       const parser = new HTMLParser({
         onopentagname() { attributes = new Set(); },
         onattribute(name) {
-          if (attributes.has(name)) problem(file, 'duplicate-html-attribute');
+          if (attributes.has(name)) {
+            const position = at(Math.max(0, parser.startIndex));
+            problem(file, 'duplicate-html-attribute', position.line, position.column);
+          }
           attributes.add(name);
         },
         onopentag(name, attrs) {

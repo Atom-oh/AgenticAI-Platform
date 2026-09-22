@@ -563,6 +563,9 @@ class Ontology:
                 break
             visited.add(identifier)
             node = self._node(current, identifier)
+            if node and node["reviewState"] == "rejected":
+                unknown.add("rejected-mapping")
+                continue
             readable = node and (historical or not node["tombstone"]) and self._visible_node(current, node, historical=historical)
             opaque_seed = historical and identifier in node_ids and not readable
             if not readable and not opaque_seed:
@@ -599,7 +602,7 @@ class Ontology:
                     continue
                 other = edge["dst"]["id"] if edge["src"]["id"] == identifier else edge["src"]["id"]
                 target = self._node(current, other)
-                if (not target or not historical and target["tombstone"]
+                if (not target or target["reviewState"] == "rejected" or not historical and target["tombstone"]
                         or not self._visible_node(current, target, historical=historical)
                         or not self._visible(edge["sourceRefs"], historical=historical)):
                     unknown.add("unmapped-or-inaccessible")
@@ -726,8 +729,8 @@ class Ontology:
             fail(409, "ontology-deprecated", "폐기된 노드는 새 매핑 버전으로 다시 등록하세요.")
         if decision == "approved" and target["reviewState"] != "reviewed":
             fail(409, "ontology-review-required", "검토 완료 후 정확한 버전을 승인하세요.")
-        if decision == "approved" and target["type"] in {"Product", "PolicyRule"} and any(
-                ref["sourceKind"] not in {"product-guideline", "document-revision"} for ref in target["sourceRefs"]):
+        if decision == "approved" and target["type"] in {"Product", "PolicyRule"} and not any(
+                ref["sourceKind"] in {"product-guideline", "document-revision"} for ref in target["sourceRefs"]):
             fail(409, "ontology-business-authority", "상품·업무 규칙에는 게시 또는 승인된 업무 원본이 필요합니다.")
         location = self._index(current, "nodes", _bucket(identifier))[identifier]
         prior = self._part(current, location["partition"])

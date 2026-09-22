@@ -15,6 +15,16 @@ test('unsupported CSS resource functions retain location-bound unknown evidence'
   assert.equal(result.coverage.complete, false);
 });
 
+test('approved root code aliases resolve while browser root URLs retain their unknown base', () => {
+  const input = request([text('App.tsx', 'import Button from "/src/Button";'),
+    text('src/Button.tsx', 'export default function Button(){return null}'),
+    text('page.html', '<img src="/src/Button">', 'html')]);
+  input.resolver = { aliases: { '/src/*': 'src/*' }, packages: {}, jsonAssetFields: [] };
+  const result = analyze(input);
+  assert.equal(result.references.find(item => item.path === 'App.tsx').resolution.targetPath, 'src/Button.tsx');
+  assert.equal(result.references.find(item => item.path === 'page.html').resolution.reason, 'root-url-needs-mapping');
+});
+
 test('generic call noise cannot starve later dynamic dependency observations', () => {
   const result = analyze(request([
     text('a.ts', 'run();'.repeat(4500)),

@@ -184,6 +184,8 @@ def analyze(ctx, identifier, body):
                "impactHash": digest, "impactKey": key, "impactSha": sha,
                "generation": impact["generation"], "sourceRefs": impact["sourceRefs"],
                "taskIds": [task["id"] for task in tasks], "graphAuthority": "canonical" if canonical else "legacy"}
+    from workspace.ontology_impact import check_metadata_budget
+    check_metadata_budget([updated, *tasks])
     validate(ctx, impact["sourceRefs"], authority=authority)
     saved = ctx.commit([ctx.write("wb_change", updated, change["version"]), *writes], checks)
     tasks_by_id = {task["id"]: task for task in saved[1:]}
@@ -237,12 +239,12 @@ def update_task(ctx, identifier, body):
     if not isinstance(refs, list) or len(refs) > 50:
         fail(400, "invalid-evidence", "작업 완료 근거는 50개 이하여야 합니다.")
     checks.extend(knowledge.verify_refs(ctx, refs, authority=authority))
-    if status == "done":
+    if status in {"in-progress", "done"}:
         change = ctx.get("wb_change", task["changeId"])
         impact = read_impact(ctx, task["changeId"])
         if change["impactHash"] != task["impactHash"] or impact["impactHash"] != task["impactHash"]:
             fail(409, "stale-task", "현재 영향 분석에 해당하지 않는 작업입니다.")
-        if not refs or not any(ref in task["sourceRefs"] for ref in refs):
+        if status == "done" and (not refs or not any(ref in task["sourceRefs"] for ref in refs)):
             fail(422, "evidence-required", "이 작업의 현재 소스 근거가 필요합니다.")
         checks.extend(knowledge.verify_refs(ctx, task["sourceRefs"], authority=authority))
         checks.append(ctx.check("wb_change", change))
@@ -253,8 +255,10 @@ def update_task(ctx, identifier, body):
     updated = {**task, "status": status, "assigneeSub": assignee, "evidenceRefs": refs,
                "completedBy": ctx.actor if status == "done" else None,
                "completedAt": ctx.storage.clock() if status == "done" else None}
+    from workspace.ontology_impact import check_metadata_budget
+    check_metadata_budget([updated])
     checks.extend(knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority))
     knowledge.verify_refs(ctx, refs, authority=authority)
-    if status == "done":
+    if status in {"in-progress", "done"}:
         knowledge.verify_refs(ctx, task["sourceRefs"], authority=authority)
     return ctx.commit([ctx.write("wb_task", updated, task["version"])], checks)[0]

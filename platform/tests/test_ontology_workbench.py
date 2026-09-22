@@ -85,6 +85,49 @@ def test_canonical_task_rejects_untrusted_oversized_evidence_before_verification
     assert wb.storage.get(wb.owner, "wb_task", task["id"])["version"] == task["version"]
 
 
+def test_archived_canonical_source_cannot_start_current_task_work(wb):
+    from test_ontology_store import candidate
+    result = Ontology(context(wb)).publish_candidate("stale-task", candidate(wb),
+        expected_generation=None, request_id="stale-task")
+    wb.api.ontology_mode = "canonical"
+    change = call(wb, "POST", "changes", {"requestId": "stale-task-change", "title": "Source update",
+        "targetId": result["identities"]["image"], "changeType": "update",
+        "before": "", "after": "", "reason": "Synthetic"})["change"]
+    task = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})["tasks"][0]
+    source = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**source, "archived": True}, source["version"])
+    with pytest.raises(CollaborationError) as error:
+        call(wb, "PUT", f"tasks/{task['id']}", {"version": task["version"], "status": "in-progress"})
+    assert error.value.code == "ontology-source-stale"
+    assert wb.storage.get(wb.owner, "wb_task", task["id"])["status"] == "open"
+
+
+def test_location_rich_impact_fails_before_oversized_metadata_publication(wb):
+    from test_ontology_sources import asset
+    from test_ontology_schema import node, edge
+    from workspace.ontology_sources import asset_reference
+    source = asset_reference(asset(wb, "annotations"))
+    nodes = [node("root", "Foundation", subtype="icon", project=wb.project["id"], sourceRefs=[source])]
+    edges = []
+    for number in range(40):
+        name = f"node-{number}"
+        refs = [{**source, "location": {"path": "x" * 400 + f"/{number}-{item}.tsx"}} for item in range(20)]
+        nodes.append(node(name, project=wb.project["id"], sourceRefs=refs))
+        edges.append(edge(f"edge-{number}", name, "root", sourceRefs=[source]))
+    result = Ontology(context(wb)).publish_candidate("annotations", {
+        "schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": edges},
+        expected_generation=None, request_id="annotations")
+    wb.api.ontology_mode = "canonical"
+    change = call(wb, "POST", "changes", {"requestId": "annotations-change", "title": "Source update",
+        "targetId": result["identities"]["root"], "changeType": "update",
+        "before": "", "after": "", "reason": "Synthetic"})["change"]
+    with pytest.raises(CollaborationError) as error:
+        call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
+    assert error.value.code == "ontology-impact-scope" and error.value.status == 422
+    assert wb.storage.get(wb.owner, "wb_change", change["id"])["status"] == "draft"
+    assert wb.storage.list_page(wb.owner, "wb_task")["items"] == []
+
+
 def test_missing_canonical_endpoint_is_unknown_stale_evidence_not_a_crash():
     from workbench.impact import traversal
     from test_ontology_schema import ref
