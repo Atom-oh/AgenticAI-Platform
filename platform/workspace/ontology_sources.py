@@ -53,7 +53,8 @@ class Sources:
         project = self.ctx.scope["project"]
         membership = {actor: member["role"] for actor, member in project["members"].items()}
         return (self.ctx.actor, self.ctx.project_id, self.ctx.scope["role"],
-                schema.digest(membership), project.get("status"), project.get("archived", False))
+                schema.digest(membership), project.get("status"), project.get("archived", False),
+                project.get("authorityRevision", 0))
 
     def _fresh(self):
         self.ctx.fresh()

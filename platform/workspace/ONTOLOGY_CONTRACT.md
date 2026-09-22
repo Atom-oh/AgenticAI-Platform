@@ -104,6 +104,9 @@ fail instead of running the analyzer again.
 Membership changes alter the project audience and invalidate in-flight source
 authority, even when the requesting actor's own role is unchanged. Title/content
 writes that preserve that audience do not invalidate it.
+Storage maintains a monotonic `authorityRevision` for membership/role and project
+lifecycle changes. Restoring old membership contents does not restore an earlier
+in-flight authority epoch. Title/comment writes leave that epoch unchanged.
 Queued analyses pin this authority digest at admission and compare it before
 source analysis, in addition to the checks during publication.
 Deadline-sensitive service commits submit a transaction once. Contention returns

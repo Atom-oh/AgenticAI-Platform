@@ -25,6 +25,18 @@ test('approved root code aliases resolve while browser root URLs retain their un
   assert.equal(result.references.find(item => item.path === 'page.html').resolution.reason, 'root-url-needs-mapping');
 });
 
+test('JSX object properties remain unknown while direct namespace exports retain their identity', () => {
+  const result = analyze(request([
+    text('App.tsx', 'import UI from "./UI"; import * as Kit from "./UI"; export const App=()=> <><UI.Button/><Kit.Button/><Kit.Button.Icon/></>'),
+    text('UI.tsx', 'export const Button=()=>null; export default {Button};'),
+  ]));
+  const usages = result.references.filter(item => item.kind === 'jsx-use');
+  assert.equal(usages[0].resolution.reason, 'jsx-member-semantics-not-inspected');
+  assert.equal(usages[1].symbol, 'Button');
+  assert.equal(usages[1].resolution.status, 'resolved-local');
+  assert.equal(usages[2].resolution.reason, 'jsx-member-semantics-not-inspected');
+});
+
 test('generic call noise cannot starve later dynamic dependency observations', () => {
   const result = analyze(request([
     text('a.ts', 'run();'.repeat(4500)),
@@ -32,6 +44,16 @@ test('generic call noise cannot starve later dynamic dependency observations', (
   ]));
   assert.ok(result.unresolved.some(item => item.path === 'z.ts' && item.reason === 'dynamic-or-commonjs-dependency'));
   assert.equal(result.unresolved.find(item => item.path === 'a.ts' && item.reason === 'call-semantics-not-inspected').count, 4500);
+  assert.equal(result.coverage.truncated, false);
+});
+
+test('CSS function observations do not starve later dynamic source dependencies', () => {
+  const result = analyze(request([
+    text('a.css', '.x{color:var(--x)}'.repeat(4100), 'style'),
+    text('z.ts', 'import(nextModule);'),
+  ]));
+  assert.ok(result.unresolved.some(item => item.path === 'z.ts' && item.reason === 'dynamic-or-commonjs-dependency'));
+  assert.equal(result.unresolved.find(item => item.path === 'a.css' && item.reason === 'css-function-not-inspected').count, 4100);
   assert.equal(result.coverage.truncated, false);
 });
 

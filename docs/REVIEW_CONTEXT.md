@@ -12,6 +12,7 @@ This file maps requirements to evidence; it does not waive defects or certify de
 | `platform/README.md` | Implementation map, commands, and dated operational evidence |
 | `platform/docs/CONTRACTS.md` | API/module integration |
 | `platform/workspace/REACT_CONTRACT.md` | React generation, approval, release, and export |
+| `platform/workspace/AGENTCORE_CONTRACT.md` | SPEC §7-2 execution, authorization, capability and rollout requirements; not a deployment claim |
 | `platform/workspace/CONTRACT.md` | Imported-file/HTML workspace validation |
 | `platform/workbench/CONTRACT.md`, `platform/workbench/README.md` | Project-scoped knowledge/impact/skills and synthetic pension/report workflow; SPEC §17 |
 | `platform/infra/README-privacy.md` | MyData relay/gateway configuration and operational prerequisites |

@@ -45,7 +45,8 @@ def _impact_views(ontology, current, body, raw_seeds):
             if body.get(key):
                 change[key] = body[key]
         value = analyze({key: item for key, item in graph.items() if key != "generation"}, change,
-                        generation=generation, can_read=lambda refs: reader._visible(refs, historical=True))
+                        generation=generation, can_read=lambda refs: reader._visible(refs, historical=True),
+                        max_items=50 - sum(len(value["items"]) for value in results))
         for item in value["items"]:
             item["snapshotGeneration"] = generation
         results.append(value)

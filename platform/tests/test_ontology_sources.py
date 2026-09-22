@@ -71,6 +71,20 @@ def test_role_or_project_epoch_change_during_read_cannot_refresh_away_the_fence(
         reader.recheck()
 
 
+def test_restoring_membership_does_not_restore_an_inflight_authority_epoch(wb):
+    row = asset(wb)
+    reader = Sources(context(wb))
+    reader.resolve(asset_reference(row))
+    original = wb.storage.get(wb.owner, "project", wb.project["id"])
+    changed = {**original, "members": {key: value for key, value in original["members"].items() if key != "bob"}}
+    changed = wb.storage.put(wb.owner, "project", changed, original["version"])
+    restored = wb.storage.put(wb.owner, "project", {**changed, "members": original["members"]}, changed["version"])
+    assert restored["authorityRevision"] == original["authorityRevision"] + 2
+    with pytest.raises(CollaborationError) as error:
+        reader.recheck()
+    assert error.value.code == "ontology-authority-changed"
+
+
 def test_workbench_source_keeps_its_existing_acl_and_generation_authority(wb):
     indexed(wb)
     hit = next(item for item in call(wb, "GET", "knowledge")["items"] if item["title"] == "Synthetic withdrawal guidance")

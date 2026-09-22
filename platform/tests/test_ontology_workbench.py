@@ -102,6 +102,45 @@ def test_archived_canonical_source_cannot_start_current_task_work(wb):
     assert wb.storage.get(wb.owner, "wb_task", task["id"])["status"] == "open"
 
 
+def test_retired_graph_witness_cannot_authorize_current_task_transitions(wb):
+    from test_ontology_store import candidate
+    value = candidate(wb)
+    first = Ontology(context(wb)).publish_candidate("retired-task", value,
+        expected_generation=None, request_id="retired-task")
+    Ontology(context(wb)).publish_candidate("retired-task", {**value, "edges": []},
+        expected_generation=first["generation"], request_id="retire-edge")
+    wb.api.ontology_mode = "canonical"
+    change = call(wb, "POST", "changes", {"requestId": "retired-task-change", "title": "Source update",
+        "targetId": first["identities"]["image"], "changeType": "update",
+        "before": "", "after": "", "reason": "Synthetic"})["change"]
+    result = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
+    task = next(task for task in result["tasks"] if task.get("staleWitness"))
+    for status in ["in-progress", "done"]:
+        with pytest.raises(CollaborationError) as error:
+            call(wb, "PUT", f"tasks/{task['id']}", {"version": task["version"], "status": status,
+                "evidenceRefs": task["sourceRefs"][:1]})
+        assert error.value.code == "stale-task"
+
+
+def test_legacy_change_read_rechecks_membership_after_source_validation(wb, monkeypatch):
+    from workbench import knowledge
+    change = call(wb, "POST", "changes", {"requestId": "read-race", "title": "Private change",
+        "targetId": "target", "changeType": "update", "before": "", "after": "", "reason": "Synthetic"})["change"]
+    verify = knowledge.verify_refs
+
+    def revoke_after_validation(ctx, refs, **kwargs):
+        result = verify(ctx, refs, **kwargs)
+        project = wb.storage.get(wb.owner, "project", wb.project["id"])
+        project["members"].pop("bob")
+        wb.storage.put(wb.owner, "project", project, project["version"])
+        return result
+
+    monkeypatch.setattr(knowledge, "verify_refs", revoke_after_validation)
+    with pytest.raises(CollaborationError) as error:
+        call(wb, "GET", f"changes/{change['id']}", actor="bob")
+    assert error.value.status == 404
+
+
 def test_location_rich_impact_fails_before_oversized_metadata_publication(wb):
     from test_ontology_sources import asset
     from test_ontology_schema import node, edge

@@ -240,6 +240,8 @@ def update_task(ctx, identifier, body):
         fail(400, "invalid-evidence", "작업 완료 근거는 50개 이하여야 합니다.")
     checks.extend(knowledge.verify_refs(ctx, refs, authority=authority))
     if status in {"in-progress", "done"}:
+        if task.get("staleWitness"):
+            fail(409, "stale-task", "과거 관계의 진단 근거입니다. 현재 관계로 재분석한 작업이 필요합니다.")
         change = ctx.get("wb_change", task["changeId"])
         impact = read_impact(ctx, task["changeId"])
         if change["impactHash"] != task["impactHash"] or impact["impactHash"] != task["impactHash"]:

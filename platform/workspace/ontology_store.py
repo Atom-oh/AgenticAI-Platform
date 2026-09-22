@@ -474,7 +474,7 @@ class Ontology:
             return {"nodes": [], "edges": [], "generation": None,
                     "coverage": {"complete": False, "unknown": ["not-indexed"]}, "backend": "workspace-project-ontology"}
         position = {"bucket": 0, "offset": 0}
-        fingerprint = schema.digest([self.ctx.actor, self.ctx.scope["role"], self.ctx.scope["project"]["version"],
+        fingerprint = schema.digest([list(self.sources.authority),
                                      current["generation"], node_ids, limit])
         if cursor:
             schema._identifier(cursor)
@@ -529,10 +529,10 @@ class Ontology:
         next_cursor = None
         if more:
             next_cursor = "cursor-" + secrets.token_hex(24)
-            self.storage.put(self.ctx.owner, "ontology_cursor", {
+            self.ctx.commit([self.ctx.write("ontology_cursor", {
                 "id": next_cursor, "projectId": self.ctx.project_id, "fingerprint": fingerprint,
                 "position": position, "expiresAt": self.storage.clock() + 300000,
-                "ttl": self.storage.clock() // 1000 + 300})
+                "ttl": self.storage.clock() // 1000 + 300})])
             self._recheck(current)
         return {"schemaVersion": 1, "nodes": selected, "edges": list(edges.values()), "generation": current["generation"],
                 "cursor": next_cursor, "backend": "workspace-project-ontology",

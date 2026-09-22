@@ -142,7 +142,7 @@ def _get(api, scope, kind, identifier):
 
 def _commit(api, scope, writes, action="read", checks=(), claims=None):
     api.collaboration.require(scope, action)
-    if checks:
+    if checks or claims is not None:
         from workspace.storage import Conflict
         if scope.get("project"):
             writes = [*writes, _write(scope, "project", scope["project"], scope["project"]["version"])]
@@ -494,7 +494,8 @@ def _create_report(api, scope, claims, body):
     from workspace.ontology_impact import check_metadata_budget
     check_metadata_budget([record])
     api.storage.put_blob_once(key, raw, "text/markdown; charset=utf-8")
-    saved = _commit(api, scope, [_write(scope, "wb_report", record)])[0]
+    checks = _validate_report_sources(api, scope, claims, record, exact=False)
+    saved = _commit(api, scope, [_write(scope, "wb_report", record)], checks=checks, claims=claims)[0]
     return 201, {"report": _public(saved)}
 
 

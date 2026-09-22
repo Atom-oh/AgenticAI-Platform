@@ -102,7 +102,8 @@ function analyze(input) {
   const problem = (file, reason, line = 1, column = 0) => {
     // Generic calls are counted once per file/reason so they cannot consume
     // the entire location-bound dependency budget before later files run.
-    const aggregate = ['call-semantics-not-inspected', 'constructor-semantics-not-inspected'].includes(reason);
+    const aggregate = ['call-semantics-not-inspected', 'constructor-semantics-not-inspected',
+      'css-function-not-inspected', 'scss-function-not-inspected', 'computed-style-reference'].includes(reason);
     const key = file.path + ':' + reason;
     if (aggregate && observations.has(key)) { observations.get(key).count++; return; }
     if (aggregate) {
@@ -293,8 +294,12 @@ function analyze(input) {
           let base = node.tagName;
           while (ts.isPropertyAccessExpression(base)) base = base.expression;
           const binding = importBinding(base);
-          if (binding) reference(file, 'jsx-use', binding.specifier, position(node),
-            { symbol: binding.symbol === '*' ? member || '*' : binding.symbol, localName: tag });
+          if (binding) {
+            const unresolvedMember = Boolean(member) && (binding.symbol !== '*' || member.includes('.'));
+            reference(file, 'jsx-use', binding.specifier, position(node),
+              { symbol: binding.symbol === '*' ? member || '*' : binding.symbol, localName: tag },
+              unresolvedMember ? { status: 'unresolved', reason: 'jsx-member-semantics-not-inspected' } : undefined);
+          }
           else if (/^[A-Z]/.test(tag) || tag.includes('.'))
             problem(file, 'local-jsx-binding-not-traced', position(node).line, position(node).column);
           for (const attr of node.attributes.properties) {
