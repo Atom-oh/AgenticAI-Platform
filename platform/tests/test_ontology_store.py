@@ -208,6 +208,16 @@ def test_cursors_are_opaque_and_bound_to_actor_scope_and_generation(wb):
         Ontology(context(wb)).read(limit=1, cursor=first["cursor"])
 
 
+def test_unrelated_project_edits_do_not_revoke_ontology_pagination(wb):
+    publish(wb)
+    first = Ontology(context(wb)).read(limit=1)
+    project = wb.storage.get(wb.owner, "project", wb.project["id"])
+    changed = wb.storage.put(wb.owner, "project", {**project, "name": "New project name"}, project["version"])
+    assert changed["authorityRevision"] == project["authorityRevision"]
+    second = Ontology(context(wb)).read(limit=1, cursor=first["cursor"])
+    assert first["nodes"][0]["id"] != second["nodes"][0]["id"]
+
+
 def test_forged_project_or_publication_scope_is_not_a_new_canonical_authority(wb):
     data = candidate(wb)
     wrong = copy.deepcopy(data)

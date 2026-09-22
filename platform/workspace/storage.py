@@ -140,6 +140,12 @@ class Storage:
                 if key not in ("pk", "sk", "owner", "sub", "ttl")}
         data.update(id=identifier, version=expected_version + 1 if expected_version else 1,
                     createdAt=previous["createdAt"] if previous else now, updatedAt=now)
+        if kind == "project":
+            def authority(record):
+                return ({actor: member["role"] for actor, member in record.get("members", {}).items()},
+                        record.get("status"), record.get("archived", False))
+            data["authorityRevision"] = ((previous.get("authorityRevision", 0) +
+                int(authority(previous) != authority(data))) if previous else 1)
         if kind == "job":
             data["ttl"] = now // 1000 + JOB_RETENTION_SECONDS
         if kind == "ontology_cursor":

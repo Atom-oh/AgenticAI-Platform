@@ -354,8 +354,10 @@ trigger a silent local fallback.
 Implement in reviewed stages with the current Lambda/legacy mode as the initial
 default. Offline schema/analyzer/API tests do not certify AgentCore deployment.
 The execution/authorization, capability-gate, private-source and rollout
-requirements are recorded in `platform/docs/ONTOLOGY_AGENTCORE_PLAN.md`;
-implemented interfaces are scoped by `platform/workspace/ONTOLOGY_CONTRACT.md`.
+requirements in `platform/workspace/AGENTCORE_CONTRACT.md` are adopted for this
+extension. Implemented interfaces are scoped by `platform/workspace/ONTOLOGY_CONTRACT.md`.
+`platform/docs/ONTOLOGY_AGENTCORE_PLAN.md` records sequencing and historical reviews;
+edits to that plan do not amend these requirements.
 
 ## 8. User interface
 

@@ -42,6 +42,14 @@ def test_log_redacts_forbidden_keys(capsys):
     assert "비밀 프롬프트 원문" not in out and "promptHash" in out and '"count": 3' in out
 
 
+def test_log_redacts_structured_sensitive_fields(capsys):
+    clog.log_event("structured", "t1", payload={"text": "SENSITIVE-NESTED-MARKER"},
+                   prompt=["SENSITIVE-LIST-MARKER"], count=2)
+    out = capsys.readouterr().out
+    assert "SENSITIVE-" not in out
+    assert "payloadHash" in out and "promptHash" in out and '"count": 2' in out
+
+
 class _FakeTable:
     def __init__(self):
         self.items = {}

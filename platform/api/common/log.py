@@ -21,9 +21,10 @@ def hash8(value: str) -> str:
 def redact(fields: dict) -> dict:
     out = {}
     for k, v in fields.items():
-        if k in _FORBIDDEN and isinstance(v, str):
-            out[f"{k}Hash"] = hash8(v)
-            out[f"{k}Len"] = len(v)
+        if k in _FORBIDDEN:
+            text = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)
+            out[f"{k}Hash"] = hash8(text)
+            out[f"{k}Len"] = len(text)
         else:
             out[k] = v
     return out

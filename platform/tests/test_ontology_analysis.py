@@ -90,6 +90,22 @@ def test_actual_node_parser_projects_exact_source_refs_and_unclassified_componen
         validate_analysis(payload, tampered)
 
 
+def test_repeated_jsx_usages_preserve_every_observed_location(wb):
+    files = collection(wb)
+    original = wb.storage.get(wb.owner, "asset", "code-app")
+    raw = b'import {Button} from "./Button";export const App=()=> <><Button/><Button/></>;'
+    key = wb.storage.key_for(wb.owner, "asset", "code-app", "repeat.tsx")
+    wb.storage.put_blob_once(key, raw, "text/plain")
+    wb.storage.put(wb.owner, "asset", {**original, "originalKey": key, "sha256": hashlib.sha256(raw).hexdigest(),
+        "size": len(raw), "importRevision": 2}, original["version"])
+    payload, bindings = source_input(context(wb), files)
+    graph = project_analysis(context(wb), "repeat", payload, bindings, local_analyze(payload)["analysis"])
+    app = next(node["id"] for node in graph["nodes"] if node["type"] == "CodeFile" and node["title"] == "App.tsx")
+    usages = [edge for edge in graph["edges"] if edge["src"]["id"] == app and edge["type"] == "USES"]
+    assert len(usages) == 2
+    assert len({edge["sourceRefs"][0]["location"]["column"] for edge in usages}) == 2
+
+
 def test_analysis_is_a_durable_job_and_local_backend_requires_explicit_test_opt_in(wb):
     files = collection(wb)
     with pytest.raises(CollaborationError, match="구성"):

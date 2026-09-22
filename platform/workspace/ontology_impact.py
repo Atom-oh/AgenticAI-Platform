@@ -18,18 +18,33 @@ CHANGE_EDGES = {
 
 def check_output_budget(parts, maximum=3_500_000):
     from workbench.service import fail
-    total = 0
+    total = 2
     for part in parts:
-        total += len(json.dumps(part, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode())
+        try:
+            total += len(schema.canonical(part)) + 1
+        except (ValueError, UnicodeError):
+            fail(422, "ontology-impact-scope", "영향 근거의 직렬화 한도를 초과했습니다. 조회 범위를 나누세요.")
         if total > maximum:
             fail(422, "ontology-impact-scope", "영향 근거의 응답 크기 한도를 초과했습니다. 조회 범위를 나누세요.")
+
+
+def check_metadata_budget(records):
+    from workbench.service import fail
+    from workspace.storage import MAX_RECORD_BYTES
+    for record in records:
+        # Match Storage's JSON accounting and reserve generated metadata and
+        # subsequent approval fields rather than relying on the HTTP budget.
+        if len(json.dumps(record, ensure_ascii=False, allow_nan=False, default=str).encode()) > MAX_RECORD_BYTES - 8192:
+            fail(422, "ontology-impact-scope", "영향 근거의 저장 크기 한도를 초과했습니다. 조회 범위를 나누세요.")
 
 
 def _same_source(left, right):
     return authority_identity(left) == authority_identity(right)
 
 
-def analyze(graph, change, *, generation, can_read):
+def analyze(graph, change, *, generation, can_read, max_items=50):
+    if type(max_items) is not int or not 1 <= max_items <= LIMITS["items"]:
+        raise ValueError("Invalid remaining impact item budget")
     schema.validate_graph(graph, diagnostic=True)
     schema._hash(generation)
     schema._fields(change, {"id", "kind", "baseGeneration"}, {"oldSource", "nodeIds", "newSource", "requestHash"})
@@ -74,7 +89,7 @@ def analyze(graph, change, *, generation, can_read):
         identifier, path, witnesses = pending.popleft()
         if identifier in seen:
             continue
-        if len(seen) >= LIMITS["nodes"] or len(items) >= LIMITS["items"]:
+        if len(seen) >= LIMITS["nodes"] or len(items) >= max_items:
             truncated = True
             break
         seen.add(identifier)

@@ -142,7 +142,7 @@ def _get(api, scope, kind, identifier):
 
 def _commit(api, scope, writes, action="read", checks=(), claims=None):
     api.collaboration.require(scope, action)
-    if checks:
+    if checks or claims is not None:
         from workspace.storage import Conflict
         if scope.get("project"):
             writes = [*writes, _write(scope, "project", scope["project"], scope["project"]["version"])]
@@ -484,7 +484,6 @@ def _create_report(api, scope, claims, body):
                               for ref in references]]) + "\n"
     raw = markdown.encode()
     key = api.storage.key_for(scope["owner"], "wb_report", identifier, "document.md")
-    api.storage.put_blob_once(key, raw, "text/markdown; charset=utf-8")
     record = {"id": identifier, "title": title, "type": kind, "status": "draft",
               "projectId": (scope.get("project") or {}).get("id"),
               "mode": "evidence-template", "contentHash": hashlib.sha256(raw).hexdigest(),
@@ -492,7 +491,11 @@ def _create_report(api, scope, claims, body):
               "createdBy": scope["actor"], "requestHash": fingerprint,
               "validation": {"status": "pass" if not unresolved else "incomplete",
                              "sourceCount": len(references), "generatedNumericClaims": False}}
-    saved = _commit(api, scope, [_write(scope, "wb_report", record)])[0]
+    from workspace.ontology_impact import check_metadata_budget
+    check_metadata_budget([record])
+    api.storage.put_blob_once(key, raw, "text/markdown; charset=utf-8")
+    checks = _validate_report_sources(api, scope, claims, record, exact=False)
+    saved = _commit(api, scope, [_write(scope, "wb_report", record)], checks=checks, claims=claims)[0]
     return 201, {"report": _public(saved)}
 
 

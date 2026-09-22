@@ -228,6 +228,29 @@ def test_report_approval_rechecks_source_expiry_after_transaction_preparation(wb
     assert wb.storage.get(wb.owner, "wb_report", report["id"])["status"] == "draft"
 
 
+def test_draft_report_creation_fences_source_expiry_before_publication(wb, monkeypatch):
+    wb.storage.clock = lambda: wb.now
+    src = source(wb)
+    run(wb, queue(wb, src))
+    current = wb.storage.get(wb.owner, "wb_source", src["id"])
+    wb.now = current["accessExpiresAt"] - 1000
+    identifier = project_call(wb, "GET", "knowledge")["items"][0]["id"]
+    original = wb.storage._prepare
+
+    def expire(owner, kind, item, version, now):
+        result = original(owner, kind, item, version, now)
+        if kind == "wb_report":
+            wb.now += 2000
+        return result
+
+    monkeypatch.setattr(wb.storage, "_prepare", expire)
+    with pytest.raises(CollaborationError) as error:
+        project_call(wb, "POST", "reports", {"requestId": "expired-draft", "type": "regulation",
+            "title": "Source expiry during draft publication", "evidenceIds": [identifier]})
+    assert error.value.code == "stale-evidence"
+    assert wb.storage.list_page(wb.owner, "wb_report")["items"] == []
+
+
 def test_approval_fences_a_source_changed_during_commit(monkeypatch):
     route, api, scope = setup()
     session = call(route, api, scope, "POST", "pension/sessions",

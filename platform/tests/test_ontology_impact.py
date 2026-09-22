@@ -48,6 +48,15 @@ def test_dense_evidence_fails_with_a_typed_split_scope_error_before_returning(mo
     assert error.value.status == 422 and error.value.code == "ontology-impact-scope"
 
 
+def test_remaining_snapshot_item_budget_is_applied_during_traversal():
+    value = fixture()
+    generation = schema.digest(value)
+    result = analyze(value, {"id": "remaining", "kind": "asset", "nodeIds": ["icon"],
+        "baseGeneration": generation}, generation=generation, can_read=lambda refs: True, max_items=2)
+    assert len(result["items"]) == 2
+    assert result["coverage"]["truncated"] is True
+
+
 def test_traversal_stops_before_unreadable_nodes_and_does_not_leak_hidden_path_shape():
     value = fixture()
     result = run(value, can_read=lambda refs: all(r["sourceId"] != "screen" for r in refs))

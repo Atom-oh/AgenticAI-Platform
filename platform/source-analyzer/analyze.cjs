@@ -102,7 +102,8 @@ function analyze(input) {
   const problem = (file, reason, line = 1, column = 0) => {
     // Generic calls are counted once per file/reason so they cannot consume
     // the entire location-bound dependency budget before later files run.
-    const aggregate = ['call-semantics-not-inspected', 'constructor-semantics-not-inspected'].includes(reason);
+    const aggregate = ['call-semantics-not-inspected', 'constructor-semantics-not-inspected',
+      'css-function-not-inspected', 'scss-function-not-inspected', 'computed-style-reference'].includes(reason);
     const key = file.path + ':' + reason;
     if (aggregate && observations.has(key)) { observations.get(key).count++; return; }
     if (aggregate) {
@@ -121,7 +122,7 @@ function analyze(input) {
     const candidates = [];
     if (withoutQuery.startsWith('.') || resourceRelative && !withoutQuery.startsWith('/'))
       candidates.push(path.normalize(path.join(path.dirname(from), withoutQuery)));
-    else if (withoutQuery.startsWith('/')) return { status: 'unresolved', reason: 'root-url-needs-mapping' };
+    else if (resourceRelative && withoutQuery.startsWith('/')) return { status: 'unresolved', reason: 'root-url-needs-mapping' };
     else {
       for (const [alias, target] of Object.entries(resolver.aliases || {})) {
         const star = alias.indexOf('*');
@@ -134,7 +135,8 @@ function analyze(input) {
       if (!candidates.length && Object.hasOwn(resolver.packages || {}, withoutQuery))
         return { status: 'approved-package', package: withoutQuery, ...resolver.packages[withoutQuery] };
     }
-    if (!candidates.length) return { status: 'unresolved', reason: 'unmapped-package-or-alias' };
+    if (!candidates.length) return { status: 'unresolved', reason: withoutQuery.startsWith('/') ?
+      'root-url-needs-mapping' : 'unmapped-package-or-alias' };
     if (candidates.some(candidate => !safePath(candidate))) return { status: 'unresolved', reason: 'path-escape' };
     const found = new Set();
     for (const candidate of candidates) {
@@ -292,8 +294,12 @@ function analyze(input) {
           let base = node.tagName;
           while (ts.isPropertyAccessExpression(base)) base = base.expression;
           const binding = importBinding(base);
-          if (binding) reference(file, 'jsx-use', binding.specifier, position(node),
-            { symbol: binding.symbol === '*' ? member || '*' : binding.symbol, localName: tag });
+          if (binding) {
+            const unresolvedMember = Boolean(member) && (binding.symbol !== '*' || member.includes('.'));
+            reference(file, 'jsx-use', binding.specifier, position(node),
+              { symbol: binding.symbol === '*' ? member || '*' : binding.symbol, localName: tag },
+              unresolvedMember ? { status: 'unresolved', reason: 'jsx-member-semantics-not-inspected' } : undefined);
+          }
           else if (/^[A-Z]/.test(tag) || tag.includes('.'))
             problem(file, 'local-jsx-binding-not-traced', position(node).line, position(node).column);
           for (const attr of node.attributes.properties) {
@@ -381,7 +387,10 @@ function analyze(input) {
       const parser = new HTMLParser({
         onopentagname() { attributes = new Set(); },
         onattribute(name) {
-          if (attributes.has(name)) problem(file, 'duplicate-html-attribute');
+          if (attributes.has(name)) {
+            const position = at(Math.max(0, parser.startIndex));
+            problem(file, 'duplicate-html-attribute', position.line, position.column);
+          }
           attributes.add(name);
         },
         onopentag(name, attrs) {

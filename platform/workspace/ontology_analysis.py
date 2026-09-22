@@ -198,7 +198,8 @@ def project_analysis(ctx, name, payload, bindings, analysis):
                 symbol_id = schema.identity("symbol", name, *key)
                 if symbol_id in nodes:
                     add_edge(components[key], symbol_id, "USES", [target_ref])
-            add_edge(source, components[key], "USES", [reference])
+            add_edge(source, components[key], "USES", [reference],
+                     {"line": item["line"], "column": item["column"]})
     reasons = sorted({item["reason"] for item in value["unresolved"]} |
                      {"unreviewed-design-mappings", "outside-source-unit-not-certified"})
     if any(item["resolution"]["status"] == "approved-package" for item in value["references"]):

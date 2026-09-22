@@ -74,6 +74,12 @@ Repeated impact evidence has a 3,500,000-byte aggregate response budget.
 Overflow fails with `ontology-impact-scope` and a split-scope instruction;
 evidence is never silently discarded. Caller-provided task completion evidence
 is limited to 50 references regardless of graph authority.
+Change, task and report records also check the smaller metadata storage limit
+before publication, with space reserved for subsequent approval metadata.
+Rejected mappings remain visible for review but cannot supply dependency closure,
+generation context or impact traversal. Starting or completing a work item
+requires current source and impact evidence; historical diagnostics alone do not
+permit these transitions.
 Archived readable sources remain diagnostic candidates. Revoked source metadata
 is hidden; an opaque changed seed can expose only independently readable dependent
 nodes/evidence and reports a restricted boundary. Context/reuse/approval still
@@ -98,6 +104,9 @@ fail instead of running the analyzer again.
 Membership changes alter the project audience and invalidate in-flight source
 authority, even when the requesting actor's own role is unchanged. Title/content
 writes that preserve that audience do not invalidate it.
+Storage maintains a monotonic `authorityRevision` for membership/role and project
+lifecycle changes. Restoring old membership contents does not restore an earlier
+in-flight authority epoch. Title/comment writes leave that epoch unchanged.
 Queued analyses pin this authority digest at admission and compare it before
 source analysis, in addition to the checks during publication.
 Deadline-sensitive service commits submit a transaction once. Contention returns

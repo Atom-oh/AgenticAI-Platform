@@ -13,6 +13,7 @@ def _readable(ctx, record):
         authority = record.get("graphAuthority", "legacy")
         validate = knowledge.authorize_refs if authority == "canonical" else knowledge.verify_refs
         validate(ctx, record.get("sourceRefs", []), authority=authority)
+        ctx.fresh()
         return True
     except CollaborationError as error:
         if error.status in (400, 403, 404, 409):
