@@ -12,6 +12,7 @@ export type Overview = {
 export type Task = {
   id: string; changeId: string; impactHash: string; targetId: string; title: string; role: string;
   status: string; assigneeSub?: string; evidenceRefs: unknown[]; sourceRefs?: unknown[]; version: number;
+  evidenceKind?: string; targetEvidence?: unknown; evidenceStates?: unknown[]; staleWitness?: boolean;
 };
 export type Source = {
   id: string; name: string; kind: string; version: number; status?: string; description?: string;

@@ -114,8 +114,7 @@ class WorkspaceAPI:
         self.ontology_mode = os.environ.get("PROJECT_ONTOLOGY_MODE", "legacy")
         if self.ontology_mode not in {"legacy", "canonical"}:
             raise ValueError("Unknown project ontology backend")
-        if self.ontology_mode == "canonical":
-            self.collaboration.ontology_enabled = True
+        self.collaboration.ontology_enabled = self.ontology_mode == "canonical"
         # The foundation does not install a cloud adapter. The adapter milestone
         # supplies a verified readiness installer; an environment label cannot.
         self.ontology_analyzer_ready = False
@@ -260,6 +259,10 @@ class WorkspaceAPI:
 
     def _expire_job(self, owner, job, scope=None):
         """One CAS attempt per read; a concurrent heartbeat or completion wins."""
+        if job.get("task") == "workbench" and job.get("status") == "failed" and job.get("errorCode") == "job-timeout":
+            from workbench.worker import _mark_failed
+            _mark_failed(self, owner, job, "job-timeout")
+            return job
         if job.get("task") in ("document-finalize", "document-analysis"):
             from documents.jobs import expire_raw_job
             if scope is None:
@@ -271,11 +274,15 @@ class WorkspaceAPI:
                 or now - updated <= STALE_JOB_MS):
             return job
         try:
-            return self.storage.put(owner, "job", {
+            saved = self.storage.put(owner, "job", {
                 **job, "status": "failed", "stopReason": "timeout", "errorCode": "job-timeout",
                 "error": "작업 진행이 16분 이상 갱신되지 않아 종료했습니다. 다시 실행해 주세요.",
                 "finishedAt": now,
             }, job["version"])
+            if job.get("task") == "workbench":
+                from workbench.worker import _mark_failed
+                _mark_failed(self, owner, saved, "job-timeout")
+            return saved
         except Conflict:
             return self._get(owner, "job", job["id"])
 

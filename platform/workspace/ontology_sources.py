@@ -9,6 +9,14 @@ from workspace import ontology_schema as schema
 PROJECT_AUDIENCE = "current-project-members-v1"
 
 
+def authority_identity(reference):
+    ref = schema.source_ref(reference)
+    value = {key: item for key, item in ref.items() if key != "location"}
+    if ref.get("location", {}).get("documentId"):
+        value["documentId"] = ref["location"]["documentId"]
+    return schema.digest(value)
+
+
 def asset_reference(asset):
     return {"sourceKind": "asset", "sourceId": asset["id"],
             "revision": str(asset.get("importRevision", 1)), "sha256": asset["sha256"],
@@ -222,10 +230,7 @@ class Sources:
         unique = {}
         for raw in references:
             ref = schema.source_ref(raw)
-            authority = {key: value for key, value in ref.items() if key != "location"}
-            if ref.get("location", {}).get("documentId"):
-                authority["documentId"] = ref["location"]["documentId"]
-            unique[schema.digest(authority)] = ref
+            unique[authority_identity(ref)] = ref
         if len(unique) > self.max_sources:
             fail(422, "ontology-source-limit", "서로 다른 원본 근거 수 제한을 초과했습니다. 범위를 나누세요.")
         for ref in unique.values():

@@ -140,14 +140,16 @@ def _get(api, scope, kind, identifier):
     return item
 
 
-def _commit(api, scope, writes, action="read", checks=()):
+def _commit(api, scope, writes, action="read", checks=(), claims=None):
     api.collaboration.require(scope, action)
     if checks:
         from workspace.storage import Conflict
         if scope.get("project"):
             writes = [*writes, _write(scope, "project", scope["project"], scope["project"]["version"])]
         try:
-            result = api.storage.put_many(writes, checks=list(checks))
+            from workbench.service import check_source_deadlines
+            result = api.storage.put_many(writes, checks=list(checks), retry_conflicts=False,
+                before_attempt=lambda: check_source_deadlines(api.storage, checks, claims))
             return result[:-1] if scope.get("project") else result
         except Conflict as error:
             raise CollaborationError(409, "source-changed", "원본 또는 프로젝트가 변경되었습니다.") from error
@@ -404,7 +406,9 @@ def _report_sources(api, scope, claims, body):
         tasks = [t for t in _list(api, scope, "wb_task") if current_impact
                  and t.get("changeId") == change["id"] and t.get("impactHash") == change["impactHash"]]
         for task in tasks:
-            knowledge.verify_refs(ctx, task.get("sourceRefs", []), authority=task.get("graphAuthority", "legacy"))
+            authority = task.get("graphAuthority", "legacy")
+            validate = knowledge.authorize_refs if authority == "canonical" else knowledge.verify_refs
+            validate(ctx, task.get("sourceRefs", []), authority=authority)
             references.append({"kind": "wb_task", "id": task["id"], "version": task["version"],
                                "changeId": change["id"], "impactHash": task["impactHash"],
                                "sourceRefs": copy.deepcopy(task.get("sourceRefs", [])),
@@ -498,7 +502,8 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
             from workbench.api import route as core_route
             from workbench.service import Service
             from workbench.knowledge import authorize_refs
-            authorize_refs(Service(api, scope, claims), [reference.get("evidence") or {}])
+            for check in authorize_refs(Service(api, scope, claims), [reference.get("evidence") or {}]):
+                remember(check)
             _, value = core_route(api, scope, claims, "GET", ["knowledge", reference["id"]], {}, {})
             document = value.get("document") or {}
             text = document.get("content", document.get("text", ""))
@@ -520,9 +525,11 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                 # Historical output retains its own bindings. Current read access
                 # must hold for both those bindings and the current record.
                 authority = reference.get("graphAuthority", "legacy")
-                knowledge.authorize_refs(ctx, reference.get("sourceRefs", []), authority=authority)
-                knowledge.authorize_refs(ctx, current.get("sourceRefs", []),
-                                         authority=current.get("graphAuthority", "legacy"))
+                for check in knowledge.authorize_refs(ctx, reference.get("sourceRefs", []), authority=authority):
+                    remember(check)
+                for check in knowledge.authorize_refs(ctx, current.get("sourceRefs", []),
+                                                      authority=current.get("graphAuthority", "legacy")):
+                    remember(check)
                 if exact:
                     if (current.get("sourceRefs", []) != reference.get("sourceRefs", [])
                             or current.get("graphAuthority", "legacy") != authority):
@@ -548,7 +555,10 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
             remember({
                 "owner": scope["owner"], "kind": reference["kind"], "id": reference["id"],
                 "version": current["version"]})
-    return list(checks.values())
+    from workbench.service import check_source_deadlines
+    result = list(checks.values())
+    check_source_deadlines(api.storage, result, claims)
+    return result
 
 
 def can_read_report(api, scope, claims, report):
@@ -590,7 +600,7 @@ def route(api, scope, claims, method, parts, body, query):
             updated = _commit(api, scope, [_write(scope, "wb_report", {
                 **report, "status": "approved", "approval": {"actor": scope["actor"],
                 "contentHash": report["contentHash"], "sourceRefs": report["sourceRefs"]}}, report["version"])],
-                action="publish", checks=checks)[0]
+                action="publish", checks=checks, claims=claims)[0]
             return 200, {"report": _public(updated)}
     return None
 

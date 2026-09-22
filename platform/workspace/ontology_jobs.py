@@ -12,6 +12,22 @@ from workspace.ontology_store import Ontology
 from ontology_runtime.dispatch import RuntimeAnalyzer, selected_backend
 
 
+def reconcile(ctx, artifact):
+    """Read-triggered recovery never reruns paid work or revives old authorization."""
+    if artifact.get("status") not in {"queued", "processing"}:
+        return artifact
+    job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
+    if job:
+        job = ctx.host._expire_job(ctx.owner, job, ctx.scope)
+    if (job and job.get("status") == "failed" or not job and
+            ctx.storage.clock() - artifact.get("updatedAt", ctx.storage.clock()) > 16 * 60 * 1000):
+        from workbench.worker import _mark_failed
+        _mark_failed(ctx.host, ctx.owner, job or {"id": artifact["jobId"], "input": artifact["jobInput"]},
+                     (job or {}).get("errorCode", "dispatch-interrupted"))
+        return ctx.get("wb_artifact", artifact["id"])
+    return artifact
+
+
 def submit(ctx, body):
     fields(body, {"requestId", "name", "files", "resolverProfileId", "expectedGeneration"})
     ctx.fresh()
@@ -24,8 +40,17 @@ def submit(ctx, body):
     identifier = ctx.identity("wb_artifact", body.get("requestId"))
     prior = ctx.existing("wb_artifact", identifier, body)
     if prior:
+        prior = reconcile(ctx, prior)
         Sources(ctx).verify(prior["sourceRefs"])
         job = ctx.storage.get(ctx.owner, "job", prior["jobId"])
+        if prior["status"] == "failed" and not job:
+            fail(409, "ontology-analysis-interrupted", "작업 전달이 중단되었습니다. 새 요청으로 다시 실행하세요.")
+        if job and job["status"] == "queued" and prior["status"] in {"queued", "processing"}:
+            if prior["jobInput"]["authorizationExpiresAt"] <= ctx.storage.clock():
+                fail(401, "authorization-expired", "작업 인증이 만료되었습니다. 새 요청으로 다시 실행하세요.")
+            # A crash can occur after durable creation but before invocation.
+            # Re-delivery is safe: Worker.claim_job admits the analyzer once.
+            job = ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])
         return {"artifact": prior, "job": job or ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])}
     files = body.get("files")
     if not isinstance(files, list) or not 1 <= len(files) <= 100:
@@ -62,12 +87,12 @@ def submit(ctx, body):
               "expectedGeneration": body.get("expectedGeneration"), "backend": selected_backend(ctx.host)}
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
-                "createdBy": ctx.actor, "requestHash": schema.digest(body)}
+                "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}
     saved = ctx.commit([ctx.write("wb_artifact", artifact)], checks)[0]
     return {"artifact": saved, "job": ctx.queue_job(job_id, pinned, saved["requestHash"])}
 
 
-def process(ctx, pinned):
+def process(ctx, pinned, job=None):
     artifact = ctx.get("wb_artifact", pinned["artifactId"])
     if artifact.get("kind") != "ontology-analysis" or artifact["jobInput"] != pinned:
         fail(409, "ontology-job-mismatch", "분석 작업의 승인 입력이 다릅니다.")
@@ -75,6 +100,10 @@ def process(ctx, pinned):
         return {"artifactId": artifact["id"], "generation": artifact["generation"]}
     if artifact["status"] not in {"queued", "processing"}:
         fail(409, "ontology-job-state", "분석 가능한 작업 상태가 아닙니다.")
+    job = job or ctx.get("job", artifact["jobId"])
+    if (job["id"] != artifact["jobId"] or job.get("input") != pinned
+            or job.get("task") != "workbench" or job.get("status") not in {"queued", "running"}):
+        fail(409, "ontology-job-state", "현재 실행 작업과 승인 입력이 다릅니다.")
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
     remote = type(analyzer) is RuntimeAnalyzer
     if not remote and not callable(analyzer):
@@ -119,12 +148,16 @@ def process(ctx, pinned):
 
     def completion(marker):
         refs.recheck()
+        result = {"artifactId": artifact["id"], "generation": marker["generation"],
+                  "coverage": result_coverage}
         return [ctx.write("wb_artifact", {**artifact, "status": "completed",
             "analysisKey": key, "analysisHash": digest, "graphKey": graph_key, "graphHash": graph_hash,
-            "execution": result["execution"], "coverage": result["analysis"]["coverage"],
+            "execution": execution, "coverage": result_coverage,
             "generation": marker["generation"], "partitionId": marker["partitionId"],
-            "identities": marker["identities"]}, artifact["version"])]
+            "identities": marker["identities"]}, artifact["version"]),
+            ctx.write("job", {**job, "status": "completed", "progress": 100, "result": result}, job["version"])]
 
+    execution, result_coverage = result["execution"], result["analysis"]["coverage"]
     from workspace.collaboration import CollaborationError
     for attempt in range(3):
         try:

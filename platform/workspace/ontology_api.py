@@ -45,23 +45,29 @@ def route(host, scope, claims, method, parts, body, query):
         current = ontology.current()
         if not current or current["generation"] != body.get("expectedGeneration"):
             fail(409, "ontology-changed", "영향 분석 기준이 변경되었습니다.")
+        if body.get("newSource"):
+            ontology.sources.verify([body["newSource"]], recheck=False)
         raw_seeds = body.get("nodeIds", [])
         if not isinstance(raw_seeds, list) or len(raw_seeds) > 20:
             fail(400, "ontology-selection", "시작 노드 목록이 올바르지 않습니다.")
         for seed in raw_seeds:
             schema._identifier(seed)
+            node = ontology._node(current, seed)
+            if not node or not ontology._visible_node(current, node, historical=True):
+                fail(404, "not-found", "읽을 수 있는 영향 분석 시작 노드가 없습니다.")
         seeds = list(raw_seeds)
+        restricted_source = False
         if body.get("oldSource"):
+            restricted_source = not ontology._visible([body["oldSource"]], historical=True)
             seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True))
-        if not seeds:
-            ontology._recheck(current)
-            return 200, {"items": [], "generation": current["generation"],
-                         "coverage": {"complete": False, "unknown": ["unmapped-or-inaccessible-seed"]}}
         seeds = sorted(set(seeds))
-        graph = ontology.closure(seeds[:20], direction="dependents", max_nodes=500, historical=True)
+        graph = (ontology.closure(seeds[:20], direction="dependents", max_nodes=500, historical=True) if seeds else
+                 {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": [], "edges": [], "impactSeeds": [],
+                  "coverage": {"complete": False, "truncated": False, "unknown": ["unmapped-or-inaccessible-seed"],
+                               "scope": "authorized-manifest-snapshot"}})
         impact_seeds = graph.pop("impactSeeds")
         change = {"id": body.get("changeId"), "kind": body.get("kind"), "baseGeneration": current["generation"],
-                  "nodeIds": impact_seeds}
+                  "nodeIds": impact_seeds, "requestHash": schema.digest({**body, "nodeIds": sorted(set(raw_seeds))})}
         if body.get("oldSource"):
             change["oldSource"] = body["oldSource"]
         if body.get("newSource"):
@@ -69,6 +75,8 @@ def route(host, scope, claims, method, parts, body, query):
         if len(seeds) > 20:
             graph["coverage"]["truncated"] = True
             graph["coverage"]["unknown"].append("seed-limit")
+        if restricted_source:
+            graph["coverage"]["unknown"].append("restricted-source-boundary")
         result = analyze({key: value for key, value in graph.items() if key != "generation"},
                          change, generation=current["generation"], can_read=lambda refs: ontology._visible(refs, historical=True))
         ontology._recheck(current)
@@ -76,10 +84,33 @@ def route(host, scope, claims, method, parts, body, query):
     if parts == ["analyses"] and method == "POST":
         from workspace.ontology_jobs import submit
         return 202, public(submit(ctx, body))
+    if parts == ["analyses"] and method == "GET":
+        from workspace.collaboration import CollaborationError
+        from workspace.ontology_jobs import reconcile
+        from workspace.ontology_sources import Sources
+        page = ctx.page("wb_artifact", query)
+        sources, items = Sources(ctx, max_records=2500), []
+        for artifact in page["items"]:
+            if artifact.get("kind") != "ontology-analysis":
+                continue
+            try:
+                sources.verify(artifact["sourceRefs"], recheck=False)
+            except CollaborationError as error:
+                if error.status in {403, 404, 409}:
+                    continue
+                raise
+            artifact = reconcile(ctx, artifact)
+            items.append({key: artifact[key] for key in
+                          ("id", "name", "status", "jobId", "requestId", "createdBy", "createdAt", "updatedAt")
+                          if key in artifact})
+        sources.recheck()
+        return 200, {"items": items, "cursor": page.get("cursor")}
     if len(parts) == 2 and parts[0] == "analyses" and method == "GET":
+        from workspace.ontology_jobs import reconcile
         artifact = ctx.get("wb_artifact", parts[1])
         if artifact.get("kind") != "ontology-analysis":
             fail(404, "not-found", "분석 작업이 없습니다.")
+        artifact = reconcile(ctx, artifact)
         from workspace.ontology_sources import Sources
         sources = Sources(ctx)
         sources.verify(artifact["sourceRefs"])

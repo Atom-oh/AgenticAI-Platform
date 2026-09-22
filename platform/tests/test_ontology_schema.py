@@ -49,7 +49,9 @@ def test_icon_to_atom_to_screen_and_code_references_are_representable():
 
 
 def test_external_and_diagnostic_patterns_do_not_require_unrelated_usage_nodes():
-    pattern = node("pattern", "Pattern", reviewState="approved", properties={"usageIds": ["screen-a", "screen-b"]})
+    pattern = node("pattern", "Pattern", reviewState="approved", properties={
+        "usageIds": ["screen-a", "screen-b"], "usageBindings": [
+            {"id": identifier, "revision": 1, "contentHash": "a" * 64} for identifier in ["screen-a", "screen-b"]]})
     with pytest.raises(ValueError, match="usages"):
         schema.validate_graph(graph([pattern], []))
     assert schema.validate_graph(graph([node("consumer")], [edge("use", "consumer", "pattern")]),
@@ -115,7 +117,18 @@ def test_patterns_need_two_reviewed_screen_usages_but_candidates_do_not():
     with pytest.raises(ValueError, match="usages"):
         schema.validate_graph(graph([approved, *screens], []))
     approved = schema.seal({**approved, "properties": {"usageIds": ["screen-a", "screen-b"]}})
-    assert schema.validate_graph(graph([approved, *screens], []))
+    with pytest.raises(ValueError, match="bindings"):
+        schema.validate_graph(graph([approved, *screens], []))
+    approved = schema.seal({**approved, "properties": {**approved["properties"], "usageBindings": [
+        {key: screen[key] for key in ("id", "revision", "contentHash")} for screen in screens]}})
+    proofs = [edge("usage-" + screen["id"], "pattern", screen["id"], "REFERENCES",
+                   reviewState="approved", sourceRefs=screen["sourceRefs"]) for screen in screens]
+    with pytest.raises(ValueError, match="relationship"):
+        schema.validate_graph(graph([approved, *screens], []))
+    assert schema.validate_graph(graph([approved, *screens], proofs))
+    updated = schema.seal({**screens[0], "title": "Changed reviewed screen"})
+    with pytest.raises(ValueError, match="stale"):
+        schema.validate_graph(graph([approved, updated, screens[1]], proofs))
 
 
 def test_non_dependency_edges_have_typed_endpoints_and_incomplete_coverage_is_honest():

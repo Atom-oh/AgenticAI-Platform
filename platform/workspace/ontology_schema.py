@@ -43,6 +43,7 @@ PROPERTIES = {
     "Document": {"documentId", "description"},
     "Skill": {"skillId", "description"},
 }
+PROPERTIES["Pattern"] = DESIGN_PROPERTIES | {"usageBindings"}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
 
@@ -223,10 +224,24 @@ def validate_node(value):
             raise ValueError("Invalid design references")
     if "required" in properties and type(properties["required"]) is not bool:
         raise ValueError("Invalid policy requirement flag")
+    if "usageBindings" in properties:
+        bindings = properties["usageBindings"]
+        if not isinstance(bindings, list) or len(bindings) > 20:
+            raise ValueError("Invalid pattern approval bindings")
+        for binding in bindings:
+            _fields(binding, {"id", "revision", "contentHash"})
+            _identifier(binding["id"])
+            _revision(binding["revision"])
+            _hash(binding["contentHash"])
+    if value["type"] == "Pattern" and value["reviewState"] == "approved" and not value["tombstone"]:
+        bindings = properties.get("usageBindings", [])
+        identifiers = {binding["id"] for binding in bindings}
+        if len(identifiers) < 2 or len(identifiers) != len(bindings) or identifiers != set(properties.get("usageIds", [])):
+            raise ValueError("Approved pattern usages require exact revision/hash bindings")
     hashes = {"fileHash", "analyzerHash", "normalizedImageHash", "sourceHash"}
     for key in properties.keys() & hashes:
         _hash(properties[key])
-    for key in properties.keys() - hashes - {"bytes", "width", "height", "usageIds", "slots", "required"}:
+    for key in properties.keys() - hashes - {"bytes", "width", "height", "usageIds", "slots", "required", "usageBindings"}:
         _text(properties[key], 8000)
     aliases = value.get("aliases", [])
     if not isinstance(aliases, list) or len(aliases) > 20:
@@ -321,6 +336,14 @@ def validate_graph(value, *, external_nodes=(), diagnostic=False):
                     value not in nodes or nodes[value]["type"] != "Screen"
                     or nodes[value]["reviewState"] not in {"reviewed", "approved"} for value in usages):
                 raise ValueError("Approved patterns need independently reviewed screen usages")
+            for binding in node["properties"]["usageBindings"]:
+                screen = nodes[binding["id"]]
+                if screen["revision"] != binding["revision"] or screen["contentHash"] != binding["contentHash"]:
+                    raise ValueError("Approved pattern usage binding is stale")
+                if not any(edge["type"] == "REFERENCES" and not edge["tombstone"]
+                           and edge["reviewState"] == "approved" and edge["src"]["id"] == node["id"]
+                           and edge["dst"]["id"] == screen["id"] for edge in edges):
+                    raise ValueError("Approved pattern usage evidence relationship is required")
     coverage = copy.deepcopy(value.get("coverage", {"complete": False, "unknown": ["unmapped-dependencies"],
                                                    "scope": "bounded-project-partition", "truncated": False}))
     _fields(coverage, {"complete", "unknown", "scope", "truncated"})

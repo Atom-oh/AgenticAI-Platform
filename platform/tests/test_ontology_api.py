@@ -81,6 +81,50 @@ def test_bad_fields_and_forged_actor_are_not_project_authority(wb):
     assert call(wb, "POST", "/context", {"nodeIds": [], "projectId": "other"})[0] == 400
 
 
+def test_new_impact_source_requires_current_authority_and_empty_results_have_bound_receipts(wb):
+    from test_ontology_schema import ref
+    published = setup_graph(wb)
+    body = {"changeId": "empty-impact", "kind": "asset", "expectedGeneration": published["generation"]}
+    status, empty = call(wb, "POST", "/impact", body)
+    assert status == 200 and empty["items"] == [] and empty["hash"]
+    assert call(wb, "POST", "/impact", {**body, "newSource": ref("missing")})[0] == 404
+    source = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**source, "archived": True}, source["version"])
+    assert call(wb, "POST", "/impact", {**body, "newSource": asset_reference(source)})[0] == 409
+
+
+def test_revoked_edge_only_source_retains_a_restricted_impact_boundary(wb):
+    from test_ontology_sources import asset, context
+    from workspace.ontology_store import Ontology
+    from workspace import ontology_schema as schema
+    value = candidate(wb)
+    reference = asset_reference(asset(wb, "revoked-mapping"))
+    value["edges"][0] = schema.seal({**value["edges"][0], "sourceRefs": [reference]})
+    result = Ontology(context(wb)).publish_candidate("edge-only", value, expected_generation=None, request_id="edge-only")
+    source = wb.storage.get(wb.owner, "asset", reference["sourceId"])
+    wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+    status, impact = call(wb, "POST", "/impact", {"changeId": "revoked-edge", "kind": "permission",
+        "oldSource": reference, "expectedGeneration": result["generation"]})
+    assert status == 200, impact
+    assert impact["items"] and all(item["evidenceKind"] == "candidate" for item in impact["items"])
+    assert "restricted-source-boundary" in impact["coverage"]["unknown"]
+    assert reference["sourceId"] not in json.dumps(impact)
+
+
+def test_raw_hidden_node_and_missing_node_have_the_same_non_disclosing_response(wb):
+    published = setup_graph(wb)
+    source = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+    request = {"changeId": "raw-selection", "kind": "asset", "expectedGeneration": published["generation"]}
+    hidden = call(wb, "POST", "/impact", {**request, "nodeIds": [published["identities"]["image"]]})
+    missing = call(wb, "POST", "/impact", {**request, "nodeIds": ["unknown-node"]})
+    assert hidden == missing and hidden[0] == 404
+    # The explicit exact old-source path still provides only readable dependents.
+    status, diagnostic = call(wb, "POST", "/impact", {**request, "oldSource": asset_reference(source)})
+    assert status == 200 and [item["title"] for item in diagnostic["items"]] == ["control"]
+    assert "restricted-source-boundary" in diagnostic["coverage"]["unknown"]
+
+
 def test_pattern_approval_requires_two_current_reviewed_usages(wb):
     from test_ontology_sources import asset
     from test_ontology_schema import node
@@ -101,6 +145,53 @@ def test_pattern_approval_requires_two_current_reviewed_usages(wb):
     assert status == 409 and denied["code"] == "ontology-pattern-usages"
 
 
+def test_pattern_approval_tracks_exact_usage_screen_hashes(wb):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node
+    from workspace.ontology_store import Ontology
+    nodes = [node(name, kind, project=wb.project["id"], sourceRefs=[asset_reference(asset(wb, name))],
+                  properties={"usageIds": ["first", "second"]} if kind == "Pattern" else {})
+             for name, kind in [("first", "Screen"), ("second", "Screen"), ("pattern", "Pattern")]]
+    result = Ontology(context(wb)).publish_candidate("usage", {
+        "schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": []},
+        expected_generation=None, request_id="usage")
+    ids, generation = result["identities"], result["generation"]
+    for name in ["first", "second", "pattern"]:
+        result = Ontology(context(wb)).review_node(ids[name], expected_generation=generation, revision=1,
+            decision="reviewed", reason="Synthetic usage review", request_id="review-" + name)
+        generation = result["generation"]
+    result = Ontology(context(wb)).review_node(ids["pattern"], expected_generation=generation, revision=1,
+        decision="approved", reason="Two reviewed usages", request_id="approve-pattern")
+    assert len(result["node"]["properties"]["usageBindings"]) == 2
+    assert len(result["review"]["sourceRefs"]) == 3
+    assert ids["pattern"] in {node["id"] for node in Ontology(context(wb)).read()["nodes"]}
+    Ontology(context(wb)).review_node(ids["first"], expected_generation=result["generation"], revision=1,
+        decision="rejected", reason="Usage no longer valid", request_id="reject-usage")
+    assert ids["pattern"] not in {node["id"] for node in Ontology(context(wb)).read()["nodes"]}
+
+
+def test_pattern_approval_cannot_exceed_the_edge_limit_with_retained_tombstones(wb):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node, edge
+    from workspace.ontology_store import Ontology
+    nodes = [node(name, kind, project=wb.project["id"], sourceRefs=[asset_reference(asset(wb, name))],
+                  properties={"usageIds": ["first", "second"]} if kind == "Pattern" else {})
+             for name, kind in [("first", "Screen"), ("second", "Screen"), ("pattern", "Pattern")]]
+    edges = [edge(f"retired-{i}", "first", "second", tombstone=True, sourceRefs=nodes[0]["sourceRefs"])
+             for i in range(1000)]
+    result = Ontology(context(wb)).publish_candidate("full-review", {
+        "schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": edges},
+        expected_generation=None, request_id="full-review")
+    ids = result["identities"]
+    for name in ["first", "second", "pattern"]:
+        result = Ontology(context(wb)).review_node(ids[name], expected_generation=result["generation"], revision=1,
+            decision="reviewed", reason="Synthetic usage review", request_id="review-" + name)
+    status, error = call(wb, "POST", f"/nodes/{ids['pattern']}/review", {"requestId": "over-limit",
+        "expectedGeneration": result["generation"], "revision": 1, "decision": "approved", "reason": "Two usages"})
+    assert status == 422 and error["code"] == "ontology-capacity"
+    assert Ontology(context(wb)).current()["generation"] == result["generation"]
+
+
 def test_one_opaque_seed_can_expand_to_more_than_twenty_readable_dependents(wb):
     from test_ontology_sources import asset
     from test_ontology_schema import node, edge
@@ -118,7 +209,7 @@ def test_one_opaque_seed_can_expand_to_more_than_twenty_readable_dependents(wb):
     assert status == 201, published
     wb.storage.put(wb.owner, "asset", {**secret, "accessRevoked": True}, secret["version"])
     status, result = call(wb, "POST", "/impact", {"changeId": "revoked-many", "kind": "asset",
-        "nodeIds": [published["identities"]["hidden-root"]], "expectedGeneration": published["generation"]})
+        "oldSource": asset_reference(secret), "expectedGeneration": published["generation"]})
     assert status == 200, result
     assert len(result["items"]) == 25
     assert "hidden-source" not in json.dumps(result)
@@ -174,6 +265,31 @@ def test_review_keeps_current_relations_and_mapping_changes_keep_stale_witnesses
     screen = next(item for item in impact["items"] if item["title"] == "screen")
     assert screen["staleWitness"] and screen["evidenceKind"] == "candidate"
     assert len(screen["witnessPath"]) == 2
+
+
+def test_review_fences_active_external_sources_but_retired_edges_do_not_lock_the_partition(wb):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node, edge
+    from workspace.ontology_store import Ontology
+    published = setup_graph(wb)
+    source = asset(wb, "screen-source")
+    graph = {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": [
+        node("screen", "Screen", project=wb.project["id"], sourceRefs=[asset_reference(source)])],
+        "edges": [edge("external", "screen", published["identities"]["control"], sourceRefs=[asset_reference(source)])]}
+    added = Ontology(context(wb)).publish_candidate("external", graph,
+        expected_generation=published["generation"], request_id="external")
+    control = wb.storage.get(wb.owner, "asset", "control")
+    wb.storage.put(wb.owner, "asset", {**control, "accessRevoked": True}, control["version"])
+    status, result = call(wb, "POST", f"/nodes/{added['identities']['screen']}/review", {
+        "requestId": "denied", "revision": 1, "expectedGeneration": added["generation"],
+        "decision": "reviewed", "reason": "An external source is now revoked"})
+    assert status == 409 and result["code"] == "ontology-reference-unavailable"
+    removed = Ontology(context(wb)).publish_candidate("external", {**graph, "edges": []},
+        expected_generation=added["generation"], request_id="remove")
+    status, result = call(wb, "POST", f"/nodes/{added['identities']['screen']}/review", {
+        "requestId": "allowed", "revision": 1, "expectedGeneration": removed["generation"],
+        "decision": "reviewed", "reason": "The unusable relationship is retired"})
+    assert status == 200, result
 
 
 def test_partition_removal_preserves_past_impact_and_does_not_reuse_revisions(wb):

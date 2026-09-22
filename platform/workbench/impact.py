@@ -10,7 +10,9 @@ ROLE_FOR_LABEL = {"Product": "planner", "Flow": "planner", "Guideline": "planner
                   "Component": "designer", "Icon": "designer", "Screen": "designer",
                   "API": "developer", "Test": "developer", "Skill": "developer", "Document": "planner",
                   "Foundation": "designer", "Pattern": "designer", "Asset": "designer",
-                  "CodeFile": "developer", "CodeSymbol": "developer"}
+                  "CodeFile": "developer", "CodeSymbol": "developer", "Atom": "designer",
+                  "Molecule": "designer", "Organism": "designer", "PageTemplate": "designer",
+                  "Procedure": "planner", "PolicyRule": "planner", "Team": "owner"}
 MAX_IMPACT = 50
 
 
@@ -49,7 +51,7 @@ def traversal(graph, target_id):
             continue
         visited.add(identifier)
         node = nodes.get(identifier)
-        if node is not None and node["label"] == "Role":
+        if node is not None and node["label"] == "Role" and node.get("canonicalType") != "Team":
             continue
         refs = [ref for entry in ([node] if node else []) + witness_edges
                 for ref in (entry.get("sourceRefs") or [entry["sourceRef"]])]
@@ -60,18 +62,64 @@ def traversal(graph, target_id):
         stale = any(edge.get("tombstone") or any(
             nodes.get(edge[end], {}).get("revision") != edge["canonical"][end]["revision"] for end in ("src", "dst"))
             for edge in witness_edges if "canonical" in edge)
-        role = node.get("role") or ROLE_FOR_LABEL.get(node["label"], "planner") if node else "planner"
+        role = (node.get("role") or ROLE_FOR_LABEL.get(node.get("canonicalType", node["label"]), "planner")) if node else "planner"
         items.append({"targetId": identifier, "title": node["title"] if node else "매핑되지 않은 대상",
                       "role": role, "reason": "변경 대상" if len(path) == 1 else "의존 관계를 통해 영향 가능",
                       "witnessPath": path, "witnessEdges": witness_edges, "sourceRefs": refs,
                       "sourceRevision": node["sourceRef"]["revision"] if node else None,
                       "confidence": confidence, "staleWitness": stale})
+        if node is not None and node.get("canonicalType") == "Team":
+            continue
         parallel = {}
         for edge in sorted(reverse.get(identifier, []), key=lambda e: (e["src"], e["rel"])):
             parallel.setdefault(edge["src"], []).append(edge)
         for source, supporting in parallel.items():
             if source not in visited:
                 pending.append((source, path + [source], witness_edges + supporting))
+    # Retain a display path and all evidence inside the inspected result
+    # subgraph. Converging paths and cycles must not discard source authority.
+    included = {item["targetId"] for item in items}
+    outgoing = {}
+    for edges in reverse.values():
+        for edge in edges:
+            if edge["src"] in included and edge["dst"] in included:
+                outgoing.setdefault(edge["src"], []).append(edge)
+    references = {}
+    for item in items:
+        pending_proofs, proof_nodes, proof_edges = [item["targetId"]], set(), {}
+        while pending_proofs:
+            identifier = pending_proofs.pop()
+            if identifier in proof_nodes:
+                continue
+            proof_nodes.add(identifier)
+            for edge in outgoing.get(identifier, []):
+                proof_edges[_hash(edge)] = edge
+                pending_proofs.append(edge["dst"])
+        evidence = [nodes[key] for key in sorted(proof_nodes) if key in nodes] + list(proof_edges.values())
+        refs = {_hash(ref): ref for entry in evidence
+                for ref in (entry.get("sourceRefs") or [entry["sourceRef"]])}
+        item["sourceRefs"] = list(refs.values())
+        item["witnessEdges"] = list(proof_edges.values())
+        item["staleWitness"] = (any(entry.get("tombstone") or entry.get("reviewState") == "deprecated"
+                                   for entry in evidence) or
+                               "historical-source-revisions" in graph["coverage"].get("unknown", []) or any(
+            edge.get("tombstone") or any(nodes[edge[end]].get("revision") != edge["canonical"][end]["revision"]
+                                       for end in ("src", "dst"))
+            for edge in proof_edges.values() if "canonical" in edge))
+        item["confidence"] = ("unknown" if item["targetId"] not in nodes else "confirmed" if
+            not item["staleWitness"] and all(entry.get("provenance") == "connector-extracted" for entry in evidence) else "candidate")
+        target = nodes.get(item["targetId"])
+        if target and "canonicalType" in target:
+            candidate = item["staleWitness"] or any(
+                entry.get("reviewState") != "approved" or entry.get("provenance") == "model-inferred" for entry in evidence)
+            item["evidenceKind"] = ("candidate" if candidate else "approved-declared" if
+                any(entry.get("provenance") == "declared" for entry in evidence) else "observed-structural")
+            item["confidence"] = "candidate" if candidate else "confirmed"
+            item["targetEvidence"] = {key: target["canonical"][key] for key in
+                                      ("id", "revision", "contentHash", "provenance", "reviewState", "tombstone")}
+            item["evidenceStates"] = [{"provenance": provenance, "reviewState": state}
+                for provenance, state in sorted({(entry["provenance"], entry["reviewState"]) for entry in evidence})]
+        references.update(refs)
     return {"items": items, "generation": graph["generation"], "sourceRefs": list(references.values()),
             "coverage": {**graph["coverage"], "complete": False, "truncated": bool(pending) or graph["coverage"].get("truncated", False),
                          "unknown": sorted(set(graph["coverage"].get("unknown", []) + ["unmapped-dependencies"]))}}
@@ -124,9 +172,13 @@ def analyze(ctx, identifier, body):
                 "assigneeSub": None, "evidenceRefs": [], "sourceRefs": item["sourceRefs"],
                 "generation": impact["generation"], "confidence": item["confidence"]}
         task["graphAuthority"] = authority
+        for field in ("evidenceKind", "targetEvidence", "evidenceStates", "staleWitness"):
+            if field in item:
+                task[field] = item[field]
         writes.append(ctx.write("wb_task", task))
         tasks.append(task)
-    updated = {**change, "status": "analyzed", "impactHash": digest, "impactKey": key, "impactSha": sha,
+    updated = {**change, "status": "analyzed" if impact["items"] else "needs-mapping",
+               "impactHash": digest, "impactKey": key, "impactSha": sha,
                "generation": impact["generation"], "sourceRefs": impact["sourceRefs"],
                "taskIds": [task["id"] for task in tasks], "graphAuthority": "canonical" if canonical else "legacy"}
     validate(ctx, impact["sourceRefs"], authority=authority)
@@ -167,7 +219,7 @@ def update_task(ctx, identifier, body):
     task = ctx.get("wb_task", identifier)
     ctx.fresh({"owner", task["role"]})
     authority = task.get("graphAuthority", "legacy")
-    knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority)
+    checks = knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority)
     if _version(body.get("version")) != task["version"]:
         fail(409, "conflict", "작업 버전이 변경되었습니다.")
     status = body.get("status")
@@ -179,7 +231,7 @@ def update_task(ctx, identifier, body):
         if not member or member["role"] not in {"owner", task["role"]}:
             fail(400, "invalid-assignee", "해당 역할의 현재 프로젝트 구성원만 배정할 수 있습니다.")
     refs = body.get("evidenceRefs", task.get("evidenceRefs", []))
-    checks = knowledge.verify_refs(ctx, refs, authority=authority)
+    checks.extend(knowledge.verify_refs(ctx, refs, authority=authority))
     if status == "done":
         change = ctx.get("wb_change", task["changeId"])
         impact = read_impact(ctx, task["changeId"])
@@ -196,7 +248,7 @@ def update_task(ctx, identifier, body):
     updated = {**task, "status": status, "assigneeSub": assignee, "evidenceRefs": refs,
                "completedBy": ctx.actor if status == "done" else None,
                "completedAt": ctx.storage.clock() if status == "done" else None}
-    knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority)
+    checks.extend(knowledge.authorize_refs(ctx, task.get("sourceRefs", []), authority=authority))
     knowledge.verify_refs(ctx, refs, authority=authority)
     if status == "done":
         knowledge.verify_refs(ctx, task["sourceRefs"], authority=authority)

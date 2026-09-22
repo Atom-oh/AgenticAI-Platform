@@ -13,7 +13,7 @@ from collections import deque
 
 from workbench.service import fail
 from workspace import ontology_schema as schema
-from workspace.ontology_sources import Sources
+from workspace.ontology_sources import Sources, authority_identity
 
 CURRENT = "project-current"
 MAX_PARTITIONS = 1000
@@ -31,6 +31,15 @@ def source_identity(ref):
 def _references(graph):
     return list({schema.digest(ref): ref for item in [*graph["nodes"], *graph["edges"]]
                  for ref in item["sourceRefs"]}.values())
+
+
+def _mapping(value):
+    result = copy.deepcopy(value)
+    for field in ("revision", "contentHash", "reviewState"):
+        result.pop(field, None)
+    for field in ("usageBindings",):
+        result.get("properties", {}).pop(field, None)
+    return result
 
 
 def retain_tombstones(previous, graph):
@@ -58,6 +67,7 @@ class Ontology:
         self._parts = {}
         self._indexes = {}
         self._historical_stale = False
+        self._visibility = {}
 
     def current(self):
         self.ctx.fresh()
@@ -89,7 +99,9 @@ class Ontology:
     def _put_json(self, identifier, value):
         raw = schema.canonical(value)
         if len(raw) > MAX_INDEX_BYTES:
-            fail(422, "ontology-capacity", "온톨로지 파티션 또는 인덱스를 더 작은 단위로 나누세요.")
+            if identifier.startswith("index-"):
+                fail(422, "ontology-index-capacity", "연결 인덱스의 저장 한도를 초과했습니다. 운영자에게 인덱스 용량 확장을 요청하세요.")
+            fail(422, "ontology-capacity", "온톨로지 파티션을 더 작은 단위로 나누세요.")
         digest = hashlib.sha256(raw).hexdigest()
         self.storage.put_blob_once(self._key(identifier, digest), raw, "application/json")
         return digest
@@ -102,6 +114,8 @@ class Ontology:
             value = self._read_json(partition, key[1])
             if value.get("partitionId") != partition or value.get("graph", {}).get("projectId") != self.ctx.project_id:
                 fail(409, "ontology-integrity", "온톨로지 파티션 범위가 다릅니다.")
+            if len(value["graph"]["nodes"]) > schema.MAX_NODES or len(value["graph"]["edges"]) > schema.MAX_EDGES:
+                fail(409, "ontology-integrity", "온톨로지 파티션의 저장 한도가 올바르지 않습니다.")
             for node in value["graph"]["nodes"]:
                 schema.validate_node(node)
             for edge in value["graph"]["edges"]:
@@ -133,6 +147,9 @@ class Ontology:
 
     def _visible(self, refs, *, historical=False):
         from workspace.collaboration import CollaborationError
+        key = historical, tuple(sorted(authority_identity(ref) for ref in refs))
+        if key in self._visibility:
+            return self._visibility[key]
         try:
             if historical:
                 for ref in refs:
@@ -145,9 +162,11 @@ class Ontology:
                         self._historical_stale = True
             else:
                 self.sources.verify(refs, recheck=False)
+            self._visibility[key] = True
             return True
         except CollaborationError as error:
             if error.status in (403, 404, 409):
+                self._visibility[key] = False
                 return False
             raise
 
@@ -156,6 +175,22 @@ class Ontology:
         current = self.current()
         if (current or {}).get("generation") != (manifest or {}).get("generation"):
             fail(409, "ontology-changed", "조회 중 온톨로지가 변경되었습니다. 다시 조회하세요.")
+
+    def _visible_node(self, manifest, node, *, historical=False):
+        if not node or not self._visible(node["sourceRefs"], historical=historical):
+            return False
+        if node["type"] == "Pattern" and node["reviewState"] == "approved":
+            bindings = node.get("properties", {}).get("usageBindings", [])
+            if len({binding["id"] for binding in bindings}) < 2:
+                return False
+            for binding in bindings:
+                screen = self._node(manifest, binding["id"])
+                if (not screen or screen["type"] != "Screen" or screen["tombstone"]
+                        or screen["revision"] != binding["revision"] or screen["contentHash"] != binding["contentHash"]
+                        or screen["reviewState"] not in {"reviewed", "approved"}
+                        or not self._visible(screen["sourceRefs"], historical=historical)):
+                    return False
+        return True
 
     def authorize_publication(self, name):
         """Check the destination before any paid analysis or other side effect."""
@@ -184,6 +219,10 @@ class Ontology:
         if marker:
             if marker.get("requestHash") != request_hash:
                 fail(409, "request-changed", "같은 요청 ID의 내용이 달라졌습니다.")
+            if "sourceRefs" not in marker:
+                fail(409, "ontology-request-evidence", "이전 게시 요청의 원본 근거를 재확인할 수 없습니다. 현재 원본으로 새 요청을 만드세요.")
+            self.sources.verify(marker["sourceRefs"])
+            self._recheck(current)
             return {"generation": marker["generation"], "partitionId": partition,
                     "historical": (current or {}).get("generation") != marker["generation"],
                     "identities": marker["identities"]}
@@ -221,8 +260,10 @@ class Ontology:
                 *(old.get("aliases", []) if old else []), *value.get("aliases", [])]}.values())
             if not old:
                 aliases = [*aliases, {"namespace": "partition-local", "value": original_id}]
-            normalized["nodes"][i] = schema.seal({**value, "id": identifier, "properties": properties, "aliases": aliases,
-                "revision": old["revision"] + 1 if old else 1, "provenance": _producer, "reviewState": "candidate"})
+            candidate = {**value, "id": identifier, "properties": properties, "aliases": aliases,
+                         "provenance": _producer, "reviewState": "candidate"}
+            normalized["nodes"][i] = (copy.deepcopy(old) if old and _mapping(old) == _mapping(candidate) else
+                schema.seal({**candidate, "revision": old["revision"] + 1 if old else 1}))
         own = {n["id"]: n for n in normalized["nodes"]}
         externals = {}
         for i, raw in enumerate(normalized["edges"]):
@@ -231,8 +272,10 @@ class Ontology:
             for end in ("src", "dst"):
                 identifier = identities.get(value[end]["id"], value[end]["id"])
                 value[end]["id"] = identifier
+                if identifier in old_nodes and identifier not in own:
+                    fail(409, "ontology-removed-endpoint", "이번 교체에서 삭제하는 노드를 활성 관계의 대상으로 사용할 수 없습니다.")
                 target = own.get(identifier) or self._node(current or {}, identifier)
-                if not target or target["tombstone"] or not self._visible(target["sourceRefs"]):
+                if not target or target["tombstone"] or not self._visible_node(current or {}, target):
                     fail(409, "ontology-reference-unavailable", "관계 대상의 현재 원본을 확인할 수 없습니다.")
                 if identifier not in own:
                     externals[identifier] = target
@@ -258,7 +301,8 @@ class Ontology:
         self._replace_indexes(updated, current or {}, partition, prior["graph"] if prior else {"nodes": [], "edges": []}, normalized)
         updated["generation"] = schema.digest({"partitions": updated["partitions"], "indexes": updated["indexes"]})
         marker = {"id": marker_id, "projectId": self.ctx.project_id, "requestHash": request_hash,
-                  "generation": updated["generation"], "partitionId": partition, "identities": identities}
+                  "generation": updated["generation"], "partitionId": partition, "identities": identities,
+                  "sourceRefs": list({authority_identity(ref): ref for ref in refs}.values())}
         completion = (_completion_writes(copy.deepcopy(marker)) if _completion_writes else [])
         self.sources.recheck()
         self.ctx.commit([self.ctx.write("ontology", updated, current["version"] if current else None),
@@ -353,7 +397,7 @@ class Ontology:
             for identifier in node_ids:
                 schema._identifier(identifier)
                 node = self._node(current, identifier)
-                if node and not node["tombstone"] and self._visible(node["sourceRefs"]):
+                if node and not node["tombstone"] and self._visible_node(current, node):
                     selected.append(node)
         else:
             prefixes = [f"{i:02x}" for i in range(256)]
@@ -366,7 +410,7 @@ class Ontology:
                 position["offset"] += 1
                 scanned += 1
                 node = self._node(current, identifier)
-                if node and not node["tombstone"] and self._visible(node["sourceRefs"]):
+                if node and not node["tombstone"] and self._visible_node(current, node):
                     selected.append(node)
             more = position["bucket"] < len(prefixes)
         selected = list({node["id"]: node for node in selected}.values())
@@ -426,7 +470,7 @@ class Ontology:
                 break
             visited.add(identifier)
             node = self._node(current, identifier)
-            readable = node and (historical or not node["tombstone"]) and self._visible(node["sourceRefs"], historical=historical)
+            readable = node and (historical or not node["tombstone"]) and self._visible_node(current, node, historical=historical)
             opaque_seed = historical and identifier in node_ids and not readable
             if not readable and not opaque_seed:
                 unknown.add("unmapped-or-inaccessible")
@@ -461,7 +505,7 @@ class Ontology:
                 other = edge["dst"]["id"] if edge["src"]["id"] == identifier else edge["src"]["id"]
                 target = self._node(current, other)
                 if (not target or not historical and target["tombstone"]
-                        or not self._visible(target["sourceRefs"], historical=historical)
+                        or not self._visible_node(current, target, historical=historical)
                         or not self._visible(edge["sourceRefs"], historical=historical)):
                     unknown.add("unmapped-or-inaccessible")
                     continue
@@ -511,14 +555,15 @@ class Ontology:
             loc = self._index(current, "edges", _bucket(edge_id)).get(edge_id)
             part = self._part(current, loc["partition"]) if loc else None
             edge = next((item for item in part["graph"]["edges"] if item["id"] == edge_id), None) if part else None
-            if edge and (for_impact or self._visible(edge["sourceRefs"])):
+            if edge and (for_impact or not edge["tombstone"] and edge["reviewState"] not in {"rejected", "deprecated"}
+                         and self._visible(edge["sourceRefs"])):
                 values.append(edge["src"]["id"])
         result = []
         if len(set(values)) > 500:
             fail(422, "ontology-impact-scope", "원본의 영향 시작점이 500개를 초과합니다. 노드를 선택해 범위를 나누세요.")
         for identifier in values:
             node = self._node(current, identifier)
-            if for_impact or node and not node["tombstone"] and self._visible(node["sourceRefs"]):
+            if for_impact or node and not node["tombstone"] and self._visible_node(current, node):
                 result.append(identifier)
         self._recheck(current)
         return sorted(set(result))
@@ -539,6 +584,7 @@ class Ontology:
             if existing.get("requestHash") != request_hash:
                 fail(409, "request-changed", "같은 검토 요청 ID의 내용이 다릅니다.")
             self.sources.verify(existing["sourceRefs"])
+            self._recheck(current)
             return {"review": existing, "generation": existing["generation"],
                     "historical": (current or {}).get("generation") != existing["generation"]}
         if not current or current["generation"] != expected_generation:
@@ -551,7 +597,7 @@ class Ontology:
         roles = {"owner"}
         if target["type"] in {"Product", "PolicyRule", "Procedure"}:
             roles.add("planner")
-        elif target["type"] in {"CodeFile", "CodeSymbol", "Test"}:
+        elif target["type"] in {"CodeFile", "CodeSymbol", "Test", "API", "Skill"}:
             roles.add("developer")
         elif target["type"] != "Team":
             roles.add("designer")
@@ -573,16 +619,33 @@ class Ontology:
         next_revision = revision + 1 if decision == "deprecated" else revision
         updated_node = schema.seal({**target, "revision": next_revision, "reviewState": decision,
                                    "tombstone": decision == "deprecated"})
+        usage_screens = []
         if target["type"] == "Pattern" and decision == "approved":
             usages = target.get("properties", {}).get("usageIds", [])
-            if len(set(usages)) < 2:
+            if not 2 <= len(set(usages)) <= 20:
                 fail(409, "ontology-pattern-usages", "서로 다른 검토 완료 화면 두 개 이상이 필요합니다.")
-            for usage in usages:
+            for usage in sorted(set(usages)):
                 screen = self._node(current, usage)
                 if (not screen or screen["type"] != "Screen" or screen["tombstone"]
                         or screen["reviewState"] not in {"reviewed", "approved"}
                         or not self._visible(screen["sourceRefs"])):
                     fail(409, "ontology-pattern-usages", "패턴의 사용 화면 근거를 다시 확인하세요.")
+                usage_screens.append(screen)
+            bindings = [{key: screen[key] for key in ("id", "revision", "contentHash")} for screen in usage_screens]
+            updated_node = schema.seal({**updated_node, "properties": {
+                **updated_node.get("properties", {}), "usageBindings": bindings}})
+            graph["edges"] = [schema.seal({**edge, "tombstone": True, "reviewState": "deprecated"})
+                if edge["src"]["id"] == identifier and edge["type"] == "REFERENCES"
+                and edge["id"] == schema.identity("pattern-usage", identifier, edge["dst"]["id"])
+                and edge["dst"]["id"] not in usages else edge for edge in graph["edges"]]
+            for screen in usage_screens:
+                edge_id = schema.identity("pattern-usage", identifier, screen["id"])
+                graph["edges"] = [edge for edge in graph["edges"] if edge["id"] != edge_id]
+                graph["edges"].append(schema.seal({"id": edge_id, "type": "REFERENCES",
+                    "src": {"id": identifier, "revision": next_revision},
+                    "dst": {"id": screen["id"], "revision": screen["revision"]},
+                    "sourceRefs": screen["sourceRefs"], "provenance": "declared",
+                    "reviewState": "approved", "tombstone": False}))
         graph["nodes"] = [updated_node if node["id"] == identifier else node for node in graph["nodes"]]
         own = {node["id"]: node for node in graph["nodes"]}
         externals = {}
@@ -593,19 +656,22 @@ class Ontology:
             for end in ("src", "dst"):
                 if edge[end]["id"] not in own:
                     external = self._node(current, edge[end]["id"])
-                    if not external:
-                        fail(409, "ontology-reference-unavailable", "관계 대상의 현재 버전을 확인하지 못했습니다.")
+                    if not external or not self._visible_node(current, external):
+                        fail(409, "ontology-reference-unavailable", "활성 관계 대상의 현재 원본 권한을 확인하지 못했습니다.")
                     externals[external["id"]] = external
             if decision in {"rejected", "deprecated"} and identifier in (edge["src"]["id"], edge["dst"]["id"]):
                 edge["reviewState"] = "candidate"
             graph["edges"][i] = schema.seal(edge)
         # Tombstoned witnesses can retain inaccessible historical endpoints.
         # Validate active relationships separately; history remains immutable.
+        if len(graph["nodes"]) > schema.MAX_NODES or len(graph["edges"]) > schema.MAX_EDGES:
+            fail(422, "ontology-capacity", "검토 근거를 포함한 파티션의 저장 한도를 초과했습니다. 검토 범위를 나누세요.")
         schema.validate_graph({**graph, "edges": [e for e in graph["edges"] if not e["tombstone"]]},
                               external_nodes=list(externals.values()), diagnostic=True)
         active = {"nodes": [n for n in graph["nodes"] if not n["tombstone"]],
                   "edges": [e for e in graph["edges"] if not e["tombstone"]]}
-        checks = self.sources.verify(_references(active) + target["sourceRefs"])
+        checks = self.sources.verify(_references(active) + target["sourceRefs"]
+                                     + [ref for node in externals.values() for ref in node["sourceRefs"]])
         part = {**prior, "graph": graph, "updatedBy": self.ctx.actor,
                 "reviews": {**prior.get("reviews", {}), identifier: audit_id}}
         updated = copy.deepcopy(current)
@@ -616,7 +682,10 @@ class Ontology:
                  "actor": self.ctx.actor, "role": self.ctx.scope["role"], "nodeId": identifier,
                  "beforeRevision": revision, "afterRevision": next_revision,
                  "decision": decision, "reason": reason, "nodeHash": updated_node["contentHash"],
-                 "sourceRefs": target["sourceRefs"], "generation": updated["generation"], "requestHash": request_hash}
+                 "sourceRefs": list({schema.digest(ref): ref for ref in [
+                     *target["sourceRefs"], *(ref for screen in usage_screens for ref in screen["sourceRefs"])]}.values()),
+                 "usageBindings": updated_node.get("properties", {}).get("usageBindings", []),
+                 "generation": updated["generation"], "requestHash": request_hash}
         self.sources.recheck()
         self.ctx.commit([self.ctx.write("ontology", updated, current["version"]),
                          self.ctx.write("ontology", audit)], checks)

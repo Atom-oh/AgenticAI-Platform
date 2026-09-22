@@ -56,7 +56,7 @@ automatically joined, copied or authorized for a project. Selected references
 require an allowed, version-bound import. New eight-level/code nodes belong
 to the workspace canonical manifest, and workbench views/worklists derive from it.
 
-The design composition path is:
+The classification progresses from foundational resources to complete workflows:
 
 ```text
 Foundation / Icon
@@ -290,8 +290,12 @@ An edge contains `id`, `type`, exact source/target node IDs and revisions,
 
 A source reference contains `sourceKind`, `sourceId`, `revision`, `sha256`,
 `audienceRevision` and a location when applicable: document page, source
-path/export/line, or image region. Source kinds are workspace asset, document
-revision, product guideline, code revision and published asset revision.
+path/export/line, or image region. Implemented source-kind identifiers are
+`asset`, `document-revision`, `product-guideline`, `workbench-document` and
+`package`. Imported code revisions use `asset` with an exact import revision,
+byte hash and file location. `published-asset`, `ux-contract` and `run-round`
+are reserved for their separately installed authority adapters and fail closed
+until those adapters exist.
 IDs are stable within a scope; revision hashes identify immutable content.
 Original IDs live in namespace mappings. Ambiguity cannot silently select
 the first match.
@@ -925,7 +929,8 @@ enable the production default, and PR C does not bypass A/B reviews or gates.
 ## Implementation sequence
 
 1. Record this plan and extend the applicable interface contracts.
-2. Complete Phase 0 capability gates and record stop/go decisions.
+2. Complete the offline ontology/analyzer gate and disposable service probes.
+   Complete the remaining Phase 0 service gates before adapter activation/cutover.
 3. Implement canonical ontology projection, eight-level mappings, source/code
    extraction, reverse impact and generation-context selection.
 4. Implement AgentCore service adapters and scoped Gateway Lambda tools.

@@ -63,6 +63,15 @@ def test_next_and_ownership_are_not_undocumented_dependency_paths():
     assert "unrelated" not in {item["nodeId"] for item in run(value)["items"]}
 
 
+def test_direct_team_selection_is_a_terminal_item():
+    value = fixture()
+    generation = schema.digest(value)
+    result = analyze(value, {"id": "team-change", "kind": "permission", "baseGeneration": generation,
+                            "nodeIds": ["owner"]}, generation=generation, can_read=lambda refs: True)
+    assert [item["nodeId"] for item in result["items"]] == ["owner"]
+    assert result["items"][0]["witnessEdges"] == []
+
+
 def test_generation_mismatch_and_missing_authorization_are_rejected():
     value = fixture()
     change = {"id": "change-1", "kind": "asset", "baseGeneration": "a" * 64, "nodeIds": ["icon"]}
@@ -89,3 +98,37 @@ def test_stale_endpoint_remains_a_potential_witness_in_diagnostic_impact():
     code = next(item for item in result["items"] if item["nodeId"] == "code")
     assert code["staleWitness"] is True
     assert code["evidenceKind"] == "candidate"
+
+
+def test_superseded_source_authority_never_retains_approved_item_evidence():
+    value = fixture()
+    value["nodes"] = [schema.seal({**n, "reviewState": "approved"}) for n in value["nodes"]]
+    value["edges"] = [schema.seal({**e, "reviewState": "approved"}) for e in value["edges"]]
+    value["coverage"] = {"complete": False, "truncated": False, "scope": "historical",
+                         "unknown": ["historical-source-revisions"]}
+    result = run(value)
+    assert all(item["evidenceKind"] == "candidate" and item["staleWitness"] for item in result["items"])
+
+
+def test_converging_paths_and_cycles_retain_all_authorized_evidence():
+    value = graph([node(key) for key in ["icon", "b", "c", "a"]],
+                  [edge(name, src, dst, sourceRefs=[ref(name)])
+                   for name, src, dst in [("bi", "b", "icon"), ("ci", "c", "icon"),
+                                          ("ab", "a", "b"), ("ac", "a", "c"), ("ba", "b", "a")]])
+    result = run(value)
+    item = next(item for item in result["items"] if item["nodeId"] == "a")
+    assert set(item["witnessEdges"]) == {"bi", "ci", "ab", "ac", "ba"}
+    assert {r["sourceId"] for r in item["sourceRefs"]} == {"icon", "a", "b", "c", "bi", "ci", "ab", "ac", "ba"}
+    hidden = run(value, can_read=lambda refs: all(r["sourceId"] != "ac" for r in refs))
+    assert "ac" not in next(item for item in hidden["items"] if item["nodeId"] == "a")["witnessEdges"]
+
+
+def test_change_kind_and_source_revisions_bind_the_receipt_even_with_identical_results():
+    value = fixture()
+    generation = schema.digest(value)
+    change = {"id": "same-id", "kind": "asset", "baseGeneration": generation, "nodeIds": ["icon"]}
+    receipts = [analyze(value, request, generation=generation, can_read=lambda refs: True)
+                for request in [change, {**change, "kind": "code"}, {**change, "oldSource": ref("old")},
+                                {**change, "newSource": ref("new")}]]
+    assert len({receipt["hash"] for receipt in receipts}) == 4
+    assert receipts[0]["items"] == receipts[1]["items"]

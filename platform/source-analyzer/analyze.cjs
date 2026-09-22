@@ -75,11 +75,16 @@ function prepare(input) {
 function analyze(input) {
   const { files, resolver, bytes } = prepare(input);
   const references = [], exports = [], unresolved = [], diagnostics = [];
-  let visited = 0, truncated = false;
-  const addExport = value => {
-    if (exports.length < LIMITS.references) exports.push(value);
-    else truncated = true;
+  const truncatedFiles = new Set(), observations = new Map();
+  let visited = 0, truncated = false, observationBytes = 0;
+  const truncate = file => { truncated = true; truncatedFiles.add(typeof file === 'string' ? file : file.path); };
+  const append = (list, value) => {
+    const bytes = Buffer.byteLength(canonical(value)) + 1;
+    // Reserve space for the bounded file list, coverage metadata and final hash.
+    if (list.length >= LIMITS.references || observationBytes + bytes > 3500000) { truncate(value.path); return; }
+    list.push(value); observationBytes += bytes;
   };
+  const addExport = value => append(exports, value);
   const virtual = new Map([...files.values()].filter(file => file.kind === 'code')
     .map(file => ['/analysis/' + file.path, ts.createSourceFile('/analysis/' + file.path, file.text, ts.ScriptTarget.Latest, true)]));
   const program = ts.createProgram([...virtual.keys()], {
@@ -95,8 +100,17 @@ function analyze(input) {
   });
   const checker = program.getTypeChecker();
   const problem = (file, reason, line = 1, column = 0) => {
-    if (unresolved.length < LIMITS.references) unresolved.push({ path: file.path, sourceHash: file.sha256, line, column, reason });
-    else truncated = true;
+    // Generic calls are counted once per file/reason so they cannot consume
+    // the entire location-bound dependency budget before later files run.
+    const aggregate = ['call-semantics-not-inspected', 'constructor-semantics-not-inspected'].includes(reason);
+    const key = file.path + ':' + reason;
+    if (aggregate && observations.has(key)) { observations.get(key).count++; return; }
+    if (aggregate) {
+      const value = { path: file.path, sourceHash: file.sha256, line, column, reason, count: 1 };
+      observations.set(key, value);
+      return;
+    }
+    append(unresolved, { path: file.path, sourceHash: file.sha256, line, column, reason });
   };
   function resolve(from, specifier, resourceRelative = false) {
     if (typeof specifier !== 'string' || !specifier || specifier.length > 1024) return { status: 'unresolved', reason: 'invalid-reference' };
@@ -134,15 +148,18 @@ function analyze(input) {
     return { status: 'resolved-local', targetPath: target, targetHash: files.get(target).sha256,
       ...(specifier !== withoutQuery ? { transform: 'unverified-query-or-fragment' } : {}) };
   }
-  function reference(file, kind, specifier, at, detail = {}) {
-    if (references.length >= LIMITS.references) { truncated = true; return; }
-    const resolution = resolve(file.path, specifier, kind.startsWith('style-') || kind === 'json-asset' || kind === 'html-resource' || kind === 'module-url');
+  function reference(file, kind, specifier, at, detail = {}, forcedResolution) {
+    if (references.length >= LIMITS.references) { truncate(file); return; }
+    const resolution = forcedResolution || resolve(file.path, specifier, kind.startsWith('style-') || kind === 'json-asset' || kind === 'html-resource' || kind === 'module-url');
     if (resolution.status === 'unresolved') problem(file, resolution.reason, at.line, at.column);
     if (resolution.transform) problem(file, resolution.transform, at.line, at.column);
-    references.push({ path: file.path, sourceHash: file.sha256, kind, specifier, ...at, ...detail, resolution });
+    append(references, { path: file.path, sourceHash: file.sha256, kind, specifier, ...at, ...detail, resolution });
   }
   for (const file of [...files.values()].sort((a, b) => compare(a.path, b.path))) {
-    if (file.kind === 'asset') continue;
+    if (file.kind === 'asset') {
+      if (file.path.toLowerCase().endsWith('.svg')) problem(file, 'opaque-svg-dependencies-not-inspected');
+      continue;
+    }
     if (file.kind === 'code') {
       const source = program.getSourceFile('/analysis/' + file.path);
       const position = node => {
@@ -150,11 +167,17 @@ function analyze(input) {
         return { line: at.line + 1, column: at.character };
       };
       if (source.parseDiagnostics.length) {
-        diagnostics.push({ path: file.path, sourceHash: file.sha256, code: 'parse-error',
+        append(diagnostics, { path: file.path, sourceHash: file.sha256, code: 'parse-error',
           count: source.parseDiagnostics.length });
         problem(file, 'parse-error'); continue;
       }
       const imports = new Map();
+      function exportedBinding(binding) {
+        if (ts.isIdentifier(binding)) addExport({ path: file.path, name: binding.text, ...position(binding) });
+        else if (ts.isObjectBindingPattern(binding) || ts.isArrayBindingPattern(binding)) {
+          for (const element of binding.elements) if (ts.isBindingElement(element)) exportedBinding(element.name);
+        }
+      }
       for (const statement of source.statements) {
         if (ts.isImportEqualsDeclaration(statement)) {
           const module = statement.moduleReference;
@@ -178,6 +201,9 @@ function analyze(input) {
             reference(file, 're-export', statement.moduleSpecifier.text, position(statement), { typeOnly: !!statement.isTypeOnly });
           if (statement.exportClause && ts.isNamedExports(statement.exportClause))
             for (const element of statement.exportClause.elements) addExport({ path: file.path, name: element.name.text, ...position(element) });
+          else if (statement.exportClause && ts.isNamespaceExport(statement.exportClause))
+            addExport({ path: file.path, name: statement.exportClause.name.text, ...position(statement.exportClause) });
+          else if (!statement.exportClause) problem(file, 'star-export-bindings-not-enumerated', position(statement).line, position(statement).column);
         } else if (ts.isExportAssignment(statement)) {
           addExport({ path: file.path, name: statement.isExportEquals ? 'export=' : 'default', ...position(statement) });
           if (statement.isExportEquals) problem(file, 'commonjs-export-semantics', position(statement).line, position(statement).column);
@@ -186,7 +212,7 @@ function analyze(input) {
           const name = statement.modifiers.some(m => m.kind === ts.SyntaxKind.DefaultKeyword) ? 'default' : statement.name?.text;
           if (name) addExport({ path: file.path, name, ...position(statement) });
           if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations)
-            if (ts.isIdentifier(declaration.name)) addExport({ path: file.path, name: declaration.name.text, ...position(declaration) });
+            exportedBinding(declaration.name);
         }
       }
       function importBinding(expression, seen = new Set()) {
@@ -206,11 +232,21 @@ function analyze(input) {
         return null;
       }
       function walk(node) {
-        if (++visited > LIMITS.nodes) { truncated = true; return; }
+        if (++visited > LIMITS.nodes) { truncate(file); return; }
+        if (ts.isTaggedTemplateExpression(node))
+          problem(file, 'tagged-template-transform-not-inspected', position(node).line, position(node).column);
+        if (ts.isBinaryExpression(node) && /^(?:module(?:\.|\[)|exports(?:\.|\[|$))/.test(node.left.getText(source)))
+          problem(file, 'commonjs-export-bindings-not-enumerated', position(node).line, position(node).column);
         const globalName = (expression, name) => ts.isIdentifier(expression) && expression.text === name &&
           !checker.getSymbolAtLocation(expression)?.declarations?.length;
         const importMeta = expression => ts.isMetaProperty(expression) &&
           expression.keywordToken === ts.SyntaxKind.ImportKeyword && expression.name.text === 'meta';
+        if (ts.isCallExpression(node) && node.expression.kind !== ts.SyntaxKind.ImportKeyword &&
+            !globalName(node.expression, 'require') && !(ts.isPropertyAccessExpression(node.expression) &&
+              globalName(node.expression.expression, 'require') && node.expression.name.text === 'resolve'))
+          problem(file, 'call-semantics-not-inspected', position(node).line, position(node).column);
+        if (ts.isNewExpression(node) && !globalName(node.expression, 'URL'))
+          problem(file, 'constructor-semantics-not-inspected', position(node).line, position(node).column);
         if (ts.isNewExpression(node) && globalName(node.expression, 'URL')) {
           const [value, base] = node.arguments || [];
           if (value && ts.isStringLiteral(value) && base && ts.isPropertyAccessExpression(base) &&
@@ -259,6 +295,10 @@ function analyze(input) {
           else if (/^[A-Z]/.test(tag) || tag.includes('.'))
             problem(file, 'local-jsx-binding-not-traced', position(node).line, position(node).column);
           for (const attr of node.attributes.properties) {
+            if (ts.isJsxSpreadAttribute(attr)) {
+              problem(file, 'jsx-spread-not-inspected', position(attr).line, position(attr).column);
+              continue;
+            }
             if (!ts.isJsxAttribute(attr) || !['src', 'href', 'poster'].includes(attr.name.getText(source))) continue;
             const init = attr.initializer, at = position(attr);
             if (init && ts.isStringLiteral(init) || init && ts.isJsxExpression(init) && init.expression && ts.isStringLiteral(init.expression))
@@ -274,10 +314,12 @@ function analyze(input) {
       walk(source);
     } else if (file.kind === 'style') {
       try {
-        const css = postcss.parse(file.text, { from: file.path });
+        const css = postcss.parse(file.text, { from: file.path, map: false });
         css.walk(node => {
-          if (++visited > LIMITS.nodes) { truncated = true; return false; }
+          if (++visited > LIMITS.nodes) { truncate(file); return false; }
           const at = { line: node.source?.start?.line || 1, column: Math.max(0, (node.source?.start?.column || 1) - 1) };
+          if (node.type === 'comment' && /sourceMappingURL/.test(node.text || ''))
+            problem(file, 'source-map-not-loaded', at.line, at.column);
           if (node.type === 'rule' && /[#$]\{/.test(node.selector || ''))
             problem(file, 'computed-style-reference', at.line, at.column);
           const value = node.type === 'decl' ? node.value : node.type === 'atrule' ? node.params : '';
@@ -292,6 +334,18 @@ function analyze(input) {
               reference(file, 'style-import', tokens.at(-1).value, at);
           }
           parsed.walk(token => {
+            if (token.type === 'function' && ['image-set', '-webkit-image-set'].includes(token.value.toLowerCase())) {
+              let first = true;
+              for (const child of token.nodes) {
+                if (child.type === 'div' && child.value === ',') { first = true; continue; }
+                if (['space', 'comment'].includes(child.type) || !first) continue;
+                first = false;
+                if (child.type === 'string' && !/[\\{}$]/.test(child.value))
+                  reference(file, 'style-asset', child.value, at);
+                else if (!(child.type === 'function' && child.value.toLowerCase() === 'url'))
+                  problem(file, 'unsupported-image-set-source', at.line, at.column);
+              }
+            }
             if (token.type === 'function' && token.value.toLowerCase() === 'url') {
               const children = token.nodes.filter(n => !['space', 'comment'].includes(n.type));
               if (children.length === 1 && ['string', 'word'].includes(children[0].type) && !/[\\{}$]/.test(children[0].value))
@@ -306,7 +360,7 @@ function analyze(input) {
             if (node.name.toLowerCase() !== 'import') problem(file, 'scss-module-semantics', at.line, at.column);
           }
         });
-      } catch { diagnostics.push({ path: file.path, code: 'style-parse-error' }); problem(file, 'style-parse-error'); }
+      } catch { append(diagnostics, { path: file.path, code: 'style-parse-error' }); problem(file, 'style-parse-error'); }
     } else if (file.kind === 'html') {
       const found = [], stack = []; let base = false, attributes = new Set();
       const lineStarts = [0];
@@ -323,12 +377,18 @@ function analyze(input) {
           attributes.add(name);
         },
         onopentag(name, attrs) {
-          if (++visited > LIMITS.nodes) { truncated = true; return; }
+          if (++visited > LIMITS.nodes) { truncate(file); return; }
           stack.push(name);
           const position = at(Math.max(0, parser.startIndex));
           if (name === 'base' && attrs.href) { base = true; problem(file, 'html-base-url', position.line, position.column); }
-          for (const key of ['src', 'href', 'poster']) if (attrs[key] && name !== 'base')
+          for (const key of ['src', 'href', 'poster', 'data', 'background', 'longdesc', 'cite']) if (attrs[key] && name !== 'base')
             found.push({ value: attrs[key], at: position });
+          if (name === 'form' || attrs.action || attrs.formaction)
+            problem(file, 'html-form-submission', position.line, position.column);
+          if (name === 'object' || name === 'embed' || attrs.srcdoc || attrs.manifest || attrs.codebase || attrs.archive || attrs.ping)
+            problem(file, 'html-active-content', position.line, position.column);
+          if (name === 'meta' && String(attrs['http-equiv']).toLowerCase() === 'refresh')
+            problem(file, 'html-navigation', position.line, position.column);
           if (attrs.srcset) problem(file, 'html-srcset-semantics', position.line, position.column);
           if (attrs.style) problem(file, 'inline-style-references', position.line, position.column);
           if (Object.keys(attrs).some(key => key.startsWith('on'))) problem(file, 'inline-script-not-executed', position.line, position.column);
@@ -341,7 +401,8 @@ function analyze(input) {
       }, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
       parser.write(file.text); parser.end();
       if (base) problem(file, 'html-resource-base-unresolved');
-      else for (const item of found) reference(file, 'html-resource', item.value, item.at);
+      for (const item of found) reference(file, 'html-resource', item.value, item.at, {},
+        base ? { status: 'unresolved', reason: 'html-resource-base-unresolved' } : undefined);
     } else if (file.kind === 'json') {
       try {
         const data = JSON.parse(file.text);
@@ -355,14 +416,18 @@ function analyze(input) {
             else problem(file, 'unsupported-json-reference');
           }
         }
-      } catch { diagnostics.push({ path: file.path, code: 'json-parse-error' }); problem(file, 'json-parse-error'); }
+      } catch { append(diagnostics, { path: file.path, code: 'json-parse-error' }); problem(file, 'json-parse-error'); }
     }
+  }
+  for (const observation of observations.values()) {
+    append(unresolved, observation);
   }
   const result = { schemaVersion: 1, analyzer: { name: 'platform-source-analyzer', version: '1.0.0', typescript: ts.version },
     inputHash: sha(canonical(input.files.map(f => ({ path: f.path, sha256: f.sha256 })).sort((a, b) => compare(a.path, b.path)))),
     resolverHash: sha(canonical(resolver)), references, exports, unresolved, diagnostics,
-    coverage: { scope: 'static-source-manifest', complete: !unresolved.length && !diagnostics.length && !truncated,
-      runtimeComplete: false, truncated, files: files.size, bytes } };
+    coverage: { scope: 'observed-static-references', complete: false,
+      runtimeComplete: false, truncated, truncatedFiles: [...truncatedFiles].sort(), files: files.size, bytes,
+      observedReferences: references.length, unresolvedObservations: unresolved.length } };
   result.hash = sha(canonical(result));
   return result;
 }

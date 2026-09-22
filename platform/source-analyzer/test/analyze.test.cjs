@@ -5,6 +5,25 @@ const text = (path, source, kind = 'code') => ({ path, kind, text: source, sha25
 const asset = path => ({ path, kind: 'asset', sha256: sha(path) });
 const request = files => ({ schemaVersion: 1, files });
 
+test('generic call noise cannot starve later dynamic dependency observations', () => {
+  const result = analyze(request([
+    text('a.ts', 'run();'.repeat(4500)),
+    text('z.ts', 'import(nextModule);'),
+  ]));
+  assert.ok(result.unresolved.some(item => item.path === 'z.ts' && item.reason === 'dynamic-or-commonjs-dependency'));
+  assert.equal(result.unresolved.find(item => item.path === 'a.ts' && item.reason === 'call-semantics-not-inspected').count, 4500);
+  assert.equal(result.coverage.truncated, false);
+});
+
+test('dropped locations identify every affected file when the reference budget fills', () => {
+  const result = analyze(request([
+    text('a.ts', 'import("./missing");'.repeat(4000)),
+    text('z.ts', 'import(nextModule);'),
+  ]));
+  assert.equal(result.coverage.truncated, true);
+  assert.ok(result.coverage.truncatedFiles.includes('z.ts'));
+});
+
 test('import equals and import type retain literal dependencies; namespace aliases remain unknown', () => {
   const result = analyze(request([
     text('App.tsx', 'import Button = require("./Button");type Props = import("./Button").Props;export const App=()=> <Button/>'),
@@ -15,6 +34,18 @@ test('import equals and import type retain literal dependencies; namespace alias
   const alias = analyze(request([text('Alias.ts', 'namespace A {export const B=1;}import B=A.B;')]));
   assert.equal(alias.coverage.complete, false);
   assert.ok(alias.unresolved.some(r => r.reason === 'namespace-import-alias'));
+});
+
+test('long source paths truncate observations before exceeding the serialized result budget', () => {
+  const prefix = 'segment'.repeat(18) + '/';
+  const files = Array.from({ length: 100 }, (_, i) =>
+    text(prefix.repeat(7) + `${i}.ts`, 'import "./missing";'.repeat(100)));
+  const result = analyze(request(files));
+  assert.equal(result.coverage.truncated, true);
+  assert.ok(result.coverage.truncatedFiles.length > 0);
+  assert.ok(result.references.length > 0 && result.references.length < LIMITS.references);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 4000000);
+  assert.match(result.hash, /^[a-f0-9]{64}$/);
 });
 
 test('package subpath imports require an explicit alias; code # is not an HTML fragment', () => {
@@ -74,6 +105,62 @@ test('CSS module dependencies are recorded with unresolved transform semantics',
   assert.equal(extension.references.some(item => item.resolution.status === 'resolved-local'), false);
 });
 
+test('image-set strings and url sources retain exact assets without treating type descriptors as URLs', () => {
+  const result = analyze(request([
+    text('app.css', '.hero{background:image-set("hero.png" 1x, url("hero@2x.png") type("image/png") 2x)}', 'style'),
+    asset('hero.png'), asset('hero@2x.png'),
+  ]));
+  assert.deepEqual(result.references.map(ref => ref.resolution.targetPath).sort(), ['hero.png', 'hero@2x.png']);
+  const dynamic = analyze(request([text('app.css', '.hero{background:-webkit-image-set(var(--hero) 1x)}', 'style')]));
+  assert.ok(dynamic.unresolved.some(item => item.path === 'app.css' && item.reason === 'unsupported-image-set-source'));
+});
+
+test('CSS source-map discovery cannot inspect host files', () => {
+  const PreviousMap = require('../node_modules/postcss/lib/previous-map');
+  const original = PreviousMap.prototype.loadFile;
+  let attempted = false;
+  PreviousMap.prototype.loadFile = () => { attempted = true; throw new Error('unexpected host file read'); };
+  try {
+    const result = analyze(request([text('app.css', '.button{color:red}/*# sourceMappingURL=sentinel.map */', 'style')]));
+    assert.equal(attempted, false);
+    assert.deepEqual(result.diagnostics, []);
+    assert.ok(result.unresolved.some(item => item.reason === 'source-map-not-loaded'));
+  } finally { PreviousMap.prototype.loadFile = original; }
+});
+
+test('uninspected calls, constructors and HTML navigation never claim full coverage', () => {
+  const code = analyze(request([text('app.ts', 'fetch(endpoint);new EventSource(endpoint);location.assign(nextUrl);')]));
+  assert.equal(code.coverage.complete, false);
+  assert.ok(code.unresolved.some(item => item.reason === 'call-semantics-not-inspected'));
+  const html = analyze(request([text('index.html',
+    '<form action="/submit"><object data="./diagram.svg"></object></form><meta http-equiv="refresh" content="0;url=/next">', 'html'),
+    asset('diagram.svg')]));
+  assert.equal(html.coverage.complete, false);
+  assert.ok(html.references.some(item => item.resolution.targetPath === 'diagram.svg'));
+  for (const reason of ['html-form-submission', 'html-active-content', 'html-navigation'])
+    assert.ok(html.unresolved.some(item => item.reason === reason));
+});
+
+test('JSX spreads, templates and opaque SVGs disclose uninspected dependencies', () => {
+  const result = analyze(request([
+    text('App.tsx', 'export const Image=<img {...{src:"./image.svg"}}/>;export const Box=styled.div`background:url("./image.svg")`;'),
+    asset('image.svg'),
+  ]));
+  for (const reason of ['jsx-spread-not-inspected', 'tagged-template-transform-not-inspected', 'opaque-svg-dependencies-not-inspected'])
+    assert.ok(result.unresolved.some(item => item.reason === reason));
+  assert.equal(result.coverage.complete, false);
+});
+
+test('namespace and destructured exports are recorded; CommonJS exports remain unknown', () => {
+  const result = analyze(request([
+    text('index.ts', 'export * as UI from "./ui";export const {x, y: renamed}={x:1,y:2};'),
+    text('ui.ts', 'export const Button=1;'),
+    text('legacy.js', 'module["exports"]={Button:1};'),
+  ]));
+  assert.deepEqual(result.exports.filter(item => item.path === 'index.ts').map(item => item.name).sort(), ['UI', 'renamed', 'x']);
+  assert.ok(result.unresolved.some(item => item.reason === 'commonjs-export-bindings-not-enumerated'));
+});
+
 test('real TS parser connects imports, JSX symbols, image imports and CSS resources', () => {
   const input = request([
     text('src/App.tsx', `import {Button as Action} from './Button';
@@ -85,7 +172,7 @@ export default function App(){return <><Action/><img src={hero}/></>}`),
     asset('images/hero.png'),
   ]);
   const result = analyze(input);
-  assert.equal(result.coverage.complete, true);
+  assert.equal(result.coverage.complete, false);
   assert.equal(result.coverage.runtimeComplete, false);
   assert.ok(result.references.some(r => r.kind === 'jsx-use' && r.symbol === 'Button' && r.localName === 'Action' &&
     r.resolution.targetPath === 'src/Button.tsx' && r.line === 4));
@@ -110,7 +197,7 @@ test('declared aliases resolve exact manifest files; packages require a pinned i
     asset('images/hero.png')]);
   input.resolver = { aliases: { '@images/*': 'images/*' }, packages: { react: { version: '18.3.1', sha256: sha('approved-package') } } };
   const result = analyze(input);
-  assert.equal(result.coverage.complete, true);
+  assert.equal(result.coverage.complete, false);
   assert.ok(result.references.some(r => r.resolution.status === 'approved-package' && r.resolution.package === 'react'));
   input.resolver.packages.react.sha256 = 'invented';
   assert.throws(() => analyze(input), /identity/);
@@ -151,7 +238,7 @@ test('JSON reference fields are an explicit resolver contract, not a search over
   const result = analyze(input);
   assert.equal(result.references.length, 1);
   assert.equal(result.references[0].resolution.targetPath, 'hero.png');
-  assert.equal(result.coverage.complete, true);
+  assert.equal(result.coverage.complete, false);
 });
 
 test('source identity, case collisions, source kinds and budgets are rejected before analysis', () => {
@@ -178,6 +265,8 @@ test('HTML extraction connects literal resources without executing scripts or gu
   assert.ok(result.unresolved.some(item => item.reason === 'inline-script-not-executed'));
   files[0] = text('pages/export.html', '<img src="../images/hero.png"><base href="https://elsewhere.invalid/">', 'html');
   const changed = analyze(request(files));
-  assert.equal(changed.references.length, 0);
+  assert.equal(changed.references.length, 1);
+  assert.equal(changed.references[0].resolution.status, 'unresolved');
+  assert.equal(changed.references[0].resolution.reason, 'html-resource-base-unresolved');
   assert.ok(changed.unresolved.some(item => item.reason === 'html-resource-base-unresolved'));
 });

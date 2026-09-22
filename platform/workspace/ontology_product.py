@@ -25,6 +25,8 @@ def prepare_product(collaboration, scope, product, guideline, legacy):
     name = "product-" + product["id"]
     partition = schema.identity("partition", name)
     prior = store._part(current, partition) if current else None
+    if prior and (prior.get("kind") != "published-product" or prior.get("name") != name):
+        fail(409, "ontology-managed-conflict", "다른 원본이 소유한 파티션을 상품 게시로 덮어쓸 수 없습니다.")
     ref = guideline_reference(guideline)
     nodes, edges = [], []
     revisions = {n["id"]: n["revision"] for n in prior["graph"]["nodes"]} if prior else {}

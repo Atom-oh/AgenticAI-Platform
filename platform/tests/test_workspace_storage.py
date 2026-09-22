@@ -442,11 +442,14 @@ def test_transaction_boto3_wire_conditions_are_nested_and_values_marshaled_once(
              "expected_version": 1},
             {"owner": "project:shared", "kind": "guideline", "item": {"id": "new"},
              "expected_version": None},
+        ], checks=[
+            {"owner": "project:shared", "kind": "asset", "id": "source", "version": 7},
+            {"owner": "project:shared", "kind": "asset", "id": "absent", "version": None},
         ])
         stub.assert_no_pending_responses()
     wire = captured[0]
     assert "ExpressionAttributeNames" not in wire and "ExpressionAttributeValues" not in wire
-    updated, created = [entry["Put"] for entry in wire["TransactItems"]]
+    updated, created = [entry["Put"] for entry in wire["TransactItems"] if "Put" in entry]
     assert updated["Item"]["version"] == {"N": "2"}
     assert updated["Item"]["createdAt"] == {"N": "100"}
     assert updated["Item"]["price"] == {"N": "0.25"}
@@ -454,6 +457,11 @@ def test_transaction_boto3_wire_conditions_are_nested_and_values_marshaled_once(
     assert list(updated["ExpressionAttributeNames"].values()) == ["version"]
     assert created["ConditionExpression"].startswith("attribute_not_exists(")
     assert result[0]["price"] == 0.25 and result[0]["createdAt"] == 100
+    source_check, absent_check = [entry["ConditionCheck"] for entry in wire["TransactItems"] if "ConditionCheck" in entry]
+    assert source_check["ExpressionAttributeValues"] == {":version": {"N": "7"}}
+    assert source_check["Key"]["sk"] == {"S": "asset#source"}
+    assert absent_check["ConditionExpression"] == "attribute_not_exists(#pk)"
+    assert "ExpressionAttributeValues" not in absent_check
 
 
 def test_release_lifecycle_records_support_owner_scoped_transactions_and_keys(storage):
