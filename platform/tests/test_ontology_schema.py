@@ -107,6 +107,8 @@ def test_closed_types_properties_and_exact_source_references_are_required():
             schema.validate_node(changed)
     with pytest.raises(ValueError):
         schema.source_ref({**ref(), "location": {"path": "../secret.ts"}})
+    with pytest.raises(ValueError, match="documentId"):
+        schema.source_ref({**ref(), "location": {"documentId": "unrelated"}})
 
 
 def test_patterns_need_two_reviewed_screen_usages_but_candidates_do_not():

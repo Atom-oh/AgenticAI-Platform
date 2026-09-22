@@ -380,6 +380,8 @@ class Collaboration:
             saved = self.storage.put_many(writes, retry_conflicts=authorization_expires_at is None,
                 before_attempt=lambda: self._check_expiry(authorization_expires_at))[0]
         except Conflict:
+            if not self.storage.get(owner, "project", identifier):
+                raise
             saved = self.resolve_scope(actor, identifier, authorization_expires_at)["project"]
             if saved.get("requestHash") != fingerprint:
                 raise CollaborationError(409, "request-changed", "This requestId has different input")

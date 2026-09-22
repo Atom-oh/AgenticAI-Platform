@@ -130,6 +130,8 @@ def source_ref(value):
     location = value.get("location")
     if "location" in value:
         _fields(location, set(), {"path", "originalPath", "exportName", "line", "column", "page", "round", "region", "documentId"})
+        if "documentId" in location and value["sourceKind"] != "workbench-document":
+            raise ValueError("A location documentId applies only to workbench documents")
         if "path" in location:
             file = _text(location["path"], 500)
             if (file != unicodedata.normalize("NFC", file) or file.startswith("/")

@@ -31,6 +31,11 @@ def source_input(ctx, items, resolver=None):
         schema._fields(item, {"assetId", "path"})
         schema._identifier(item["assetId"])
         file = item["path"]
+        if isinstance(file, str):
+            try:
+                file.encode("utf-8")
+            except UnicodeError:
+                fail(400, "ontology-analysis-path", "파일 경로는 올바른 UTF-8 문자여야 합니다.")
         if (not isinstance(file, str) or len(file) > 500 or len(file.encode()) > 1024
                 or file != unicodedata.normalize("NFC", file) or file.startswith("/")
                 or any(c in "\\:?#" or ord(c) < 32 or ord(c) == 127 for c in file)
@@ -203,4 +208,7 @@ def project_analysis(ctx, name, payload, bindings, analysis):
     graph = {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": list(nodes.values()), "edges": list(edges.values()),
              "coverage": {"complete": False, "scope": "static-source-unit", "truncated": value["coverage"]["truncated"],
                           "unknown": reasons}}
+    if (len(nodes) > schema.MAX_NODES or len(edges) > schema.MAX_EDGES
+            or len(json.dumps(graph, ensure_ascii=False, separators=(",", ":")).encode()) > 4_000_000):
+        fail(422, "ontology-analysis-scope", "분석 결과가 게시 한도를 초과했습니다. 소스 파일 묶음을 나누어 다시 분석하세요.")
     return schema.validate_graph(graph)

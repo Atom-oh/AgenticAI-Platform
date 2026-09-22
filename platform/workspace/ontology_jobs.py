@@ -18,6 +18,19 @@ def reconcile(ctx, artifact):
     job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
     if job:
         job = ctx.host._expire_job(ctx.owner, job, ctx.scope)
+    if (artifact["jobInput"]["authorizationExpiresAt"] <= ctx.storage.clock()
+            and (not job or job.get("status") == "queued")):
+        if job:
+            from workspace.storage import Conflict
+            try:
+                job = ctx.storage.put(ctx.owner, "job", {**job, "status": "failed",
+                    "errorCode": "authorization-expired", "error": "작업 인증이 만료되었습니다."}, job["version"])
+            except Conflict:
+                return artifact
+        from workbench.worker import _mark_failed
+        _mark_failed(ctx.host, ctx.owner, job or {"id": artifact["jobId"], "input": artifact["jobInput"]},
+                     "authorization-expired")
+        return ctx.get("wb_artifact", artifact["id"])
     if (job and job.get("status") == "failed" or not job and
             ctx.storage.clock() - artifact.get("updatedAt", ctx.storage.clock()) > 16 * 60 * 1000):
         from workbench.worker import _mark_failed

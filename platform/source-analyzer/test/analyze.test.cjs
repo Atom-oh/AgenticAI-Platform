@@ -122,6 +122,25 @@ test('unsupported Sass directives and resource helpers retain their source locat
   assert.equal(result.coverage.complete, false);
 });
 
+test('literal conditional loaders retain template, option and module.require targets', () => {
+  const result = analyze(request([
+    text('App.ts', 'import(`./Widget`);import("./Widget",{with:{type:"json"}});module.require("./Widget");'),
+    text('Widget.ts', 'export const Widget=true;'),
+  ]));
+  assert.equal(result.references.filter(item => item.kind === 'conditional-import' &&
+    item.resolution.targetPath === 'Widget.ts').length, 3);
+  assert.equal(result.coverage.complete, false);
+});
+
+test('responsive HTML images retain every simple literal candidate', () => {
+  const result = analyze(request([
+    text('page.html', '<img srcset="./small.png 1x, ./large.png 2x"><link imagesrcset="./large.png 800w">', 'html'),
+    asset('small.png'), asset('large.png'),
+  ]));
+  assert.deepEqual(new Set(result.references.map(item => item.resolution.targetPath)), new Set(['small.png', 'large.png']));
+  assert.ok(result.unresolved.some(item => item.reason === 'html-srcset-semantics'));
+});
+
 test('CSS source-map discovery cannot inspect host files', () => {
   const PreviousMap = require('../node_modules/postcss/lib/previous-map');
   const original = PreviousMap.prototype.loadFile;

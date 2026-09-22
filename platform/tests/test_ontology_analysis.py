@@ -44,6 +44,12 @@ def test_actual_node_parser_projects_exact_source_refs_and_unclassified_componen
     assert any(node["type"] == "Foundation" for node in graph["nodes"])
     assert any(edge["type"] == "IMPLEMENTS" for edge in graph["edges"])
     assert all(node["reviewState"] == "candidate" for node in graph["nodes"])
+    for item in [*graph["nodes"], *graph["edges"]]:
+        for reference in item["sourceRefs"]:
+            binding = next(value["ref"] for value in bindings.values() if value["ref"]["sourceId"] == reference["sourceId"])
+            assert all(reference[key] == value for key, value in binding.items())
+            if reference.get("location", {}).get("path"):
+                assert bindings[reference["location"]["path"]]["ref"] == binding
     from workspace.ontology_impact import analyze
     from workspace import ontology_schema as schema
     symbol = next(node for node in graph["nodes"] if node["type"] == "CodeSymbol" and node["title"] == "Button")
@@ -107,14 +113,62 @@ def test_receipt_conflict_cannot_publish_a_parser_partition(wb, monkeypatch):
     assert wb.storage.get(wb.owner, "ontology", "project-current") is None
 
 
-def test_analysis_retry_after_publication_returns_the_same_receipt(wb):
+def test_analysis_retry_after_publication_returns_the_same_receipt(wb, monkeypatch):
     wb.api.ontology_analyzer_ready = True
     body = {"requestId": "retry", "name": "example", "files": collection(wb)}
     queued = submit(context(wb), body)
     worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
                              allow_offline_ontology_analysis=True)
     process(worker, wb.owner, queued["job"])
-    assert submit(context(wb), body)["artifact"]["status"] == "completed"
+    saved = wb.storage.get(wb.owner, "wb_artifact", queued["artifact"]["id"])
+    job = wb.storage.get(wb.owner, "job", queued["job"]["id"])
+    monkeypatch.setattr(wb.api, "_invoke", lambda *args: pytest.fail("completed work must not redispatch"))
+    retried = submit(context(wb), body)
+    assert retried["artifact"] == saved and retried["job"] == job
+
+
+def test_backend_labels_cannot_replace_the_exact_trusted_analyzer(wb):
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "lookalike", "name": "example", "files": collection(wb)})
+    def lookalike(payload):
+        pytest.fail("untrusted callable executed")
+    lookalike.backend = "local-offline"
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=lookalike,
+                             allow_offline_ontology_analysis=True)
+    with pytest.raises(CollaborationError) as error:
+        process(worker, wb.owner, queued["job"])
+    assert error.value.code == "ontology-analysis-backend"
+
+
+@pytest.mark.parametrize("field", ["inputHash", "analyzerCodeHash", "dependencyLockHash"])
+def test_execution_hash_tampering_is_rejected_before_publication(wb, monkeypatch, field):
+    from workspace import ontology_jobs
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "tampered-" + field, "name": "example", "files": collection(wb)})
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    validate = ontology_jobs.validate_execution
+    def tamper(value):
+        value[field] = "0" * 64
+        return validate(value)
+    monkeypatch.setattr(ontology_jobs, "validate_execution", tamper)
+    with pytest.raises(CollaborationError) as error:
+        process(worker, wb.owner, queued["job"])
+    assert error.value.code == "ontology-analysis-integrity"
+    assert wb.storage.get(wb.owner, "ontology", "project-current") is None
+
+
+def test_real_offline_analyzer_process_has_no_inherited_aws_credentials(wb, monkeypatch):
+    from workspace import ontology_analysis
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        monkeypatch.setenv(name, "synthetic-test-sentinel")
+    original = ontology_analysis.subprocess.run
+    def inspect(*args, **kwargs):
+        assert not any(name.startswith("AWS_") for name in kwargs["env"])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ontology_analysis.subprocess, "run", inspect)
+    payload, _ = source_input(context(wb), collection(wb))
+    assert local_analyze(payload)["execution"]["sourceExecuted"] is False
 
 
 def test_retry_redelivers_a_durable_job_after_a_crash_before_invocation(wb, monkeypatch):
@@ -150,7 +204,9 @@ def test_missing_job_cannot_be_dispatched_after_the_pinned_authorization_expires
     monkeypatch.setattr(wb.api, "_new_job", lambda *args: pytest.fail("expired dispatch"))
     with pytest.raises(CollaborationError) as error:
         submit(context(wb), body)
-    assert error.value.code == "authorization-expired"
+    assert error.value.code == "ontology-analysis-interrupted"
+    artifact = wb.storage.get(wb.owner, "wb_artifact", context(wb).identity("wb_artifact", body["requestId"]))
+    assert artifact["status"] == "failed" and artifact["errorCode"] == "authorization-expired"
 
 
 def test_optional_generation_pins_the_current_manifest(wb):
@@ -160,6 +216,37 @@ def test_optional_generation_pins_the_current_manifest(wb):
     wb.api.ontology_analyzer_ready = True
     queued = submit(context(wb), {"requestId": "implicit-generation", "name": "example", "files": collection(wb)})
     assert queued["artifact"]["jobInput"]["expectedGeneration"] == initial["generation"]
+
+
+def test_ambiguous_dispatch_does_not_fail_an_artifact_after_the_worker_claims_it(wb, monkeypatch):
+    wb.api.ontology_analyzer_ready = True
+    body = {"requestId": "accepted-dispatch", "name": "example", "files": collection(wb)}
+
+    def accepted(owner, job):
+        assert wb.storage.claim_job(owner, job["id"])
+        raise TimeoutError("synthetic timeout after Lambda accepted the delivery")
+
+    monkeypatch.setattr(wb.api, "_invoke", accepted)
+    with pytest.raises(TimeoutError):
+        submit(context(wb), body)
+    artifact = wb.storage.get(wb.owner, "wb_artifact", context(wb).identity("wb_artifact", body["requestId"]))
+    assert artifact["status"] == "queued"
+    assert wb.storage.get(wb.owner, "job", artifact["jobId"])["status"] == "running"
+
+
+def test_large_valid_projection_returns_an_actionable_scope_error(wb):
+    files = collection(wb)
+    source = wb.storage.get(wb.owner, "asset", "code-app")
+    raw = "\n".join(f"export const symbol{i}={i};" for i in range(501)).encode()
+    key = wb.storage.key_for(wb.owner, "asset", source["id"], "many-symbols")
+    wb.storage.put_blob_once(key, raw, "text/plain")
+    wb.storage.put(wb.owner, "asset", {**source, "originalKey": key, "sha256": hashlib.sha256(raw).hexdigest(),
+                                     "size": len(raw), "importRevision": 2}, source["version"])
+    payload, bindings = source_input(context(wb), files)
+    result = local_analyze(payload)
+    with pytest.raises(CollaborationError) as error:
+        project_analysis(context(wb), "large", payload, bindings, result["analysis"])
+    assert error.value.status == 422 and error.value.code == "ontology-analysis-scope"
 
 
 def test_sibling_file_change_preserves_unchanged_file_revision_and_node_hash(wb):

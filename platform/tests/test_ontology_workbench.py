@@ -98,6 +98,34 @@ def test_non_owner_cannot_migrate_or_overwrite_canonical_authority(wb):
         import_legacy(context(wb, "bob"), {"requestId": "import", "expectedGeneration": None})
 
 
+def test_legacy_import_namespace_cannot_be_squatted_or_written_through_manual_publication(wb):
+    from test_ontology_store import candidate
+    value = candidate(wb)
+    with pytest.raises(CollaborationError) as error:
+        Ontology(context(wb, "bob")).publish_candidate("legacy-workbench", value,
+            expected_generation=None, request_id="squat")
+    assert error.value.code == "ontology-managed-partition"
+    indexed(wb)
+    imported = import_legacy(context(wb), {"requestId": "owner-import", "expectedGeneration": None})
+    with pytest.raises(CollaborationError) as error:
+        Ontology(context(wb)).publish_candidate("legacy-workbench", value,
+            expected_generation=imported["generation"], request_id="manual-owner")
+    assert error.value.code == "ontology-managed-partition"
+
+
+def test_lossy_legacy_conversion_cannot_replace_an_existing_import(wb, monkeypatch):
+    from workbench import knowledge
+    indexed(wb)
+    first = import_legacy(context(wb), {"requestId": "complete", "expectedGeneration": None})
+    old = knowledge.legacy_graph(context(wb))
+    old["nodes"][0]["label"] = "UnsupportedLegacyType"
+    monkeypatch.setattr(knowledge, "legacy_graph", lambda ctx: old)
+    with pytest.raises(CollaborationError) as error:
+        import_legacy(context(wb), {"requestId": "lossy", "expectedGeneration": first["generation"]})
+    assert error.value.code == "legacy-import-incomplete"
+    assert Ontology(context(wb)).current()["generation"] == first["generation"]
+
+
 def test_source_index_keeps_identical_documents_in_the_same_source_separate(wb):
     from test_workbench_core import source, queue, run
     from test_ontology_schema import node
@@ -305,3 +333,5 @@ def test_task_budget_retains_all_source_checks_and_discloses_reduced_scope(wb):
     approved = call(wb, "POST", f"reports/{report['id']}/approve",
                     {"version": report["version"], "contentHash": report["contentHash"]})["report"]
     assert approved["status"] == "approved"
+    markdown = call(wb, "GET", f"reports/{report['id']}/document")["markdown"]
+    assert "일부 생략됨" in markdown and "atomic-task-limit" in markdown

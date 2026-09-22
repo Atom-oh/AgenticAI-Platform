@@ -10,7 +10,7 @@ type Node = { id: string; type: string; title: string; revision: number; reviewS
 type Edge = { id: string; type: string; src: { id: string }; dst: { id: string }; sourceRefs: SourceRef[]; provenance: string };
 type Graph = { nodes: Node[]; edges: Edge[]; generation: string | null; cursor?: string | null; coverage: unknown; backend: string };
 type Impact = { items: { nodeId: string; title: string; type: string; evidenceKind: string; witnessPath: string[];
-  witnessEdges?: unknown[]; sourceRefs?: SourceRef[]; staleWitness?: boolean }[];
+  revision?: number; snapshotGeneration?: string; witnessEdges?: unknown[]; sourceRefs?: SourceRef[]; staleWitness?: boolean }[];
   generation: string; coverage: unknown };
 type AnalysisArtifact = { id: string; status: string; name?: string; jobId?: string; requestId?: string;
   coverage?: unknown; execution?: { backend?: string; [key: string]: unknown } };
@@ -210,12 +210,12 @@ export default function OntologyView() {
       <p className="wb-muted">온톨로지 매핑 승인은 생성한 React 화면의 동작 검수·퍼블리싱 승인을 대신하지 않습니다.</p>
       <ActionState action={operation} />
       {impact && <section><h3>변경 영향 경로</h3>
-        {impact.items.map(item => <article className="wb-artifact" key={item.nodeId}><strong>{item.title}</strong>
+        {impact.items.map(item => <article className="wb-artifact" key={`${item.nodeId}:${item.revision}:${item.snapshotGeneration}`}><strong>{item.title}</strong>
           <p>{item.evidenceKind === 'candidate' ? '추정 연결 · 확인 필요' : item.evidenceKind === 'approved-declared' ? '승인된 선언 관계' :
             item.evidenceKind === 'observed-structural' ? '확인된 구조 참조' : '근거 확인 필요'}</p>
           <Details title="영향 경로의 식별자" value={item.witnessPath} />
           <Details title="경로 전체의 관계·원본 근거" value={{ edges: item.witnessEdges, sources: item.sourceRefs,
-            staleWitness: item.staleWitness }} /></article>)}
+            revision: item.revision, snapshotGeneration: item.snapshotGeneration, staleWitness: item.staleWitness }} /></article>)}
         {!impact.items.length && <Empty>확인 가능한 영향 경로가 없습니다. 미매핑·권한 제한을 확인해야 하며, 영향이 없다는 판정은 아닙니다.</Empty>}
         <Details title="영향 분석 범위와 미확인 항목" value={impact.coverage} />
       </section>}

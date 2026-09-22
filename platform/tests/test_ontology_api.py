@@ -125,6 +125,36 @@ def test_raw_hidden_node_and_missing_node_have_the_same_non_disclosing_response(
     assert "restricted-source-boundary" in diagnostic["coverage"]["unknown"]
 
 
+def test_retired_source_uses_its_immutable_snapshot_and_not_replacement_dependencies(wb):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node, edge
+    from workspace import ontology_schema as schema
+    from workspace.ontology_store import Ontology
+    original = candidate(wb)
+    first = Ontology(context(wb)).publish_candidate("history", original, expected_generation=None, request_id="old")
+    old_source = wb.storage.get(wb.owner, "asset", "image")
+    replacement = asset_reference(asset(wb, "replacement"))
+    added = asset_reference(asset(wb, "new-dependent"))
+    changed = {**original, "nodes": [
+        schema.seal({**original["nodes"][0], "title": "replacement image", "sourceRefs": [replacement]}),
+        original["nodes"][1], node("new-dependent", project=wb.project["id"], sourceRefs=[added])],
+        "edges": [*original["edges"], edge("new-use", "new-dependent", "image", sourceRefs=[added])]}
+    second = Ontology(context(wb)).publish_candidate("history", changed,
+        expected_generation=first["generation"], request_id="new")
+    request = {"changeId": "old-source", "kind": "asset", "oldSource": asset_reference(old_source),
+               "expectedGeneration": second["generation"]}
+    status, result = call(wb, "POST", "/impact", request)
+    assert status == 200, result
+    assert {item["title"] for item in result["items"]} == {"image", "control"}
+    assert all(item["snapshotGeneration"] == first["generation"] and item["staleWitness"] for item in result["items"])
+    assert result["sourceSnapshots"][0]["historical"] is True
+    wb.storage.put(wb.owner, "asset", {**old_source, "accessRevoked": True}, old_source["version"])
+    status, restricted = call(wb, "POST", "/impact", request)
+    assert status == 200, restricted
+    assert [item["title"] for item in restricted["items"]] == ["control"]
+    assert "restricted-source-boundary" in restricted["coverage"]["unknown"]
+
+
 def test_pattern_approval_requires_two_current_reviewed_usages(wb):
     from test_ontology_sources import asset
     from test_ontology_schema import node

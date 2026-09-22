@@ -145,6 +145,9 @@ def test_current_sources_enforce_the_bound_audience_for_project_wide_assets(wb):
     with pytest.raises(CollaborationError) as error:
         Sources(context(wb, "bob")).resolve(reference)
     assert error.value.status == 403
+    with pytest.raises(CollaborationError) as owner_error:
+        Sources(context(wb)).resolve(reference)
+    assert owner_error.value.code == "ontology-source-audience"
 
 
 def test_explicit_project_check_is_reconciled_with_the_same_commit_fence(wb):

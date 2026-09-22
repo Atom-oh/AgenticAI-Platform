@@ -85,6 +85,8 @@ class Sources:
     def resolve(self, reference, *, text=False):
         ref = schema.source_ref(reference)
         self._fresh()
+        if ref["sourceKind"] in {"asset", "product-guideline", "package"} and "allowedRoles" in ref:
+            fail(403, "ontology-source-audience", "프로젝트 공용 원본의 권한을 참조 필드로 변경할 수 없습니다.")
         if "allowedRoles" in ref and self.ctx.scope["role"] not in ref["allowedRoles"]:
             fail(403, "ontology-source-forbidden", "기록된 원본 읽기 권한이 없습니다.")
         kind = ref["sourceKind"]
@@ -175,6 +177,8 @@ class Sources:
         """Authorize historical metadata, never reuse/approval or original bytes."""
         ref = schema.source_ref(reference)
         self._fresh()
+        if ref["sourceKind"] in {"asset", "product-guideline", "package"} and "allowedRoles" in ref:
+            fail(403, "ontology-source-audience", "프로젝트 공용 원본의 권한을 참조 필드로 변경할 수 없습니다.")
         kind = ref["sourceKind"]
         if "allowedRoles" in ref and self.ctx.scope["role"] not in ref["allowedRoles"]:
             fail(403, "ontology-source-forbidden", "기록된 원본 읽기 권한이 없습니다.")

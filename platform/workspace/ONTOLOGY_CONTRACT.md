@@ -60,6 +60,13 @@ Foundation resources use `USES`, including Atom → Foundation/Icon.
 witness paths, candidate/approved-declared/observed evidence, and inaccessible
 boundary handling. It never certifies dependencies outside the inspected snapshot.
 Historical impact retains source-to-node indexes and stale endpoint witnesses.
+When publication retires a source binding, its old complete manifest is retained
+as an immutable snapshot with the affected seed IDs. Old-source impact uses those
+snapshots rather than attributing the old source to replacement nodes. Every
+snapshot read applies current source access checks; results name their snapshot
+generation and remain historical candidates. Current and historical views share
+the 500-node/1,000-edge inspection and 50-item budgets, with at most 20 history
+snapshots per request and explicit truncation.
 Archived readable sources remain diagnostic candidates. Revoked source metadata
 is hidden; an opaque changed seed can expose only independently readable dependent
 nodes/evidence and reports a restricted boundary. Context/reuse/approval still

@@ -428,6 +428,12 @@ def _report_sources(api, scope, claims, body):
                          f"분석 해시: `{change['impactHash']}`"]
             if any(item.get("confidence") == "unknown" for item in current_impact["items"]):
                 unresolved.append("매핑되지 않은 영향 대상을 확인해야 합니다.")
+            coverage = current_impact.get("coverage", {})
+            sections.append("분석 결과 범위: " + ("일부 생략됨." if coverage.get("truncated") else "기록된 조회 범위 내 결과."))
+            if coverage.get("truncated"):
+                sections.append("저장·조회 한도로 확인된 영향과 작업 일부가 이 보고서에서 생략되었습니다.")
+            if coverage.get("unknown"):
+                sections.append("분석 제한·미확인 사유: " + ", ".join(_literal(value) for value in coverage["unknown"]))
         if not change.get("impactHash") and not change.get("impact"):
             unresolved.append("변경 영향 분석 근거를 확인해야 합니다.")
     evidence_ids = body.get("evidenceIds", [])

@@ -280,9 +280,11 @@ function analyze(input) {
           else problem(file, 'computed-type-import', position(node).line, position(node).column);
         }
         if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-            globalName(node.expression, 'require'))) {
+            globalName(node.expression, 'require') || ts.isPropertyAccessExpression(node.expression) &&
+            globalName(node.expression.expression, 'module') && node.expression.name.text === 'require')) {
           problem(file, 'dynamic-or-commonjs-dependency', position(node).line, position(node).column);
-          if (node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]))
+          if (node.arguments.length >= 1 && (ts.isStringLiteral(node.arguments[0]) ||
+              ts.isNoSubstitutionTemplateLiteral(node.arguments[0])))
             reference(file, 'conditional-import', node.arguments[0].text, position(node), { conditional: true });
         }
         if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
@@ -394,7 +396,14 @@ function analyze(input) {
             problem(file, 'html-active-content', position.line, position.column);
           if (name === 'meta' && String(attrs['http-equiv']).toLowerCase() === 'refresh')
             problem(file, 'html-navigation', position.line, position.column);
-          if (attrs.srcset) problem(file, 'html-srcset-semantics', position.line, position.column);
+          for (const key of ['srcset', 'imagesrcset']) if (attrs[key]) {
+            problem(file, 'html-srcset-semantics', position.line, position.column);
+            const candidates = attrs[key].split(',').map(value => value.trim().split(/\s+/));
+            if (!/\bdata:/i.test(attrs[key]) && candidates.every(parts => parts[0] && parts.length <= 2 &&
+                (parts.length === 1 || /^(?:\d+(?:\.\d+)?x|\d+w)$/.test(parts[1]))))
+              for (const parts of candidates) found.push({ value: parts[0], at: position });
+            else problem(file, 'unsupported-srcset-syntax', position.line, position.column);
+          }
           if (attrs.style) problem(file, 'inline-style-references', position.line, position.column);
           if (Object.keys(attrs).some(key => key.startsWith('on'))) problem(file, 'inline-script-not-executed', position.line, position.column);
         },
