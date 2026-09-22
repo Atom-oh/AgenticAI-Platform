@@ -68,11 +68,15 @@ def _mark_failed(worker, owner, job, code):
     if not kind:
         return
     try:
+        if code == "dispatch-failed":
+            live_job = worker.storage.get(owner, "job", job.get("id"))
+            if live_job and live_job.get("status") in {"running", "completed"}:
+                return
         identifier = (data.get("batchId") if operation == "index" else data.get("artifactId")
                       if operation in {"skill-execute", "ontology-analyze"} else data.get("skillId"))
         current = worker.storage.get(owner, kind, identifier)
         if (not current or current.get("jobId") != job.get("id")
-                or current.get("status") in {"completed", "DRAFT", "APPROVED", "DEPRECATED"}):
+                or current.get("status") in {"completed", "failed", "cancelled", "FAILED", "DRAFT", "APPROVED", "DEPRECATED"}):
             return
         collab = getattr(worker, "collaboration", None) or Collaboration(worker.storage)
         project_id = current["projectId"]

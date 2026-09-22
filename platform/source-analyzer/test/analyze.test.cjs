@@ -115,6 +115,32 @@ test('image-set strings and url sources retain exact assets without treating typ
   assert.ok(dynamic.unresolved.some(item => item.path === 'app.css' && item.reason === 'unsupported-image-set-source'));
 });
 
+test('unsupported Sass directives and resource helpers retain their source locations', () => {
+  const result = analyze(request([text('theme.scss', '\n@include theme;\n.hero { background: image-url("./hero.png") }', 'style')]));
+  assert.ok(result.unresolved.some(item => item.reason === 'scss-transform-not-inspected' && item.line === 2));
+  assert.ok(result.unresolved.some(item => item.reason === 'scss-function-not-inspected' && item.line === 3));
+  assert.equal(result.coverage.complete, false);
+});
+
+test('literal conditional loaders retain template, option and module.require targets', () => {
+  const result = analyze(request([
+    text('App.ts', 'import(`./Widget`);import("./Widget",{with:{type:"json"}});module.require("./Widget");'),
+    text('Widget.ts', 'export const Widget=true;'),
+  ]));
+  assert.equal(result.references.filter(item => item.kind === 'conditional-import' &&
+    item.resolution.targetPath === 'Widget.ts').length, 3);
+  assert.equal(result.coverage.complete, false);
+});
+
+test('responsive HTML images retain every simple literal candidate', () => {
+  const result = analyze(request([
+    text('page.html', '<img srcset="./small.png 1x, ./large.png 2x"><link imagesrcset="./large.png 800w">', 'html'),
+    asset('small.png'), asset('large.png'),
+  ]));
+  assert.deepEqual(new Set(result.references.map(item => item.resolution.targetPath)), new Set(['small.png', 'large.png']));
+  assert.ok(result.unresolved.some(item => item.reason === 'html-srcset-semantics'));
+});
+
 test('CSS source-map discovery cannot inspect host files', () => {
   const PreviousMap = require('../node_modules/postcss/lib/previous-map');
   const original = PreviousMap.prototype.loadFile;

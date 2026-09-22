@@ -48,7 +48,7 @@ def create_example(ctx, body):
         "conditions": [{"id": "example-limit", "text": "가상 출금 조건과 안내 문구를 확인합니다."}],
         "steps": [{"id": "example-confirm", "title": "출금 확인", "description": "가상 출금 금액을 확인합니다."}],
         "notices": [{"id": "example-notice", "title": "합성 예시", "content": DESCRIPTION, "required": True}],
-    }, {}, ctx.actor, ctx.project_id)
+    }, {}, ctx.actor, ctx.project_id, authorization_expires_at=ctx.scope.get("authorizationExpiresAt"))
     batch = knowledge.start_batch(ctx, source["id"], {"requestId": request, "documents": DOCUMENTS}, dispatch=False)
     from workbench.worker import process
     process(ctx.host, ctx.owner, batch["job"])

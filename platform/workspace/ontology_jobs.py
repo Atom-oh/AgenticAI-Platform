@@ -19,6 +19,19 @@ def reconcile(ctx, artifact):
     job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
     if job:
         job = ctx.host._expire_job(ctx.owner, job, ctx.scope)
+    if (artifact["jobInput"]["authorizationExpiresAt"] <= ctx.storage.clock()
+            and (not job or job.get("status") == "queued")):
+        if job:
+            from workspace.storage import Conflict
+            try:
+                job = ctx.storage.put(ctx.owner, "job", {**job, "status": "failed",
+                    "errorCode": "authorization-expired", "error": "작업 인증이 만료되었습니다."}, job["version"])
+            except Conflict:
+                return artifact
+        from workbench.worker import _mark_failed
+        _mark_failed(ctx.host, ctx.owner, job or {"id": artifact["jobId"], "input": artifact["jobInput"]},
+                     "authorization-expired")
+        return ctx.get("wb_artifact", artifact["id"])
     if (job and job.get("status") == "failed" or not job and
             ctx.storage.clock() - artifact.get("updatedAt", ctx.storage.clock()) > 16 * 60 * 1000):
         from workbench.worker import _mark_failed
@@ -45,9 +58,10 @@ def submit(ctx, body):
         job = ctx.storage.get(ctx.owner, "job", prior["jobId"])
         if prior["status"] == "failed" and not job:
             fail(409, "ontology-analysis-interrupted", "작업 전달이 중단되었습니다. 새 요청으로 다시 실행하세요.")
-        if job and job["status"] == "queued" and prior["status"] in {"queued", "processing"}:
+        if prior["status"] in {"queued", "processing"} and (not job or job["status"] == "queued"):
             if prior["jobInput"]["authorizationExpiresAt"] <= ctx.storage.clock():
                 fail(401, "authorization-expired", "작업 인증이 만료되었습니다. 새 요청으로 다시 실행하세요.")
+        if job and job["status"] == "queued" and prior["status"] in {"queued", "processing"}:
             # A crash can occur after durable creation but before invocation.
             # Re-delivery is safe: Worker.claim_job admits the analyzer once.
             job = ctx.queue_job(prior["jobId"], prior["jobInput"], prior["requestHash"])
@@ -78,13 +92,14 @@ def submit(ctx, body):
         from ontology_runtime.admission import require
         checks.extend(require(ctx, ref) for ref in refs)
     current = Ontology(ctx).current()
-    if (current or {}).get("generation") != body.get("expectedGeneration"):
+    generation = (current or {}).get("generation")
+    if "expectedGeneration" in body and generation != body["expectedGeneration"]:
         fail(409, "ontology-changed", "온톨로지 기준이 변경되었습니다.")
     job_id = schema.identity("ontology-job", identifier)
     pinned = {**ctx.authorization(), "operation": "ontology-analyze", "artifactId": identifier,
               "name": name, "files": copy.deepcopy(files), "sourceRefs": refs,
               "resolver": copy.deepcopy(profile), "resolverHash": schema.digest(profile),
-              "expectedGeneration": body.get("expectedGeneration"), "backend": selected_backend(ctx.host)}
+              "expectedGeneration": generation, "backend": selected_backend(ctx.host)}
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
                 "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}
@@ -100,8 +115,8 @@ def process(ctx, pinned, job=None):
         return {"artifactId": artifact["id"], "generation": artifact["generation"]}
     if artifact["status"] not in {"queued", "processing"}:
         fail(409, "ontology-job-state", "분석 가능한 작업 상태가 아닙니다.")
-    job = job or ctx.get("job", artifact["jobId"])
-    if (job["id"] != artifact["jobId"] or job.get("input") != pinned
+    job = job or ctx.storage.get(ctx.owner, "job", artifact["jobId"])
+    if (not job or job["id"] != artifact["jobId"] or job.get("input") != pinned
             or job.get("task") != "workbench" or job.get("status") not in {"queued", "running"}):
         fail(409, "ontology-job-state", "현재 실행 작업과 승인 입력이 다릅니다.")
     analyzer = getattr(ctx.host, "ontology_analyzer", None)

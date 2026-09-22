@@ -280,9 +280,11 @@ function analyze(input) {
           else problem(file, 'computed-type-import', position(node).line, position(node).column);
         }
         if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-            globalName(node.expression, 'require'))) {
+            globalName(node.expression, 'require') || ts.isPropertyAccessExpression(node.expression) &&
+            globalName(node.expression.expression, 'module') && node.expression.name.text === 'require')) {
           problem(file, 'dynamic-or-commonjs-dependency', position(node).line, position(node).column);
-          if (node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]))
+          if (node.arguments.length >= 1 && (ts.isStringLiteral(node.arguments[0]) ||
+              ts.isNoSubstitutionTemplateLiteral(node.arguments[0])))
             reference(file, 'conditional-import', node.arguments[0].text, position(node), { conditional: true });
         }
         if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
@@ -323,6 +325,8 @@ function analyze(input) {
           if (node.type === 'rule' && /[#$]\{/.test(node.selector || ''))
             problem(file, 'computed-style-reference', at.line, at.column);
           const value = node.type === 'decl' ? node.value : node.type === 'atrule' ? node.params : '';
+          if (file.path.toLowerCase().endsWith('.scss') && node.type === 'atrule')
+            problem(file, 'scss-transform-not-inspected', at.line, at.column);
           if (!value) return;
           if (/[#$]\{|\$[a-zA-Z_]/.test(value)) problem(file, 'computed-style-reference', at.line, at.column);
           const parsed = valueParser(value);
@@ -334,6 +338,9 @@ function analyze(input) {
               reference(file, 'style-import', tokens.at(-1).value, at);
           }
           parsed.walk(token => {
+            if (file.path.toLowerCase().endsWith('.scss') && token.type === 'function' &&
+                !['url', 'image-set', '-webkit-image-set'].includes(token.value.toLowerCase()))
+              problem(file, 'scss-function-not-inspected', at.line, at.column);
             if (token.type === 'function' && ['image-set', '-webkit-image-set'].includes(token.value.toLowerCase())) {
               let first = true;
               for (const child of token.nodes) {
@@ -389,14 +396,24 @@ function analyze(input) {
             problem(file, 'html-active-content', position.line, position.column);
           if (name === 'meta' && String(attrs['http-equiv']).toLowerCase() === 'refresh')
             problem(file, 'html-navigation', position.line, position.column);
-          if (attrs.srcset) problem(file, 'html-srcset-semantics', position.line, position.column);
+          for (const key of ['srcset', 'imagesrcset']) if (attrs[key]) {
+            problem(file, 'html-srcset-semantics', position.line, position.column);
+            const candidates = attrs[key].split(',').map(value => value.trim().split(/\s+/));
+            if (!/\bdata:/i.test(attrs[key]) && candidates.every(parts => parts[0] && parts.length <= 2 &&
+                (parts.length === 1 || /^(?:\d+(?:\.\d+)?x|\d+w)$/.test(parts[1]))))
+              for (const parts of candidates) found.push({ value: parts[0], at: position });
+            else problem(file, 'unsupported-srcset-syntax', position.line, position.column);
+          }
           if (attrs.style) problem(file, 'inline-style-references', position.line, position.column);
           if (Object.keys(attrs).some(key => key.startsWith('on'))) problem(file, 'inline-script-not-executed', position.line, position.column);
         },
         onclosetag() { stack.pop(); },
         ontext(value) {
-          if (value.trim() && ['script', 'style'].includes(stack.at(-1)))
-            problem(file, stack.at(-1) === 'script' ? 'inline-script-not-executed' : 'inline-style-references');
+          if (value.trim() && ['script', 'style'].includes(stack.at(-1))) {
+            const position = at(parser.startIndex);
+            problem(file, stack.at(-1) === 'script' ? 'inline-script-not-executed' : 'inline-style-references',
+              position.line, position.column);
+          }
         },
       }, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
       parser.write(file.text); parser.end();

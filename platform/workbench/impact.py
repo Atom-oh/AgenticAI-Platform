@@ -144,11 +144,12 @@ def analyze(ctx, identifier, body):
         fail(409, "stale-impact", "분석 중 그래프가 변경되었습니다.")
     if manifest:
         checks.append(ctx.check(manifest_kind, manifest))
-    # Reserve one change write and the project fence. Keep every inspected
+    # Reserve the change, project fence, and a subsequent report write.
+    # Keep every inspected
     # authority check; disclose reduced task coverage instead of exceeding the
     # atomic transaction or dropping evidence to make it fit.
     unique_checks = {(check["owner"], check["kind"], check["id"]) for check in checks}
-    capacity = 98 - len(unique_checks)
+    capacity = 97 - len(unique_checks)
     if capacity < 1:
         fail(422, "impact-scope-limit", "영향 분석 근거 범위를 나누세요.")
     if len(impact["items"]) > capacity:

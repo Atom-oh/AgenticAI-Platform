@@ -10,10 +10,27 @@ type Node = { id: string; type: string; title: string; revision: number; reviewS
 type Edge = { id: string; type: string; src: { id: string }; dst: { id: string }; sourceRefs: SourceRef[]; provenance: string };
 type Graph = { nodes: Node[]; edges: Edge[]; generation: string | null; cursor?: string | null; coverage: unknown; backend: string };
 type Impact = { items: { nodeId: string; title: string; type: string; evidenceKind: string; witnessPath: string[];
-  witnessEdges?: unknown[]; sourceRefs?: SourceRef[]; staleWitness?: boolean }[];
+  revision?: number; snapshotGeneration?: string; witnessEdges?: unknown[]; sourceRefs?: SourceRef[]; staleWitness?: boolean }[];
   generation: string; coverage: unknown };
 type AnalysisArtifact = { id: string; status: string; name?: string; jobId?: string; requestId?: string;
   coverage?: unknown; execution?: { backend?: string; [key: string]: unknown } };
+const HASH = /^[a-f0-9]{64}$/;
+function completeReceipt(artifact: AnalysisArtifact) {
+  const execution = artifact.execution;
+  const coverage = artifact.coverage as { complete?: unknown; truncated?: unknown } | undefined;
+  if (artifact.status !== 'completed' || !coverage || typeof coverage !== 'object' || Array.isArray(coverage) ||
+      typeof coverage.complete !== 'boolean' || typeof coverage.truncated !== 'boolean' ||
+      !execution || execution.sourceExecuted !== false ||
+      typeof execution.inputHash !== 'string' || !HASH.test(execution.inputHash)) return false;
+  if (execution.backend === 'local-offline')
+    return ['analyzerCodeHash', 'dependencyLockHash'].every(key =>
+      typeof execution[key] === 'string' && HASH.test(execution[key] as string));
+  if (execution.backend === 'agentcore-code-interpreter')
+    return typeof execution.toolArchiveHash === 'string' && HASH.test(execution.toolArchiveHash) &&
+      ['interpreterId', 'sessionId', 'nodeVersion', 'architecture', 'region'].every(key =>
+        typeof execution[key] === 'string' && (execution[key] as string).length > 0);
+  return false;
+}
 const LEVELS = ['Foundation', 'Atom', 'Molecule', 'Organism', 'Pattern', 'PageTemplate', 'Screen', 'Procedure'];
 const STATUS: Record<string, string> = { candidate: '검토 후보', reviewed: '검토 완료', approved: '승인', rejected: '반려', deprecated: '폐기' };
 const KIND: Record<string, string> = { Foundation: '기초 자산', Atom: '기본 요소', Molecule: '소규모 조합', Organism: '업무 영역',
@@ -48,13 +65,23 @@ export default function OntologyView() {
       const path = `/ontology/analyses/${resource(analysisId)}`;
       let result = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
       signal.throwIfAborted();
-      setReceipt(result.artifact);
       if (['queued', 'processing', 'running'].includes(result.artifact.status) && result.artifact.jobId) {
-        await waitForJob(client, result.artifact.jobId, { signal, onUpdate: update });
+        setReceipt({ ...result.artifact, execution: undefined });
+        try { await waitForJob(client, result.artifact.jobId, { signal, onUpdate: update }); }
+        catch (error) {
+          signal.throwIfAborted();
+          const failed = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
+          signal.throwIfAborted();
+          setReceipt({ ...failed.artifact, execution: undefined });
+          throw error;
+        }
         result = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
       }
-      if (result.artifact.status !== 'completed' || !result.artifact.execution?.backend || !result.artifact.coverage)
+      if (result.artifact.id !== analysisId || !completeReceipt(result.artifact)) {
+        signal.throwIfAborted();
+        setReceipt({ id: analysisId, status: ['failed', 'cancelled'].includes(result.artifact.status) ? result.artifact.status : 'unverified' });
         throw new Error('분석 완료 기록과 실행 근거를 확인하지 못했습니다. 저장된 작업 상태를 확인하세요.');
+      }
       return result.artifact;
     }, value => { setReceipt(value); state.refresh(); accepted.refresh(); }, '저장된 분석의 실행 근거를 조회했습니다.');
     return () => analysis.cancel();
@@ -183,12 +210,12 @@ export default function OntologyView() {
       <p className="wb-muted">온톨로지 매핑 승인은 생성한 React 화면의 동작 검수·퍼블리싱 승인을 대신하지 않습니다.</p>
       <ActionState action={operation} />
       {impact && <section><h3>변경 영향 경로</h3>
-        {impact.items.map(item => <article className="wb-artifact" key={item.nodeId}><strong>{item.title}</strong>
+        {impact.items.map(item => <article className="wb-artifact" key={`${item.nodeId}:${item.revision}:${item.snapshotGeneration}`}><strong>{item.title}</strong>
           <p>{item.evidenceKind === 'candidate' ? '추정 연결 · 확인 필요' : item.evidenceKind === 'approved-declared' ? '승인된 선언 관계' :
             item.evidenceKind === 'observed-structural' ? '확인된 구조 참조' : '근거 확인 필요'}</p>
           <Details title="영향 경로의 식별자" value={item.witnessPath} />
           <Details title="경로 전체의 관계·원본 근거" value={{ edges: item.witnessEdges, sources: item.sourceRefs,
-            staleWitness: item.staleWitness }} /></article>)}
+            revision: item.revision, snapshotGeneration: item.snapshotGeneration, staleWitness: item.staleWitness }} /></article>)}
         {!impact.items.length && <Empty>확인 가능한 영향 경로가 없습니다. 미매핑·권한 제한을 확인해야 하며, 영향이 없다는 판정은 아닙니다.</Empty>}
         <Details title="영향 분석 범위와 미확인 항목" value={impact.coverage} />
       </section>}

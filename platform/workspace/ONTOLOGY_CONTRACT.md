@@ -17,7 +17,7 @@ single DynamoDB conditional publication transaction.
 Publication adds exact source-record checks; concurrent source, project or
 manifest changes cancel the transaction. Failed immutable writes cannot advance
 the manifest. Per-partition limits are 500 nodes/1,000 edges, with up to 1,000
-partitions and bounded sharded indexes. Each immutable partition/index object is
+partitions and bounded sharded indexes. Each immutable S3 partition/index object is
 limited to 4,000,000 serialized bytes. Index keys are assigned to 256 hash buckets;
 a key's entries stay in one bucket. Concentrated source references or adjacency
 can exhaust a bucket before the partition-count limit. Such publication fails
@@ -60,6 +60,13 @@ Foundation resources use `USES`, including Atom → Foundation/Icon.
 witness paths, candidate/approved-declared/observed evidence, and inaccessible
 boundary handling. It never certifies dependencies outside the inspected snapshot.
 Historical impact retains source-to-node indexes and stale endpoint witnesses.
+When publication retires a source binding, its old complete manifest is retained
+as an immutable snapshot with the affected seed IDs. Old-source impact uses those
+snapshots rather than attributing the old source to replacement nodes. Every
+snapshot read applies current source access checks; results name their snapshot
+generation and remain historical candidates. Current and historical views share
+the 500-node/1,000-edge inspection and 50-item budgets, with at most 20 history
+snapshots per request and explicit truncation.
 Archived readable sources remain diagnostic candidates. Revoked source metadata
 is hidden; an opaque changed seed can expose only independently readable dependent
 nodes/evidence and reports a restricted boundary. Context/reuse/approval still
@@ -81,6 +88,9 @@ unrelated collaboration writes do not revoke it. The commit still fences the
 latest project record and every observed source. Bounded project-CAS retries
 reuse already computed analysis; changed membership, sources or graph generation
 fail instead of running the analyzer again.
+Membership changes alter the project audience and invalidate in-flight source
+authority, even when the requesting actor's own role is unchanged. Title/content
+writes that preserve that audience do not invalidate it.
 Deadline-sensitive service commits submit a transaction once. Contention returns
 to the authorized caller, which repeats source and actor deadline checks before
 any retry; storage cannot silently resubmit that transaction after expiry.
@@ -96,6 +106,11 @@ This is explicit staging, not completed sharing or release integration.
 
 All endpoints use the existing `/studio-api` JWT authorizer and
 `X-Workspace-Project` membership checks. Body fields never select actor or owner.
+Current owner, planner, designer and developer members may read context/impact
+and submit candidate mappings or source analysis. Replacing an existing
+partition additionally requires its creator or the current project owner.
+Review/approval uses the narrower type-specific roles below. Legacy import is
+owner-only. Analyzer availability and source-authority checks precede dispatch.
 
 | Endpoint | Behavior |
 |---|---|
@@ -130,15 +145,22 @@ manifest and preserves lexical import binding.
 
 Analysis records literal imports, re-exports, JSX references, CSS/HTML resources
 and explicitly configured JSON reference fields. Aliases/package identities are
-server-owned resolver profiles. Dynamic URLs/imports, ambiguous paths,
+server-owned resolver profiles. Nonliteral dynamic targets, ambiguous paths,
 unconfigured browser URL bases, inline HTML script/style behavior and unsupported
 transforms stay unresolved. Input bytes, resolver profile and result are hashed.
+Literal `import()`/CommonJS targets retain possible static dependencies with
+`conditional-import` observations and unresolved runtime-loading semantics.
+They do not certify runtime execution or promote a mapping to approval.
 Static manifest coverage is distinct from runtime completeness.
 
 `ontology_jobs.py` uses existing durable jobs and rechecks actor expiry, source
 revisions and permissions before analysis and publication. A missing configured
 analyzer blocks submission/execution. `local_analyze` is an explicit offline test
 adapter and requires a separate test opt-in; production cannot silently use it.
+The host must set `allow_offline_ontology_analysis=True` and supply the exact
+`local_analyze` function; the default is disabled. An omitted analysis
+`expectedGeneration` pins the current authorized manifest at admission, while an
+explicit value (including `null`) must match it.
 The trusted adapter identity and publication role/partition ownership are checked
 before invocation. Terminal durable-job state, artifact completion, execution
 receipt pointers, the partition and request marker commit atomically; an artifact

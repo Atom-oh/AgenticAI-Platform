@@ -132,3 +132,19 @@ def test_change_kind_and_source_revisions_bind_the_receipt_even_with_identical_r
                                 {**change, "newSource": ref("new")}]]
     assert len({receipt["hash"] for receipt in receipts}) == 4
     assert receipts[0]["items"] == receipts[1]["items"]
+    exact = {**change, "oldSource": ref("same-source")}
+    variants = [exact, {**exact, "nodeIds": ["button"]},
+                *[{**exact, "oldSource": {**exact["oldSource"], key: value}}
+                  for key, value in [("revision", "2"), ("sha256", "b" * 64), ("audienceRevision", "2")]]]
+    hashes = {analyze(value, request, generation=generation, can_read=lambda refs: True)["hash"] for request in variants}
+    assert len(hashes) == len(variants)
+
+
+def test_identical_workbench_content_does_not_merge_document_authorities():
+    source = {**ref("same-source"), "sourceKind": "workbench-document", "allowedRoles": ["owner"]}
+    a, b = [{**source, "location": {"documentId": name}} for name in ["doc-a", "doc-b"]]
+    value = graph([node("a", sourceRefs=[a]), node("b", sourceRefs=[b])], [])
+    generation = schema.digest(value)
+    result = analyze(value, {"id": "doc-change", "kind": "rule", "baseGeneration": generation, "oldSource": a},
+                     generation=generation, can_read=lambda refs: True)
+    assert [item["nodeId"] for item in result["items"]] == ["a"]

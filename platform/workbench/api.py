@@ -232,9 +232,8 @@ def _route(ctx, method, parts, body, query):
         return 201, {"change": impact.create_change(ctx, body)}
     if len(parts) == 2 and parts[0] == "changes" and method == "GET":
         change = ctx.get("wb_change", parts[1])
-        authority = change.get("graphAuthority", "legacy")
-        validate = knowledge.authorize_refs if authority == "canonical" else knowledge.verify_refs
-        validate(ctx, change.get("sourceRefs", []), authority=authority)
+        if not _readable(ctx, change):
+            fail(404, "not-found", "읽을 수 있는 변경 요청이 없습니다.")
         return 200, {"change": change}
     if len(parts) == 3 and parts[0] == "changes":
         if parts[2] == "analyze" and method == "POST":

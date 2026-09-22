@@ -6,6 +6,72 @@ from workspace import ontology_schema as schema
 from workspace.ontology_store import Ontology
 
 
+def _impact_views(ontology, current, body, raw_seeds):
+    from workspace.ontology_impact import analyze
+    seeds, history, history_truncated = list(raw_seeds), [], False
+    restricted = False
+    if body.get("oldSource"):
+        restricted = not ontology._visible([body["oldSource"]], historical=True)
+        seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True, include_history=False))
+        history, history_truncated = ontology.source_history(body["oldSource"])
+    views = ([(ontology, sorted(set(seeds)), None)] if seeds or not history else []) + history
+    results, snapshots, used_nodes, used_edges = [], [], 0, 0
+    truncated = history_truncated
+    request_hash = schema.digest({**body, "nodeIds": sorted(set(raw_seeds))})
+    for reader, selected, snapshot_hash in views:
+        if used_nodes >= 500 or used_edges >= 1000 or sum(len(value["items"]) for value in results) >= 50:
+            truncated = True
+            break
+        generation = reader.current()["generation"]
+        graph = (reader.closure(selected[:20], direction="dependents", max_nodes=500 - used_nodes,
+                               max_edges=1000 - used_edges, historical=True) if selected else
+                 {"schemaVersion": 1, "projectId": ontology.ctx.project_id, "nodes": [], "edges": [], "impactSeeds": [],
+                  "coverage": {"complete": False, "truncated": False, "unknown": ["unmapped-or-inaccessible-seed"],
+                               "scope": "authorized-manifest-snapshot"}})
+        used_nodes += reader._last_inspection[0]
+        used_edges += reader._last_inspection[1]
+        impact_seeds = graph.pop("impactSeeds")
+        if len(selected) > 20:
+            graph["coverage"]["truncated"] = True
+            graph["coverage"]["unknown"].append("seed-limit")
+        if restricted:
+            graph["coverage"]["unknown"].append("restricted-source-boundary")
+        if snapshot_hash:
+            graph["coverage"]["unknown"].append("historical-source-revisions")
+        graph["coverage"]["complete"] = False
+        change = {"id": body.get("changeId"), "kind": body.get("kind"), "baseGeneration": generation,
+                  "nodeIds": impact_seeds, "requestHash": request_hash}
+        for key in ("oldSource", "newSource"):
+            if body.get(key):
+                change[key] = body[key]
+        value = analyze({key: item for key, item in graph.items() if key != "generation"}, change,
+                        generation=generation, can_read=lambda refs: reader._visible(refs, historical=True))
+        for item in value["items"]:
+            item["snapshotGeneration"] = generation
+        results.append(value)
+        snapshots.append({"generation": generation, "manifestHash": snapshot_hash, "historical": bool(snapshot_hash)})
+    # At least one empty/current view is processed for an empty selection.
+    result = results[0]
+    items = [item for value in results for item in value["items"]]
+    unknown = {reason for value in results for reason in value["coverage"]["unknown"]}
+    truncated = truncated or len(items) > 50 or any(value["coverage"]["truncated"] for value in results)
+    if truncated:
+        unknown.add("truncated")
+    if history:
+        unknown.add("historical-source-snapshots")
+    result.update(generation=current["generation"], items=items[:50], sourceSnapshots=snapshots,
+                  coverage={"complete": False, "truncated": truncated, "unknown": sorted(unknown),
+                            "scope": "authorized-current-and-historical-snapshots"})
+    result["change"] = {"kind": body["kind"], "requestHash": request_hash,
+                        "selectionHash": schema.digest(sorted(set(raw_seeds))),
+                        "oldSourceHash": schema.digest(body["oldSource"]) if body.get("oldSource") else None,
+                        "newSourceHash": schema.digest(body["newSource"]) if body.get("newSource") else None}
+    result.pop("hash", None)
+    result["hash"] = schema.digest(result)
+    ontology._recheck(current)
+    return result
+
+
 def route(host, scope, claims, method, parts, body, query):
     ctx = Service(host, scope, claims)
     if parts == ["sources", "admission"] and method == "POST":
@@ -41,7 +107,6 @@ def route(host, scope, claims, method, parts, body, query):
             expected_generation=body.get("expectedGeneration"), request_id=body.get("requestId"))
     if parts == ["impact"] and method == "POST":
         fields(body, {"changeId", "kind", "expectedGeneration", "oldSource", "nodeIds", "newSource"})
-        from workspace.ontology_impact import analyze
         current = ontology.current()
         if not current or current["generation"] != body.get("expectedGeneration"):
             fail(409, "ontology-changed", "영향 분석 기준이 변경되었습니다.")
@@ -55,32 +120,7 @@ def route(host, scope, claims, method, parts, body, query):
             node = ontology._node(current, seed)
             if not node or not ontology._visible_node(current, node, historical=True):
                 fail(404, "not-found", "읽을 수 있는 영향 분석 시작 노드가 없습니다.")
-        seeds = list(raw_seeds)
-        restricted_source = False
-        if body.get("oldSource"):
-            restricted_source = not ontology._visible([body["oldSource"]], historical=True)
-            seeds.extend(ontology.source_nodes(body["oldSource"], for_impact=True))
-        seeds = sorted(set(seeds))
-        graph = (ontology.closure(seeds[:20], direction="dependents", max_nodes=500, historical=True) if seeds else
-                 {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": [], "edges": [], "impactSeeds": [],
-                  "coverage": {"complete": False, "truncated": False, "unknown": ["unmapped-or-inaccessible-seed"],
-                               "scope": "authorized-manifest-snapshot"}})
-        impact_seeds = graph.pop("impactSeeds")
-        change = {"id": body.get("changeId"), "kind": body.get("kind"), "baseGeneration": current["generation"],
-                  "nodeIds": impact_seeds, "requestHash": schema.digest({**body, "nodeIds": sorted(set(raw_seeds))})}
-        if body.get("oldSource"):
-            change["oldSource"] = body["oldSource"]
-        if body.get("newSource"):
-            change["newSource"] = body["newSource"]
-        if len(seeds) > 20:
-            graph["coverage"]["truncated"] = True
-            graph["coverage"]["unknown"].append("seed-limit")
-        if restricted_source:
-            graph["coverage"]["unknown"].append("restricted-source-boundary")
-        result = analyze({key: value for key, value in graph.items() if key != "generation"},
-                         change, generation=current["generation"], can_read=lambda refs: ontology._visible(refs, historical=True))
-        ontology._recheck(current)
-        return 200, result
+        return 200, _impact_views(ontology, current, body, raw_seeds)
     if parts == ["analyses"] and method == "POST":
         from workspace.ontology_jobs import submit
         return 202, public(submit(ctx, body))

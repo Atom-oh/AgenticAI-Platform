@@ -98,6 +98,52 @@ def test_non_owner_cannot_migrate_or_overwrite_canonical_authority(wb):
         import_legacy(context(wb, "bob"), {"requestId": "import", "expectedGeneration": None})
 
 
+def test_legacy_import_namespace_cannot_be_squatted_or_written_through_manual_publication(wb):
+    from test_ontology_store import candidate
+    value = candidate(wb)
+    with pytest.raises(CollaborationError) as error:
+        Ontology(context(wb, "bob")).publish_candidate("legacy-workbench", value,
+            expected_generation=None, request_id="squat")
+    assert error.value.code == "ontology-managed-partition"
+    indexed(wb)
+    imported = import_legacy(context(wb), {"requestId": "owner-import", "expectedGeneration": None})
+    with pytest.raises(CollaborationError) as error:
+        Ontology(context(wb)).publish_candidate("legacy-workbench", value,
+            expected_generation=imported["generation"], request_id="manual-owner")
+    assert error.value.code == "ontology-managed-partition"
+
+
+def test_lossy_legacy_conversion_cannot_replace_an_existing_import(wb, monkeypatch):
+    from workbench import knowledge
+    indexed(wb)
+    first = import_legacy(context(wb), {"requestId": "complete", "expectedGeneration": None})
+    old = knowledge.legacy_graph(context(wb))
+    old["nodes"][0]["label"] = "UnsupportedLegacyType"
+    monkeypatch.setattr(knowledge, "legacy_graph", lambda ctx: old)
+    with pytest.raises(CollaborationError) as error:
+        import_legacy(context(wb), {"requestId": "lossy", "expectedGeneration": first["generation"]})
+    assert error.value.code == "legacy-import-incomplete"
+    assert Ontology(context(wb)).current()["generation"] == first["generation"]
+
+
+def test_source_index_keeps_identical_documents_in_the_same_source_separate(wb):
+    from test_workbench_core import source, queue, run
+    from test_ontology_schema import node
+    from workspace.ontology_sources import workbench_reference
+    src = source(wb, request="identical-docs")
+    run(wb, queue(wb, src, [{"id": key, "title": key, "revision": "1", "content": "identical synthetic content"}
+                           for key in ["first", "second"]]))
+    docs = call(wb, "GET", "knowledge")["items"]
+    refs = [workbench_reference(call(wb, "GET", "knowledge/" + row["id"])["evidence"]) for row in docs]
+    assert refs[0]["sha256"] == refs[1]["sha256"]
+    value = {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": [
+        node(f"doc-{i}", "Document", project=wb.project["id"], properties={"documentId": str(i)},
+             sourceRefs=[reference]) for i, reference in enumerate(refs)], "edges": []}
+    published = Ontology(context(wb)).publish_candidate("identical", value, expected_generation=None, request_id="identical")
+    assert Ontology(context(wb)).source_nodes(refs[0]) == [published["identities"]["doc-0"]]
+    assert Ontology(context(wb)).source_nodes(refs[1]) == [published["identities"]["doc-1"]]
+
+
 def test_raw_workbench_target_cannot_probe_a_revoked_source(wb):
     from test_ontology_store import candidate
     from workspace.ontology_workbench import graph
@@ -278,7 +324,14 @@ def test_task_budget_retains_all_source_checks_and_discloses_reduced_scope(wb):
         "targetId": published["identities"]["item-0"], "changeType": "update",
         "before": "", "after": "", "reason": "Synthetic scope"})["change"]
     result = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
-    assert len(result["tasks"]) == 47
+    assert len(result["tasks"]) == 46
     assert len(result["impact"]["sourceRefs"]) == 50
     assert result["impact"]["coverage"]["truncated"]
     assert "atomic-task-limit" in result["impact"]["coverage"]["unknown"]
+    report = call(wb, "POST", "reports", {"requestId": "wide-report", "type": "change-impact",
+                                       "changeId": change["id"]})["report"]
+    approved = call(wb, "POST", f"reports/{report['id']}/approve",
+                    {"version": report["version"], "contentHash": report["contentHash"]})["report"]
+    assert approved["status"] == "approved"
+    markdown = call(wb, "GET", f"reports/{report['id']}/document")["markdown"]
+    assert "일부 생략됨" in markdown and "atomic-task-limit" in markdown

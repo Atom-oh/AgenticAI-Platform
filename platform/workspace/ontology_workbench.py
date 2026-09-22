@@ -143,4 +143,5 @@ def import_legacy(ctx, body):
     name = schema.identity("legacy-scope", selected) if selected is not None else "legacy-workbench"
     return Ontology(ctx).publish_candidate(name, value,
         expected_generation=body.get("expectedGeneration"), request_id=body.get("requestId"),
-        additional_checks=[ctx.check("wb_index", baseline)] if baseline else [])
+        additional_checks=[ctx.check("wb_index", baseline)] if baseline else [],
+        _origin="workbench-import", _replacement_complete=not missing)
