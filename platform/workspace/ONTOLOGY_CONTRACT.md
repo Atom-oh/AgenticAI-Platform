@@ -17,12 +17,22 @@ single DynamoDB conditional publication transaction.
 Publication adds exact source-record checks; concurrent source, project or
 manifest changes cancel the transaction. Failed immutable writes cannot advance
 the manifest. Per-partition limits are 500 nodes/1,000 edges, with up to 1,000
-partitions and bounded sharded indexes. There is no global 500-node storage claim.
+partitions and bounded sharded indexes. Each immutable partition/index object is
+limited to 4,000,000 serialized bytes. Index keys are assigned to 256 hash buckets;
+a key's entries stay in one bucket. Concentrated source references or adjacency
+can exhaust a bucket before the partition-count limit. Such publication fails
+without advancing the manifest and requires index-capacity expansion; splitting
+the same hot key across source partitions does not expand that bucket.
+The first reached limit governs publication.
+There is no global 500-node storage claim.
 Read pages and dependency closures remain bounded and disclose incomplete scope.
 Source verification admits at most 90 distinct authority records; publication
 also checks the complete DynamoDB transaction against its 100-operation limit.
 Oversized operations fail with a split-scope error before publication.
-Each publication accepts at most 50 distinct source references. Read snapshots
+Each publication accepts at most 50 distinct source authority bindings: source
+kind/ID, exact revision/hash and audience, plus a workbench document ID where
+applicable. Location-only annotations within that same source share a binding
+and do not consume additional source-authority slots. Read snapshots
 use a separate 2,500-record verification budget and perform their final version
 recheck once, rather than inheriting the atomic-write limit.
 
@@ -102,7 +112,9 @@ All endpoints use the existing `/studio-api` JWT authorizer and
 | `GET /ontology/analyses/:id` | Authorized analysis artifact, coverage and actual execution receipt |
 
 Manual candidate writes cannot claim parser provenance or approval. Only the
-trusted analysis path records parser-extracted provenance; review stays candidate.
+trusted analysis path records parser-extracted provenance and initially sets
+`reviewState=candidate`. Authorized human review advances it to `reviewed`, then
+approval can advance that exact revision to `approved`.
 Review roles are owner/planner for business nodes and procedures, owner/developer
 for code/test nodes, owner/designer for design nodes, and owner for Team metadata.
 Approval requires a reviewed exact revision. Product/policy approval additionally

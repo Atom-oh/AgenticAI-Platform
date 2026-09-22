@@ -99,7 +99,9 @@ class Ontology:
     def _put_json(self, identifier, value):
         raw = schema.canonical(value)
         if len(raw) > MAX_INDEX_BYTES:
-            fail(422, "ontology-capacity", "온톨로지 파티션 또는 인덱스를 더 작은 단위로 나누세요.")
+            if identifier.startswith("index-"):
+                fail(422, "ontology-index-capacity", "연결 인덱스의 저장 한도를 초과했습니다. 운영자에게 인덱스 용량 확장을 요청하세요.")
+            fail(422, "ontology-capacity", "온톨로지 파티션을 더 작은 단위로 나누세요.")
         digest = hashlib.sha256(raw).hexdigest()
         self.storage.put_blob_once(self._key(identifier, digest), raw, "application/json")
         return digest
@@ -112,6 +114,8 @@ class Ontology:
             value = self._read_json(partition, key[1])
             if value.get("partitionId") != partition or value.get("graph", {}).get("projectId") != self.ctx.project_id:
                 fail(409, "ontology-integrity", "온톨로지 파티션 범위가 다릅니다.")
+            if len(value["graph"]["nodes"]) > schema.MAX_NODES or len(value["graph"]["edges"]) > schema.MAX_EDGES:
+                fail(409, "ontology-integrity", "온톨로지 파티션의 저장 한도가 올바르지 않습니다.")
             for node in value["graph"]["nodes"]:
                 schema.validate_node(node)
             for edge in value["graph"]["edges"]:
@@ -215,6 +219,10 @@ class Ontology:
         if marker:
             if marker.get("requestHash") != request_hash:
                 fail(409, "request-changed", "같은 요청 ID의 내용이 달라졌습니다.")
+            if "sourceRefs" not in marker:
+                fail(409, "ontology-request-evidence", "이전 게시 요청의 원본 근거를 재확인할 수 없습니다. 현재 원본으로 새 요청을 만드세요.")
+            self.sources.verify(marker["sourceRefs"])
+            self._recheck(current)
             return {"generation": marker["generation"], "partitionId": partition,
                     "historical": (current or {}).get("generation") != marker["generation"],
                     "identities": marker["identities"]}
@@ -293,7 +301,8 @@ class Ontology:
         self._replace_indexes(updated, current or {}, partition, prior["graph"] if prior else {"nodes": [], "edges": []}, normalized)
         updated["generation"] = schema.digest({"partitions": updated["partitions"], "indexes": updated["indexes"]})
         marker = {"id": marker_id, "projectId": self.ctx.project_id, "requestHash": request_hash,
-                  "generation": updated["generation"], "partitionId": partition, "identities": identities}
+                  "generation": updated["generation"], "partitionId": partition, "identities": identities,
+                  "sourceRefs": list({authority_identity(ref): ref for ref in refs}.values())}
         completion = (_completion_writes(copy.deepcopy(marker)) if _completion_writes else [])
         self.sources.recheck()
         self.ctx.commit([self.ctx.write("ontology", updated, current["version"] if current else None),
@@ -575,6 +584,7 @@ class Ontology:
             if existing.get("requestHash") != request_hash:
                 fail(409, "request-changed", "같은 검토 요청 ID의 내용이 다릅니다.")
             self.sources.verify(existing["sourceRefs"])
+            self._recheck(current)
             return {"review": existing, "generation": existing["generation"],
                     "historical": (current or {}).get("generation") != existing["generation"]}
         if not current or current["generation"] != expected_generation:
@@ -654,6 +664,8 @@ class Ontology:
             graph["edges"][i] = schema.seal(edge)
         # Tombstoned witnesses can retain inaccessible historical endpoints.
         # Validate active relationships separately; history remains immutable.
+        if len(graph["nodes"]) > schema.MAX_NODES or len(graph["edges"]) > schema.MAX_EDGES:
+            fail(422, "ontology-capacity", "검토 근거를 포함한 파티션의 저장 한도를 초과했습니다. 검토 범위를 나누세요.")
         schema.validate_graph({**graph, "edges": [e for e in graph["edges"] if not e["tombstone"]]},
                               external_nodes=list(externals.values()), diagnostic=True)
         active = {"nodes": [n for n in graph["nodes"] if not n["tombstone"]],

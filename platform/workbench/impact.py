@@ -108,6 +108,17 @@ def traversal(graph, target_id):
             for edge in proof_edges.values() if "canonical" in edge))
         item["confidence"] = ("unknown" if item["targetId"] not in nodes else "confirmed" if
             not item["staleWitness"] and all(entry.get("provenance") == "connector-extracted" for entry in evidence) else "candidate")
+        target = nodes.get(item["targetId"])
+        if target and "canonicalType" in target:
+            candidate = item["staleWitness"] or any(
+                entry.get("reviewState") != "approved" or entry.get("provenance") == "model-inferred" for entry in evidence)
+            item["evidenceKind"] = ("candidate" if candidate else "approved-declared" if
+                any(entry.get("provenance") == "declared" for entry in evidence) else "observed-structural")
+            item["confidence"] = "candidate" if candidate else "confirmed"
+            item["targetEvidence"] = {key: target["canonical"][key] for key in
+                                      ("id", "revision", "contentHash", "provenance", "reviewState", "tombstone")}
+            item["evidenceStates"] = [{"provenance": provenance, "reviewState": state}
+                for provenance, state in sorted({(entry["provenance"], entry["reviewState"]) for entry in evidence})]
         references.update(refs)
     return {"items": items, "generation": graph["generation"], "sourceRefs": list(references.values()),
             "coverage": {**graph["coverage"], "complete": False, "truncated": bool(pending) or graph["coverage"].get("truncated", False),
@@ -161,6 +172,9 @@ def analyze(ctx, identifier, body):
                 "assigneeSub": None, "evidenceRefs": [], "sourceRefs": item["sourceRefs"],
                 "generation": impact["generation"], "confidence": item["confidence"]}
         task["graphAuthority"] = authority
+        for field in ("evidenceKind", "targetEvidence", "evidenceStates", "staleWitness"):
+            if field in item:
+                task[field] = item[field]
         writes.append(ctx.write("wb_task", task))
         tasks.append(task)
     updated = {**change, "status": "analyzed" if impact["items"] else "needs-mapping",

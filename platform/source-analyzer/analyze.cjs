@@ -76,12 +76,15 @@ function analyze(input) {
   const { files, resolver, bytes } = prepare(input);
   const references = [], exports = [], unresolved = [], diagnostics = [];
   const truncatedFiles = new Set(), observations = new Map();
-  let visited = 0, truncated = false;
+  let visited = 0, truncated = false, observationBytes = 0;
   const truncate = file => { truncated = true; truncatedFiles.add(typeof file === 'string' ? file : file.path); };
-  const addExport = value => {
-    if (exports.length < LIMITS.references) exports.push(value);
-    else truncate(value.path);
+  const append = (list, value) => {
+    const bytes = Buffer.byteLength(canonical(value)) + 1;
+    // Reserve space for the bounded file list, coverage metadata and final hash.
+    if (list.length >= LIMITS.references || observationBytes + bytes > 3500000) { truncate(value.path); return; }
+    list.push(value); observationBytes += bytes;
   };
+  const addExport = value => append(exports, value);
   const virtual = new Map([...files.values()].filter(file => file.kind === 'code')
     .map(file => ['/analysis/' + file.path, ts.createSourceFile('/analysis/' + file.path, file.text, ts.ScriptTarget.Latest, true)]));
   const program = ts.createProgram([...virtual.keys()], {
@@ -107,8 +110,7 @@ function analyze(input) {
       observations.set(key, value);
       return;
     }
-    if (unresolved.length < LIMITS.references) unresolved.push({ path: file.path, sourceHash: file.sha256, line, column, reason });
-    else truncate(file);
+    append(unresolved, { path: file.path, sourceHash: file.sha256, line, column, reason });
   };
   function resolve(from, specifier, resourceRelative = false) {
     if (typeof specifier !== 'string' || !specifier || specifier.length > 1024) return { status: 'unresolved', reason: 'invalid-reference' };
@@ -146,12 +148,12 @@ function analyze(input) {
     return { status: 'resolved-local', targetPath: target, targetHash: files.get(target).sha256,
       ...(specifier !== withoutQuery ? { transform: 'unverified-query-or-fragment' } : {}) };
   }
-  function reference(file, kind, specifier, at, detail = {}) {
+  function reference(file, kind, specifier, at, detail = {}, forcedResolution) {
     if (references.length >= LIMITS.references) { truncate(file); return; }
-    const resolution = resolve(file.path, specifier, kind.startsWith('style-') || kind === 'json-asset' || kind === 'html-resource' || kind === 'module-url');
+    const resolution = forcedResolution || resolve(file.path, specifier, kind.startsWith('style-') || kind === 'json-asset' || kind === 'html-resource' || kind === 'module-url');
     if (resolution.status === 'unresolved') problem(file, resolution.reason, at.line, at.column);
     if (resolution.transform) problem(file, resolution.transform, at.line, at.column);
-    references.push({ path: file.path, sourceHash: file.sha256, kind, specifier, ...at, ...detail, resolution });
+    append(references, { path: file.path, sourceHash: file.sha256, kind, specifier, ...at, ...detail, resolution });
   }
   for (const file of [...files.values()].sort((a, b) => compare(a.path, b.path))) {
     if (file.kind === 'asset') {
@@ -165,7 +167,7 @@ function analyze(input) {
         return { line: at.line + 1, column: at.character };
       };
       if (source.parseDiagnostics.length) {
-        diagnostics.push({ path: file.path, sourceHash: file.sha256, code: 'parse-error',
+        append(diagnostics, { path: file.path, sourceHash: file.sha256, code: 'parse-error',
           count: source.parseDiagnostics.length });
         problem(file, 'parse-error'); continue;
       }
@@ -358,7 +360,7 @@ function analyze(input) {
             if (node.name.toLowerCase() !== 'import') problem(file, 'scss-module-semantics', at.line, at.column);
           }
         });
-      } catch { diagnostics.push({ path: file.path, code: 'style-parse-error' }); problem(file, 'style-parse-error'); }
+      } catch { append(diagnostics, { path: file.path, code: 'style-parse-error' }); problem(file, 'style-parse-error'); }
     } else if (file.kind === 'html') {
       const found = [], stack = []; let base = false, attributes = new Set();
       const lineStarts = [0];
@@ -399,7 +401,8 @@ function analyze(input) {
       }, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
       parser.write(file.text); parser.end();
       if (base) problem(file, 'html-resource-base-unresolved');
-      else for (const item of found) reference(file, 'html-resource', item.value, item.at);
+      for (const item of found) reference(file, 'html-resource', item.value, item.at, {},
+        base ? { status: 'unresolved', reason: 'html-resource-base-unresolved' } : undefined);
     } else if (file.kind === 'json') {
       try {
         const data = JSON.parse(file.text);
@@ -413,12 +416,11 @@ function analyze(input) {
             else problem(file, 'unsupported-json-reference');
           }
         }
-      } catch { diagnostics.push({ path: file.path, code: 'json-parse-error' }); problem(file, 'json-parse-error'); }
+      } catch { append(diagnostics, { path: file.path, code: 'json-parse-error' }); problem(file, 'json-parse-error'); }
     }
   }
   for (const observation of observations.values()) {
-    if (unresolved.length < LIMITS.references) unresolved.push(observation);
-    else truncate(observation.path);
+    append(unresolved, observation);
   }
   const result = { schemaVersion: 1, analyzer: { name: 'platform-source-analyzer', version: '1.0.0', typescript: ts.version },
     inputHash: sha(canonical(input.files.map(f => ({ path: f.path, sha256: f.sha256 })).sort((a, b) => compare(a.path, b.path)))),

@@ -70,7 +70,10 @@ export function Changes() {
         <tbody>{impacts.map((entry, index) => { const item = object(entry), node = object(item.target);
           const targetId = text(item.targetId || node.id, '');
           return <tr key={targetId || index}><td>{text(item.title || node.title || item.targetId)}</td><td>{label(text(item.role))}</td>
-            <td>{text(item.reason)}<Details title="연결 경로·원본 버전" value={{ path: item.witnessPath || item.path, sourceRef: item.sourceRef, sourceRevision: item.sourceRevision }} /></td>
+            <td>{text(item.reason)}<Details title="연결 경로·원본 버전" value={{ path: item.witnessPath || item.path,
+              sourceRef: item.sourceRef, sourceRefs: item.sourceRefs, sourceRevision: item.sourceRevision,
+              evidenceKind: item.evidenceKind, targetEvidence: item.targetEvidence,
+              evidenceStates: item.evidenceStates, staleWitness: item.staleWitness }} /></td>
             <td><Status value={text(item.confidence || item.confidenceClass, 'unknown')} /></td>
             <td><button onClick={() => navigate(item.role === 'developer' ? 'development' : item.role === 'designer' ? 'studio' : 'planning', {
               changeId: selected, targetId, impactHash: text(impactData.hash || impactData.impactHash, ''),
@@ -95,6 +98,8 @@ function TaskRow({ task, refresh }: { task: Task; refresh: () => void }) {
   const allowed = overview.role === 'owner' || overview.role === task.role;
   return <article className="wb-task"><div className="wb-row"><div><span className="wb-eyebrow">{label(task.role)} · v{task.version}</span><h3>{task.title}</h3></div><Status value={task.status} /></div>
     <p className="wb-muted">대상 {task.targetId} · 변경 {task.changeId}</p>
+    {task.evidenceKind && <Details title="영향 근거의 관찰·검토 상태" value={{ classification: task.evidenceKind,
+      target: task.targetEvidence, states: task.evidenceStates, staleWitness: task.staleWitness }} />}
     <div className="wb-actions"><button onClick={() => navigate(task.role === 'designer' ? 'studio' : task.role === 'planner' ? 'planning' : 'components',
       { changeId: task.changeId, targetId: task.targetId, impactHash: task.impactHash })}>대상 작업 열기</button>
       <button onClick={() => navigate('changes', { changeId: task.changeId, targetId: task.targetId })}>변경 근거 확인</button></div>

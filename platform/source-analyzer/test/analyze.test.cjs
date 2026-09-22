@@ -36,6 +36,18 @@ test('import equals and import type retain literal dependencies; namespace alias
   assert.ok(alias.unresolved.some(r => r.reason === 'namespace-import-alias'));
 });
 
+test('long source paths truncate observations before exceeding the serialized result budget', () => {
+  const prefix = 'segment'.repeat(18) + '/';
+  const files = Array.from({ length: 100 }, (_, i) =>
+    text(prefix.repeat(7) + `${i}.ts`, 'import "./missing";'.repeat(100)));
+  const result = analyze(request(files));
+  assert.equal(result.coverage.truncated, true);
+  assert.ok(result.coverage.truncatedFiles.length > 0);
+  assert.ok(result.references.length > 0 && result.references.length < LIMITS.references);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 4000000);
+  assert.match(result.hash, /^[a-f0-9]{64}$/);
+});
+
 test('package subpath imports require an explicit alias; code # is not an HTML fragment', () => {
   const input = request([text('App.ts', "import tokens from '#design/tokens';"), text('tokens.ts', 'export default {}')]);
   assert.equal(analyze(input).coverage.complete, false);
@@ -253,6 +265,8 @@ test('HTML extraction connects literal resources without executing scripts or gu
   assert.ok(result.unresolved.some(item => item.reason === 'inline-script-not-executed'));
   files[0] = text('pages/export.html', '<img src="../images/hero.png"><base href="https://elsewhere.invalid/">', 'html');
   const changed = analyze(request(files));
-  assert.equal(changed.references.length, 0);
+  assert.equal(changed.references.length, 1);
+  assert.equal(changed.references[0].resolution.status, 'unresolved');
+  assert.equal(changed.references[0].resolution.reason, 'html-resource-base-unresolved');
   assert.ok(changed.unresolved.some(item => item.reason === 'html-resource-base-unresolved'));
 });

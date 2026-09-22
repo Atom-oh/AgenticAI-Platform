@@ -121,7 +121,14 @@ def test_patterns_need_two_reviewed_screen_usages_but_candidates_do_not():
         schema.validate_graph(graph([approved, *screens], []))
     approved = schema.seal({**approved, "properties": {**approved["properties"], "usageBindings": [
         {key: screen[key] for key in ("id", "revision", "contentHash")} for screen in screens]}})
-    assert schema.validate_graph(graph([approved, *screens], []))
+    proofs = [edge("usage-" + screen["id"], "pattern", screen["id"], "REFERENCES",
+                   reviewState="approved", sourceRefs=screen["sourceRefs"]) for screen in screens]
+    with pytest.raises(ValueError, match="relationship"):
+        schema.validate_graph(graph([approved, *screens], []))
+    assert schema.validate_graph(graph([approved, *screens], proofs))
+    updated = schema.seal({**screens[0], "title": "Changed reviewed screen"})
+    with pytest.raises(ValueError, match="stale"):
+        schema.validate_graph(graph([approved, updated, screens[1]], proofs))
 
 
 def test_non_dependency_edges_have_typed_endpoints_and_incomplete_coverage_is_honest():

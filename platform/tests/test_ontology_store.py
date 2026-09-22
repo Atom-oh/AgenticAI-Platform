@@ -44,6 +44,16 @@ def test_workspace_ontology_is_the_only_new_write_authority(wb):
     assert again["historical"] is False
 
 
+def test_idempotent_publication_rechecks_the_original_source_authority(wb):
+    data = candidate(wb)
+    publish(wb, data)
+    source = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+    with pytest.raises(CollaborationError) as error:
+        publish(wb, data)
+    assert error.value.code == "ontology-source-stale"
+
+
 def test_manual_coverage_cannot_claim_complete_runtime_dependencies(wb):
     value = candidate(wb)
     value["coverage"] = {"complete": True, "scope": "runtime-complete", "unknown": [], "truncated": False}

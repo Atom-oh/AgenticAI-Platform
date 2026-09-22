@@ -158,7 +158,7 @@ class Storage:
             raise Conflict("The resource has changed") from error
         return _plain(data)
 
-    def put_many(self, writes: list[dict], checks: list[dict] | None = None, *, retry_conflicts=True) -> list[dict]:
+    def put_many(self, writes: list[dict], checks: list[dict] | None = None, *, retry_conflicts=True, before_attempt=None) -> list[dict]:
         """Atomically publish conditional metadata across owner partitions.
 
         The resource client marshals native values. Build each nested condition
@@ -166,6 +166,8 @@ class Storage:
         A transaction failure must never fall back to individual writes.
         """
         from boto3.dynamodb.conditions import ConditionExpressionBuilder
+        if before_attempt is not None and not callable(before_attempt):
+            raise ValueError("A transaction guard must be callable")
         checks = [] if checks is None else checks
         if not isinstance(writes, list) or not isinstance(checks, list) or not 1 <= len(writes) + len(checks) <= 100:
             raise ValueError("A transaction requires between 1 and 100 writes")
@@ -210,6 +212,8 @@ class Storage:
                 condition.pop("ExpressionAttributeValues")
             transactions.append({"ConditionCheck": condition})
         for attempt in range(5):
+            if before_attempt is not None:
+                before_attempt()
             try:
                 table.meta.client.transact_write_items(TransactItems=copy.deepcopy(transactions))
                 break

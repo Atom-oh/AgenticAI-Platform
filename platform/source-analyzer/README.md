@@ -38,3 +38,7 @@ Generic call/constructor observations aggregate counts per file and reason,
 preserving the first location. When a parser, reference, export or observation
 budget is exhausted, `coverage.truncatedFiles` identifies each affected file.
 Uninspected locations are never represented as complete coverage.
+Observations also share a 3,500,000-byte serialized budget, reserving space within
+the 4,000,000-byte result limit for coverage and hashes. Budget exhaustion marks
+the affected files instead of discarding the entire analysis. HTML with an
+unconfigured `base` retains each literal resource as an unresolved observation.

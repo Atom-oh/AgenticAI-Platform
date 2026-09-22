@@ -203,6 +203,31 @@ def test_direct_knowledge_report_preserves_historical_audience_after_public_revi
     assert "Current shared guidance" in project_call(wb, "GET", f"reports/{fresh['id']}/document", actor="carol")["markdown"]
 
 
+def test_report_approval_rechecks_source_expiry_after_transaction_preparation(wb, monkeypatch):
+    wb.storage.clock = lambda: wb.now
+    src = source(wb)
+    run(wb, queue(wb, src))
+    current = wb.storage.get(wb.owner, "wb_source", src["id"])
+    wb.now = current["accessExpiresAt"] - 1000
+    identifier = project_call(wb, "GET", "knowledge")["items"][0]["id"]
+    report = project_call(wb, "POST", "reports", {"requestId": "deadline-report", "type": "regulation",
+        "title": "Bound source deadline", "evidenceIds": [identifier]})["report"]
+    original = wb.storage._prepare
+
+    def expire(owner, kind, item, version, now):
+        prepared = original(owner, kind, item, version, now)
+        if kind == "wb_report" and item.get("status") == "approved":
+            wb.now += 2000
+        return prepared
+
+    monkeypatch.setattr(wb.storage, "_prepare", expire)
+    with pytest.raises(CollaborationError) as error:
+        project_call(wb, "POST", f"reports/{report['id']}/approve",
+                     {"version": report["version"], "contentHash": report["contentHash"]})
+    assert error.value.code == "stale-evidence"
+    assert wb.storage.get(wb.owner, "wb_report", report["id"])["status"] == "draft"
+
+
 def test_approval_fences_a_source_changed_during_commit(monkeypatch):
     route, api, scope = setup()
     session = call(route, api, scope, "POST", "pension/sessions",
@@ -211,10 +236,10 @@ def test_approval_fences_a_source_changed_during_commit(monkeypatch):
                   {"requestId": "race-report", "type": "management",
                    "sessionId": session["id"]})["report"]
     original = api.storage.put_many
-    def concurrent_write(writes, checks=None):
+    def concurrent_write(writes, checks=None, **kwargs):
         current = api.storage.get(scope["owner"], "wb_pension", session["id"])
         api.storage.put(scope["owner"], "wb_pension", {**current, "title": "revised"}, current["version"])
-        return original(writes, checks=checks)
+        return original(writes, checks=checks, **kwargs)
     monkeypatch.setattr(api.storage, "put_many", concurrent_write)
     with pytest.raises(CollaborationError):
         call(route, api, scope, "POST", f"reports/{report['id']}/approve",

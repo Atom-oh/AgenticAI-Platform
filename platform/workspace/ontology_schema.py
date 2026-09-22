@@ -336,6 +336,14 @@ def validate_graph(value, *, external_nodes=(), diagnostic=False):
                     value not in nodes or nodes[value]["type"] != "Screen"
                     or nodes[value]["reviewState"] not in {"reviewed", "approved"} for value in usages):
                 raise ValueError("Approved patterns need independently reviewed screen usages")
+            for binding in node["properties"]["usageBindings"]:
+                screen = nodes[binding["id"]]
+                if screen["revision"] != binding["revision"] or screen["contentHash"] != binding["contentHash"]:
+                    raise ValueError("Approved pattern usage binding is stale")
+                if not any(edge["type"] == "REFERENCES" and not edge["tombstone"]
+                           and edge["reviewState"] == "approved" and edge["src"]["id"] == node["id"]
+                           and edge["dst"]["id"] == screen["id"] for edge in edges):
+                    raise ValueError("Approved pattern usage evidence relationship is required")
     coverage = copy.deepcopy(value.get("coverage", {"complete": False, "unknown": ["unmapped-dependencies"],
                                                    "scope": "bounded-project-partition", "truncated": False}))
     _fields(coverage, {"complete", "unknown", "scope", "truncated"})

@@ -22,6 +22,27 @@ def fail(status, code, message):
     raise CollaborationError(status, code, message)
 
 
+def check_source_deadlines(storage, checks, claims=None):
+    """Recheck the aggregate deadline after reads and transaction preparation."""
+    deadlines = []
+    for check in checks:
+        if check["kind"] != "wb_source":
+            continue
+        source = storage.get(check["owner"], check["kind"], check["id"])
+        if (not source or source["version"] != check["version"]
+                or type(source.get("accessExpiresAt")) is not int):
+            fail(409, "stale-evidence", "검증한 원본 권한이 변경되었습니다.")
+        deadlines.append(source["accessExpiresAt"])
+    expiry = (claims or {}).get("exp")
+    if expiry is None and not deadlines:
+        return
+    now = storage.clock()
+    if expiry is not None and int(expiry) * 1000 <= now:
+        fail(401, "authorization-expired", "인증이 만료되었습니다.")
+    if deadlines and min(deadlines) <= now:
+        fail(409, "stale-evidence", "검증한 원본의 유효 기간이 만료되었습니다.")
+
+
 def fields(body, allowed):
     if not isinstance(body, dict) or set(body) - set(allowed):
         fail(400, "invalid-input", "허용되지 않은 입력 필드입니다.")
@@ -159,7 +180,9 @@ class Service:
         try:
             # Timed authority/source checks belong to the caller. A contention
             # retry must return there for reauthorization before another send.
-            return self.storage.put_many([*writes, fence], checks=list(unique.values()), retry_conflicts=False)[:-1]
+            observed = list(unique.values())
+            return self.storage.put_many([*writes, fence], checks=observed, retry_conflicts=False,
+                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims))[:-1]
         except Conflict as error:
             raise CollaborationError(409, "conflict", "프로젝트 또는 근거가 변경되었습니다.") from error
 

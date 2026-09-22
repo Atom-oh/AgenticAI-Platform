@@ -16,8 +16,17 @@ RELATIONS = {"COMPOSES": "DEPENDS_ON", "IMPORTS": "DEPENDS_ON", "GOVERNED_BY": "
 def graph(ctx, target_id=None, *, historical=False):
     store = Ontology(ctx)
     if target_id:
+        # This endpoint takes a raw node ID, not an exact old-source reference.
+        # Opaque changed-source expansion belongs to /ontology/impact's
+        # oldSource path; arbitrary IDs must not become connectivity probes.
+        current = store.current()
+        target = store._node(current or {}, target_id)
+        if not target or not store._visible_node(current, target, historical=historical):
+            from workbench.service import fail
+            fail(404, "not-found", "읽을 수 있는 온톨로지 대상이 없습니다.")
         value = store.closure([target_id], direction="dependents" if historical else "both", max_nodes=100,
                               historical=historical)
+        store._recheck(current)
     else:
         value = store.read(limit=100)
     # The compatibility fields preserve source refs and original canonical type.

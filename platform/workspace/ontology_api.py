@@ -49,6 +49,9 @@ def route(host, scope, claims, method, parts, body, query):
             fail(400, "ontology-selection", "시작 노드 목록이 올바르지 않습니다.")
         for seed in raw_seeds:
             schema._identifier(seed)
+            node = ontology._node(current, seed)
+            if not node or not ontology._visible_node(current, node, historical=True):
+                fail(404, "not-found", "읽을 수 있는 영향 분석 시작 노드가 없습니다.")
         seeds = list(raw_seeds)
         restricted_source = False
         if body.get("oldSource"):

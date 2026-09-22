@@ -38,6 +38,8 @@ def test_canonical_workbench_impacts_keep_the_same_manifest_and_all_source_refs(
     result = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
     assert result["change"]["graphAuthority"] == "canonical"
     assert result["impact"]["generation"] == graph["generation"]
+    assert all(task["evidenceKind"] == "candidate" and task["targetEvidence"]["reviewState"] == "candidate"
+               for task in result["tasks"])
     assert all(ref["sourceKind"] == "workbench-document" for ref in result["impact"]["sourceRefs"])
     loaded = call(wb, "GET", f"changes/{change['id']}/impact")["impact"]
     assert loaded["generation"] == graph["generation"]
@@ -94,6 +96,19 @@ def test_non_owner_cannot_migrate_or_overwrite_canonical_authority(wb):
     indexed(wb)
     with pytest.raises(CollaborationError):
         import_legacy(context(wb, "bob"), {"requestId": "import", "expectedGeneration": None})
+
+
+def test_raw_workbench_target_cannot_probe_a_revoked_source(wb):
+    from test_ontology_store import candidate
+    from workspace.ontology_workbench import graph
+    published = Ontology(context(wb)).publish_candidate("raw-probe", candidate(wb),
+        expected_generation=None, request_id="raw-probe")
+    source = wb.storage.get(wb.owner, "asset", "image")
+    wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+    for target in [published["identities"]["image"], "unknown-node"]:
+        with pytest.raises(CollaborationError) as error:
+            graph(context(wb), target, historical=True)
+        assert error.value.status == 404 and error.value.code == "not-found"
 
 
 def test_legacy_refs_cannot_select_a_different_authority(wb):
@@ -222,6 +237,26 @@ def test_converging_paths_keep_all_intermediate_and_edge_sources():
     item = next(item for item in result["items"] if item["targetId"] == "a")
     assert {ref["sourceId"] for ref in item["sourceRefs"]} == {"root", "a", "b", "c", "a-b", "a-c", "b-root", "c-root"}
     assert len(item["witnessEdges"]) == 4
+
+
+@pytest.mark.parametrize("state,provenance,expected", [
+    ("candidate", "parser-extracted", "candidate"), ("reviewed", "parser-extracted", "candidate"),
+    ("approved", "declared", "approved-declared"), ("approved", "parser-extracted", "observed-structural")])
+def test_canonical_impact_keeps_observation_and_human_review_states_distinct(state, provenance, expected):
+    from workbench.impact import traversal
+    from test_ontology_schema import node, edge
+    raw_nodes = [node(key, "Screen", reviewState=state, provenance=provenance) for key in ["root", "dependent"]]
+    relation = edge("depends", "dependent", "root", reviewState=state, provenance=provenance)
+    nodes = [{**row, "canonical": row, "canonicalType": row["type"], "label": "Screen",
+              "sourceRef": row["sourceRefs"][0]} for row in raw_nodes]
+    edges = [{**relation, "canonical": relation, "canonicalRelation": "USES", "rel": "USES",
+              "src": "dependent", "dst": "root", "sourceRef": relation["sourceRefs"][0]}]
+    result = traversal({"nodes": nodes, "edges": edges, "generation": "g", "coverage": {}}, "root")
+    item = next(item for item in result["items"] if item["targetId"] == "dependent")
+    assert item["evidenceKind"] == expected
+    assert item["targetEvidence"]["provenance"] == provenance
+    assert item["targetEvidence"]["reviewState"] == state
+    assert item["evidenceStates"] == [{"provenance": provenance, "reviewState": state}]
 
 
 def test_task_budget_retains_all_source_checks_and_discloses_reduced_scope(wb):
