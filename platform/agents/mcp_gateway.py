@@ -119,6 +119,13 @@ def filter_tool_names(discovered: Iterable[str], allowed: Optional[Sequence[str]
     return out
 
 
+def missing_tool_names(discovered: Iterable[str], allowed: Optional[Sequence[str]]) -> List[str]:
+    names = set(discovered)
+    bare = {bare_name(name) for name in names}
+    return sorted(name for name in (allowed or []) if
+                  (name not in names if TOOL_NAME_SEP in name else name not in bare))
+
+
 def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any], List[str]]:
     """start 된 MCPClient 에서 도구를 나열해 allowed 로 필터링하고 bare 이름으로 노출하는 AgentTool 목록을 만든다.
 
@@ -138,8 +145,13 @@ def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any]
         if not token:
             break
     keep = set(filter_tool_names(discovered, allowed))
-    tools = [MCPAgentTool(t.mcp_tool, client, name_override=bare_name(t.tool_name)) for t in raw if t.tool_name in keep]
-    missing = sorted({bare_name(a) for a in (allowed or [])} - {bare_name(n) for n in keep})
+    counts = {}
+    for name in keep:
+        counts[bare_name(name)] = counts.get(bare_name(name), 0) + 1
+    tools = [MCPAgentTool(t.mcp_tool, client,
+             name_override=t.tool_name if counts[bare_name(t.tool_name)] > 1 else bare_name(t.tool_name))
+             for t in raw if t.tool_name in keep]
+    missing = missing_tool_names(keep, allowed)
     if missing:
         log.warning("gateway tools missing for spec: %s (discovered=%d)", missing, len(discovered))
     return tools, discovered

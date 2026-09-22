@@ -40,6 +40,22 @@ test('accepts exact privacy wiring for WebSocket and Workspace API consumers', (
     [...functionIds, ...policyIds].sort());
 });
 
+test('checks current privacy grants after an independent main-stack IAM change', () => {
+  const before = fixture();
+  const current = fixture();
+  for (const template of [current.baseline, current.enabled]) {
+    template.Resources[policyIds[0]].Properties.PolicyDocument.Statement.unshift({
+      Effect: 'Allow', Action: 'bedrock-agentcore:InvokeHarness',
+      Resource: 'arn:aws:bedrock-agentcore:ap-northeast-2:000000000000:harness/bank_*',
+    });
+  }
+  assertMainPrivacyDelta(before.baseline, before.enabled, arn);
+  assertMainPrivacyDelta(current.baseline, current.enabled, arn);
+  assert.throws(() => assertMainPrivacyDelta(before.baseline, current.enabled, arn));
+  current.enabled.Resources[policyIds[0]].Properties.PolicyDocument.Statement.at(-1).Resource = '*';
+  assert.throws(() => assertMainPrivacyDelta(current.baseline, current.enabled, arn));
+});
+
 const mutations = {
   'missing workspace consumer': ({ baseline, enabled }) => {
     for (const id of [functionIds[1], policyIds[1]]) enabled.Resources[id] = structuredClone(baseline.Resources[id]);

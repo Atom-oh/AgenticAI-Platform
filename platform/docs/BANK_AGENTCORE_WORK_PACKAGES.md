@@ -49,6 +49,10 @@ WsFn receives only the listed Harness/Gateway/Registry read operations and
 prefix. AgentCore create/update/delete/approval actions and Harness
 `iam:PassRole` belong to AdminFn. Remove the three unused workload-token
 permissions from the bank Runtime role.
+The user's explicit AdminFn allocation includes CreateMemory, GetMemory and
+CreateWorkloadIdentity. These are administrative creation capabilities, not a
+claim that bank Runtime Memory or outbound Identity is active. Runtime use and
+dedicated resource grants still require WP5 and its independent live evidence.
 
 User agent creation saves a local pending specification. Agent transitions
 save `AGENT_ADMIN_REQUEST` records. The generic Registry route cannot bypass
@@ -59,6 +63,10 @@ requested record, provisions the approved Harness, applies its Registry
 transition and mirrors it. Changed specifications and conflicting existing
 Harness configurations are rejected. Long-term Harness memory is not enabled
 by these requests without its separate privacy/extraction review.
+For an unapproved orphan, the IAM-only `reconcile_agent_request` operation
+requires `expectedHarnessHash` from `agentcore.administration.harness_fingerprint`.
+It refuses any active approved consumer and rechecks the request before updating
+the existing Harness to the exact requested configuration. It never deletes it.
 
 O: synthesized policy checks prove no AgentCore control actions or PassRole on
 WsFn; tests prove no control call on user routes and cover administrative
@@ -69,8 +77,11 @@ unexpected grant cannot delete a real resource.
 ### WP3: closed tool access and bounded errors
 
 Remove production Gateway DEBUG exception output. Empty or wildcard
-`allowedTools` do not grant all tools. Missing configured tools produce
+`allowedTools` do not grant all tools. In the Strands Runtime, missing configured tools produce
 `toolsMissing`, a failure before model invocation, and a visible UI badge.
+Harness creation requires a configured Gateway and explicit tools; its managed
+execution reports bounded service failures and does not provide the Runtime's
+client-side `toolsMissing` preflight. Do not claim that unimplemented equivalence.
 Runtime/Harness upstream exception bodies are not returned to the user.
 Harness input/system text receives the same independent rule inspection
 before a managed model request.

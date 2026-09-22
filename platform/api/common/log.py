@@ -13,7 +13,7 @@ import time
 
 _FORBIDDEN = {"prompt", "query", "answer", "payload", "maskedPayload", "text", "email",
               "system", "user", "message", "content", "actor", "error"}
-_METRICS = set("""agents attempts blocked cached chars codeLen components count crossings denied dense docs
+_METRICS = set("""agents attempts blocked cached chars code codeLen components count crossings denied dense docs
 errors estTokens fields gateRefused harnessListed harnessReused hits imageBytes imageCount injection items
 limit maxRounds memory ms ocrChars ok pii piiCount promptLen queryLen reasonLen replay screens sent skills
 textLen tokensIn tokensOut toolCalls tools inputTokens outputTokens totalTokens elapsedMs durationMs costUsd

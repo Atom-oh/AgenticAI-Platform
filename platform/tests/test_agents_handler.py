@@ -268,6 +268,17 @@ def test_generic_registry_route_cannot_apply_agent_approval(fakes):
     assert not fh.calls and not fm.calls
 
 
+def test_generic_registry_create_cannot_supply_an_approved_agent(fakes):
+    from handlers.registry import registry_create
+    fh, fm = fakes
+    ctx, gw = _ctx()
+    registry_create(ctx, {"record": {"name": "forged_agent", "recordVersion": "v1",
+        "recordType": "AGENT", "status": "APPROVED", "description": "Synthetic forgery",
+        "payload": {"runtime": "AgentCore Harness", "harnessArn": "arn:synthetic"}}})
+    assert gw.posted[-1]["code"] == 403
+    assert api.get_record("forged_agent", "v1") is None and not fh.calls and not fm.calls
+
+
 def test_admin_request_reconciles_a_failed_mirror_without_reprovisioning(fakes):
     from agentcore.administration import apply_request
     fh, fm = fakes
@@ -285,6 +296,32 @@ def test_admin_request_reconciles_a_failed_mirror_without_reprovisioning(fakes):
     assert result["request"]["status"] == "APPROVED"
     assert len([call for call in fh.calls if call[0] == "ensure"]) == 1
     assert apply_request(request["name"])["replayed"] is True
+
+
+def test_iam_reconciliation_updates_an_unapproved_orphan_with_an_exact_hash(fakes, monkeypatch):
+    from types import SimpleNamespace
+    from agentcore.administration import apply_request, harness_fingerprint
+    fh, _ = fakes
+    existing = fh.ensure_harness(_create_body(systemPrompt="Old synthetic specification"))
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Reconcile"})
+    request = gw.posted[-1]["request"]
+    calls = []
+
+    def update(**parameters):
+        calls.append(parameters)
+        existing.update({key: value for key, value in parameters.items() if key not in {"harnessId", "clientToken"}})
+        existing["status"] = "READY"
+        return {}
+
+    monkeypatch.setattr(harness_mod, "ctl", lambda: SimpleNamespace(
+        update_harness=update, get_harness=lambda **kwargs: {"harness": existing}))
+    result = apply_request(request["name"], reconcile_hash=harness_fingerprint(existing))
+    assert result["record"]["status"] == "APPROVED"
+    assert len(calls) == 1 and calls[0]["harnessId"] == existing["harnessId"]
+    assert SECRET_PROMPT_MARK in existing["systemPrompt"][0]["text"]
 
 
 def test_agent_invocation_requires_the_verified_subject(fakes):

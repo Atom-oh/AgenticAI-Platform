@@ -65,6 +65,8 @@ def build_config(spec: dict) -> dict:
     if not isinstance(allowed, list) or not allowed or any(
             not isinstance(tool, str) or not tool.strip() or "*" in tool for tool in allowed):
         raise ValueError("Harness requires an explicit nonempty allowedTools list")
+    if not GATEWAY_ARN:
+        raise ValueError("Harness tools require the configured bank Gateway")
     _inspect(str(spec.get("systemPrompt", "")), "agentcore.harness.system")
     tools = []
     if GATEWAY_ARN and spec.get("allowedTools"):

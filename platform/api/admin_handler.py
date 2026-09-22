@@ -89,10 +89,11 @@ def handler(event, context):
                 row["registryError"] = f"{type(e).__name__}: {str(e)[:300]}"
             out.append(row)
         return {"agents": out, "runtimeArn": runtime_arn or None}
-    if op == "apply_agent_request":
+    if op in {"apply_agent_request", "reconcile_agent_request"}:
         from agentcore.administration import apply_request
         try:
-            return {"ok": True, **apply_request(event["name"], event.get("version", "v1"))}
+            options = {"reconcile_hash": event["expectedHarnessHash"]} if op == "reconcile_agent_request" else {}
+            return {"ok": True, **apply_request(event["name"], event.get("version", "v1"), **options)}
         except Exception as error:
             log_event("admin.agent_request_failed", errorType=type(error).__name__)
             return {"ok": False, "error": "agent-administration-failed", "errorType": type(error).__name__}

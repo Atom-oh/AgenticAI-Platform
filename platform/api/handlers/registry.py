@@ -16,7 +16,7 @@ from __future__ import annotations
 from common.ctx import Ctx
 from common.log import log_event
 from registry import api
-from registry.model import RegistryError
+from registry.model import RegistryError, STATUSES
 
 
 def _fail(ctx: Ctx, kind: str, e: RegistryError, **extra) -> None:
@@ -60,7 +60,7 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
             return
         rec, ev = api.transition(name, version, to, actor=ctx.email, reason=reason)
     except RegistryError as e:
-        log_event("registry.transition_rejected", ctx.trace_id, name=name, version=version, to=to,
+        log_event("registry.transition_rejected", ctx.trace_id, name=name, version=version, to=to if to in STATUSES else "invalid",
                   code=e.code, errorType=type(e).__name__)
         _fail(ctx, "registry_transition", e, name=name, version=version, to=to)
         return
@@ -88,6 +88,11 @@ def registry_consumer(ctx: Ctx, body: dict) -> None:
 
 def registry_create(ctx: Ctx, body: dict) -> None:
     record = body.get("record") or {}
+    if isinstance(record, dict) and (str(record.get("recordType", "")).strip().upper() == "AGENT"
+                                   or str(record.get("subtype", "")).strip().upper() == "AGENT_ADMIN_REQUEST"):
+        ctx.post({"type": "registry_create", "ok": False, "code": 403,
+                  "error": "에이전트 명세와 관리 요청은 에이전트 전용 요청 경로를 사용하세요."})
+        return
     try:
         rec = api.create_record(record, actor=ctx.email)
     except RegistryError as e:

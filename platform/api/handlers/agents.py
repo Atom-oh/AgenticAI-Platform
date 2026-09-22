@@ -27,7 +27,7 @@ from common import tracing
 from common.ctx import Ctx
 from common.log import log_event
 from registry import api as registry_api
-from registry.model import RegistryError
+from registry.model import RegistryError, STATUSES
 from engine import model_catalog
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
@@ -304,7 +304,7 @@ def agent_transition(ctx: Ctx, body: dict) -> None:
         from agentcore.administration import request_transition
         result = request_transition(name, version, to, ctx.email, reason)
     except RegistryError as e:
-        log_event("agent.transition_rejected", ctx.trace_id, name=name, version=version, to=to,
+        log_event("agent.transition_rejected", ctx.trace_id, name=name, version=version, to=to if to in STATUSES else "invalid",
                   code=getattr(e, "code", 400), errorType=type(e).__name__)
         ctx.post({"type": "agent_transition", "ok": False, "error": str(e)[:300], "code": getattr(e, "code", 400),
                   "errorType": type(e).__name__, "name": name, "version": version, "to": to})
@@ -458,7 +458,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                                   "toolCalls": tool_calls, "errors": len(errors), "cached": False,
                                   "elapsedMs": elapsed})
         except Exception as e:  # noqa: BLE001
-            log_event("agent.trace_failed", ctx.trace_id, error=_err(e))
+            log_event("agent.trace_failed", ctx.trace_id, errorType=type(e).__name__)
         try:
             from common import costguard
             costguard.add_usage(tokens_in + tokens_out)

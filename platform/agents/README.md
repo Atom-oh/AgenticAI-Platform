@@ -89,7 +89,7 @@ provide temporary credentials; do not bake them into the image or print them in
 shared logs. If port 8080 is occupied, change only the host port, for example
 `127.0.0.1:18080:8080`. Reuse the Runtime session header for local multi-turn testing.
 
-Setup/handshake failures emit a bounded error such as `code=502`. A missing
+Setup/handshake failures emit a bounded error such as `code=502`. In this Strands Runtime, a missing
 configured tool is recorded in `meta.toolsMissing`, blocks model execution and
 appears in the UI. Empty allowlists grant no tools. Application exception paths
 return type/category text without upstream bodies; verify SDK logs separately

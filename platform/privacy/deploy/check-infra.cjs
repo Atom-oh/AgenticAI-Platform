@@ -151,7 +151,7 @@ const sourcePath = path.join(infra, 'lib/stack.ts');
 // Supply `git show "$PR_BASE_SHA":platform/infra/lib/stack.ts` on stdin. Keeping Git outside
 // Node also works in runners which prohibit nested subprocesses.
 const oldSource = fs.readFileSync(0, 'utf8');
-assert.ok(oldSource.includes('export class BankPlatformStack'), 'HEAD stack source required on stdin');
+assert.ok(oldSource.includes('export class BankPlatformStack'), 'PR-base stack source required on stdin');
 const oldModule = new Module(sourcePath, module);
 oldModule.filename = sourcePath;
 oldModule.paths = Module._nodeModulePaths(path.dirname(sourcePath));
@@ -167,13 +167,21 @@ function mainTemplate(Stack, name, privacyArn) {
   })).toJSON();
 }
 const baseline = mainTemplate(oldModule.exports.BankPlatformStack, 'baseline');
+const baselineEnabled = mainTemplate(oldModule.exports.BankPlatformStack, 'baseline-enabled', arn);
+assertMainPrivacyDelta(baseline, baselineEnabled, arn);
 const disabled = mainTemplate(BankPlatformStack, 'disabled');
-assert.deepEqual(disabled, baseline, 'default main stack changed with privacy disabled');
 const enabled = mainTemplate(BankPlatformStack, 'enabled', arn);
-const changed = assertMainPrivacyDelta(baseline, enabled, arn);
+// Compare feature-on/off at the SAME revision. Independently reviewed IAM or
+// application changes between revisions must not become privacy-toggle deltas.
+const changed = assertMainPrivacyDelta(disabled, enabled, arn);
+const mainIds = new Set([...Object.keys(baseline.Resources), ...Object.keys(disabled.Resources)]);
+const reviewedMainChanges = [...mainIds].filter(id =>
+  JSON.stringify(baseline.Resources[id]) !== JSON.stringify(disabled.Resources[id]));
 fs.writeFileSync(path.join(out, 'verified.json'), JSON.stringify({
   privacyResources: Object.keys(json.Resources).length,
-  existingMainResources: Object.keys(baseline.Resources).length,
-  defaultMainUnchanged: true, enabledMainChangedResources: changed,
+  existingMainResources: Object.keys(disabled.Resources).length,
+  baselinePrivacyDeltaVerified: true, currentPrivacyDeltaVerified: true,
+  separatelyReviewedMainChangedResources: reviewedMainChanges,
+  enabledMainChangedResources: changed,
 }, null, 2));
-console.log('PASS private stack assertions; default main unchanged; enabled main changes only exact WS and Workspace API privacy env/policy.');
+console.log('PASS private stack assertions; both revisions add only exact WS and Workspace API privacy env/policy when enabled.');

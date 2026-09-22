@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import time
 
 from registry import api
 from registry.model import ConflictError, NotFoundError, ValidationError, check_transition
@@ -10,6 +11,12 @@ from registry.model import ConflictError, NotFoundError, ValidationError, check_
 def fingerprint(record):
     value = {key: record.get(key) for key in ("name", "recordVersion", "recordType", "subtype", "status", "stateRevision", "payload", "description")}
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def harness_fingerprint(value):
+    fields = ("harnessId", "executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills")
+    return hashlib.sha256(json.dumps({key: value.get(key) for key in fields},
+        sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
 def request_transition(name, version, target, actor, reason):
@@ -31,7 +38,7 @@ def request_transition(name, version, target, actor, reason):
             "agentcoreRegistry": {"status": "PENDING_ADMIN"}, "message": "관리자 처리 요청을 기록했습니다."}
 
 
-def apply_request(name, version="v1"):
+def apply_request(name, version="v1", *, reconcile_hash=None):
     """Called only by admin_handler; this function is not a WebSocket route."""
     from agentcore import harness, registry_mirror
     request = api.get_record(name, version)
@@ -69,9 +76,32 @@ def apply_request(name, version="v1"):
         expected = harness.build_config(spec)
         existing = harness.find_harness(expected["harnessName"])
         if existing:
-            for field in ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills"):
-                if existing.get(field) != expected[field]:
-                    raise ConflictError("Existing Harness differs from the requested specification; reconcile it through IAM administration")
+            differs = any(existing.get(field) != expected[field] for field in
+                          ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills"))
+            if differs:
+                if not reconcile_hash:
+                    raise ConflictError("Existing Harness differs; use reconcile_agent_request with its reviewed configuration hash")
+                if harness_fingerprint(existing) != reconcile_hash:
+                    raise ConflictError("Harness changed after the reconciliation inspection")
+                if any(row["status"] == "APPROVED" for row in api.get_store().versions(record["name"])):
+                    raise ConflictError("Deprecate approved consumers before changing their Harness")
+                if fingerprint(api.get_record(record["name"], record["recordVersion"])) != body["expectedHash"]:
+                    raise ConflictError("Request source changed before reconciliation")
+                parameters = {key: value for key, value in expected.items() if key not in {"harnessName", "tags"}}
+                harness.ctl().update_harness(harnessId=existing["harnessId"],
+                    clientToken=hashlib.sha256((name + reconcile_hash).encode()).hexdigest(), **parameters)
+                for _ in range(30):
+                    current = harness.ctl().get_harness(harnessId=existing["harnessId"])["harness"]
+                    if current.get("status") in {"READY", "ACTIVE"}:
+                        if any(current.get(field) != expected[field] for field in
+                               ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills")):
+                            raise ConflictError("Reconciled Harness does not match the requested specification")
+                        break
+                    if current.get("status") in {"FAILED", "DELETE_FAILED"}:
+                        raise RuntimeError("Harness reconciliation failed")
+                    time.sleep(3)
+                else:
+                    raise RuntimeError("Harness reconciliation did not finish")
         else:
             harness.ensure_harness(spec)
     updated, audit = ((record, None) if applied else

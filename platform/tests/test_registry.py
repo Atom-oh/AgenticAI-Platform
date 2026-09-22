@@ -397,12 +397,12 @@ def test_handler_routes_end_to_end():
     ev = gw.posted[-1]
     assert ev["type"] == "registry_search" and ev["hits"] and ev["dense"] is False
     # create: 검증 실패 → 400, 성공 → DRAFT
-    h.registry_create(ctx, {"record": {"name": "bad name!", "recordVersion": "v1", "recordType": "AGENT"}})
+    h.registry_create(ctx, {"record": {"name": "bad name!", "recordVersion": "v1", "recordType": "CUSTOM", "subtype": "COMPONENT"}})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 400
-    h.registry_create(ctx, {"record": _rec("new_agent")})
+    h.registry_create(ctx, {"record": _rec("new_component", rtype="CUSTOM", subtype="COMPONENT")})
     ev = gw.posted[-1]
     assert ev["ok"] and ev["record"]["status"] == "DRAFT" and ev["record"]["updatedBy"] == ACTOR
-    h.registry_create(ctx, {"record": _rec("new_agent")})
+    h.registry_create(ctx, {"record": _rec("new_component", rtype="CUSTOM", subtype="COMPONENT")})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 409
     # Even the removed legacy handler cannot seed from a user context.
     h.registry_seed(ctx, {})

@@ -283,6 +283,7 @@ def test_mcp_gateway_name_filtering_without_strands():
     assert mg.filter_tool_names(discovered, ["list_regulations", "platform___analyze_regulation_impact"]) == discovered[:2]
     assert mg.filter_tool_names(discovered, []) == []
     assert mg.filter_tool_names(["trusted___tool", "other___tool"], ["trusted___tool"]) == ["trusted___tool"]
+    assert mg.missing_tool_names(["trusted___tool"], ["trusted___tool", "other___tool"]) == ["other___tool"]
     assert mg.bare_name("platform___run_screen_gates") == "run_screen_gates" and mg.bare_name("resolve_metric") == "resolve_metric"
     assert mg.SERVICE_NAME == "bedrock-agentcore"
 
@@ -296,6 +297,8 @@ def test_runtime_uses_only_the_authenticated_session_and_reports_missing_tools(r
     app._session_put(victim, [{"private": "VICTIM_HISTORY_MARKER"}])
     opened, streamed = [], []
     monkeypatch.setattr(app.mcp_gateway, "bare_name", lambda name: name.split("___")[-1], raising=False)
+    monkeypatch.setattr(app.mcp_gateway, "missing_tool_names",
+                        _load_container_module("mcp_gateway").missing_tool_names, raising=False)
 
     def session(spec, model, actual_sid):
         opened.append(actual_sid)
@@ -340,6 +343,26 @@ def test_payload_session_cannot_replace_missing_authenticated_context(runtime_ap
     events = asyncio.run(collect())
     assert events[0]["code"] == 400
     assert events[-1]["ignoredPayloadSessionId"] is True
+
+
+def test_missing_qualified_target_is_not_hidden_by_a_loaded_bare_name(runtime_app, monkeypatch):
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    spec = {**app.agent_specs.spec_by_name("regulation_impact_agent"),
+            "allowedTools": ["target_a___lookup", "target_b___lookup"]}
+    monkeypatch.setattr(app.agent_specs, "spec_by_name", lambda name: spec)
+    monkeypatch.setattr(app.mcp_gateway, "missing_tool_names",
+                        _load_container_module("mcp_gateway").missing_tool_names, raising=False)
+    monkeypatch.setattr(app, "_Session", lambda *args: SimpleNamespace(
+        tools=[SimpleNamespace(tool_name="lookup")], discovered=["target_a___lookup"],
+        skills_loaded=[], skills_missing=[], close=lambda: None))
+
+    async def collect():
+        return [event async for event in app.run({"agent": spec["name"], "prompt": "hello"}, "s" * 64)]
+
+    events = asyncio.run(collect())
+    assert events[-1]["toolsMissing"] == ["target_b___lookup"]
+    assert events[-1]["stopReason"] == "tools_unavailable"
 
 
 @pytest.mark.parametrize("tools", [None, [], ["*"]])

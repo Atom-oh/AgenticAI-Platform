@@ -89,7 +89,7 @@ def handler(event, context):
     try:
         fn(ctx, body)
     except Exception as e:
-        log_event("ws.action_failed", ctx.trace_id, action=action, error=f"{type(e).__name__}: {str(e)[:200]}")
+        log_event("ws.action_failed", ctx.trace_id, action=action, errorType=type(e).__name__)
         try:
             ctx.error("요청을 처리하지 못했습니다.", code=500, errorType=type(e).__name__)
         except Exception:

@@ -211,8 +211,7 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
             meta["stopReason"] = "error"
             return
         meta["toolNames"] = [t.tool_name for t in session.tools]
-        meta["toolsMissing"] = sorted({mcp_gateway.bare_name(name) for name in spec.get("allowedTools", [])}
-                                      - {mcp_gateway.bare_name(name) for name in meta["toolNames"]})
+        meta["toolsMissing"] = mcp_gateway.missing_tool_names(session.discovered, spec.get("allowedTools"))
         meta["gatewayTools"] = len(session.discovered)
         meta["skills"] = {"loaded": session.skills_loaded, "missing": session.skills_missing}
         if session.skills_missing:
