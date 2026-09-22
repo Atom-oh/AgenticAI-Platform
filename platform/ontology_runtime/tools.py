@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import copy
-from types import SimpleNamespace
 
 from ontology_runtime import admission
+from ontology_runtime.authorization import active_job
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.identity import RESERVED
-from workbench.service import Service, fail, fields
+from workbench.service import fail, fields
 from workspace import ontology_schema as schema
 from workspace.collaboration import Collaboration
-from workspace.ontology_sources import Sources
 from workspace.ontology_store import Ontology
 
 EXECUTIONS = "ontology-executions"
@@ -47,9 +46,11 @@ class Tools:
             raise AuthorizationDenied() from None
         claims, ledger = self.capabilities.verify(envelope["capability"], self.load,
             operation=operation, workload=self.workload)
-        scope = self.collaboration.resolve_scope(claims["actor"], claims["projectId"])
-        host = SimpleNamespace(storage=self.storage, collaboration=self.collaboration)
-        ctx = Service(host, scope, {"sub": claims["actor"], "exp": claims["authorizationExpiresAt"]})
+        ctx, artifact, _, sources, checks = active_job(self.storage, self.collaboration,
+            claims["projectId"], ledger["artifactId"], deadline=min(claims["exp"], ledger["deadline"]))
+        if (ctx.actor != claims["actor"] or artifact["jobInput"]["sourceRefs"] != ledger["sourceRefs"]
+                or artifact["jobInput"]["authorityHash"] != ledger.get("authorityHash")):
+            raise AuthorizationDenied()
         ctx.fresh({"owner", "planner", "designer", "developer"})
         arguments = {key: value for key, value in event.items() if key != RESERVED}
         fingerprint = schema.digest({"operation": operation, "arguments": arguments})
@@ -59,11 +60,14 @@ class Tools:
             fail(409, "execution-operation-changed", "같은 작업 ID의 내용이 다릅니다.")
         if ledger.get("calls", 0) >= 60 or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024:
             fail(422, "execution-budget", "실행의 도구 조회 한도를 초과했습니다.")
-        sources = Sources(ctx)
-        checks = []
         for reference in ledger["sourceRefs"]:
             checks.append(admission.require(ctx, reference))
         sources.verify(ledger["sourceRefs"])
+        manifest = Ontology(ctx).current()
+        if (manifest or {}).get("generation") != ledger["graphGeneration"]:
+            raise AuthorizationDenied()
+        if manifest:
+            checks.append(ctx.check("ontology", manifest))
         if operation == "ontology.source":
             fields(arguments, {"sourceRef"})
             reference = schema.source_ref(arguments.get("sourceRef"))

@@ -3,16 +3,15 @@ from __future__ import annotations
 
 import json
 import secrets
-from types import SimpleNamespace
 
 from ontology_runtime import admission
+from ontology_runtime.authorization import active_job
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.tools import EXECUTIONS, KEYS
-from workbench.service import Service, fail, fields
+from workbench.service import fail, fields
 from workspace import ontology_schema as schema
 from workspace.collaboration import Collaboration
 from workspace.ontology_analysis import source_input, validate_analysis
-from workspace.ontology_sources import Sources
 from workspace.ontology_store import Ontology
 
 
@@ -26,25 +25,17 @@ class Authority:
         fields(event, {"projectId", "artifactId", "inputHash"})
         project_id = schema._identifier(event.get("projectId"))
         artifact_id = schema._identifier(event.get("artifactId"))
-        owner = "project:" + project_id
-        artifact = self.storage.get(owner, "wb_artifact", artifact_id)
-        if not artifact or artifact.get("kind") != "ontology-analysis" or artifact.get("status") != "queued":
-            raise AuthorizationDenied()
+        ctx, artifact, job, sources, checks = active_job(self.storage, self.collaboration, project_id, artifact_id)
         pinned = artifact["jobInput"]
         if (pinned.get("backend", {}).get("name") != "agentcore"
                 or pinned["backend"].get("toolArchiveHash") != self.config["toolArchiveHash"]):
             fail(409, "agentcore-backend-changed", "요청 당시의 실행 도구 버전이 변경되었습니다.")
-        job = self.storage.get(owner, "job", artifact["jobId"])
-        if not job or job.get("status") != "running" or job.get("input") != pinned:
+        current, _ = Ontology(ctx).authorize_publication(pinned["name"])
+        if (current or {}).get("generation") != pinned["expectedGeneration"]:
             raise AuthorizationDenied()
-        if pinned["projectId"] != project_id:
-            raise AuthorizationDenied()
-        scope = self.collaboration.resolve_scope(pinned["actor"], project_id)
-        ctx = Service(SimpleNamespace(storage=self.storage, collaboration=self.collaboration),
-                      scope, {"sub": pinned["actor"], "exp": pinned["authorizationExpiresAt"] // 1000})
-        Ontology(ctx).authorize_publication(pinned["name"])
-        sources = Sources(ctx)
-        checks = sources.verify(pinned["sourceRefs"])
+        checks.extend(sources.verify(pinned["sourceRefs"]))
+        if current:
+            checks.append(ctx.check("ontology", current))
         # Each admitted source contributes its source fence and a distinct
         # classification fence. Keep every operation within DynamoDB's limit.
         if len(pinned["sourceRefs"]) > 40:
@@ -86,7 +77,8 @@ class Authority:
             "authorizationExpiresAt": pinned["authorizationExpiresAt"] // 1000, "deadline": min(now + 840, pinned["authorizationExpiresAt"] // 1000),
             "status": "admitted", "stage": "admitted", "sourceRefs": pinned["sourceRefs"],
             "files": request["files"], "nodeIds": [], "graphGeneration": pinned["expectedGeneration"],
-            "artifactId": artifact_id, "calls": 0, "retrievedBytes": 0, "ttl": now + 30 * 86400}
+            "artifactId": artifact_id, "authorityHash": pinned["authorityHash"],
+            "calls": 0, "retrievedBytes": 0, "ttl": now + 30 * 86400}
         capability, binding = self.capabilities.issue(ledger, self.config["capabilityKeyId"])
         ledger.update(binding)
         sources.recheck()
@@ -123,9 +115,13 @@ class Authority:
             raise AuthorizationDenied()
         result = {**value, "runtimeReceipt": receipt}
         key, digest = ctx.put_json("wb_artifact", artifact_id, "agentcore-result.json", result)
-        ctx.fresh()
-        checks = Sources(ctx).verify(pinned["sourceRefs"])
+        ctx, live_artifact, _, sources, checks = active_job(self.storage, self.collaboration,
+            project_id, artifact_id, deadline=current["deadline"])
+        if live_artifact["jobInput"] != pinned:
+            raise AuthorizationDenied()
+        checks.extend(sources.verify(pinned["sourceRefs"]))
         checks.extend(admission.require(ctx, reference) for reference in pinned["sourceRefs"])
+        checks.extend(sources.recheck())
         if self.storage.clock() // 1000 >= current["deadline"]:
             raise AuthorizationDenied()
         ctx.commit([self.collaboration._write(EXECUTIONS, "ac_execution",

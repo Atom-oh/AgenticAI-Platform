@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from workbench.service import fail, fields
 from workspace import ontology_schema as schema
-from workspace.ontology_sources import Sources
+from workspace.ontology_sources import Sources, authority_identity
 from workspace.collaboration import CollaborationError
 
 POLICY = "design-nonsensitive-v1"
@@ -12,7 +12,7 @@ CLASSES = frozenset({"synthetic", "public", "internal-non-sensitive"})
 
 def identifier(reference):
     ref = schema.source_ref(reference)
-    return schema.identity("admission", {key: value for key, value in ref.items() if key != "location"})
+    return schema.identity("admission", authority_identity(ref))
 
 
 def classify(ctx, body):

@@ -23,6 +23,11 @@ The separate Gateway target validates the signature, active signing-key record,
 ledger binding, allowed operation, deadlines, current membership, source
 classification and source revisions on every tool call. Source and execution
 writes use the project and source version fences.
+Each protected call also binds the original artifact and running workspace job.
+Cancellation, terminal artifacts and admission-time membership changes reject
+further work. Coupled writes check those job/artifact versions, and tool commits
+retain the capability's shorter expiry. Execution and operation records retain
+their bounded DynamoDB TTL.
 
 The source-analysis workflow obtains context/source data through Gateway, reads
 scoped structured Memory events, runs the pinned analyzer in Code Interpreter,
@@ -86,7 +91,8 @@ Use Python 3.12, the workspace requirements and the pinned infra dependencies:
 ```bash
 PYTHONPATH=platform python -m pytest \
   platform/tests/test_agentcore_capability.py \
-  platform/tests/test_agentcore_identity.py -q
+  platform/tests/test_agentcore_identity.py \
+  platform/tests/test_agentcore_authorization.py -q
 cd platform/infra
 npm ci
 node --test test/ontology-stack.test.cjs
