@@ -210,6 +210,12 @@ the separate adapter PR; a callable's backend label is insufficient.
 
 ## Workbench compatibility
 
+The legacy-shaped change API expresses changes to selected current nodes.
+Its free-text `before`/`after` fields are annotations, not source revision IDs.
+Exact old/new source changes use `POST /ontology/impact`, which binds those
+references and selects retained source snapshots. The workbench API does not
+infer source revisions from free text.
+
 In `legacy` mode, existing workbench graph behavior remains. In `canonical` mode,
 the workbench graph is a projection of the workspace manifest and retains
 `canonicalType`/`canonicalRelation` plus exact source references.

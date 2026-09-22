@@ -130,6 +130,10 @@ def validate_analysis(payload, value):
                 or not isinstance(item.get("resolution"), dict)):
             fail(409, "ontology-analysis-integrity", "분석 참조의 원본을 확인하지 못했습니다.")
         resolved = item["resolution"]
+        if resolved.get("status") == "approved-package":
+            selected = payload["resolver"].get("packages", {}).get(resolved.get("package"))
+            if selected != {key: resolved.get(key) for key in ("version", "sha256")}:
+                fail(409, "ontology-analysis-integrity", "패키지 분석 근거가 승인한 해석 프로필과 다릅니다.")
         if resolved.get("status") == "resolved-local" and (
                 resolved.get("targetPath") not in files
                 or resolved.get("targetHash") != files[resolved["targetPath"]]["sha256"]):
@@ -140,6 +144,7 @@ def validate_analysis(payload, value):
 def project_analysis(ctx, name, payload, bindings, analysis):
     value = validate_analysis(payload, analysis)
     nodes, edges, file_ids, components = {}, {}, {}, {}
+    projection_unknown = set()
     owner_scope = {"kind": "project", "projectId": ctx.project_id}
 
     def add_node(identifier, kind, title, refs, props, subtype=None):
@@ -170,6 +175,11 @@ def project_analysis(ctx, name, payload, bindings, analysis):
     for item in value["exports"]:
         if item.get("path") not in bindings or not isinstance(item.get("name"), str):
             fail(409, "ontology-analysis-integrity", "내보내기 기호의 원본이 올바르지 않습니다.")
+        try:
+            schema._text(item["name"], 160)
+        except ValueError:
+            projection_unknown.add("oversized-symbol-not-projected")
+            continue
         ref = {**bindings[item["path"]]["ref"], "location": {
             "path": item["path"], "exportName": item["name"], "line": item["line"], "column": item["column"]}}
         symbol_id = add_node(schema.identity("symbol", name, item["path"], item["name"]), "CodeSymbol",
@@ -177,6 +187,25 @@ def project_analysis(ctx, name, payload, bindings, analysis):
         add_edge(file_ids[item["path"]], symbol_id, "IMPLEMENTS", [ref])
     for item in value["references"]:
         resolution = item["resolution"]
+        if resolution["status"] == "approved-package":
+            from workspace.component_catalog import read_catalog
+            catalog = read_catalog()
+            if resolution.get("package") != "@studio/approved-ui":
+                projection_unknown.add("external-package-authority-unavailable")
+                continue
+            package_ref = {"sourceKind": "package", "sourceId": catalog["id"],
+                           "revision": resolution["version"], "sha256": resolution["sha256"],
+                           "audienceRevision": "platform-package-v1"}
+            Sources(ctx).resolve(package_ref)
+            package_id = schema.identity("package", catalog["id"])
+            if package_id not in nodes:
+                add_node(package_id, "Component", "@studio/approved-ui", [package_ref],
+                         {"packageName": "@studio/approved-ui", "description": "Verified platform package; design level unclassified."})
+            reference = {**bindings[item["path"]]["ref"], "location": {
+                "path": item["path"], "line": item["line"], "column": item["column"]}}
+            add_edge(file_ids[item["path"]], package_id, "IMPORTS", [reference, package_ref],
+                     {"line": item["line"], "column": item["column"], "resolution": "registered-platform-package"})
+            continue
         if resolution["status"] != "resolved-local":
             continue
         source, target = file_ids[item["path"]], file_ids[resolution["targetPath"]]
@@ -188,6 +217,9 @@ def project_analysis(ctx, name, payload, bindings, analysis):
         add_edge(source, target, "IMPORTS" if "import" in item["kind"] else "REFERENCES", [reference], properties)
         if item["kind"] == "jsx-use" and bindings[resolution["targetPath"]]["kind"] == "code":
             key = resolution["targetPath"], item.get("symbol", "default")
+            if key[1] == "*" or len(key[1]) > 160:
+                projection_unknown.add("oversized-symbol-not-projected")
+                continue
             if key not in components:
                 target_ref = {**bindings[key[0]]["ref"], "location": {"path": key[0], "exportName": key[1]}}
                 components[key] = add_node(schema.identity("component", name, *key), "Component",
@@ -200,10 +232,8 @@ def project_analysis(ctx, name, payload, bindings, analysis):
                     add_edge(components[key], symbol_id, "USES", [target_ref])
             add_edge(source, components[key], "USES", [reference],
                      {"line": item["line"], "column": item["column"]})
-    reasons = sorted({item["reason"] for item in value["unresolved"]} |
+    reasons = sorted(projection_unknown | {item["reason"] for item in value["unresolved"]} |
                      {"unreviewed-design-mappings", "outside-source-unit-not-certified"})
-    if any(item["resolution"]["status"] == "approved-package" for item in value["references"]):
-        reasons.append("package-dependencies-not-projected")
     if value["diagnostics"]:
         reasons.append("parser-errors")
     graph = {"schemaVersion": 1, "projectId": ctx.project_id, "nodes": list(nodes.values()), "edges": list(edges.values()),

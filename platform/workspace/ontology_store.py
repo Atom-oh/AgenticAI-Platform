@@ -247,8 +247,6 @@ class Ontology:
                     "identities": marker["identities"]}
         if (current or {}).get("generation") != expected_generation:
             fail(409, "ontology-changed", "온톨로지 기준이 변경되었습니다.")
-        if prior and not _replacement_complete:
-            fail(422, "legacy-import-incomplete", "변환하지 못한 기존 항목이 있어 이전 가져오기를 교체할 수 없습니다.")
         schema._fields(graph, {"schemaVersion", "projectId", "nodes", "edges"}, {"coverage"})
         if not isinstance(graph["nodes"], list) or not isinstance(graph["edges"], list):
             fail(400, "ontology-input", "노드와 관계 목록이 필요합니다.")
@@ -348,6 +346,12 @@ class Ontology:
                 normalized["edges"][i] = schema.seal({**value, "id": identifier, "provenance": _producer, "reviewState": "candidate"})
         supplied = {edge["id"] for edge in normalized["edges"]}
         normalized["edges"].extend(copy.deepcopy(edge) for key, edge in managed.items() if key not in supplied)
+        if prior and not _replacement_complete:
+            for kind in ("nodes", "edges"):
+                preserved = {item["id"] for item in normalized[kind] if not item["tombstone"]}
+                previous = {item["id"] for item in prior["graph"][kind] if not item["tombstone"]}
+                if not previous <= preserved:
+                    fail(422, "legacy-import-incomplete", "변환하지 못한 기존 항목이 있어 이전 매핑을 제거할 수 없습니다.")
         normalized = schema.validate_graph(normalized, external_nodes=list(externals.values()))
         normalized["coverage"] = {**normalized["coverage"], "complete": False,
             "scope": "static-source-unit" if _producer == "parser-extracted" else "declared-project-partition",

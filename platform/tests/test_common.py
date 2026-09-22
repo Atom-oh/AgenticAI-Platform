@@ -50,6 +50,16 @@ def test_log_redacts_structured_sensitive_fields(capsys):
     assert "payloadHash" in out and "promptHash" in out and '"count": 2' in out
 
 
+def test_log_uses_a_safe_field_schema_for_unknown_values_and_error_text(capsys):
+    clog.log_event("safe-fields", "t1", metadata={"prompt": "RAW-PROMPT-MARKER"},
+        customerName="PRIVATE-NAME-MARKER", actor="person@example.invalid",
+        error="Bearer PRIVATE-CREDENTIAL-MARKER", count=3, status="failed")
+    out = capsys.readouterr().out
+    assert all(value not in out for value in ["RAW-PROMPT", "PRIVATE-", "person@example"])
+    assert "metadataHash" in out and "customerNameHash" in out and "actorHash" in out and "errorHash" in out
+    assert '"count": 3' in out and '"status": "failed"' in out
+
+
 class _FakeTable:
     def __init__(self):
         self.items = {}
