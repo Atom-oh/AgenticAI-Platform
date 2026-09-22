@@ -25,7 +25,7 @@ def _bucket(identifier):
 
 
 def source_identity(ref):
-    return schema.digest({key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256")})
+    return authority_identity(ref)
 
 
 def _references(graph):
@@ -265,6 +265,7 @@ class Ontology:
             normalized["nodes"][i] = (copy.deepcopy(old) if old and _mapping(old) == _mapping(candidate) else
                 schema.seal({**candidate, "revision": old["revision"] + 1 if old else 1}))
         own = {n["id"]: n for n in normalized["nodes"]}
+        old_edges = {edge["id"]: edge for edge in prior["graph"]["edges"]} if prior else {}
         externals = {}
         for i, raw in enumerate(normalized["edges"]):
             schema.validate_edge(raw)
@@ -280,8 +281,11 @@ class Ontology:
                 if identifier not in own:
                     externals[identifier] = target
                 value[end]["revision"] = target["revision"]
-            old_edge_ids = {edge["id"] for edge in prior["graph"]["edges"]} if prior else set()
-            identifier = value["id"] if value["id"] in old_edge_ids else schema.identity("edge", partition, value["id"])
+            identifier = value["id"] if value["id"] in old_edges else schema.identity("edge", partition, value["id"])
+            previous = old_edges.get(identifier)
+            if previous and (previous["type"] != value["type"] or any(
+                    previous[end]["id"] != value[end]["id"] for end in ("src", "dst"))):
+                fail(409, "ontology-edge-identity", "관계 종류나 대상을 변경할 때는 새 관계 ID를 사용하세요. 기존 관계는 이력으로 보존됩니다.")
             normalized["edges"][i] = schema.seal({**value, "id": identifier, "provenance": _producer, "reviewState": "candidate"})
         normalized = schema.validate_graph(normalized, external_nodes=list(externals.values()))
         normalized["coverage"] = {**normalized["coverage"], "complete": False,

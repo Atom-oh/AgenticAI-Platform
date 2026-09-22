@@ -159,7 +159,8 @@ class WorkspaceAPI:
             project_id = project_headers[0] if project_headers else None
             if segments[0] in ("projects", "products", "comments"):
                 response = self.collaboration.handle(method, segments, _body(event) if method in ("POST", "PUT", "PATCH") else {},
-                                                       query, owner, project_id)
+                                                       query, owner, project_id,
+                                                       authorization_expires_at=int(claims["exp"]) * 1000 if claims.get("exp") is not None else None)
                 if response is not None:
                     return _json(response[0], response[1])
             scope = self.collaboration.resolve_scope(owner, project_id)

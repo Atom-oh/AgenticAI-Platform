@@ -137,6 +137,31 @@ def test_retry_redelivers_a_durable_job_after_a_crash_before_invocation(wb, monk
     assert len(wb.storage.list(wb.owner, "wb_artifact")) == 1
 
 
+def test_missing_job_cannot_be_dispatched_after_the_pinned_authorization_expires(wb, monkeypatch):
+    wb.api.ontology_analyzer_ready = True
+    ctx = context(wb)
+    ctx.claims["exp"] = wb.now // 1000 + 1
+    body = {"requestId": "expired-orphan", "name": "example", "files": collection(wb)}
+    monkeypatch.setattr(wb.api, "_new_job", lambda *args: (_ for _ in ()).throw(RuntimeError("synthetic interruption")))
+    with pytest.raises(RuntimeError):
+        submit(ctx, body)
+    wb.now += 2000
+    wb.storage.clock = lambda: wb.now
+    monkeypatch.setattr(wb.api, "_new_job", lambda *args: pytest.fail("expired dispatch"))
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), body)
+    assert error.value.code == "authorization-expired"
+
+
+def test_optional_generation_pins_the_current_manifest(wb):
+    from test_ontology_store import candidate
+    initial = Ontology(context(wb)).publish_candidate("existing", candidate(wb),
+        expected_generation=None, request_id="existing")
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "implicit-generation", "name": "example", "files": collection(wb)})
+    assert queued["artifact"]["jobInput"]["expectedGeneration"] == initial["generation"]
+
+
 def test_sibling_file_change_preserves_unchanged_file_revision_and_node_hash(wb):
     wb.api.ontology_analyzer_ready = True
     files = collection(wb)
@@ -257,6 +282,21 @@ def test_real_worker_claim_prevents_duplicate_analyzer_delivery(wb, monkeypatch)
     worker.handle(event)
     assert worker.handle(event)["status"] == "duplicate-or-unavailable"
     assert len(calls) == 1
+
+
+def test_real_worker_records_matching_job_and_artifact_failure_without_execution(wb, monkeypatch):
+    from workspace.worker import Worker
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "failure-state", "name": "example", "files": collection(wb)})
+    worker = Worker(storage=wb.storage)
+    worker.collaboration = wb.collab
+    worker.ontology_analyzer = local_analyze
+    monkeypatch.setattr("workspace.ontology_analysis.subprocess.run", lambda *a, **k: pytest.fail("offline execution"))
+    assert worker.handle({"owner": wb.owner, "jobId": queued["job"]["id"]})["status"] == "failed"
+    job = wb.storage.get(wb.owner, "job", queued["job"]["id"])
+    artifact = wb.storage.get(wb.owner, "wb_artifact", queued["artifact"]["id"])
+    assert job["status"] == artifact["status"] == "failed"
+    assert job["errorCode"] == artifact["errorCode"] == "ontology-analysis-backend"
 
 
 def test_interrupted_claim_becomes_a_terminal_failure_on_job_or_artifact_read(wb):

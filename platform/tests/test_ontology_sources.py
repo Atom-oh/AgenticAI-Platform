@@ -84,6 +84,19 @@ def test_workbench_source_keeps_its_existing_acl_and_generation_authority(wb):
         Sources(context(wb)).resolve(reference)
 
 
+def test_workbench_generation_is_checked_even_when_source_permissions_do_not_change(wb):
+    indexed(wb)
+    hit = call(wb, "GET", "knowledge")["items"][0]
+    evidence = call(wb, "GET", "knowledge/" + hit["id"])["evidence"]
+    reference = workbench_reference(evidence)
+    manifest = wb.storage.get(wb.owner, "wb_index", "current")
+    manifest["sources"][evidence["sourceId"]]["generation"] = "b" * 64
+    wb.storage.put(wb.owner, "wb_index", manifest, manifest["version"])
+    with pytest.raises(CollaborationError) as error:
+        Sources(context(wb)).resolve(reference)
+    assert error.value.code == "ontology-source-stale"
+
+
 def test_only_current_published_product_guidance_is_a_current_source(wb):
     product = wb.collab.handle("POST", ["products"], {
         "requestId": "p", "title": "Synthetic product", "description": "Synthetic guidance",

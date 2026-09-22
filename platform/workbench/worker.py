@@ -72,7 +72,7 @@ def _mark_failed(worker, owner, job, code):
                       if operation in {"skill-execute", "ontology-analyze"} else data.get("skillId"))
         current = worker.storage.get(owner, kind, identifier)
         if (not current or current.get("jobId") != job.get("id")
-                or current.get("status") in {"completed", "DRAFT", "APPROVED", "DEPRECATED"}):
+                or current.get("status") in {"completed", "failed", "cancelled", "FAILED", "DRAFT", "APPROVED", "DEPRECATED"}):
             return
         collab = getattr(worker, "collaboration", None) or Collaboration(worker.storage)
         project_id = current["projectId"]

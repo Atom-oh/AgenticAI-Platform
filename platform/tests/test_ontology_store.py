@@ -83,6 +83,17 @@ def test_partition_cannot_keep_active_edges_to_nodes_it_removes(wb):
     assert error.value.code == "ontology-removed-endpoint"
 
 
+def test_changed_edge_endpoints_require_a_new_identity_to_preserve_history(wb):
+    value = candidate(wb)
+    first = publish(wb, value)
+    relation = value["edges"][0]
+    value["edges"] = [schema.seal({**relation, "src": relation["dst"], "dst": relation["src"]})]
+    with pytest.raises(CollaborationError) as error:
+        publish(wb, value, request="changed-relation", generation=first["generation"])
+    assert error.value.code == "ontology-edge-identity"
+    assert Ontology(context(wb)).current()["generation"] == first["generation"]
+
+
 def test_read_page_does_not_inherit_the_atomic_write_authority_limit(wb):
     generation = None
     for part in range(2):

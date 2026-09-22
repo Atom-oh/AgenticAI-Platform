@@ -124,6 +124,7 @@ class Service:
                 expired = True
             if expired:
                 fail(401, "authorization-expired", "인증이 만료되었습니다.")
+            self.scope = {**self.scope, "authorizationExpiresAt": int(expiry) * 1000}
         self.scope = self.collaboration.require(self.scope, "read")
         if self.scope["role"] not in self.required_roles:
             fail(403, "forbidden", "현재 역할로 수행할 수 없는 작업입니다.")

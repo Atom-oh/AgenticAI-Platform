@@ -45,6 +45,7 @@ def test_product_and_canonical_partition_publish_in_one_transaction(wb):
     assert next(node for node in view["nodes"] if node["type"] == "Procedure")["reviewState"] == "candidate"
     assert published["ontology"]["guidelineId"] == published["guideline"]["id"]
     assert "ontologyHash" in published["product"]
+    assert any(node["label"] == "Condition" for node in published["ontology"]["nodes"])
     operations = wb.storage.table().transactions[-1]["TransactItems"]
     assert len(operations) == 6  # product, guideline, legacy projection, source asset, canonical manifest, project fence
 
@@ -62,6 +63,27 @@ def test_failed_canonical_index_cannot_leave_product_published(wb, monkeypatch):
         publish(wb, value)
     assert wb.storage.get(wb.owner, "product", value["id"])["publishedGuidelineId"] is None
     assert wb.storage.get(wb.owner, "ontology", CURRENT) is None
+
+
+def test_canonical_product_publication_retains_the_callers_authorization_deadline(wb, monkeypatch):
+    wb.collab.ontology_enabled = True
+    wb.storage.clock = lambda: wb.now
+    value = product(wb)
+    original = wb.storage._prepare
+
+    def expire(owner, kind, item, version, now):
+        prepared = original(owner, kind, item, version, now)
+        if kind == "product" and item.get("publishedGuidelineId"):
+            wb.now += 2000
+        return prepared
+
+    monkeypatch.setattr(wb.storage, "_prepare", expire)
+    with pytest.raises(CollaborationError) as error:
+        wb.collab.handle("POST", ["products", value["id"], "publish"], {"version": value["version"]},
+                         {}, "alice", wb.project["id"], authorization_expires_at=wb.now + 1000)
+    assert error.value.code == "authorization-expired"
+    assert wb.storage.get(wb.owner, "ontology", CURRENT) is None
+    assert not wb.storage.get(wb.owner, "product", value["id"]).get("publishedGuidelineId")
 
 
 def test_business_source_partition_cannot_be_overwritten_or_reapproved_as_manual_mapping(wb):

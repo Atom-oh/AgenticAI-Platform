@@ -146,6 +146,8 @@ def _commit(api, scope, writes, action="read", checks=(), claims=None):
         from workspace.storage import Conflict
         if scope.get("project"):
             writes = [*writes, _write(scope, "project", scope["project"], scope["project"]["version"])]
+        if len(writes) + len(checks) > 100:
+            raise CollaborationError(422, "report-scope-limit", "보고서의 원본 근거 범위를 나누어 다시 생성하세요.")
         try:
             from workbench.service import check_source_deadlines
             result = api.storage.put_many(writes, checks=list(checks), retry_conflicts=False,

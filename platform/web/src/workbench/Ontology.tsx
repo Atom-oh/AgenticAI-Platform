@@ -14,6 +14,23 @@ type Impact = { items: { nodeId: string; title: string; type: string; evidenceKi
   generation: string; coverage: unknown };
 type AnalysisArtifact = { id: string; status: string; name?: string; jobId?: string; requestId?: string;
   coverage?: unknown; execution?: { backend?: string; [key: string]: unknown } };
+const HASH = /^[a-f0-9]{64}$/;
+function completeReceipt(artifact: AnalysisArtifact) {
+  const execution = artifact.execution;
+  const coverage = artifact.coverage as { complete?: unknown; truncated?: unknown } | undefined;
+  if (artifact.status !== 'completed' || !coverage || typeof coverage !== 'object' || Array.isArray(coverage) ||
+      typeof coverage.complete !== 'boolean' || typeof coverage.truncated !== 'boolean' ||
+      !execution || execution.sourceExecuted !== false ||
+      typeof execution.inputHash !== 'string' || !HASH.test(execution.inputHash)) return false;
+  if (execution.backend === 'local-offline')
+    return ['analyzerCodeHash', 'dependencyLockHash'].every(key =>
+      typeof execution[key] === 'string' && HASH.test(execution[key] as string));
+  if (execution.backend === 'agentcore-code-interpreter')
+    return typeof execution.toolArchiveHash === 'string' && HASH.test(execution.toolArchiveHash) &&
+      ['interpreterId', 'sessionId', 'nodeVersion', 'architecture', 'region'].every(key =>
+        typeof execution[key] === 'string' && (execution[key] as string).length > 0);
+  return false;
+}
 const LEVELS = ['Foundation', 'Atom', 'Molecule', 'Organism', 'Pattern', 'PageTemplate', 'Screen', 'Procedure'];
 const STATUS: Record<string, string> = { candidate: '검토 후보', reviewed: '검토 완료', approved: '승인', rejected: '반려', deprecated: '폐기' };
 const KIND: Record<string, string> = { Foundation: '기초 자산', Atom: '기본 요소', Molecule: '소규모 조합', Organism: '업무 영역',
@@ -48,13 +65,23 @@ export default function OntologyView() {
       const path = `/ontology/analyses/${resource(analysisId)}`;
       let result = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
       signal.throwIfAborted();
-      setReceipt(result.artifact);
       if (['queued', 'processing', 'running'].includes(result.artifact.status) && result.artifact.jobId) {
-        await waitForJob(client, result.artifact.jobId, { signal, onUpdate: update });
+        setReceipt({ ...result.artifact, execution: undefined });
+        try { await waitForJob(client, result.artifact.jobId, { signal, onUpdate: update }); }
+        catch (error) {
+          signal.throwIfAborted();
+          const failed = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
+          signal.throwIfAborted();
+          setReceipt({ ...failed.artifact, execution: undefined });
+          throw error;
+        }
         result = await client.get<{ artifact: AnalysisArtifact }>(path, signal);
       }
-      if (result.artifact.status !== 'completed' || !result.artifact.execution?.backend || !result.artifact.coverage)
+      if (result.artifact.id !== analysisId || !completeReceipt(result.artifact)) {
+        signal.throwIfAborted();
+        setReceipt({ id: analysisId, status: ['failed', 'cancelled'].includes(result.artifact.status) ? result.artifact.status : 'unverified' });
         throw new Error('분석 완료 기록과 실행 근거를 확인하지 못했습니다. 저장된 작업 상태를 확인하세요.');
+      }
       return result.artifact;
     }, value => { setReceipt(value); state.refresh(); accepted.refresh(); }, '저장된 분석의 실행 근거를 조회했습니다.');
     return () => analysis.cancel();

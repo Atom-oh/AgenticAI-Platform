@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 
 from workspace import ontology_schema as schema
+from workspace.ontology_sources import authority_identity
 
 LIMITS = {"nodes": 500, "edges": 1000, "hops": 12, "items": 50}
 STRUCTURAL = schema.DEPENDENCIES - {"GOVERNED_BY"}
@@ -15,7 +16,7 @@ CHANGE_EDGES = {
 
 
 def _same_source(left, right):
-    return all(left.get(key) == right.get(key) for key in ("sourceKind", "sourceId", "revision", "sha256"))
+    return authority_identity(left) == authority_identity(right)
 
 
 def analyze(graph, change, *, generation, can_read):

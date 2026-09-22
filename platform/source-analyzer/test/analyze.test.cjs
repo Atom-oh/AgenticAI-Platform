@@ -115,6 +115,13 @@ test('image-set strings and url sources retain exact assets without treating typ
   assert.ok(dynamic.unresolved.some(item => item.path === 'app.css' && item.reason === 'unsupported-image-set-source'));
 });
 
+test('unsupported Sass directives and resource helpers retain their source locations', () => {
+  const result = analyze(request([text('theme.scss', '\n@include theme;\n.hero { background: image-url("./hero.png") }', 'style')]));
+  assert.ok(result.unresolved.some(item => item.reason === 'scss-transform-not-inspected' && item.line === 2));
+  assert.ok(result.unresolved.some(item => item.reason === 'scss-function-not-inspected' && item.line === 3));
+  assert.equal(result.coverage.complete, false);
+});
+
 test('CSS source-map discovery cannot inspect host files', () => {
   const PreviousMap = require('../node_modules/postcss/lib/previous-map');
   const original = PreviousMap.prototype.loadFile;

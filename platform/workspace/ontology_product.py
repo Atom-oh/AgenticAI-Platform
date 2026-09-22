@@ -17,8 +17,10 @@ def prepare_product(collaboration, scope, product, guideline, legacy):
     The caller already authorized publish and writes the new guideline/product
     records in that same transaction. The new source is not read before commit.
     """
-    ctx = Service(SimpleNamespace(storage=collaboration.storage, collaboration=collaboration),
-                  scope, {"sub": scope["actor"]})
+    claims = {"sub": scope["actor"]}
+    if scope.get("authorizationExpiresAt") is not None:
+        claims["exp"] = scope["authorizationExpiresAt"] // 1000
+    ctx = Service(SimpleNamespace(storage=collaboration.storage, collaboration=collaboration), scope, claims)
     ctx.fresh({"owner", "planner"})
     store = Ontology(ctx)
     current = store.current()

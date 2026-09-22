@@ -143,8 +143,13 @@ async function harness() {
       if (target === '/ontology/analyses/analysis-artifact') {
         const artifact = data.analyses[0];
         if (data.jobs['analysis-job'].status === 'completed') Object.assign(artifact, {
-          status: 'completed', execution: { backend: 'local-offline', inputHash: hash },
-          coverage: { complete: false, unknown: ['unreviewed-design-mappings'] } });
+          status: 'completed', execution: { backend: 'local-offline', inputHash: hash, sourceExecuted: false,
+            analyzerCodeHash: hash, dependencyLockHash: hash },
+          coverage: { complete: false, truncated: false, unknown: ['unreviewed-design-mappings'] } });
+        if (fixture.malformedAnalysisReceipt && artifact.status === 'completed')
+          return json({ artifact: { ...artifact, execution: { backend: 'local-offline', inputHash: hash } } });
+        if (fixture.unknownAnalysisBackend && artifact.status === 'completed')
+          return json({ artifact: { ...artifact, execution: { ...artifact.execution, backend: 'future-runtime' } } });
         return json({ artifact });
       }
       if (target === '/ontology/impact') {
@@ -415,6 +420,22 @@ test('accepted ontology analysis can be recovered after remount without another 
     assert.match(await h.page.getByRole('region', { name: '원본 분석 실행 근거' }).innerText(), new RegExp(requestId));
     assert.equal(h.fixture.calls.filter(call => call.method === 'POST' && call.target === '/ontology/analyses').length, 1);
   } finally { await h.close(); }
+});
+
+test('ontology never presents a backend label or unsupported receipt as completed execution evidence', { timeout: 60000 }, async () => {
+  for (const flag of ['malformedAnalysisReceipt', 'unknownAnalysisBackend']) {
+    const h = await harness();
+    try {
+      h.fixture.analyzerConfigured = true; h.fixture[flag] = true;
+      h.data('a').assets = [{ id: 'code', name: 'App.tsx', uploadStatus: 'stored' }];
+      await h.open('ontology');
+      await h.page.getByRole('checkbox', { name: 'App.tsx', exact: true }).check();
+      await h.page.getByRole('button', { name: '원본 분석·매핑 후보 등록', exact: true }).click();
+      await h.page.getByText('분석 작업 상태: 실행 근거 미확인', { exact: true }).waitFor();
+      assert.equal(await h.page.getByText(/^실제 분석 환경:/).count(), 0);
+      assert.equal(await h.page.getByText('저장된 분석의 실행 근거를 조회했습니다.', { exact: true }).count(), 0);
+    } finally { await h.close(); }
+  }
 });
 
 test('Workbench creates a project, saves and publishes real product fields, preserves opaque navigation', { timeout: 60000 }, async () => {

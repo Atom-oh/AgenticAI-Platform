@@ -323,6 +323,8 @@ function analyze(input) {
           if (node.type === 'rule' && /[#$]\{/.test(node.selector || ''))
             problem(file, 'computed-style-reference', at.line, at.column);
           const value = node.type === 'decl' ? node.value : node.type === 'atrule' ? node.params : '';
+          if (file.path.toLowerCase().endsWith('.scss') && node.type === 'atrule')
+            problem(file, 'scss-transform-not-inspected', at.line, at.column);
           if (!value) return;
           if (/[#$]\{|\$[a-zA-Z_]/.test(value)) problem(file, 'computed-style-reference', at.line, at.column);
           const parsed = valueParser(value);
@@ -334,6 +336,9 @@ function analyze(input) {
               reference(file, 'style-import', tokens.at(-1).value, at);
           }
           parsed.walk(token => {
+            if (file.path.toLowerCase().endsWith('.scss') && token.type === 'function' &&
+                !['url', 'image-set', '-webkit-image-set'].includes(token.value.toLowerCase()))
+              problem(file, 'scss-function-not-inspected', at.line, at.column);
             if (token.type === 'function' && ['image-set', '-webkit-image-set'].includes(token.value.toLowerCase())) {
               let first = true;
               for (const child of token.nodes) {
@@ -395,8 +400,11 @@ function analyze(input) {
         },
         onclosetag() { stack.pop(); },
         ontext(value) {
-          if (value.trim() && ['script', 'style'].includes(stack.at(-1)))
-            problem(file, stack.at(-1) === 'script' ? 'inline-script-not-executed' : 'inline-style-references');
+          if (value.trim() && ['script', 'style'].includes(stack.at(-1))) {
+            const position = at(parser.startIndex);
+            problem(file, stack.at(-1) === 'script' ? 'inline-script-not-executed' : 'inline-style-references',
+              position.line, position.column);
+          }
         },
       }, { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true });
       parser.write(file.text); parser.end();

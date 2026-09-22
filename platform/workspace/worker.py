@@ -291,8 +291,13 @@ class Worker:
                     if current_job and current_job.get("status") == "completed":
                         return {"status": "completed", "jobId": identifier}
                     if current_job and current_job.get("status") in {"queued", "running"}:
-                        self.storage.put(owner, "job", {**current_job, "status": "failed",
-                            "error": "온톨로지 분석을 완료하지 못했습니다."}, current_job["version"])
+                        from workspace.collaboration import CollaborationError
+                        code = error.code if isinstance(error, CollaborationError) else "ontology-processing-failed"
+                        current_job = self.storage.put(owner, "job", {**current_job, "status": "failed",
+                            "error": "온톨로지 분석을 완료하지 못했습니다.", "errorCode": code}, current_job["version"])
+                    if current_job and current_job.get("status") == "failed":
+                        from workbench.worker import _mark_failed
+                        _mark_failed(self, owner, current_job, current_job.get("errorCode", "ontology-processing-failed"))
                 except Exception:
                     return {"status": "failed", "jobId": identifier, "failurePersisted": False}
                 return {"status": "failed", "jobId": identifier}
