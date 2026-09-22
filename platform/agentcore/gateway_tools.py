@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -148,9 +149,8 @@ def tool_run_screen_gates(args: dict) -> dict:
         FunctionName=fn, Payload=json.dumps(payload, ensure_ascii=False).encode())
     if r.get("FunctionError"):
         return {"error": "Gate execution failed"}
-    body = json.loads(r["Payload"].read().decode() or "{}")
+    body = _gate_summary(json.loads(r["Payload"].read().decode() or "{}"))
     # Registry 승인 검증: 헤더 주석의 Name@vN 이 승인 목록에 있는지
-    import re
     used = re.findall(r"([A-Za-z]+)@(v\d+)", (args.get("code", "").splitlines() or [""])[0])
     approved = {(c["name"], c["version"]) for c in comps}
     body["registry"] = {"ok": all((n, v) in approved for n, v in used) and bool(used),
@@ -161,10 +161,70 @@ def tool_run_screen_gates(args: dict) -> dict:
 def tool_search_internal_documents(args: dict) -> dict:
     try:
         from report.internal_tool_handler import handler as internal
-        return internal({"query": args.get("query", ""), "top_k": int(args.get("top_k") or 5)}, None)
+        body = internal({"query": args.get("query", ""), "top_k": int(args.get("top_k") or 5)}, None)
+        if (not isinstance(body, dict) or not isinstance(body.get("results"), list)
+                or type(body.get("total")) is not int or type(body.get("corpusSize")) is not int
+                or _contains_error(body)):
+            raise ValueError("Invalid document tool response")
+        rows = []
+        for row in body["results"][:20]:
+            if not isinstance(row, dict) or not all(isinstance(row.get(key), str) for key in ("docId", "title", "type", "dept")):
+                raise ValueError("Invalid document result")
+            rows.append({key: row[key][:500] for key in ("docId", "title", "type", "dept")})
+        return {"results": rows, "total": len(rows), "corpusSize": body["corpusSize"],
+                "source": "seed/out/nodes.jsonl (Document·Regulation)"}
     except Exception as e:
         log_event("tool.document_search_failed", errorType=type(e).__name__)
         return {"error": "Internal document search failed"}
+
+
+def _contains_error(value):
+    if isinstance(value, dict):
+        if any(str(key).lower() in {"error", "errormessage", "stacktrace", "traceback", "exception"}
+               for key in value):
+            return True
+        status = value.get("statusCode")
+        if type(status) is int and status >= 400:
+            return True
+        return any(_contains_error(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_error(item) for item in value)
+    return False
+
+
+def _gate_summary(body):
+    """Accept the real gate result shape; export verdicts and diagnostic metadata."""
+    if not isinstance(body, dict) or type(body.get("ok")) is not bool or _contains_error(body):
+        raise ValueError("Invalid gate response")
+    result = {"ok": body["ok"]}
+    for name in ("build", "types", "lint", "a11y", "visual"):
+        section = body.get(name)
+        if not isinstance(section, dict) or type(section.get("ok")) is not bool:
+            raise ValueError("Missing gate verdict")
+        safe = {"ok": section["ok"]}
+        for field in ("errors", "warnings", "violations"):
+            if field not in section:
+                continue
+            if not isinstance(section[field], list):
+                raise ValueError("Invalid gate diagnostics")
+            safe[field] = []
+            for diagnostic in section[field][:100]:
+                if not isinstance(diagnostic, dict):
+                    raise ValueError("Invalid gate diagnostic")
+                metadata = {key: diagnostic[key] for key in ("line", "column", "code")
+                            if type(diagnostic.get(key)) is int and diagnostic[key] >= 0}
+                for key in ("ruleId", "id"):
+                    value = diagnostic.get(key)
+                    if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_/@-]{0,79}", value):
+                        metadata[key] = value
+                if diagnostic.get("impact") in {"minor", "moderate", "serious", "critical"}:
+                    metadata["impact"] = diagnostic["impact"]
+                safe[field].append(metadata)
+            safe[field + "Count"] = len(section[field])
+        if name == "visual":
+            safe["changed"] = section.get("changed") if type(section.get("changed")) is bool else None
+        result[name] = safe
+    return result
 
 
 TOOLS = {
@@ -193,11 +253,17 @@ def handler(event, context):
         return {"error": "Unknown Gateway tool", "code": "UNKNOWN_TOOL"}
     log_event("tool.call", tool=name, argKeys=sorted(k for k in args.keys() if k != "code"))
     try:
+        from engine import gate
+        incoming = gate.measure("", json.dumps(args, ensure_ascii=False, separators=(",", ":")))
+        hits = incoming["piiRules"]
+        log_event("tool.input_boundary", tool=name, chars=incoming["chars"], estTokens=incoming["estTokens"],
+                  piiCount=hits["count"], piiTypes=sorted(hits["byType"]), blocked=bool(hits["count"]))
+        if hits["count"]:
+            return {"error": "Tool input blocked by privacy boundary", "code": "BOUNDARY_REFUSED"}
         out = fn(args)
         body = json.loads(json.dumps(out, ensure_ascii=False, default=str))
-        if isinstance(body, dict) and any(key in body for key in ("error", "errorMessage", "stackTrace")):
+        if _contains_error(body):
             return {"error": "Tool request could not be completed", "code": "TOOL_REJECTED"}
-        from engine import gate
         measured = gate.measure("", json.dumps(body, ensure_ascii=False, separators=(",", ":")))
         pii = measured["piiRules"]
         log_event("tool.boundary", tool=name, chars=measured["chars"], estTokens=measured["estTokens"],

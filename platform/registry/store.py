@@ -70,7 +70,10 @@ def _to_ddb(obj: Any) -> Any:
 
 def _is_conditional_failure(e: Exception) -> bool:
     resp = getattr(e, "response", None) or {}
-    return (resp.get("Error") or {}).get("Code") == "ConditionalCheckFailedException"
+    code = (resp.get("Error") or {}).get("Code")
+    return code == "ConditionalCheckFailedException" or (
+        code == "TransactionCanceledException" and any(
+            reason.get("Code") == "ConditionalCheckFailed" for reason in resp.get("CancellationReasons", [])))
 
 
 def _record_from_item(item: dict) -> dict:
@@ -81,6 +84,7 @@ def _record_from_item(item: dict) -> dict:
 class RegistryStore:
     def __init__(self, table: Any = None, table_name: Optional[str] = None) -> None:
         self._table = table
+        self._transaction_client = None
         self._table_name = table_name if table_name is not None else os.environ.get("REGISTRY_TABLE", "")
 
     @property
@@ -101,6 +105,31 @@ class RegistryStore:
         return self._table
 
     # ---------- 레코드 ----------
+    def _write_with_audit(self, operation: str, mutation: dict, name: str, version: str, event: dict) -> None:
+        """Commit the conditional record mutation and its audit event atomically."""
+        table = self.table()
+        audit = {"Put": {"Item": self._audit_item(name, version, event),
+                         "ConditionExpression": "attribute_not_exists(pk)"}}
+        writes = [{operation: mutation}, audit]
+        if self.backend == "memory":
+            table.transact_write_items(TransactItems=writes)
+            return
+        import boto3
+        from boto3.dynamodb.types import TypeSerializer
+        if self._transaction_client is None:
+            self._transaction_client = boto3.client("dynamodb", region_name=REGION)
+        serializer = TypeSerializer()
+        encoded = []
+        for write in writes:
+            kind, parameters = next(iter(write.items()))
+            parameters = {**parameters, "TableName": table.name}
+            for field in ("Item", "Key", "ExpressionAttributeValues"):
+                if field in parameters:
+                    parameters[field] = {key: serializer.serialize(_to_ddb(value))
+                                         for key, value in parameters[field].items()}
+            encoded.append({kind: parameters})
+        self._transaction_client.transact_write_items(TransactItems=encoded, ClientRequestToken=str(uuid.uuid4()))
+
     def put_new(self, rec: dict, actor: str, reason: str = "", transition: str = "create") -> dict:
         """신규 레코드 저장 (name+recordVersion 유일). 생성 감사 이벤트(from=None) 기록."""
         ts = now_ms()
@@ -109,13 +138,13 @@ class RegistryStore:
                      "createdAt": ts, "updatedAt": ts, "updatedBy": actor, "stateRevision": 1})
         item = _to_ddb(item)
         try:
-            self.table().put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
+            self._write_with_audit("Put", {"Item": item, "ConditionExpression": "attribute_not_exists(pk)"},
+                                   rec["name"], rec["recordVersion"],
+                                   audit_event(actor, "", rec["status"], reason, ts, transition=transition))
         except Exception as e:  # noqa: BLE001 — 조건 실패만 변환, 나머지는 그대로
             if _is_conditional_failure(e):
                 raise ConflictError(f"이미 존재하는 레코드: {rec['name']} {rec['recordVersion']}")
             raise
-        self.put_audit(rec["name"], rec["recordVersion"],
-                       audit_event(actor, "", rec["status"], reason, ts, transition=transition))
         return _record_from_item(item)
 
     def get(self, name: str, version: str) -> Optional[dict]:
@@ -172,22 +201,19 @@ class RegistryStore:
                     condition += f" AND {key} = {value}"
                 else:
                     condition += f" AND attribute_not_exists({key})"
+        ev = audit_event(actor, cur["status"], to_status, reason, ts, transition=tname)
         try:
-            r = self.table().update_item(
-                Key={"pk": rec_pk(name), "sk": version},
-                UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
-                ConditionExpression=condition,
-                ExpressionAttributeNames=names,
-                ExpressionAttributeValues=values,
-                ReturnValues="ALL_NEW")
+            self._write_with_audit("Update", {
+                "Key": {"pk": rec_pk(name), "sk": version},
+                "UpdateExpression": "SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
+                "ConditionExpression": condition, "ExpressionAttributeNames": names,
+                "ExpressionAttributeValues": values,
+            }, name, version, ev)
         except Exception as e:  # noqa: BLE001
             if _is_conditional_failure(e):
-                latest = self.get(name, version)
-                raise TransitionError(f"상태가 이미 변경되었습니다 (현재: {latest['status'] if latest else '삭제됨'}). 새로고침 후 다시 시도하세요.")
+                raise ConflictError("상태가 이미 변경되었습니다. 새로고침 후 다시 시도하세요.") from e
             raise
-        ev = audit_event(actor, cur["status"], to_status, reason, ts, transition=tname)
-        self.put_audit(name, version, ev)
-        return _record_from_item(r.get("Attributes") or {**cur, "status": to_status, "updatedAt": ts, "updatedBy": actor}), ev
+        return {**cur, "status": to_status, "updatedAt": ts, "updatedBy": actor, "stateRevision": values[":revision"]}, ev
 
     def force_status(self, name: str, version: str, to_status: str, actor: str, reason: str) -> Tuple[dict, dict]:
         """상태 기계를 우회하는 직접 기록 (시연 리셋·기준선 재설정 전용). 감사 이벤트에 forced=True."""
@@ -200,19 +226,19 @@ class RegistryStore:
         names = {"#st": "status", "#ua": "updatedAt", "#ub": "updatedBy"}
         values = {":to": to_status, ":ts": ts, ":by": actor}
         condition = "attribute_exists(pk) AND " + _revision_condition(cur, names, values)
+        ev = audit_event(actor, cur["status"], to_status, reason, ts, forced=True)
         try:
-            r = self.table().update_item(
-                Key={"pk": rec_pk(name), "sk": version},
-                UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
-                ConditionExpression=condition, ExpressionAttributeNames=names,
-                ExpressionAttributeValues=values, ReturnValues="ALL_NEW")
+            self._write_with_audit("Update", {
+                "Key": {"pk": rec_pk(name), "sk": version},
+                "UpdateExpression": "SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
+                "ConditionExpression": condition, "ExpressionAttributeNames": names,
+                "ExpressionAttributeValues": values,
+            }, name, version, ev)
         except Exception as e:
             if _is_conditional_failure(e):
                 raise ConflictError("The record changed during administrative status update") from e
             raise
-        ev = audit_event(actor, cur["status"], to_status, reason, ts, forced=True)
-        self.put_audit(name, version, ev)
-        return _record_from_item(r.get("Attributes") or {**cur, "status": to_status}), ev
+        return {**cur, "status": to_status, "updatedAt": ts, "updatedBy": actor, "stateRevision": values[":revision"]}, ev
 
     def rewrite(self, name: str, version: str, fields: dict, actor: str) -> dict:
         """상태 외 필드(description/payload/tags/owner/subtype/recordType) 덮어쓰기 — 시드 reset 용."""
@@ -236,7 +262,7 @@ class RegistryStore:
                                          ReturnValues="ALL_NEW")
         except Exception as e:  # noqa: BLE001
             if _is_conditional_failure(e):
-                raise NotFoundError(f"레코드 없음: {name} {version}")
+                raise ConflictError("The record changed during administrative rewrite") from e
             raise
         return _record_from_item(r.get("Attributes") or {})
 
@@ -247,12 +273,15 @@ class RegistryStore:
                                  ExpressionAttributeValues={":e": embedding_json})
 
     # ---------- 감사 ----------
-    def put_audit(self, name: str, version: str, ev: dict) -> None:
+    @staticmethod
+    def _audit_item(name: str, version: str, ev: dict) -> dict:
         # sk = ts(13자리) # 프로세스 내 순번(6자리) # 난수 — 같은 ms 에 두 이벤트가 나도 최신순 정렬이 깨지지 않는다
-        item = {"pk": audit_pk(name, version),
+        return {"pk": audit_pk(name, version),
                 "sk": f"{int(ev['ts']):013d}#{next(_audit_seq) % 1000000:06d}#{uuid.uuid4().hex[:6]}",
                 "name": name, "recordVersion": version, **ev}
-        self.table().put_item(Item=item)
+
+    def put_audit(self, name: str, version: str, ev: dict) -> None:
+        self.table().put_item(Item=self._audit_item(name, version, ev))
 
     def audit(self, name: str, version: str, limit: int = 50) -> List[dict]:
         r = self.table().query(KeyConditionExpression="pk = :pk",

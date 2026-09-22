@@ -122,7 +122,9 @@ Record example (illustrative values, not a fixed approved version):
   IAM processing opt into `get_record(..., include_internal=True)` internally;
   user request bodies cannot enable that option.
 - `name` + `recordVersion` is unique. Conditional writes detect conflicts;
-  transitions retain actor/from/to/reason/time audit data.
+  record creation/status changes and their actor/from/to/reason/time audit
+  insertions commit atomically. Agent discovery omits operational prompts;
+  Agent audit responses expose identity/reason hashes rather than private text.
 - `REGISTRY_TABLE` uses `pk`, `sk`, and GSI `byStatus(status, updatedAt)`.
   No table configuration selects the in-memory test store.
 - Consumer queries return only `APPROVED` records. Administrative hybrid search

@@ -163,6 +163,24 @@ class InMemoryTable:
         return self.indexes[index_name]
 
     # -- API --
+    def transact_write_items(self, TransactItems: list, **_: Any) -> dict:
+        """Atomic fake for Registry's record+audit Put/Update transaction."""
+        self.calls.append("transact_write_items")
+        before = copy.deepcopy(self._items)
+        try:
+            for operation in TransactItems:
+                kind, parameters = next(iter(operation.items()))
+                if kind == "Put":
+                    self.put_item(**parameters)
+                elif kind == "Update":
+                    self.update_item(**parameters)
+                else:
+                    raise ValueError("Unsupported test transaction operation")
+        except Exception:
+            self._items = before
+            raise
+        return {}
+
     def put_item(self, Item: dict, ConditionExpression: Optional[str] = None,
                  ExpressionAttributeNames: Optional[dict] = None,
                  ExpressionAttributeValues: Optional[dict] = None, **_: Any) -> dict:

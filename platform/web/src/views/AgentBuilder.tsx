@@ -469,8 +469,7 @@ function Chat({ sel, onApprove, onRefresh }: {
                   <div className="col-span-2 break-all">허용 도구 <span className="font-mono">{(hz.allowedTools || []).join(', ') || '—'}</span></div>
                   <div className="col-span-2 break-all">스킬 <span className="font-mono">{(hz.skills || []).map((s: any) => s?.s3?.uri || JSON.stringify(s)).join(', ') || '없음'}</span></div>
                   <div className="col-span-2 break-all font-mono text-slate-500">{hz.arn}</div>
-                  <details className="col-span-2 mt-1"><summary className="cursor-pointer">시스템 프롬프트</summary>
-                    <div className="md text-slate-700 mt-1 text-[11px]">{hz.systemPrompt}</div></details>
+                  <div className="col-span-2 mt-1 text-slate-500">시스템 지침 원문은 관리자 검토 자료에서 확인합니다.</div>
                 </div>
               )}
             </div>

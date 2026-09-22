@@ -42,6 +42,13 @@ def test_log_redacts_forbidden_keys(capsys):
     assert "비밀 프롬프트 원문" not in out and "promptHash" in out and '"count": 3' in out
 
 
+def test_user_supplied_version_cannot_log_a_phone_number(capsys):
+    clog.log_event("version-test", version="010-1234-5678")
+    out = capsys.readouterr().out
+    assert "010-1234-5678" not in out and "versionHash" in out
+    assert clog.redact({"version": "v12"}) == {"version": "v12"}
+
+
 def test_log_redacts_structured_sensitive_fields(capsys):
     clog.log_event("structured", "t1", payload={"text": "SENSITIVE-NESTED-MARKER"},
                    prompt=["SENSITIVE-LIST-MARKER"], count=2)

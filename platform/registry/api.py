@@ -108,6 +108,23 @@ def strip(rec: dict) -> dict:
     return out
 
 
+def public_record(rec: dict) -> dict:
+    """Discovery metadata excludes operational prompts and inline Skill sources."""
+    out = dict(rec)
+    out["payload"] = {key: value for key, value in (out.get("payload") or {}).items()
+                      if key not in {"systemPrompt", "skillMd"}}
+    return out
+
+
+def public_agent_audit(events: List[dict]) -> List[dict]:
+    """Keep approval evidence while withholding private request reasons/identities."""
+    from common.log import hash8
+    return [{**{key: value for key, value in event.items() if key not in {"actor", "reason"}},
+             "actorHash": hash8(str(event.get("actor", ""))),
+             "reasonHash": hash8(str(event.get("reason", ""))),
+             "reasonLen": len(str(event.get("reason", "")))} for event in events]
+
+
 def _sort_key(r: dict) -> Tuple[str, int, str]:
     m = re.match(r"^v(\d+)$", str(r.get("recordVersion", "")))
     return (str(r.get("name", "")).lower(), int(m.group(1)) if m else 0, str(r.get("recordVersion", "")))

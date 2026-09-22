@@ -250,7 +250,7 @@ def _registry_view(n) -> dict:
         rec = reg.get_record(name, ver)
     except Exception as e:  # noqa: BLE001
         return {"available": True, "record": None, "tier": TIER_BADGE, "error": f"{type(e).__name__}: {str(e)[:120]}"}
-    return {"available": True, "record": rec, "name": name, "recordVersion": ver, "tier": TIER_BADGE,
+    return {"available": True, "record": reg.public_record(rec) if rec else None, "name": name, "recordVersion": ver, "tier": TIER_BADGE,
             "backend": reg.backend()}
 
 
@@ -596,7 +596,8 @@ def portal_publish(ctx: Ctx, body: dict) -> None:
     log_event("portal.publish", ctx.trace_id, id=n.id, label=n.label, action=action, email=ctx.email,
               recordType=rec_in["recordType"], subtype=rec_in["subtype"], status=(record or {}).get("status"),
               ms=_elapsed(t0))
-    ctx.post({"type": "portal_publish", "ok": True, "id": n.id, "label": n.label, "action": action, "record": record,
+    ctx.post({"type": "portal_publish", "ok": True, "id": n.id, "label": n.label, "action": action,
+              "record": reg.public_record(record) if record else None,
               "target": {"recordType": rec_in["recordType"], "subtype": rec_in["subtype"], "name": rec_in["name"],
                          "recordVersion": rec_in["recordVersion"]},
               "mapping": _mapping_for(n.label), "tier": TIER_BADGE, "registryBackend": reg.backend(),

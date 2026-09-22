@@ -51,7 +51,7 @@ def request_transition(name, version, target, actor, reason):
         saved = api.create_record({"name": key, "recordVersion": "v1", "recordType": "CUSTOM",
             "subtype": "AGENT_ADMIN_REQUEST", "description": "IAM administrator agent transition request",
             "owner": actor[:80], "tags": ["agent-admin-request"], "payload": request}, actor=actor, embed=False)
-    return {"record": record, "request": {"name": saved["name"], "version": "v1", "status": "PENDING_ADMIN"},
+    return {"record": api.public_record(record), "request": {"name": saved["name"], "version": "v1", "status": "PENDING_ADMIN"},
             "agentcoreRegistry": {"status": "PENDING_ADMIN"}, "message": "관리자 처리 요청을 기록했습니다."}
 
 

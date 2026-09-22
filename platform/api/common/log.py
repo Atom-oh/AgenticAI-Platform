@@ -36,6 +36,8 @@ def redact(fields: dict) -> dict:
     for k, v in fields.items():
         metric = k in _METRICS and (type(v) in {int, float, bool} or isinstance(v, str) and _NUMBER.fullmatch(v))
         tag = k in _TAGS and isinstance(v, str) and _TAG.fullmatch(v)
+        if tag and k == "version":
+            tag = bool(re.fullmatch(r"v\d{1,9}|v?\d{1,4}(?:\.\d{1,4}){1,3}|DRAFT|LATEST", v))
         fingerprint = k.endswith("Hash") and isinstance(v, str) and _HASH.fullmatch(v)
         pii_types = k == "piiTypes" and isinstance(v, list) and len(v) <= 30 and all(
             isinstance(item, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", item) for item in v)

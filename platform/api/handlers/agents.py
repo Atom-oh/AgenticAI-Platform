@@ -39,7 +39,7 @@ MAX_MESSAGE = 4000
 # Harness 상세에서 클라이언트로 내보내는 키 — executionRoleArn·clientToken 은 화이트리스트에 없다
 HARNESS_KEYS = ("harnessId", "harnessName", "arn", "harnessArn", "status", "model", "tools", "skills",
                 "allowedTools", "memory", "maxIterations", "maxTokens", "timeoutSeconds", "tags", "createdAt",
-                "updatedAt", "systemPrompt")
+                "updatedAt")
 
 
 # ---------- 지연 import (boto3 클라이언트는 agentcore 모듈 안에서만 만들어진다) ----------
@@ -302,7 +302,7 @@ def agent_create(ctx: Ctx, body: dict) -> None:
     log_event("agent.requested", ctx.trace_id, name=name, version=version, model=spec["model"],
               tools=len(spec["allowedTools"]), skills=len(spec["skills"]), memory=spec["memory"],
               promptLen=len(spec["systemPrompt"]), email=ctx.email)
-    ctx.post({"type": "agent_create", "ok": True, "record": rec,
+    ctx.post({"type": "agent_create", "ok": True, "record": registry_api.public_record(rec),
               "harness": {"arn": None, "status": "PENDING_ADMIN", "reused": False},
               "agentcoreRegistry": {"status": "PENDING_ADMIN"}, "audit": ev,
               "message": "명세를 저장했습니다. 승인 요청 후 IAM 관리자가 실행 환경을 준비합니다."})
@@ -323,7 +323,8 @@ def agent_transition(ctx: Ctx, body: dict) -> None:
         ctx.post({"type": "agent_transition", "ok": False, "error": str(e)[:300], "code": getattr(e, "code", 400),
                   "errorType": type(e).__name__, "name": name, "version": version, "to": to})
         return
-    ctx.post({"type": "agent_transition", "ok": True, **result, "auditTrail": registry_api.audit_trail(name, version)})
+    ctx.post({"type": "agent_transition", "ok": True, **result,
+              "auditTrail": registry_api.public_agent_audit(registry_api.audit_trail(name, version))})
 
 
 # ---------- 조회 ----------
@@ -339,8 +340,8 @@ def agent_get(ctx: Ctx, body: dict) -> None:
         harness_summary = _harness_summary(_harness().find_harness(_harness_name(name)))
     except Exception as e:  # noqa: BLE001
         harness_err = _err(e)
-    ctx.post({"type": "agent_get", "ok": True, "record": rec, "harness": harness_summary, "harnessError": harness_err,
-              "audit": registry_api.audit_trail(name, rec["recordVersion"])})
+    ctx.post({"type": "agent_get", "ok": True, "record": registry_api.public_record(rec), "harness": harness_summary, "harnessError": harness_err,
+              "audit": registry_api.public_agent_audit(registry_api.audit_trail(name, rec["recordVersion"]))})
 
 
 # ---------- 호출 (스트리밍) ----------

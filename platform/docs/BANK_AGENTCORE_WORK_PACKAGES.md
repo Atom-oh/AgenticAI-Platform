@@ -66,6 +66,10 @@ this request path for Agent records. WsFn cannot invoke AdminFn.
 
 Request records, payloads and audit entries are excluded from user Registry
 listing, get, search, version and consumer APIs. Their namespace is reserved.
+Agent discovery omits operational system prompts and embedded Skill content.
+Agent audit responses retain transition evidence and hashes rather than private
+request reasons. Record creation/status changes and their audit inserts commit
+in one DynamoDB transaction; audit failure cannot leave an approval behind.
 The IAM-only `apply_agent_request` Admin operation validates the exact
 requested record, provisions the approved Harness, applies its Registry
 transition and mirrors it. Changed specifications and conflicting existing
@@ -108,6 +112,11 @@ Runtime/Harness upstream exception bodies are not returned to the user.
 Harness input/system text is inspected before managed execution. The bank
 Gateway Lambda independently measures and scans every outgoing tool result,
 blocks residual identifiers or failed inspection, and returns bounded errors.
+It also inspects arguments before executing a tool, including nested model
+adapter calls inside tools.
+Gate and document results are projected from their expected response schemas;
+nested upstream diagnostic bodies are not returned. Gate failure verdicts,
+counts, rule identifiers and compiler codes remain available.
 The managed Harness loop does not run the Strands pre-model hook; its input
 trace must not be presented as inspection of the complete managed history.
 

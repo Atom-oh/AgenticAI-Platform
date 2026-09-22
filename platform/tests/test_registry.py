@@ -121,6 +121,55 @@ def test_uniqueness_name_plus_version():
     assert api.get_record("widget_x", "v1")["status"] == "DRAFT"
 
 
+@pytest.mark.parametrize("operation", ["create", "transition", "force"])
+def test_record_and_audit_commit_atomically_on_audit_failure(monkeypatch, operation):
+    store = api.get_store()
+    if operation != "create":
+        api.create_record(_rec(), ACTOR, embed=False)
+    before = store.table().dump()
+    put = store.table().put_item
+
+    def fail_audit(**kwargs):
+        if kwargs["Item"]["pk"].startswith("audit#"):
+            raise RuntimeError("synthetic audit write failure")
+        return put(**kwargs)
+
+    monkeypatch.setattr(store.table(), "put_item", fail_audit)
+    with pytest.raises(RuntimeError, match="synthetic audit write failure"):
+        if operation == "create":
+            api.create_record(_rec(), ACTOR, embed=False)
+        elif operation == "transition":
+            api.transition("widget_x", "v1", "PENDING_APPROVAL", ACTOR)
+        else:
+            store.force_status("widget_x", "v1", "APPROVED", ACTOR, "Synthetic reset")
+    assert store.table().dump() == before
+
+
+def test_registry_transaction_uses_valid_dynamodb_wire_values():
+    from types import SimpleNamespace
+    import botocore.session
+    from botocore.validate import validate_parameters
+    from registry.model import validate_record
+    shape = botocore.session.get_session().get_service_model("dynamodb").operation_model("TransactWriteItems").input_shape
+    recorded = []
+
+    def transact(**parameters):
+        validate_parameters(parameters, shape)
+        recorded.append(parameters)
+
+    store = RegistryStore(table=SimpleNamespace(name="synthetic-registry"), table_name="synthetic-registry")
+    store._transaction_client = SimpleNamespace(transact_write_items=transact)
+    record = validate_record(_rec(payload={"rate": "3.250", "limit": 123456789, "ratio": 0.5}))
+    saved = store.put_new(record, ACTOR)
+    writes = recorded[0]["TransactItems"]
+    assert len(writes) == 2
+    assert all(write["Put"]["TableName"] == "synthetic-registry" for write in writes)
+    payload = writes[0]["Put"]["Item"]["payload"]["M"]
+    assert payload == {"rate": {"S": "3.250"}, "limit": {"N": "123456789"}, "ratio": {"N": "0.5"}}
+    assert writes[1]["Put"]["Item"]["pk"]["S"].startswith("audit#")
+    assert saved["stateRevision"] == 1
+
+
 @pytest.mark.parametrize("bad", [
     {"name": "", "recordVersion": "v1", "recordType": "AGENT"},
     {"name": "한글이름", "recordVersion": "v1", "recordType": "AGENT"},

@@ -16,6 +16,8 @@ def context():
     {"items": [{"contact": "person@example.invalid"}]},
     {"error": "UPSTREAM_BODY_SENTINEL Traceback lambda.py"},
     {"errorMessage": "UPSTREAM_BODY_SENTINEL", "stackTrace": ["lambda.py:1"]},
+    {"statusCode": 500, "body": {"stackTrace": ["UPSTREAM_BODY_SENTINEL"]}},
+    {"result": [{"nested": {"errorMessage": "UPSTREAM_BODY_SENTINEL"}}]},
 ])
 def test_gateway_outgoing_payload_is_independently_checked(monkeypatch, capsys, output):
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: output)
@@ -49,3 +51,22 @@ def test_gateway_measurement_failure_blocks_output(monkeypatch):
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: {"safe": True})
     monkeypatch.setattr(gate, "measure", lambda *args: (_ for _ in ()).throw(RuntimeError("scan failed")))
     assert gateway_tools.handler({}, context())["code"] == "TOOL_FAILED"
+
+
+def test_gateway_input_is_inspected_before_any_nested_tool_model_call(monkeypatch):
+    calls = []
+    monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: calls.append(args))
+    assert gateway_tools.handler({"question": "CUST-0042"}, context())["code"] == "BOUNDARY_REFUSED"
+    assert calls == []
+
+
+def test_gate_summary_keeps_verdicts_without_backend_diagnostic_bodies():
+    body = {"ok": False, **{name: {"ok": True} for name in ("build", "types", "lint", "a11y", "visual")}}
+    body["types"] = {"ok": False, "errors": [{"code": 2322, "line": 8, "column": 3,
+                                            "message": "UPSTREAM_BODY_SENTINEL /var/task/private.py"}]}
+    summary = gateway_tools._gate_summary(body)
+    assert summary["ok"] is False and summary["types"]["ok"] is False
+    assert summary["types"]["errors"] == [{"code": 2322, "line": 8, "column": 3}]
+    assert "UPSTREAM_BODY_SENTINEL" not in json.dumps(summary)
+    with pytest.raises(ValueError):
+        gateway_tools._gate_summary({"statusCode": 500, "body": {"stackTrace": ["private"]}})

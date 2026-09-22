@@ -514,6 +514,29 @@ def test_agent_get_omits_upstream_harness_status_reason(fakes):
     assert "UPSTREAM_STATUS_SENTINEL" not in json.dumps(gw.posted)
 
 
+def test_operational_prompts_are_not_part_of_authenticated_discovery(fakes):
+    from handlers import registry as routes
+    from agentcore.administration import apply_request
+    h = _handler()
+    _create(h)
+    requester, sent = _ctx()
+    h.agent_transition(requester, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED",
+                                   "reason": "PRIVATE_APPROVAL_REASON"})
+    apply_request(sent.posted[-1]["request"]["name"])
+    ctx, gw = _ctx(user_sub="another-user")
+    h.agent_get(ctx, {"name": "card_benefit_agent", "version": "v1"})
+    routes.registry_get(ctx, {"name": "card_benefit_agent", "version": "v1"})
+    routes.registry_list(ctx, {"type": "AGENT"})
+    routes.registry_search(ctx, {"q": "card_benefit_agent"})
+    routes.registry_consumer(ctx, {"type": "AGENT"})
+    assert SECRET_PROMPT_MARK not in json.dumps(gw.posted)
+    assert "systemPrompt" not in json.dumps(gw.posted)
+    assert "PRIVATE_APPROVAL_REASON" not in json.dumps(gw.posted)
+    assert any(event["reason"] == "PRIVATE_APPROVAL_REASON" for event in api.audit_trail("card_benefit_agent", "v1"))
+    # Trusted administration still reads the original immutable specification.
+    assert SECRET_PROMPT_MARK in api.get_record("card_benefit_agent", "v1")["payload"]["systemPrompt"]
+
+
 def test_admin_approval_fences_specification_changes_during_provisioning(fakes, monkeypatch):
     from agentcore.administration import apply_request
     from registry.model import RegistryError
@@ -730,7 +753,7 @@ def test_agent_get_hides_execution_role(fakes):
     assert ev["type"] == "agent_get" and ev["ok"] and ev["record"]["recordVersion"] == "v1"
     hs = ev["harness"]
     assert hs["status"] == "READY" and hs["arn"].endswith("abc123") and hs["harnessName"] == "bank_card_benefit_agent"
-    assert SECRET_PROMPT_MARK in hs["systemPrompt"] and isinstance(hs["systemPrompt"], str)
+    assert "systemPrompt" not in hs and SECRET_PROMPT_MARK not in json.dumps(ev)
     assert "executionRoleArn" not in json.dumps(ev) and "clientToken" not in json.dumps(ev) and ROLE_ARN not in json.dumps(ev)
     assert [a["to"] for a in ev["audit"]] == ["APPROVED", "PENDING_APPROVAL", "DRAFT"]
     h.agent_get(ctx, {"name": "nope"})
