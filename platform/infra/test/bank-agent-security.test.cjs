@@ -86,6 +86,12 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
   const runtime = statements('AgentsRuntimeRole');
   assert(runtime.length, 'Prepare the agent context so the Runtime is included in this test');
   assert(!actions(runtime).some(action => action.startsWith('bedrock-agentcore:GetWorkloadAccessToken')));
+  for (const rows of [runtime, statements('HarnessExecRole')]) {
+    const agentcore = actions(rows).filter(action => action.startsWith('bedrock-agentcore:'));
+    assert.deepEqual(agentcore.sort(), ['bedrock-agentcore:GetGateway',
+      'bedrock-agentcore:InvokeGateway', 'bedrock-agentcore:ListGatewayTargets'].sort(),
+      'Execution roles have no unused Memory/Identity grants or wildcard AgentCore actions');
+  }
   const gateway = Object.values(resources).find(resource => resource.Type === 'AWS::BedrockAgentCore::Gateway');
   assert.equal(gateway.Properties.AuthorizerType, 'AWS_IAM');
   assert.equal(gateway.Properties.ExceptionLevel, undefined);

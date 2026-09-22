@@ -162,8 +162,8 @@ node and NLB probes and exposes no model or input data. This is an additional
 application boundary, not a claim of strict-mode or host-level isolation.
 
 The main stack accepts the exact same-account Seoul relay ARN using
-`mydataPrivacyFunctionArn`. Only the WebSocket API role receives the new
-identity-policy grant. Existing account-level administrative permissions are not
+`mydataPrivacyFunctionArn`. Only the WebSocket and Workspace API roles receive
+the consumer identity-policy grant. Existing account-level administrative permissions are not
 rewritten. No new exports, GPU resources, VPCs, or peering are introduced.
 
 ## Image and manifest procedure

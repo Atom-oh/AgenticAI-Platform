@@ -146,6 +146,8 @@ def tool_run_screen_gates(args: dict) -> dict:
     payload = {"code": args.get("code", ""), "filename": "Screen.tsx", "components": comps}
     r = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "ap-northeast-2")).invoke(
         FunctionName=fn, Payload=json.dumps(payload, ensure_ascii=False).encode())
+    if r.get("FunctionError"):
+        return {"error": "Gate execution failed"}
     body = json.loads(r["Payload"].read().decode() or "{}")
     # Registry 승인 검증: 헤더 주석의 Name@vN 이 승인 목록에 있는지
     import re
@@ -161,7 +163,8 @@ def tool_search_internal_documents(args: dict) -> dict:
         from report.internal_tool_handler import handler as internal
         return internal({"query": args.get("query", ""), "top_k": int(args.get("top_k") or 5)}, None)
     except Exception as e:
-        return {"error": f"내부 문서 검색 실패: {type(e).__name__}: {str(e)[:120]}"}
+        log_event("tool.document_search_failed", errorType=type(e).__name__)
+        return {"error": "Internal document search failed"}
 
 
 TOOLS = {
@@ -187,11 +190,21 @@ def handler(event, context):
     args = event if isinstance(event, dict) else {}
     fn = TOOLS.get(name)
     if fn is None:
-        return {"error": f"unknown tool: {name}", "available": sorted(TOOLS)}
+        return {"error": "Unknown Gateway tool", "code": "UNKNOWN_TOOL"}
     log_event("tool.call", tool=name, argKeys=sorted(k for k in args.keys() if k != "code"))
     try:
         out = fn(args)
+        body = json.loads(json.dumps(out, ensure_ascii=False, default=str))
+        if isinstance(body, dict) and any(key in body for key in ("error", "errorMessage", "stackTrace")):
+            return {"error": "Tool request could not be completed", "code": "TOOL_REJECTED"}
+        from engine import gate
+        measured = gate.measure("", json.dumps(body, ensure_ascii=False, separators=(",", ":")))
+        pii = measured["piiRules"]
+        log_event("tool.boundary", tool=name, chars=measured["chars"], estTokens=measured["estTokens"],
+                  piiCount=pii["count"], piiTypes=sorted(pii["byType"]), blocked=bool(pii["count"]))
+        if pii["count"]:
+            return {"error": "Tool output blocked by privacy boundary", "code": "BOUNDARY_REFUSED"}
+        return body
     except Exception as e:
-        log_event("tool.failed", tool=name, error=f"{type(e).__name__}: {str(e)[:200]}")
-        return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
-    return json.loads(json.dumps(out, ensure_ascii=False, default=str))
+        log_event("tool.failed", tool=name, errorType=type(e).__name__)
+        return {"error": "Tool execution failed", "code": "TOOL_FAILED"}

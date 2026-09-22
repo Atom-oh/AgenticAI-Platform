@@ -9,14 +9,18 @@ from registry.model import ConflictError, NotFoundError, ValidationError, check_
 
 HARNESS_FIELDS = ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills",
                   "maxIterations", "maxTokens", "timeoutSeconds", "memory", "environment",
-                  "environmentArtifact", "environmentVariables", "authorizerConfiguration", "truncation")
+                  "environmentArtifact", "environmentVariables", "authorizerConfiguration", "truncation", "hooks")
 
 
 def harness_settings(value):
-    # The service can represent disabled managed memory explicitly or omit it.
     settings = {key: value.get(key) for key in HARNESS_FIELDS}
-    if settings["memory"] in (None, {}, {"disabled": {}}):
-        settings["memory"] = None
+    environment = settings.get("environment")
+    if isinstance(environment, dict) and isinstance(environment.get("agentCoreRuntimeEnvironment"), dict):
+        config = environment["agentCoreRuntimeEnvironment"]
+        settings["environment"] = {**environment, "agentCoreRuntimeEnvironment": {
+            key: value for key, value in config.items() if key not in {"agentRuntimeArn", "agentRuntimeName", "agentRuntimeId"}}}
+    settings["environmentVariables"] = settings["environmentVariables"] or {}
+    settings["hooks"] = settings["hooks"] or []
     return settings
 
 
@@ -103,9 +107,8 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
                     raise ConflictError("Deprecate approved consumers before changing their Harness")
                 if fingerprint(api.get_record(record["name"], record["recordVersion"])) != body["expectedHash"]:
                     raise ConflictError("Request source changed before reconciliation")
-                if any(existing.get(key) not in (None, {}, {"disabled": {}}) for key in
-                       ("memory", "environment", "environmentArtifact", "environmentVariables",
-                        "authorizerConfiguration", "truncation")):
+                if any(existing.get(key) not in (None, {}, []) for key in
+                       ("environmentArtifact", "authorizerConfiguration", "hooks")):
                     raise ConflictError("Remove unexpected Harness extensions through IAM before reconciliation")
                 parameters = {key: value for key, value in expected.items() if key not in {"harnessName", "tags"}}
                 harness.ctl().update_harness(harnessId=existing["harnessId"],

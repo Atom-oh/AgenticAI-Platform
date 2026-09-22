@@ -70,6 +70,9 @@ class FakeHarness:
         self.calls.append(("invoke", arn, text, session_id))
         if self.fail_invoke:
             raise RuntimeError("ThrottlingException: slow down")
+        measured = harness_mod._inspect(text, "synthetic.harness.input")
+        yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
+                            "piiRules": measured["piiRules"]["count"], "source": "harness-input"})
         yield ("text", "안녕")
         yield ("tool_start", {"name": "lookup_customer_profile", "toolUseId": "t1"})
         yield ("tool_input", {"name": "lookup_customer_profile", "input": json.dumps({"question": "우대금리"})})
@@ -279,6 +282,19 @@ def test_generic_registry_create_cannot_supply_an_approved_agent(fakes):
     assert api.get_record("forged_agent", "v1") is None and not fh.calls and not fm.calls
 
 
+@pytest.mark.parametrize("name,subtype", [
+    ("forged_request", "AGENT_ADMIN_REQUEST"),
+    ("agent-request-" + "a" * 48, "COMPONENT"),
+])
+def test_generic_registry_cannot_occupy_administration_namespaces(fakes, name, subtype):
+    from handlers.registry import registry_create
+    ctx, gw = _ctx()
+    registry_create(ctx, {"record": {"name": name, "recordVersion": "v1", "recordType": "CUSTOM",
+                                    "subtype": subtype, "status": "APPROVED", "payload": {}}})
+    assert gw.posted[-1]["code"] == 403
+    assert api.get_store().get(name, "v1") is None
+
+
 def test_admin_request_reconciles_a_failed_mirror_without_reprovisioning(fakes):
     from agentcore.administration import apply_request
     fh, fm = fakes
@@ -435,7 +451,7 @@ def test_admin_requests_are_hidden_from_all_registry_discovery_paths(fakes):
     assert all(row["name"] != name for row in api.list_approved())
 
 
-def test_stream_error_events_never_expose_upstream_response_bodies(fakes, monkeypatch):
+def test_stream_error_events_never_expose_upstream_response_bodies(fakes, monkeypatch, capsys):
     from agentcore import invoke
     h = _handler()
     _create(h)
@@ -448,6 +464,54 @@ def test_stream_error_events_never_expose_upstream_response_bodies(fakes, monkey
     h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "Synthetic request"})
     assert gw.posted[-1]["error"]
     assert "UPSTREAM_BODY_SENTINEL" not in json.dumps(gw.posted)
+    from common.log import hash8
+    trace = next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace["queryHash"] == hash8("Synthetic request")
+
+
+@pytest.mark.parametrize("drift", ["legacy", "wildcard", "limits", "memory"])
+def test_all_approved_harness_versions_require_the_reviewed_configuration(fakes, drift):
+    h = _handler()
+    _create(h)
+    _approve(h)
+    record = api.get_record("card_benefit_agent", "v1")
+    existing = fakes[0].harnesses["bank_card_benefit_agent"]
+    if drift == "legacy":
+        payload = {key: value for key, value in record["payload"].items() if key not in {"administration", "skillBindings"}}
+        api.get_store().rewrite(record["name"], "v1", {"payload": payload}, "admin")
+    elif drift == "wildcard":
+        existing["allowedTools"] = ["*"]
+    elif drift == "limits":
+        existing["maxIterations"] = 999
+    else:
+        existing["memory"] = {"managedMemoryConfiguration": {"arn": "arn:synthetic:memory/unreviewed"}}
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": record["name"], "version": "v1", "message": "Synthetic request"})
+    assert gw.posted[-1]["code"] == 409
+    assert not any(call[0] == "invoke" for call in fakes[0].calls)
+
+
+def test_harness_memory_is_explicitly_disabled_and_generated_ids_do_not_change_approval(fakes):
+    from agentcore.administration import harness_settings
+    expected = harness_mod.build_config(_create_body())
+    assert expected["memory"] == {"disabled": {}}
+    actual = json.loads(json.dumps(expected))
+    actual["environment"]["agentCoreRuntimeEnvironment"].update(
+        agentRuntimeArn="arn:synthetic", agentRuntimeName="synthetic", agentRuntimeId="synthetic")
+    assert harness_settings(actual) == harness_settings(expected)
+    actual["environment"]["agentCoreRuntimeEnvironment"]["networkConfiguration"]["networkMode"] = "VPC"
+    assert harness_settings(actual) != harness_settings(expected)
+
+
+def test_agent_get_omits_upstream_harness_status_reason(fakes):
+    h = _handler()
+    _create(h)
+    _approve(h)
+    fakes[0].harnesses["bank_card_benefit_agent"]["statusReason"] = "UPSTREAM_STATUS_SENTINEL Traceback"
+    ctx, gw = _ctx()
+    h.agent_get(ctx, {"name": "card_benefit_agent", "version": "v1"})
+    assert gw.posted[-1]["ok"]
+    assert "UPSTREAM_STATUS_SENTINEL" not in json.dumps(gw.posted)
 
 
 def test_admin_approval_fences_specification_changes_during_provisioning(fakes, monkeypatch):
@@ -548,7 +612,7 @@ def test_transition_then_invoke_streams(fakes, capsys):
     assert tokens == ["안녕", "하세요"]
     stages = [e for e in gw.posted if e["type"] == "agent.stage"]
     ts = next(s for s in stages if s["step"] == "tool_start")
-    assert ts["name"] == "lookup_customer_profile" and ts["toolUseId"] == "t1" and ts["plane"] == "vpc"
+    assert ts["name"] == "lookup_customer_profile" and ts["toolUseId"] == "t1" and ts["plane"] == "agentcore"
     ti = next(s for s in stages if s["step"] == "tool_input")
     assert json.loads(ti["input"]) == {"question": "우대금리"}
     done = gw.posted[-1]
@@ -563,7 +627,7 @@ def test_transition_then_invoke_streams(fakes, capsys):
     trace = next(json.loads(l) for l in out.splitlines() if '"event": "trace.recorded"' in l)
     assert trace["scenario"] == "AGENT" and trace["tokensIn"] == 120 and trace["tokensOut"] == 45
     assert trace["route"] == "harness" and trace["plane"] == "agentcore" and trace["agent"] == "card_benefit_agent"
-    assert trace["piiOutbound"] == 0 and trace["piiDetectors"] == ["tool-egress-gate"] and trace["blocked"] is False
+    assert trace["piiOutbound"] == 0 and trace["piiDetectors"] == ["rules(harness-input)"] and trace["blocked"] is False
     assert SECRET_MESSAGE_MARK not in out and ACTOR not in out and "queryHash" in trace
     # 세션 유지: 클라이언트가 준 sessionId 가 Harness 로 전달되고 done 에 되돌아온다
     sid = "0123456789abcdef0123456789abcdef-session"

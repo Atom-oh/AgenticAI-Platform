@@ -40,7 +40,7 @@ def redact(fields: dict) -> dict:
         pii_types = k == "piiTypes" and isinstance(v, list) and len(v) <= 30 and all(
             isinstance(item, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", item) for item in v)
         detectors = k == "piiDetectors" and isinstance(v, list) and len(v) <= 10 and all(
-            isinstance(item, str) and item in {"rules", "guardrail", "rules(gate)", "tool-egress-gate"} for item in v)
+            isinstance(item, str) and item in {"rules", "guardrail", "rules(gate)", "rules(harness-input)", "tool-egress-gate"} for item in v)
         if k in _FORBIDDEN or not (metric or tag or fingerprint or pii_types or detectors):
             try:
                 text = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)

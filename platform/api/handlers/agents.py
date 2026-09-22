@@ -37,7 +37,7 @@ SCENARIOS = ("S1", "S2", "S3", "F7")
 MAX_PROMPT = 6000
 MAX_MESSAGE = 4000
 # Harness 상세에서 클라이언트로 내보내는 키 — executionRoleArn·clientToken 은 화이트리스트에 없다
-HARNESS_KEYS = ("harnessId", "harnessName", "arn", "harnessArn", "status", "statusReason", "model", "tools", "skills",
+HARNESS_KEYS = ("harnessId", "harnessName", "arn", "harnessArn", "status", "model", "tools", "skills",
                 "allowedTools", "memory", "maxIterations", "maxTokens", "timeoutSeconds", "tags", "createdAt",
                 "updatedAt", "systemPrompt")
 
@@ -126,7 +126,7 @@ def _find_agent_record(name: str, version: Optional[str] = None) -> Optional[dic
     if version:
         rec = registry_api.get_record(name, version)
         return rec if rec and rec.get("recordType") == "AGENT" else None
-    recs = [r for r in registry_api.list_records({"type": "AGENT", "q": name}) if r.get("name") == name]
+    recs = [registry_api.strip(r) for r in registry_api.get_store().versions(name) if r.get("recordType") == "AGENT"]
     if not recs:
         return None
     recs.sort(key=lambda r: (r.get("status") == "APPROVED", _version_num(r.get("recordVersion"))), reverse=True)
@@ -134,15 +134,16 @@ def _find_agent_record(name: str, version: Optional[str] = None) -> Optional[dic
 
 
 def _resolve_harness_arn(rec: dict) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
-    """payload.harnessArn → 없으면 find_harness(bank_<name>). 반환 (arn, harness, error)."""
+    """Resolve bank_<name> and verify any stored ARN; return the live configuration."""
     payload = rec.get("payload") or {}
-    if payload.get("harnessArn"):
-        return str(payload["harnessArn"]), None, None
     try:
         h = _harness().find_harness(_harness_name(rec["name"]))
     except Exception as e:  # noqa: BLE001
         return None, None, _err(e)
-    return _harness_arn(h), h, None
+    arn = _harness_arn(h)
+    if payload.get("harnessArn") and payload["harnessArn"] != arn:
+        return None, h, "Harness configuration differs from the approved record"
+    return arn, h, None
 
 
 # ---------- 카탈로그 ----------
@@ -377,13 +378,6 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
         ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
     payload = rec.get("payload") or {}
-    if payload.get("administration") == "IAM_ONLY":
-        from agentcore import skill_binding
-        try:
-            skill_binding.resolve(payload.get("skillBindings"), payload.get("skills", []))
-        except (RegistryError, OSError, UnicodeError, ValueError, TypeError):
-            ctx.done("agent", error="승인된 Skill 자료가 변경되었습니다. 새 명세로 승인 요청하세요.", code=409)
-            return
     model_id = payload.get("model")
     from agentcore import invoke as _invoke
     kind = _invoke.kind_of(rec)
@@ -398,6 +392,20 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
             ctx.done("agent", error=("이 에이전트에 연결된 Harness 가 없습니다" + (f" — {herr}" if herr else
                                      " (파이프라인형 에이전트는 각 시나리오 화면에서 실행)")),
                      status=status, name=name, version=rec.get("recordVersion"), runtime=payload.get("runtime"))
+            return
+        from agentcore import skill_binding
+        from agentcore.administration import harness_settings
+        try:
+            # Legacy approved records receive the same gate; creation date or
+            # absence of an administration marker is never an exemption.
+            skill_binding.resolve(payload.get("skillBindings"), payload.get("skills", []))
+            spec, error = _validate_create({**payload, "name": rec["name"], "description": rec.get("description", "")})
+            if error or not spec or (_h or {}).get("status") not in {"READY", "ACTIVE"}:
+                raise ValueError("Harness approval needs reconciliation")
+            if harness_settings(_h) != harness_settings(_harness().build_config(spec)):
+                raise ValueError("Harness configuration changed after approval")
+        except (RegistryError, OSError, UnicodeError, ValueError, TypeError):
+            ctx.done("agent", error="승인된 Harness·Skill 구성을 확인하지 못했습니다. IAM 관리자 검토가 필요합니다.", code=409)
             return
         kind = "harness"
         runtime_label = _invoke.RUNTIME_HARNESS
@@ -414,7 +422,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
     tool_calls, text_len, errors = 0, 0, []
     boundary_events: list = []
     tools_missing: list = []
-    blocked, pii_outbound = False, 0
+    blocked, pii_outbound = False, None
     started = time.time()
     runtime_kind = kind
     try:
@@ -424,18 +432,18 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 ctx.token("agent", data)
             elif kind_ev == "tool_start":
                 tool_calls += 1
-                ctx.stage("agent", "tool_start", plane="vpc", **_stage_kw(data))
+                ctx.stage("agent", "tool_start", plane="agentcore", **_stage_kw(data))
             elif kind_ev == "tool_input":
-                ctx.stage("agent", "tool_input", plane="vpc", **_stage_kw(data))
+                ctx.stage("agent", "tool_input", plane="agentcore", **_stage_kw(data))
             elif kind_ev == "tool_result":
-                ctx.stage("agent", "tool_result", plane="vpc", **_stage_kw(data))
+                ctx.stage("agent", "tool_result", plane="agentcore", **_stage_kw(data))
             elif kind_ev == "boundary":
                 boundary_events.append(data if isinstance(data, dict) else {"raw": str(data)[:200]})
                 ctx.stage("agent", "boundary", plane="boundary", **_stage_kw(data))
             elif kind_ev == "error":
-                message = "에이전트 실행을 완료하지 못했습니다."
-                errors.append(message)
-                ctx.stage("agent", "error", message=message)
+                error_message = "에이전트 실행을 완료하지 못했습니다."
+                errors.append(error_message)
+                ctx.stage("agent", "error", message=error_message)
             elif kind_ev == "meta":
                 usage = (data or {}).get("usage") or {}
                 tools_missing = [str(name) for name in (data or {}).get("toolsMissing", [])]
@@ -443,7 +451,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 out_sid = (data or {}).get("sessionId") or out_sid
         meta_model = None
         blocked = stop_reason == "gate_refused"
-        pii_outbound = sum(int(event.get("piiRules", 0) or 0) for event in boundary_events)
+        pii_outbound = sum(int(event.get("piiRules", 0) or 0) for event in boundary_events) if boundary_events else None
         done_kw: Dict[str, Any] = {"usage": usage, "stopReason": stop_reason, "sessionId": client_session_id,
                                    "runtimeSessionId": session_id,
                                    "toolsMissing": tools_missing,
@@ -474,8 +482,9 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
             tracing.record_trace({"traceId": ctx.trace_id, "scenario": "AGENT", "email": ctx.email, "query": message,
                                   "tokensIn": tokens_in, "tokensOut": tokens_out, "modelId": model_id,
                                   "route": "strands" if runtime_kind == "strands" else "harness", "plane": "agentcore", "blocked": blocked,
-                                  "piiOutbound": pii_outbound,
-                                  "piiDetectors": ["rules(gate)"] if boundary_events or blocked else ["tool-egress-gate"], "agent": name,
+                                  **({"piiOutbound": pii_outbound} if pii_outbound is not None else {}),
+                                  "piiDetectors": (["rules(harness-input)" if runtime_kind == "harness" else "rules(gate)"]
+                                                   if boundary_events or blocked else []), "agent": name,
                                   "toolCalls": tool_calls, "errors": len(errors), "cached": False,
                                   "elapsedMs": elapsed})
         except Exception as e:  # noqa: BLE001

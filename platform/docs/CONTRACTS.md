@@ -118,8 +118,9 @@ Record example (illustrative values, not a fixed approved version):
   IAM administration applies them. Generic creation of AGENT records or the
   administrative request namespace, and user transitions of requests, return
   `403`. Request payloads and audit entries are omitted from public get,
-  list, search, version and consumer APIs. Only IAM request processing opts
-  into `get_record(..., include_internal=True)`.
+  list, search, version and consumer APIs. Trusted request collision checks and
+  IAM processing opt into `get_record(..., include_internal=True)` internally;
+  user request bodies cannot enable that option.
 - `name` + `recordVersion` is unique. Conditional writes detect conflicts;
   transitions retain actor/from/to/reason/time audit data.
 - `REGISTRY_TABLE` uses `pk`, `sk`, and GSI `byStatus(status, updatedAt)`.

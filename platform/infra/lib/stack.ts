@@ -312,11 +312,6 @@ export class BankPlatformStack extends cdk.Stack {
       resources: [gateway.attrGatewayArn, `${gateway.attrGatewayArn}/*`],
     }));
     harnessRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:GetEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:ListSessions',
-        'bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:GetMemoryRecord', 'bedrock-agentcore:ListMemoryRecords', 'bedrock-agentcore:DeleteEvent'],
-      resources: [`arn:aws:bedrock-agentcore:${region}:${account}:memory/*`],
-    }));
-    harnessRole.addToPolicy(new iam.PolicyStatement({
       actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogGroups', 'logs:DescribeLogStreams',
         'xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'cloudwatch:PutMetricData'],
       resources: ['*'],

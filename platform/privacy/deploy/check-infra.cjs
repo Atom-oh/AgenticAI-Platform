@@ -177,6 +177,7 @@ const changed = assertMainPrivacyDelta(disabled, enabled, arn);
 const mainIds = new Set([...Object.keys(baseline.Resources), ...Object.keys(disabled.Resources)]);
 const reviewedMainChanges = [...mainIds].filter(id =>
   JSON.stringify(baseline.Resources[id]) !== JSON.stringify(disabled.Resources[id]));
+console.log('Main-stack resources changed between revisions (review separately):', reviewedMainChanges.join(', '));
 fs.writeFileSync(path.join(out, 'verified.json'), JSON.stringify({
   privacyResources: Object.keys(json.Resources).length,
   existingMainResources: Object.keys(disabled.Resources).length,

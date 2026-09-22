@@ -222,7 +222,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
 
           <div className="grid grid-cols-2 gap-3 mt-2">
             <div>
-              <div className="text-xs text-slate-400 mb-1">Skills <span className="text-slate-400">(Registry SKILL → S3 SKILL.md 로 Harness 에 연결)</span></div>
+              <div className="text-xs text-slate-400 mb-1">Skills <span className="text-slate-400">(승인된 버전·파일 해시를 고정해 시스템 지침에 포함)</span></div>
               <div className="flex flex-wrap gap-1">
                 {(cat?.skills || []).map(s => {
                   const on = skills.includes(s.name);
@@ -316,7 +316,7 @@ function ToolCard({ t }: { t: ToolCall }) {
   return (
     <div className="rounded-lg p-2 text-[11px]" style={{ border: '1px solid var(--vpc)', background: 'rgba(251,191,36,.08)' }}>
       <div className="font-semibold text-amber-700">🔧 도구 호출: <span className="font-mono">{t.name}</span>
-        <span className="text-slate-500 font-normal"> · Gateway → Lambda · VPC 내부에서 마스킹 후 반환</span></div>
+        <span className="text-slate-500 font-normal"> · Gateway 도구 실행 이벤트</span></div>
       {t.input != null
         ? <pre className="font-mono whitespace-pre-wrap break-words text-amber-100/80 mt-1 max-h-40 overflow-y-auto">{pretty}</pre>
         : <span className="text-slate-500">입력 수신 중…</span>}
@@ -436,14 +436,14 @@ function Chat({ sel, onApprove, onRefresh }: {
         <b className="text-sm">{sel ? sel.title : '채팅'}</b>
         {sel && <span className="font-mono text-[11px] text-slate-500">{sel.name}@{sel.version}</span>}
         {sel && <RegChip s={sel.status} />}
-        <span className="chip text-[10px] text-amber-700 border-amber-400" title="SPEC §11-4 — AgentCore 는 global 교차 리전 추론이 강제되므로 Tier 2 경로에는 쓰지 않는다">
+        <span className="chip text-[10px] text-amber-700 border-amber-400" title="Tier 0/1 시나리오 전용입니다. 추론 경로는 선택한 모델 프로필 설정에 따릅니다.">
           {sel?.runtime || 'AgentCore'} · Tier 0/1 전용
         </span>
         <span className="ml-auto text-[10px] text-slate-500">세션 <span className="font-mono">{shortSid(sessionId)}</span></span>
         {sessionId && <button className="chip text-[10px] hover:border-slate-400" onClick={() => { setSessionId(null); setMsgs([]); }}>새 세션</button>}
       </div>
       <div className="text-[11px] text-slate-500 mt-1">
-        에이전트는 Bedrock을 직접 호출한다 — 개인데이터는 도구가 VPC 내부에서 마스킹한 뒤에만 반환된다(도구 출력 = 경계).
+        Tier 0/1 데이터만 입력하세요. Runtime은 모델 호출 직전, Harness는 입력·시스템 지침에서 식별자 규칙을 검사합니다. 도구의 처리·배치 정보는 개별 실행 증거로 확인하세요.
       </div>
 
       {!sel && <div className="flex-1 flex items-center justify-center text-sm text-slate-500 py-16">카탈로그에서 에이전트를 선택한다</div>}

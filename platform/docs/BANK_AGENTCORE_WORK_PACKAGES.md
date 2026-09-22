@@ -50,6 +50,11 @@ prefix, plus the existing exact bank Runtime invocation grant needed by Strands.
 AgentCore create/update/delete/approval actions and Harness
 `iam:PassRole` belong to AdminFn. Remove the three unused workload-token
 permissions from the bank Runtime role.
+Remove the Harness role's wildcard Memory data permissions too. New Harness
+configurations explicitly set `memory.disabled`; omission does not prove the
+service has disabled managed Memory. The deployed legacy Harness's Registry
+version is deprecated; retain its historical Memory without execution-role
+access. Do not delete its events or resource.
 The user's explicit AdminFn allocation includes CreateMemory, GetMemory and
 CreateWorkloadIdentity. These are administrative creation capabilities, not a
 claim that bank Runtime Memory or outbound Identity is active. Runtime use and
@@ -70,6 +75,10 @@ Custom Harness Skill selections must be APPROVED; server-derived bindings fix
 the Registry revision and bundled Markdown hash. Approval rechecks those
 bindings and embeds the exact inspected text into the Harness system prompt,
 without a mutable S3 Skill prefix. Invocation rechecks the approval bindings.
+Every Harness invocation, including legacy approved custom records, also checks
+the actual READY service configuration against the reviewed fields. A missing
+binding, wildcard tool, changed limit, or enabled Memory blocks invocation until
+IAM reconciliation. Runtime scenario records retain their existing dispatch.
 Missing Runtime Skill files also block execution before a model call.
 If local approval succeeds but the metadata mirror fails, the Admin response
 reports `applied=true, completed=false`, the actual local state and mirror
@@ -96,8 +105,11 @@ Harness creation requires a configured Gateway and explicit tools; its managed
 execution reports bounded service failures and does not provide the Runtime's
 client-side `toolsMissing` preflight. Do not claim that unimplemented equivalence.
 Runtime/Harness upstream exception bodies are not returned to the user.
-Harness input/system text receives the same independent rule inspection
-before a managed model request.
+Harness input/system text is inspected before managed execution. The bank
+Gateway Lambda independently measures and scans every outgoing tool result,
+blocks residual identifiers or failed inspection, and returns bounded errors.
+The managed Harness loop does not run the Strands pre-model hook; its input
+trace must not be presented as inspection of the complete managed history.
 
 O: empty/wildcard allowlist rejection, missing-tool behavior and error-body
 exclusion tests. L: an authenticated invalid-tool request contains no Lambda

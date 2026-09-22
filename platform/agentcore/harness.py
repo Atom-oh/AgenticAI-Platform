@@ -67,6 +67,8 @@ def build_config(spec: dict) -> dict:
         raise ValueError("Harness requires an explicit nonempty allowedTools list")
     if not GATEWAY_ARN:
         raise ValueError("Harness tools require the configured bank Gateway")
+    if spec.get("memory"):
+        raise ValueError("Long-term Harness Memory requires separate privacy review")
     system_prompt = str(spec.get("systemPrompt", ""))
     if "skillBindings" in spec:
         from agentcore.skill_binding import resolve
@@ -93,11 +95,15 @@ def build_config(spec: dict) -> dict:
         "maxIterations": int(spec.get("maxIterations", 12)),
         "maxTokens": 8192,
         "timeoutSeconds": 120,
+        "memory": {"disabled": {}},
+        "environment": {"agentCoreRuntimeEnvironment": {
+            "networkConfiguration": {"networkMode": "PUBLIC"},
+            "lifecycleConfiguration": {"idleRuntimeSessionTimeout": 900, "maxLifetime": 28800},
+        }},
+        "environmentVariables": {},
+        "truncation": {"strategy": "sliding_window", "config": {"slidingWindow": {"messagesCount": 150}}},
         "tags": {**PLATFORM_TAG, "scenario": str(spec.get("scenario", "custom")), "createdBy": str(spec.get("createdBy", "platform"))[:64]},
     }
-    if spec.get("memory"):
-        cfg["memory"] = {"managedMemoryConfiguration": {"strategies": ["SEMANTIC"], "eventExpiryDuration": 30}}
-    # memory 미사용이면 키를 생략한다 (구형 botocore 모델에는 'disabled'가 없다)
     return cfg
 
 
