@@ -9,6 +9,7 @@ from workspace import ontology_schema as schema
 from workspace.ontology_analysis import source_input, project_analysis, validate_analysis, validate_execution, local_analyze, ANALYZER_ROOT
 from workspace.ontology_sources import Sources, asset_reference
 from workspace.ontology_store import Ontology
+from ontology_runtime.dispatch import RuntimeAnalyzer, selected_backend
 
 
 def submit(ctx, body):
@@ -46,6 +47,11 @@ def submit(ctx, body):
         fail(400, "ontology-resolver-unavailable", "승인된 경로 해석 프로필을 선택하세요.")
     reader = Sources(ctx)
     checks = reader.verify(refs)
+    if selected_backend(ctx.host)["name"] == "agentcore":
+        if len(refs) > 40:
+            fail(422, "agentcore-source-budget", "AgentCore 분석 묶음은 원본 40개 이하로 나누세요.")
+        from ontology_runtime.admission import require
+        checks.extend(require(ctx, ref) for ref in refs)
     current = Ontology(ctx).current()
     if (current or {}).get("generation") != body.get("expectedGeneration"):
         fail(409, "ontology-changed", "온톨로지 기준이 변경되었습니다.")
@@ -53,7 +59,7 @@ def submit(ctx, body):
     pinned = {**ctx.authorization(), "operation": "ontology-analyze", "artifactId": identifier,
               "name": name, "files": copy.deepcopy(files), "sourceRefs": refs,
               "resolver": copy.deepcopy(profile), "resolverHash": schema.digest(profile),
-              "expectedGeneration": body.get("expectedGeneration")}
+              "expectedGeneration": body.get("expectedGeneration"), "backend": selected_backend(ctx.host)}
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
                 "createdBy": ctx.actor, "requestHash": schema.digest(body)}
@@ -70,18 +76,19 @@ def process(ctx, pinned):
     if artifact["status"] not in {"queued", "processing"}:
         fail(409, "ontology-job-state", "분석 가능한 작업 상태가 아닙니다.")
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
-    if not callable(analyzer):
+    remote = type(analyzer) is RuntimeAnalyzer
+    if not remote and not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
-    # Unit A intentionally admits only this exact offline implementation.
-    # The separately reviewed cloud adapter must install its own pinned factory;
-    # an arbitrary callable's mutable backend label confers no execution trust.
-    if analyzer is not local_analyze:
+    if pinned.get("backend") != selected_backend(ctx.host):
+        fail(409, "ontology-backend-changed", "요청 당시의 분석 실행 환경이 변경되었습니다. 새 작업을 시작하세요.")
+    if not remote and analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
-    backend = "local-offline"
-    if not getattr(ctx.host, "allow_offline_ontology_analysis", False):
+    backend = "agentcore-code-interpreter" if remote else "local-offline"
+    if not remote and not getattr(ctx.host, "allow_offline_ontology_analysis", False):
         fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")
-    expected = {"analyzerCodeHash": hashlib.sha256((ANALYZER_ROOT / "analyze.cjs").read_bytes()).hexdigest(),
-                "dependencyLockHash": hashlib.sha256((ANALYZER_ROOT / "package-lock.json").read_bytes()).hexdigest()}
+    expected = ({"toolArchiveHash": analyzer.archive} if remote else {
+        "analyzerCodeHash": hashlib.sha256((ANALYZER_ROOT / "analyze.cjs").read_bytes()).hexdigest(),
+        "dependencyLockHash": hashlib.sha256((ANALYZER_ROOT / "package-lock.json").read_bytes()).hexdigest()})
     store = Ontology(ctx)
     current, _ = store.authorize_publication(pinned["name"])
     if (current or {}).get("generation") != pinned["expectedGeneration"]:
@@ -95,7 +102,7 @@ def process(ctx, pinned):
             bindings[file["path"]]["ref"] != ref for file, ref in zip(pinned["files"], pinned["sourceRefs"]))):
         fail(409, "ontology-source-changed", "분석 요청의 원본 버전이 변경되었습니다.")
     refs.recheck()
-    result = analyzer(payload)
+    result = analyzer.analyze(ctx, pinned, payload) if remote else analyzer(payload)
     if not isinstance(result, dict) or not isinstance(result.get("execution"), dict) or "analysis" not in result:
         fail(503, "ontology-analysis-incomplete", "분석 실행 근거를 확인하지 못했습니다.")
     validate_execution(result["execution"])

@@ -8,6 +8,9 @@ from workspace.ontology_store import Ontology
 
 def route(host, scope, claims, method, parts, body, query):
     ctx = Service(host, scope, claims)
+    if parts == ["sources", "admission"] and method == "POST":
+        from ontology_runtime.admission import classify
+        return 201, {"admission": public(classify(ctx, body))}
     if parts == ["schema"] and method == "GET":
         return 200, {"schemaVersion": 1, "levels": list(schema.LEVELS), "nodeTypes": sorted(schema.NODE_TYPES),
                      "edgeTypes": sorted(schema.EDGE_TYPES), "sourceKinds": sorted(schema.SOURCE_KINDS),

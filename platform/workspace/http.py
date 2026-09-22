@@ -119,6 +119,8 @@ class WorkspaceAPI:
         # The foundation does not install a cloud adapter. The adapter milestone
         # supplies a verified readiness installer; an environment label cannot.
         self.ontology_analyzer_ready = False
+        from ontology_runtime.dispatch import install as install_ontology
+        install_ontology(self)
         from workspace.git_service import configured_connections
         self.git_connections = git_connections or configured_connections
         from workbench.runtime import install
