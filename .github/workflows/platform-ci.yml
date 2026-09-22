@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths: ['platform/**', '.github/workflows/platform-ci.yml']
   pull_request:
-    paths: ['platform/**']
+    paths: ['platform/**', '.github/workflows/platform-ci.yml']
 
 permissions:
   contents: read
@@ -84,6 +84,10 @@ jobs:
         with: { node-version: 20 }
       - run: npm ci
       - run: mkdir -p ../api-dist && touch ../api-dist/.keep
+      - name: Verify bank AgentCore user/admin isolation
+        run: |
+          bash ../agents/prepare_context.sh
+          node --test test/bank-agent-security.test.cjs
       - name: Supply offline availability-zone context
         run: |
           node -e "require('fs').writeFileSync('cdk.context.json', JSON.stringify({'availability-zones:account=000000000000:region=ap-northeast-2':['ap-northeast-2a','ap-northeast-2b']}))"

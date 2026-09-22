@@ -24,6 +24,15 @@ EMBEDDING_ATTR = "embedding"  # JSON 문자열(소수 5자리 반올림) — 전
 _audit_seq = itertools.count(1)  # 같은 ms 안의 감사 이벤트 순서를 보장하는 프로세스 내 단조 카운터
 
 
+def _revision_condition(record, names, values):
+    names["#revision"] = "stateRevision"
+    values[":revision"] = int(record.get("stateRevision", 0)) + 1
+    if "stateRevision" in record:
+        values[":previousRevision"] = record["stateRevision"]
+        return "#revision = :previousRevision"
+    return "attribute_not_exists(#revision)"
+
+
 def rec_pk(name: str) -> str:
     return f"rec#{name}"
 
@@ -97,7 +106,7 @@ class RegistryStore:
         ts = now_ms()
         item = dict(rec)
         item.update({"pk": rec_pk(rec["name"]), "sk": rec["recordVersion"],
-                     "createdAt": ts, "updatedAt": ts, "updatedBy": actor})
+                     "createdAt": ts, "updatedAt": ts, "updatedBy": actor, "stateRevision": 1})
         item = _to_ddb(item)
         try:
             self.table().put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
@@ -110,13 +119,13 @@ class RegistryStore:
         return _record_from_item(item)
 
     def get(self, name: str, version: str) -> Optional[dict]:
-        r = self.table().get_item(Key={"pk": rec_pk(name), "sk": version})
+        r = self.table().get_item(Key={"pk": rec_pk(name), "sk": version}, ConsistentRead=True)
         it = r.get("Item")
         return _record_from_item(it) if it else None
 
     def versions(self, name: str) -> List[dict]:
         r = self.table().query(KeyConditionExpression="pk = :pk",
-                               ExpressionAttributeValues={":pk": rec_pk(name)})
+                               ExpressionAttributeValues={":pk": rec_pk(name)}, ConsistentRead=True)
         return [_record_from_item(it) for it in r.get("Items", [])]
 
     def by_status(self, status: str) -> List[dict]:
@@ -139,20 +148,37 @@ class RegistryStore:
             out += self.by_status(st)
         return out
 
-    def transition(self, name: str, version: str, to_status: str, actor: str, reason: str = "") -> Tuple[dict, dict]:
+    def transition(self, name: str, version: str, to_status: str, actor: str, reason: str = "",
+                   *, expected_record: Optional[dict] = None) -> Tuple[dict, dict]:
         """상태 기계 검증 → 낙관적 조건 갱신 → 감사 이벤트. 반환 (record, audit_event)."""
         cur = self.get(name, version)
         if cur is None:
             raise NotFoundError(f"레코드 없음: {name} {version}")
         tname = check_transition(cur["status"], to_status, reason)
         ts = now_ms()
+        condition = "attribute_exists(pk) AND #st = :from"
+        names = {"#st": "status", "#ua": "updatedAt", "#ub": "updatedBy"}
+        values = {":to": to_status, ":from": cur["status"], ":ts": ts, ":by": actor}
+        condition += " AND " + _revision_condition(cur, names, values)
+        if expected_record is not None:
+            for index, field in enumerate(("status", "stateRevision", "payload", "description", "recordType", "subtype")):
+                if cur.get(field) != expected_record.get(field):
+                    raise ConflictError("The requested record changed before administrative approval")
+                key = f"#expected{index}"
+                names[key] = field
+                if field in expected_record:
+                    value = f":expected{index}"
+                    values[value] = _to_ddb(expected_record[field])
+                    condition += f" AND {key} = {value}"
+                else:
+                    condition += f" AND attribute_not_exists({key})"
         try:
             r = self.table().update_item(
                 Key={"pk": rec_pk(name), "sk": version},
-                UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by",
-                ConditionExpression="attribute_exists(pk) AND #st = :from",
-                ExpressionAttributeNames={"#st": "status", "#ua": "updatedAt", "#ub": "updatedBy"},
-                ExpressionAttributeValues={":to": to_status, ":from": cur["status"], ":ts": ts, ":by": actor},
+                UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
+                ConditionExpression=condition,
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
                 ReturnValues="ALL_NEW")
         except Exception as e:  # noqa: BLE001
             if _is_conditional_failure(e):
@@ -171,12 +197,14 @@ class RegistryStore:
         if to_status not in STATUSES:
             raise TransitionError(f"알 수 없는 목표 상태: {to_status}")
         ts = now_ms()
+        names = {"#st": "status", "#ua": "updatedAt", "#ub": "updatedBy"}
+        values = {":to": to_status, ":ts": ts, ":by": actor}
+        condition = "attribute_exists(pk) AND " + _revision_condition(cur, names, values)
         r = self.table().update_item(
             Key={"pk": rec_pk(name), "sk": version},
-            UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by",
-            ConditionExpression="attribute_exists(pk)",
-            ExpressionAttributeNames={"#st": "status", "#ua": "updatedAt", "#ub": "updatedBy"},
-            ExpressionAttributeValues={":to": to_status, ":ts": ts, ":by": actor}, ReturnValues="ALL_NEW")
+            UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
+            ConditionExpression=condition, ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values, ReturnValues="ALL_NEW")
         ev = audit_event(actor, cur["status"], to_status, reason, ts, forced=True)
         self.put_audit(name, version, ev)
         return _record_from_item(r.get("Attributes") or {**cur, "status": to_status}), ev
@@ -185,16 +213,20 @@ class RegistryStore:
         """상태 외 필드(description/payload/tags/owner/subtype/recordType) 덮어쓰기 — 시드 reset 용."""
         allowed = {"description", "payload", "tags", "owner", "subtype", "recordType"}
         sets, names, values = [], {"#ua": "updatedAt", "#ub": "updatedBy"}, {":ts": now_ms(), ":by": actor}
+        cur = self.get(name, version)
+        if cur is None:
+            raise NotFoundError(f"레코드 없음: {name} {version}")
+        condition = "attribute_exists(pk) AND " + _revision_condition(cur, names, values)
         for i, (k, v) in enumerate(sorted(fields.items())):
             if k not in allowed:
                 continue
             names[f"#f{i}"], values[f":f{i}"] = k, _to_ddb(v)
             sets.append(f"#f{i} = :f{i}")
-        sets += ["#ua = :ts", "#ub = :by"]
+        sets += ["#ua = :ts", "#ub = :by", "#revision = :revision"]
         try:
             r = self.table().update_item(Key={"pk": rec_pk(name), "sk": version},
                                          UpdateExpression="SET " + ", ".join(sets),
-                                         ConditionExpression="attribute_exists(pk)",
+                                         ConditionExpression=condition,
                                          ExpressionAttributeNames=names, ExpressionAttributeValues=values,
                                          ReturnValues="ALL_NEW")
         except Exception as e:  # noqa: BLE001

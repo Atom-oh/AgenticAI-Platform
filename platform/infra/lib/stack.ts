@@ -276,7 +276,6 @@ export class BankPlatformStack extends cdk.Stack {
       authorizerType: 'AWS_IAM',
       protocolType: 'MCP',
       roleArn: gatewayRole.roleArn,
-      exceptionLevel: 'DEBUG',
     });
     const toolSchema = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../agentcore/tool_schema.json'), 'utf8'));
     const gatewayTarget = new agentcore.CfnGatewayTarget(this, 'ToolsTarget', {
@@ -323,14 +322,18 @@ export class BankPlatformStack extends cdk.Stack {
       resources: ['*'],
     }));
     skillsBucket.grantRead(harnessRole);
-    const agentcoreOps = new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:CreateHarness', 'bedrock-agentcore:GetHarness', 'bedrock-agentcore:ListHarnesses', 'bedrock-agentcore:UpdateHarness',
-        'bedrock-agentcore:ListHarnessVersions', 'bedrock-agentcore:DeleteHarness', 'bedrock-agentcore:InvokeHarness',
-        'bedrock-agentcore:CreateMemory', 'bedrock-agentcore:GetMemory', 'bedrock-agentcore:ListMemories',
+    const agentcoreRead = new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:GetHarness', 'bedrock-agentcore:ListHarnesses',
         'bedrock-agentcore:GetGateway', 'bedrock-agentcore:ListGatewayTargets', 'bedrock-agentcore:GetGatewayTarget',
-        'bedrock-agentcore:CreateRegistryRecord', 'bedrock-agentcore:UpdateRegistryRecord', 'bedrock-agentcore:GetRegistryRecord',
-        'bedrock-agentcore:ListRegistryRecords', 'bedrock-agentcore:SubmitRegistryRecordForApproval', 'bedrock-agentcore:UpdateRegistryRecordStatus',
-        'bedrock-agentcore:GetRegistry', 'bedrock-agentcore:ListRegistries', 'bedrock-agentcore:CreateWorkloadIdentity', 'bedrock-agentcore:GetWorkloadIdentity'],
+        'bedrock-agentcore:GetRegistryRecord', 'bedrock-agentcore:ListRegistryRecords'],
+      resources: ['*'],
+    });
+    const agentcoreAdmin = new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:CreateHarness', 'bedrock-agentcore:UpdateHarness', 'bedrock-agentcore:DeleteHarness',
+        'bedrock-agentcore:ListHarnessVersions', 'bedrock-agentcore:CreateMemory', 'bedrock-agentcore:GetMemory',
+        'bedrock-agentcore:CreateRegistryRecord', 'bedrock-agentcore:UpdateRegistryRecord',
+        'bedrock-agentcore:SubmitRegistryRecordForApproval', 'bedrock-agentcore:UpdateRegistryRecordStatus',
+        'bedrock-agentcore:CreateWorkloadIdentity'],
       resources: ['*'],
     });
     const passHarnessRole = new iam.PolicyStatement({ actions: ['iam:PassRole'], resources: [harnessRole.roleArn] });
@@ -361,8 +364,7 @@ export class BankPlatformStack extends cdk.Stack {
       runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['ecr:GetAuthorizationToken'], resources: ['*'] }));
       runtimeRole.addToPolicy(new iam.PolicyStatement({
         actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogGroups', 'logs:DescribeLogStreams',
-          'xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets', 'cloudwatch:PutMetricData',
-          'bedrock-agentcore:GetWorkloadAccessToken', 'bedrock-agentcore:GetWorkloadAccessTokenForJWT', 'bedrock-agentcore:GetWorkloadAccessTokenForUserId'],
+          'xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'xray:GetSamplingRules', 'xray:GetSamplingTargets', 'cloudwatch:PutMetricData'],
         resources: ['*'],
       }));
       agentsRuntime = new agentcore.CfnRuntime(this, 'AgentsRuntime', {
@@ -443,8 +445,11 @@ export class BankPlatformStack extends cdk.Stack {
     }));
     readerFn.grantInvoke(fn);
     if (gatesFn) gatesFn.grantInvoke(fn);
-    fn.addToRolePolicy(agentcoreOps);
-    fn.addToRolePolicy(passHarnessRole);
+    fn.addToRolePolicy(agentcoreRead);
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeHarness'],
+      resources: [`arn:${this.partition}:bedrock-agentcore:${region}:${account}:harness/bank_*`],
+    }));
     if (agentsRuntime) {
       fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock-agentcore:InvokeAgentRuntime'],
         resources: [agentsRuntime.attrAgentRuntimeArn, `${agentsRuntime.attrAgentRuntimeArn}/*`] }));
@@ -486,7 +491,8 @@ export class BankPlatformStack extends cdk.Stack {
     });
     registryTable.grantReadWriteData(adminFn);
     adminFn.addToRolePolicy(bedrockInvoke);
-    adminFn.addToRolePolicy(agentcoreOps);
+    adminFn.addToRolePolicy(agentcoreRead);
+    adminFn.addToRolePolicy(agentcoreAdmin);
     adminFn.addToRolePolicy(passHarnessRole);
     if (props.planeDeployed) {
       adminFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [bridgeFnArn] }));

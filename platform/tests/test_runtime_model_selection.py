@@ -74,7 +74,7 @@ def runtime_app(monkeypatch):
 
 def _events(app, payload):
     async def collect():
-        return [event async for event in app.run(payload)]
+        return [event async for event in app.run(payload, "verified-runtime-session-" + "a" * 32)]
 
     return asyncio.run(collect())
 

@@ -16,7 +16,7 @@ AgentCore chat does not implement the authenticated S2 privacy pipeline.
 ## Runtime contract
 
 `BedrockAgentCoreApp` serves port 8080: `GET /ping` and `POST /invocations`.
-Normal input is `{agent, prompt, sessionId?, model?}`. Design-flow input adds
+Normal input is `{agent, prompt, model?}`. Design-flow input adds
 `design: {productSpec, smModel, checklists[], outputType?}`.
 
 | File | Responsibility |
@@ -46,10 +46,20 @@ allowlist copied from `engine/model_catalog.py`; it is not limited to the two
 original Claude specs. A default spec supplies its model; arbitrary `GEN_MODEL`
 values do not extend the allowlist. `TEMPERATURE` is omitted unless explicitly set.
 
-The process retains at most 20 session histories in memory. Payload `sessionId`
-takes precedence over the runtime session ID; callers must keep session identity
-consistent. This is not durable managed memory. The image does not install the
-ADOT auto-instrumentation package.
+The process retains at most 20 session histories in memory, keyed only by the
+SDK Runtime context session ID. A payload `sessionId` is ignored and reported
+only as `meta.ignoredPayloadSessionId=true`. Missing Runtime context fails.
+The WebSocket handler derives the Runtime ID from the verified Cognito subject,
+agent/version and client conversation ID. It returns the original client ID
+for subsequent turns. Pool, client and connection expiry are checked.
+This is not durable managed memory. ADOT is not yet installed; WP5/WP6 in
+[the bank work packages](../docs/BANK_AGENTCORE_WORK_PACKAGES.md) track these gaps.
+
+The user Lambda records agent specifications and administration requests.
+Only the IAM Admin Lambda may provision Harnesses or mirror approval changes.
+An administrator processes a recorded request using
+`{"op":"apply_agent_request","name":"agent-request-…","version":"v1"}`.
+User routes cannot invoke AdminFn or call AgentCore control APIs.
 
 ## Local container commands
 
@@ -68,6 +78,7 @@ docker run --rm -d --name bank-agents -p 127.0.0.1:8080:8080 \
 
 curl -s localhost:8080/ping
 curl -sN -X POST localhost:8080/invocations -H 'Content-Type: application/json' \
+  -H 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: local-synthetic-session-00000000000000000000' \
   -d '{"agent":"regulation_impact_agent","prompt":"REG-LN-001 규정 개정 영향은?"}'
 docker logs bank-agents
 docker stop bank-agents
@@ -76,12 +87,13 @@ docker stop bank-agents
 For a role-backed shell, `aws configure export-credentials --format env` can
 provide temporary credentials; do not bake them into the image or print them in
 shared logs. If port 8080 is occupied, change only the host port, for example
-`127.0.0.1:18080:8080`. Reuse payload `sessionId` for local multi-turn testing.
+`127.0.0.1:18080:8080`. Reuse the Runtime session header for local multi-turn testing.
 
-Setup/handshake failures emit an error such as `code=502`; unavailable tools are
-not fabricated. Missing skills are reported. Log safety is a requirement:
-normal events log sizes/names/counts, while exception paths use bounded `_err`
-strings and must not be treated as a general raw-error sanitization guarantee.
+Setup/handshake failures emit a bounded error such as `code=502`. A missing
+configured tool is recorded in `meta.toolsMissing`, blocks model execution and
+appears in the UI. Empty allowlists grant no tools. Application exception paths
+return type/category text without upstream bodies; verify SDK logs separately
+in the live gate.
 
 ## Historical smoke evidence
 

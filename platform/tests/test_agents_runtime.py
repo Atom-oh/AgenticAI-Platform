@@ -9,6 +9,7 @@ RULES 가 api/common/pii.py 와 동일, 시스템 프롬프트+스킬 본문이 
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import json
 import os
 import sys
@@ -25,6 +26,7 @@ os.environ.pop("AGENTS_RUNTIME_ARN", None)
 from agentcore import invoke, runtime  # noqa: E402
 from agentcore import agent_specs  # noqa: E402
 from common import pii  # noqa: E402
+from tests.test_runtime_model_selection import runtime_app
 
 
 def _load_container_module(name: str):
@@ -100,7 +102,7 @@ def test_parse_sse_without_meta_synthesizes_final_meta():
 def test_parse_sse_runtime_wrapped_exception_becomes_error():
     body = FakeBody(['data: {"error":"boom","error_type":"RuntimeError","message":"An error occurred during streaming"}'])
     out = list(runtime.to_tuples(runtime.parse_events(body), "s" * 40))
-    assert out[0][0] == "error" and "RuntimeError" in out[0][1] and "boom" in out[0][1]
+    assert out[0][0] == "error" and "upstream details are withheld" in out[0][1] and "boom" not in out[0][1]
 
 
 def test_parse_sse_accepts_bytes_and_str_bodies():
@@ -137,7 +139,7 @@ def test_invoke_stream_sends_expected_request(monkeypatch):
     assert len(calls["runtimeSessionId"]) >= 33
     body = json.loads(calls["payload"].decode("utf-8"))
     assert body["agent"] == "regulation_impact_agent" and body["prompt"] == "REG-LN-001 영향?"
-    assert body["model"] == "global.anthropic.claude-opus-5" and body["sessionId"] == calls["runtimeSessionId"]
+    assert body["model"] == "global.anthropic.claude-opus-5" and "sessionId" not in body
     assert out[-1][0] == "meta"
 
 
@@ -279,6 +281,77 @@ def test_mcp_gateway_name_filtering_without_strands():
     mg = _load_container_module("mcp_gateway")
     discovered = ["platform___list_regulations", "platform___analyze_regulation_impact", "platform___lookup_customer_profile"]
     assert mg.filter_tool_names(discovered, ["list_regulations", "platform___analyze_regulation_impact"]) == discovered[:2]
-    assert mg.filter_tool_names(discovered, []) == discovered
+    assert mg.filter_tool_names(discovered, []) == []
+    assert mg.filter_tool_names(["trusted___tool", "other___tool"], ["trusted___tool"]) == ["trusted___tool"]
     assert mg.bare_name("platform___run_screen_gates") == "run_screen_gates" and mg.bare_name("resolve_metric") == "resolve_metric"
     assert mg.SERVICE_NAME == "bedrock-agentcore"
+
+
+@pytest.mark.parametrize("tools_available", [True, False])
+def test_runtime_uses_only_the_authenticated_session_and_reports_missing_tools(runtime_app, monkeypatch, tools_available):
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    sid = "authenticated-session-" + "a" * 32
+    victim = "payload-selected-victim-" + "b" * 32
+    app._session_put(victim, [{"private": "VICTIM_HISTORY_MARKER"}])
+    opened, streamed = [], []
+    monkeypatch.setattr(app.mcp_gateway, "bare_name", lambda name: name.split("___")[-1], raising=False)
+
+    def session(spec, model, actual_sid):
+        opened.append(actual_sid)
+        messages = app._session_get(actual_sid)
+
+        async def stream(prompt):
+            streamed.append(True)
+            messages.append({"role": "user", "content": [{"text": prompt}]})
+            yield {"data": "VICTIM_HISTORY_MARKER" if "VICTIM_HISTORY_MARKER" in json.dumps(messages) else "safe"}
+
+        return SimpleNamespace(
+            tools=[SimpleNamespace(tool_name=name) for name in spec["allowedTools"]] if tools_available else [],
+            discovered=list(spec["allowedTools"]) if tools_available else [],
+            skills_loaded=[], skills_missing=[], close=lambda: None,
+            gate=SimpleNamespace(drain=lambda: [], summary=lambda: {}),
+            agent=SimpleNamespace(messages=messages, stream_async=stream))
+
+    monkeypatch.setattr(app, "_Session", session)
+
+    async def collect():
+        return [event async for event in app.run(
+            {"agent": "regulation_impact_agent", "prompt": "Synthetic hello", "sessionId": victim}, sid)]
+
+    events = asyncio.run(collect())
+    assert opened == [sid]
+    assert events[-1]["sessionId"] == sid and events[-1]["ignoredPayloadSessionId"] is True
+    assert "VICTIM_HISTORY_MARKER" not in json.dumps(events)
+    assert app._session_get(victim) == [{"private": "VICTIM_HISTORY_MARKER"}]
+    if tools_available:
+        assert streamed == [True] and app._session_get(sid)
+    else:
+        assert not streamed and events[-1]["toolsMissing"]
+        assert any(event.get("code") == 502 for event in events)
+
+
+def test_payload_session_cannot_replace_missing_authenticated_context(runtime_app):
+    app, _ = runtime_app
+
+    async def collect():
+        return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "hello", "sessionId": "x" * 64})]
+
+    events = asyncio.run(collect())
+    assert events[0]["code"] == 400
+    assert events[-1]["ignoredPayloadSessionId"] is True
+
+
+@pytest.mark.parametrize("tools", [None, [], ["*"]])
+def test_harness_configuration_never_defaults_to_all_tools(tools):
+    from agentcore import harness
+    with pytest.raises(ValueError, match="nonempty"):
+        harness.build_config({"name": "synthetic", "systemPrompt": "safe", "allowedTools": tools})
+
+
+def test_harness_input_is_checked_before_any_model_transport(monkeypatch):
+    from agentcore import harness
+    from engine.gate import GateRefused
+    monkeypatch.setattr(harness, "data", lambda: pytest.fail("raw identifiers reached AgentCore"))
+    with pytest.raises(GateRefused):
+        list(harness.invoke_stream("synthetic-arn", "고객 CUST-0042", "x" * 64))

@@ -2,7 +2,8 @@
 
 HTTP 8080: POST /invocations (SSE 스트림) · GET /ping — bedrock_agentcore.runtime.BedrockAgentCoreApp 이 제공.
 
-요청 payload: {"agent": "<name>", "prompt": "<text>", "sessionId"?: str, "model"?: str}
+요청 payload: {"agent": "<name>", "prompt": "<text>", "model"?: str}
+  - 세션은 SDK context만 사용한다. 기존 payload sessionId는 무시하고 boolean 메타데이터로만 보고한다.
   - agent: agent_specs.SCENARIO_AGENTS 의 name (regulation_impact_agent 등). 모르는 이름 → {type:'error', code:404}.
   - 도구: AgentCore Gateway(MCP, IAM 인바운드) 도구 중 spec.allowedTools 만.
   - 익명화 게이트: BoundaryGateHook 이 모델 호출 직전에 나가는 메시지를 스캔한다 (히트 → 모델 호출 없음).
@@ -23,7 +24,6 @@ import os
 import sys
 import threading
 import time
-import uuid
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -123,12 +123,8 @@ def build_model(model_id: str):
     return BedrockModel(**kw)
 
 
-def _new_session_id() -> str:
-    return uuid.uuid4().hex + "-" + uuid.uuid4().hex[:8]  # 41자 (AgentCore runtimeSessionId 최소 33자)
-
-
 def _err(e: BaseException) -> str:
-    return f"{type(e).__name__}: {str(e)[:300]}"
+    return type(e).__name__
 
 
 class _Session:
@@ -159,13 +155,20 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
     payload = payload if isinstance(payload, dict) else {}
     name = str(payload.get("agent") or "").strip()
     prompt = str(payload.get("prompt") or "").strip()[:MAX_PROMPT_CHARS]
-    sid = str(payload.get("sessionId") or runtime_session_id or _new_session_id())[:256]
+    sid = runtime_session_id if isinstance(runtime_session_id, str) else ""
     spec = agent_specs.spec_by_name(name) if name else None
     model_id = str(payload.get("model") or (spec or {}).get("model") or agent_specs.DEFAULT_MODEL)
 
     meta: dict[str, Any] = {"type": "meta", "usage": {"inputTokens": 0, "outputTokens": 0}, "modelId": model_id,
                             "stopReason": "", "sessionId": sid, "runtime": RUNTIME_LABEL, "agent": name,
                             "toolCalls": 0, "toolNames": [], "boundary": None, "elapsedMs": 0}
+    if "sessionId" in payload:
+        meta["ignoredPayloadSessionId"] = True
+    if not 33 <= len(sid) <= 256:
+        yield {"type": "error", "code": 400, "message": "A verified Runtime session is required"}
+        meta["stopReason"] = "error"
+        yield meta
+        return
 
     if spec is None:
         yield {"type": "error", "code": 404, "message": f"unknown agent: {name or '(empty)'}",
@@ -208,13 +211,17 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
             meta["stopReason"] = "error"
             return
         meta["toolNames"] = [t.tool_name for t in session.tools]
+        meta["toolsMissing"] = sorted({mcp_gateway.bare_name(name) for name in spec.get("allowedTools", [])}
+                                      - {mcp_gateway.bare_name(name) for name in meta["toolNames"]})
         meta["gatewayTools"] = len(session.discovered)
         meta["skills"] = {"loaded": session.skills_loaded, "missing": session.skills_missing}
         if session.skills_missing:
             yield {"type": "error", "code": 500, "message": "skills missing in image: " + ",".join(session.skills_missing)}
-        if spec.get("allowedTools") and not session.tools:
+        if meta["toolsMissing"]:
             yield {"type": "error", "code": 502,
-                   "message": f"no Gateway tools matched allowedTools {spec.get('allowedTools')} (discovered {len(session.discovered)})"}
+                   "message": "Configured Gateway tools are unavailable"}
+            meta["stopReason"] = "tools_unavailable"
+            return
 
         gate = session.gate
         agent = session.agent

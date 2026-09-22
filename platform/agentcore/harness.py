@@ -61,6 +61,11 @@ def find_harness(name: str) -> dict | None:
 
 def build_config(spec: dict) -> dict:
     """에이전트 명세 → create_harness 파라미터."""
+    allowed = spec.get("allowedTools")
+    if not isinstance(allowed, list) or not allowed or any(
+            not isinstance(tool, str) or not tool.strip() or "*" in tool for tool in allowed):
+        raise ValueError("Harness requires an explicit nonempty allowedTools list")
+    _inspect(str(spec.get("systemPrompt", "")), "agentcore.harness.system")
     tools = []
     if GATEWAY_ARN and spec.get("allowedTools"):
         tools.append({"type": "agentcore_gateway", "name": "bank_platform_tools",
@@ -76,7 +81,7 @@ def build_config(spec: dict) -> dict:
         "systemPrompt": [{"text": spec["systemPrompt"]}],
         "tools": tools,
         "skills": skills,
-        "allowedTools": [f"bank_platform_tools___{t}" for t in spec.get("allowedTools", [])] or ["*"],
+        "allowedTools": [f"bank_platform_tools___{t}" for t in allowed],
         "maxIterations": int(spec.get("maxIterations", 12)),
         "maxTokens": 8192,
         "timeoutSeconds": 120,
@@ -110,6 +115,9 @@ def ensure_harness(spec: dict) -> dict:
 
 def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
     """invoke_harness 스트림을 (event_type, payload) 튜플로 정규화해 yield. 마지막에 usage/stop을 담은 'meta'."""
+    measured = _inspect(text, "agentcore.harness.input")
+    yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
+                        "piiRules": measured["piiRules"]["count"], "source": "harness-input"})
     sid = session_id or (uuid.uuid4().hex + "-session")
     r = data().invoke_harness(harnessArn=harness_arn, runtimeSessionId=sid,
                               messages=[{"role": "user", "content": [{"text": text}]}])
@@ -139,5 +147,17 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
             usage = ev["metadata"].get("usage", {}) or usage
         elif any(k in ev for k in ("validationException", "internalServerException", "runtimeClientError",
                                    "throttlingException", "accessDeniedException")):
-            yield ("error", json.dumps(ev, ensure_ascii=False, default=str)[:400])
+            stop = "error"
+            yield ("error", "Harness transport failed; upstream details are withheld")
     yield ("meta", {"usage": usage, "stopReason": stop, "sessionId": sid})
+
+
+def _inspect(text, purpose):
+    from engine import gate
+    measured = gate.measure("", text)
+    pii = measured["piiRules"]
+    gate._log("agentcore.harness.boundary", purpose=purpose, chars=measured["chars"],
+              estTokens=measured["estTokens"], piiCount=pii["count"], piiTypes=pii["refuseTypes"])
+    if pii["refuseTypes"]:
+        raise gate.GateRefused(pii["refuseTypes"], pii["count"], measured, purpose)
+    return measured

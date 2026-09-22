@@ -205,8 +205,10 @@ def create_record(record: dict, actor: str, status: Optional[str] = None, reason
     return strip(saved)
 
 
-def transition(name: str, version: str, to_status: str, actor: str, reason: str = "") -> Tuple[dict, dict]:
-    rec, ev = get_store().transition(name, version, str(to_status).upper(), actor, reason)
+def transition(name: str, version: str, to_status: str, actor: str, reason: str = "",
+               *, expected_record: Optional[dict] = None) -> Tuple[dict, dict]:
+    options = {"expected_record": expected_record} if expected_record is not None else {}
+    rec, ev = get_store().transition(name, version, str(to_status).upper(), actor, reason, **options)
     return strip(rec), ev
 
 

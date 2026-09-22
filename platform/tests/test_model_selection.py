@@ -106,8 +106,9 @@ def test_studio_catalog_and_agents_share_allowed_models(monkeypatch):
     assert "studio_models" in studio.ROUTES
     studio.ROUTES["studio_models"](ctx, {})
     assert ASTRA in {m["id"] for m in events[-1]["models"]}
-    monkeypatch.setattr(agents, "_tool_schema", lambda: [])
+    monkeypatch.setattr(agents, "_tool_schema", lambda: [{"name": "list_regulations"}])
     monkeypatch.setattr(agents, "_skill_names", lambda: [])
     for model in (ASTRA, FABLE):
-        spec, error = agents._validate_create({"name": "design_helper", "systemPrompt": "디자인 검수 도우미", "model": model})
+        spec, error = agents._validate_create({"name": "design_helper", "systemPrompt": "디자인 검수 도우미",
+                                               "model": model, "allowedTools": ["list_regulations"]})
         assert error is None and spec["model"] == model

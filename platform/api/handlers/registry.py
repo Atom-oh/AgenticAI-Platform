@@ -48,6 +48,16 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
     to = str(body.get("to", "")).strip().upper()
     reason = str(body.get("reason", "") or "").strip()[:500]
     try:
+        record = api.get_record(name, version)
+        if record and record.get("subtype") == "AGENT_ADMIN_REQUEST":
+            ctx.post({"type": "registry_transition", "ok": False, "code": 403,
+                      "error": "관리자 요청의 처리 상태는 IAM 관리자만 변경할 수 있습니다."})
+            return
+        if record and record.get("recordType") == "AGENT":
+            from agentcore.administration import request_transition
+            ctx.post({"type": "registry_transition", "ok": True,
+                      **request_transition(name, version, to, ctx.email, reason)})
+            return
         rec, ev = api.transition(name, version, to, actor=ctx.email, reason=reason)
     except RegistryError as e:
         log_event("registry.transition_rejected", ctx.trace_id, name=name, version=version, to=to,

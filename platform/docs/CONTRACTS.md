@@ -32,11 +32,18 @@ ROUTES = {"x": handle_x}
   `<kind>.token`, and `<kind>.done`; `sock.run` completes on `.done`.
 - `ctx.email` is authenticated connection identity used for scenario audit.
   Workspace HTTP uses JWT `sub` instead; do not interchange their owner keys.
+- `ctx.user_sub` is the verified Cognito subject for actor-bound agent sessions.
+  WebSocket tokens must belong to the configured pool/client and remain within
+  their recorded expiry. Legacy connections without that binding must reconnect.
 - `ctx.error(message)` emits `type="error"`; terminal scenario failures can use
   `ctx.done(kind, error=...)`. Entry-point exceptions are also reported as errors.
 - Use `engine.gate` for platform LLM generation; `engine.bedrock.Stream` and
   `generate` are compatibility wrappers. Actual usage comes from the adapter.
   Strands has its separate pre-model boundary hook.
+- Agent creation/transition user actions store local requests. AgentCore
+  provisioning, approval mirroring and Harness PassRole are IAM AdminFn
+  operations; WsFn has read actions plus bank-prefix invocation only.
+  See [WP1–WP3](BANK_AGENTCORE_WORK_PACKAGES.md) for separate offline/live gates.
 - `common.tracing.record_trace` records scenario, identity/query hashes, model,
   token counts, timing, masking/block/cache evidence and plane labels.
   `common.log.log_event` hashes sensitive fields. Do not add raw prompts,

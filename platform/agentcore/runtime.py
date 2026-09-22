@@ -115,7 +115,7 @@ def to_tuples(events: Iterable[dict], session_id: str) -> Iterator[Tuple[str, An
             meta = {k: v for k, v in ev.items() if k != "type"}
         elif "error" in ev and t is None:
             # bedrock_agentcore 런타임이 스트리밍 예외를 감싸 내는 형태: {"error":..., "error_type":..., "message":...}
-            yield ("error", f"{ev.get('error_type', 'Error')}: {str(ev.get('error', ''))[:300]}")
+            yield ("error", "Runtime transport failed; upstream details are withheld")
     if meta is None:
         meta = {"usage": {}, "stopReason": "", "sessionId": session_id, "runtime": RUNTIME_LABEL, "incomplete": True}
     meta.setdefault("usage", {})
@@ -133,11 +133,12 @@ def invoke_stream(runtime_arn: str, agent_name: str, text: str, session_id: Opti
     if not runtime_arn:
         raise ValueError("runtime_arn is required (AGENTS_RUNTIME_ARN)")
     sid = normalize_session_id(session_id)
-    body: Dict[str, Any] = {"agent": agent_name, "prompt": text, "sessionId": sid}
+    body: Dict[str, Any] = {"agent": agent_name, "prompt": text}
     if model:
         body["model"] = model
     if extra:
         body.update(extra)
+    body.pop("sessionId", None)
     kw: Dict[str, Any] = {"agentRuntimeArn": runtime_arn, "runtimeSessionId": sid,
                           "payload": json.dumps(body, ensure_ascii=False).encode("utf-8"),
                           "contentType": "application/json", "accept": "text/event-stream"}

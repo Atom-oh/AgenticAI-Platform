@@ -109,12 +109,12 @@ def make_client(url: Optional[str] = None, region: Optional[str] = None, startup
 
 
 def filter_tool_names(discovered: Iterable[str], allowed: Optional[Sequence[str]]) -> List[str]:
-    """allowedTools(bare 또는 prefixed) 기준으로 서버 도구 이름을 고른다. allowed 가 비면 전부."""
+    """Select explicitly allowed tools; an empty list grants no tools."""
     allowed_set = {a for a in (allowed or [])}
-    allowed_bare = {bare_name(a) for a in allowed_set}
+    allowed_bare = {a for a in allowed_set if TOOL_NAME_SEP not in a}
     out = []
     for name in discovered:
-        if not allowed_set or name in allowed_set or bare_name(name) in allowed_bare:
+        if allowed_set and (name in allowed_set or bare_name(name) in allowed_bare):
             out.append(name)
     return out
 
@@ -147,6 +147,8 @@ def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any]
 
 def open_tools(allowed: Optional[Sequence[str]], url: Optional[str] = None, region: Optional[str] = None):
     """편의 함수: 클라이언트 생성 + start + 도구 로드. 반환 (client, tools, discovered). 호출자가 client.stop(None, None, None)."""
+    if not allowed or any(not isinstance(name, str) or not name.strip() or "*" in name for name in allowed):
+        raise ValueError("An explicit nonempty tool allowlist is required")
     client = make_client(url, region)
     client.start()
     try:

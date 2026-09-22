@@ -59,12 +59,9 @@ class FakeHarness:
         name = f"bank_{spec['name']}"
         if name in self.harnesses:
             return self.harnesses[name]
-        d = {"harnessId": f"{name}-abc123", "harnessName": name, "status": "READY",
+        d = {**harness_mod.build_config(spec), "harnessId": f"{name}-abc123", "harnessName": name, "status": "READY",
              "arn": f"arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:harness/{name}-abc123",
              "executionRoleArn": ROLE_ARN, "clientToken": "tok",
-             "model": {"bedrockModelConfig": {"modelId": spec.get("model")}},
-             "systemPrompt": [{"text": spec["systemPrompt"]}],
-             "allowedTools": [f"bank_platform_tools___{t}" for t in spec.get("allowedTools", [])],
              "memory": {"disabled": {}}, "maxIterations": 12, "timeoutSeconds": 120}
         self.harnesses[name] = d
         return d
@@ -127,6 +124,8 @@ def fakes(monkeypatch):
         monkeypatch.setattr(harness_mod, attr, getattr(fh, attr))
     monkeypatch.setattr(mirror_mod, "mirror", fm.mirror)
     monkeypatch.setattr(mirror_mod, "find_record", fm.find_record)
+    monkeypatch.setattr(harness_mod, "HARNESS_ROLE_ARN", ROLE_ARN)
+    monkeypatch.setattr(harness_mod, "GATEWAY_ARN", "arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:gateway/synthetic")
     return fh, fm
 
 
@@ -137,9 +136,9 @@ def _handler():
     return mod
 
 
-def _ctx(rid="r1"):
+def _ctx(rid="r1", user_sub="synthetic-user-one"):
     gw = _FakeApigw()
-    return Ctx(apigw=gw, conn_id="c1", email=ACTOR, rid=rid), gw
+    return Ctx(apigw=gw, conn_id="c1", email=ACTOR, rid=rid, user_sub=user_sub), gw
 
 
 def _create_body(**kw):
@@ -147,7 +146,7 @@ def _create_body(**kw):
             "model": "global.anthropic.claude-sonnet-5",
             "systemPrompt": f"당신은 아톰은행 카드 혜택 상담 에이전트다. {SECRET_PROMPT_MARK} 공통 규칙을 따른다.",
             "allowedTools": ["lookup_customer_profile", "resolve_metric"], "skills": ["kwcag-accessibility"],
-            "memory": True}
+            "memory": False}
     body.update(kw)
     return body
 
@@ -162,6 +161,14 @@ def _types(gw):
     return [e["type"] for e in gw.posted]
 
 
+def _approve(h, name="card_benefit_agent"):
+    from agentcore.administration import apply_request
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": name, "version": "v1", "to": "APPROVED", "reason": "Synthetic administrator approval"})
+    request = gw.posted[-1]["request"]
+    return apply_request(request["name"], request["version"])
+
+
 # ---------------- 라우트 ----------------
 def test_routes():
     h = _handler()
@@ -169,7 +176,7 @@ def test_routes():
 
 
 # ---------------- 생성 ----------------
-def test_create_goes_to_pending_and_mirrors(fakes, capsys):
+def test_create_records_a_request_without_agentcore_control_calls(fakes, capsys):
     fh, fm = fakes
     h = _handler()
     ev = _create(h)
@@ -177,24 +184,19 @@ def test_create_goes_to_pending_and_mirrors(fakes, capsys):
     rec = ev["record"]
     assert rec["status"] == "PENDING_APPROVAL" and rec["recordType"] == "AGENT" and rec["recordVersion"] == "v1"
     assert rec["updatedBy"] == ACTOR and rec["payload"]["runtime"] == "AgentCore Harness"
-    assert rec["payload"]["harnessArn"].endswith("harness/bank_card_benefit_agent-abc123")
+    assert "harnessArn" not in rec["payload"]
     assert rec["payload"]["allowedTools"] == ["lookup_customer_profile", "resolve_metric"]
-    assert rec["payload"]["skills"] == ["kwcag-accessibility"] and rec["payload"]["memory"] is True
+    assert rec["payload"]["skills"] == ["kwcag-accessibility"] and rec["payload"]["memory"] is False
     assert rec["payload"]["createdBy"] == ACTOR and rec["payload"]["scenario"] == "custom"
-    assert ev["harness"] == {**ev["harness"], "status": "READY", "reused": False}
-    assert ev["harness"]["arn"] == rec["payload"]["harnessArn"]
-    # 미러는 PENDING_APPROVAL 레코드로 1회 호출
-    assert len(fm.calls) == 1 and fm.calls[0]["status"] == "PENDING_APPROVAL" and fm.calls[0]["name"] == "card_benefit_agent"
-    assert ev["agentcoreRegistry"]["status"] == "PENDING_APPROVAL" and ev["agentcoreRegistry"]["action"] == "created"
-    # Harness 명세: createdBy = 사용자, scenario custom, 프롬프트 그대로
-    ensure = next(c for c in fh.calls if c[0] == "ensure")[1]
-    assert ensure["createdBy"] == ACTOR and ensure["scenario"] == "custom" and SECRET_PROMPT_MARK in ensure["systemPrompt"]
+    assert ev["harness"]["status"] == "PENDING_ADMIN" and ev["harness"]["arn"] is None
+    assert fh.calls == [] and fm.calls == []
+    assert ev["agentcoreRegistry"]["status"] == "PENDING_ADMIN"
     # 감사: DRAFT 생성 → PENDING_APPROVAL (사유 기록)
     trail = api.audit_trail("card_benefit_agent", "v1")
     assert [a["to"] for a in trail] == ["PENDING_APPROVAL", "DRAFT"] and trail[0]["reason"] == "빌더 생성 — 승인 대기"
     # 로그에는 프롬프트 원문·이메일이 없다
     out = capsys.readouterr().out
-    assert "agent.created" in out and SECRET_PROMPT_MARK not in out and ACTOR not in out
+    assert "agent.requested" in out and SECRET_PROMPT_MARK not in out and ACTOR not in out
 
 
 def test_create_rejects_unknown_tool(fakes):
@@ -231,7 +233,7 @@ def test_create_duplicate_name_is_409_without_touching_harness(fakes):
     assert ev["ok"] is False and ev["code"] == 409 and len(fh.calls) == n
 
 
-def test_create_harness_failure_returns_error_and_no_record(fakes, monkeypatch):
+def test_admin_provision_failure_preserves_the_unapproved_request(fakes, monkeypatch):
     fh, fm = fakes
     h = _handler()
 
@@ -239,8 +241,10 @@ def test_create_harness_failure_returns_error_and_no_record(fakes, monkeypatch):
         raise RuntimeError("ValidationException: bad model")
     monkeypatch.setattr(harness_mod, "ensure_harness", boom)
     ev = _create(h)
-    assert ev["ok"] is False and ev["stage"] == "harness" and "ValidationException" in ev["error"]
-    assert api.get_record("card_benefit_agent", "v1") is None and fm.calls == []
+    assert ev["ok"] and fh.calls == []
+    with pytest.raises(RuntimeError):
+        _approve(h)
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "PENDING_APPROVAL" and fm.calls == []
 
 
 def test_create_tolerates_mirror_failure(fakes):
@@ -249,7 +253,98 @@ def test_create_tolerates_mirror_failure(fakes):
     h = _handler()
     ev = _create(h)
     assert ev["ok"] is True and ev["record"]["status"] == "PENDING_APPROVAL"
-    assert "error" in ev["agentcoreRegistry"] and "unreachable" in ev["agentcoreRegistry"]["error"]
+    assert ev["agentcoreRegistry"]["status"] == "PENDING_ADMIN" and fm.calls == []
+
+
+def test_generic_registry_route_cannot_apply_agent_approval(fakes):
+    from handlers.registry import registry_transition
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    registry_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Request"})
+    assert gw.posted[-1]["request"]["status"] == "PENDING_ADMIN"
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "PENDING_APPROVAL"
+    assert not fh.calls and not fm.calls
+
+
+def test_admin_request_reconciles_a_failed_mirror_without_reprovisioning(fakes):
+    from agentcore.administration import apply_request
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Synthetic"})
+    request = gw.posted[-1]["request"]
+    fm.fail = True
+    with pytest.raises(RuntimeError):
+        apply_request(request["name"])
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "APPROVED"
+    fm.fail = False
+    result = apply_request(request["name"])
+    assert result["request"]["status"] == "APPROVED"
+    assert len([call for call in fh.calls if call[0] == "ensure"]) == 1
+    assert apply_request(request["name"])["replayed"] is True
+
+
+def test_agent_invocation_requires_the_verified_subject(fakes):
+    fh, _ = fakes
+    ctx, gw = _ctx(user_sub=None)
+    _handler().agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hello", "userSub": "forged"})
+    assert gw.posted[-1]["code"] == 401
+    assert not fh.calls
+
+
+def test_user_cannot_mark_an_administrative_request_as_applied(fakes):
+    from handlers.registry import registry_transition
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Request"})
+    request = gw.posted[-1]["request"]
+    registry_transition(ctx, {"name": request["name"], "version": "v1", "to": "PENDING_APPROVAL", "reason": "forged"})
+    assert gw.posted[-1]["code"] == 403
+    assert api.get_record(request["name"], "v1")["status"] == "DRAFT"
+
+
+def test_admin_approval_fences_specification_changes_during_provisioning(fakes, monkeypatch):
+    from agentcore.administration import apply_request
+    from registry.model import RegistryError
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Request"})
+    request = gw.posted[-1]["request"]
+    ensure = harness_mod.ensure_harness
+
+    def mutate(spec):
+        result = ensure(spec)
+        record = api.get_record("card_benefit_agent", "v1")
+        api.get_store().rewrite(record["name"], "v1", {"payload": {**record["payload"], "systemPrompt": "Changed specification"}}, "admin")
+        return result
+
+    monkeypatch.setattr(harness_mod, "ensure_harness", mutate)
+    with pytest.raises(RegistryError):
+        apply_request(request["name"])
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "PENDING_APPROVAL"
+    assert not fm.calls
+
+
+def test_old_approval_request_cannot_survive_a_rejection_and_resubmission(fakes):
+    from agentcore.administration import apply_request
+    from registry.model import ConflictError
+    fh, _ = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Old request"})
+    request = gw.posted[-1]["request"]
+    for state in ["REJECTED", "DRAFT", "PENDING_APPROVAL"]:
+        api.transition("card_benefit_agent", "v1", state, "admin", "New review cycle")
+    with pytest.raises(ConflictError):
+        apply_request(request["name"])
+    assert not fh.calls
 
 
 # ---------------- 호출 — Consumer 게이트 ----------------
@@ -288,14 +383,17 @@ def test_transition_then_invoke_streams(fakes, capsys):
     fh, fm = fakes
     h = _handler()
     _create(h)
-    # 데모: 즉시 승인 — 전이 + 미러 동기화
+    # User requests cannot apply the state; IAM administration provisions it.
     ctx, gw = _ctx("r3")
     h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "데모 — 즉시 승인"})
     ev = gw.posted[-1]
-    assert ev["type"] == "agent_transition" and ev["ok"] and ev["record"]["status"] == "APPROVED"
-    assert ev["audit"]["actor"] == ACTOR and ev["transition"] == "approve"
-    assert len(fm.calls) == 2 and fm.calls[-1]["status"] == "APPROVED" and fm.calls[-1]["statusReason"] == "데모 — 즉시 승인"
-    assert ev["agentcoreRegistry"]["status"] == "APPROVED"
+    assert ev["type"] == "agent_transition" and ev["ok"] and ev["record"]["status"] == "PENDING_APPROVAL"
+    assert fh.calls == [] and fm.calls == []
+    from agentcore.administration import apply_request
+    applied = apply_request(ev["request"]["name"])
+    assert applied["record"]["status"] == "APPROVED" and applied["audit"]["actor"] == "admin"
+    assert len(fm.calls) == 1 and fm.calls[-1]["status"] == "APPROVED"
+    assert SECRET_PROMPT_MARK not in json.dumps(fm.calls) and ACTOR not in json.dumps(fm.calls)
     # 호출
     capsys.readouterr()
     ctx, gw = _ctx("r4")
@@ -313,10 +411,10 @@ def test_transition_then_invoke_streams(fakes, capsys):
     done = gw.posted[-1]
     assert done["usage"]["inputTokens"] == 120 and done["usage"]["outputTokens"] == 45
     assert done["modelId"] == "global.anthropic.claude-sonnet-5" and done["runtime"] == "AgentCore Harness"
-    assert done["sessionId"].endswith("-session") and done["stopReason"] == "end_turn" and done["toolCalls"] == 1
+    assert done["sessionId"] and len(done["runtimeSessionId"]) == 64 and done["stopReason"] == "end_turn" and done["toolCalls"] == 1
     assert "error" not in done and done["errors"] == [] and "elapsedMs" in done
     inv = next(c for c in fh.calls if c[0] == "invoke")
-    assert inv[1].endswith("bank_card_benefit_agent-abc123") and SECRET_MESSAGE_MARK in inv[2] and inv[3] is None
+    assert inv[1].endswith("bank_card_benefit_agent-abc123") and SECRET_MESSAGE_MARK in inv[2] and inv[3] == done["runtimeSessionId"]
     # 트레이스: 시나리오 AGENT, 토큰 실측, 메시지 원문 없음
     out = capsys.readouterr().out
     trace = next(json.loads(l) for l in out.splitlines() if '"event": "trace.recorded"' in l)
@@ -328,19 +426,27 @@ def test_transition_then_invoke_streams(fakes, capsys):
     sid = "0123456789abcdef0123456789abcdef-session"
     ctx, gw = _ctx("r5")
     h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "다시", "sessionId": sid})
-    assert fh.calls[-1][3] == sid and gw.posted[-1]["sessionId"] == sid
+    bound = fh.calls[-1][3]
+    assert bound != sid and gw.posted[-1]["sessionId"] == sid
+    ctx, gw = _ctx("r6")
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "다시", "sessionId": sid})
+    assert fh.calls[-1][3] == bound
+    ctx, gw = _ctx("r7", user_sub="synthetic-user-two")
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "다시", "sessionId": sid})
+    assert fh.calls[-1][3] != bound and gw.posted[-1]["sessionId"] == sid
 
 
 def test_invoke_harness_exception_ends_with_done_error(fakes):
     fh, _ = fakes
     h = _handler()
     _create(h)
-    api.transition("card_benefit_agent", "v1", "APPROVED", ACTOR)
+    _approve(h)
     fh.fail_invoke = True
     ctx, gw = _ctx()
     h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hi"})
     done = gw.posted[-1]
-    assert done["type"] == "agent.done" and "Harness 호출 실패" in done["error"] and "ThrottlingException" in done["error"]
+    assert done["type"] == "agent.done" and "에이전트 호출 실패" in done["error"] and "RuntimeError" in done["error"]
+    assert "slow down" not in json.dumps(done)
 
 
 def test_transition_invalid_is_400_event(fakes):
@@ -359,6 +465,7 @@ def test_catalog_joins_registry_harness_and_agentcore(fakes, monkeypatch):
     monkeypatch.setenv("GATEWAY_URL", "https://gw1.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp")
     h = _handler()
     _create(h)
+    _approve(h)
     api.create_record({"name": "s2_mydata_advisor", "recordVersion": "v1", "recordType": "AGENT", "subtype": "PIPELINE",
                        "description": "파이프라인형", "tags": ["s2"],
                        "payload": {"entry": "handlers.s2", "scenario": "S2", "model": "m"}}, ACTOR, status="APPROVED")
@@ -368,10 +475,10 @@ def test_catalog_joins_registry_harness_and_agentcore(fakes, monkeypatch):
     assert ev["type"] == "agents_catalog"
     by = {a["name"]: a for a in ev["agents"]}
     a = by["card_benefit_agent"]
-    assert a["status"] == "PENDING_APPROVAL" and a["agentcoreStatus"] == "PENDING_APPROVAL" and a["harnessStatus"] == "READY"
+    assert a["status"] == "APPROVED" and a["agentcoreStatus"] == "APPROVED" and a["harnessStatus"] == "READY"
     assert a["harnessArn"].endswith("bank_card_benefit_agent-abc123") and a["title"] == "카드 혜택 상담"
     assert a["model"] == "global.anthropic.claude-sonnet-5" and a["allowedTools"] == ["lookup_customer_profile", "resolve_metric"]
-    assert a["skills"] == ["kwcag-accessibility"] and a["memory"] is True and a["scenario"] == "custom"
+    assert a["skills"] == ["kwcag-accessibility"] and a["memory"] is False and a["scenario"] == "custom"
     assert a["createdBy"] == ACTOR and a["updatedAt"] and a["version"] == "v1"
     p = by["s2_mydata_advisor"]
     assert p["harnessStatus"] == "none" and p["harnessArn"] is None and p["agentcoreStatus"] is None and p["scenario"] == "S2"
@@ -400,15 +507,16 @@ def test_catalog_tolerates_backend_errors(fakes):
     h.agents_catalog(ctx, {})
     ev = gw.posted[-1]
     a = ev["agents"][0]
-    assert a["harnessStatus"] == "unknown" and "AccessDeniedException" in a["harnessError"]
-    assert a["agentcoreStatus"] is None and "us-east-1" in ev["agentcoreRegistryError"]
-    assert a["harnessArn"].endswith("abc123")  # payload 의 ARN 은 그대로 보인다
+    assert a["harnessStatus"] == "unknown" and a["harnessError"] == "RuntimeError"
+    assert a["agentcoreStatus"] is None and ev["agentcoreRegistryError"] == "RuntimeError"
+    assert a["harnessArn"] is None
     assert ev["gateway"] == {"arn": "", "url": ""}
 
 
 def test_agent_get_hides_execution_role(fakes):
     h = _handler()
     _create(h)
+    _approve(h)
     ctx, gw = _ctx()
     h.agent_get(ctx, {"name": "card_benefit_agent"})
     ev = gw.posted[-1]
@@ -417,6 +525,6 @@ def test_agent_get_hides_execution_role(fakes):
     assert hs["status"] == "READY" and hs["arn"].endswith("abc123") and hs["harnessName"] == "bank_card_benefit_agent"
     assert SECRET_PROMPT_MARK in hs["systemPrompt"] and isinstance(hs["systemPrompt"], str)
     assert "executionRoleArn" not in json.dumps(ev) and "clientToken" not in json.dumps(ev) and ROLE_ARN not in json.dumps(ev)
-    assert [a["to"] for a in ev["audit"]] == ["PENDING_APPROVAL", "DRAFT"]
+    assert [a["to"] for a in ev["audit"]] == ["APPROVED", "PENDING_APPROVAL", "DRAFT"]
     h.agent_get(ctx, {"name": "nope"})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 404
