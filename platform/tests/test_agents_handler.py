@@ -247,7 +247,7 @@ def test_admin_provision_failure_preserves_the_unapproved_request(fakes, monkeyp
     assert api.get_record("card_benefit_agent", "v1")["status"] == "PENDING_APPROVAL" and fm.calls == []
 
 
-def test_create_tolerates_mirror_failure(fakes):
+def test_create_does_not_contact_the_registry_mirror(fakes):
     _, fm = fakes
     fm.fail = True
     h = _handler()
@@ -288,8 +288,10 @@ def test_admin_request_reconciles_a_failed_mirror_without_reprovisioning(fakes):
     h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Synthetic"})
     request = gw.posted[-1]["request"]
     fm.fail = True
-    with pytest.raises(RuntimeError):
-        apply_request(request["name"])
+    partial = apply_request(request["name"])
+    assert partial["applied"] is True and partial["completed"] is False
+    assert partial["agentcoreRegistry"]["status"] == "SYNC_PENDING"
+    assert partial["record"]["status"] == "APPROVED" and partial["request"]["status"] == "DRAFT"
     assert api.get_record("card_benefit_agent", "v1")["status"] == "APPROVED"
     fm.fail = False
     result = apply_request(request["name"])
@@ -341,7 +343,111 @@ def test_user_cannot_mark_an_administrative_request_as_applied(fakes):
     request = gw.posted[-1]["request"]
     registry_transition(ctx, {"name": request["name"], "version": "v1", "to": "PENDING_APPROVAL", "reason": "forged"})
     assert gw.posted[-1]["code"] == 403
-    assert api.get_record(request["name"], "v1")["status"] == "DRAFT"
+    assert api.get_record(request["name"], "v1", include_internal=True)["status"] == "DRAFT"
+
+
+@pytest.mark.parametrize("status", ["DRAFT", "REJECTED", "DEPRECATED"])
+def test_custom_agent_cannot_select_an_unapproved_skill(fakes, status):
+    api.get_store().force_status("kwcag-accessibility", "v1", status, "admin", "Synthetic state")
+    result = _create(_handler())
+    assert result["code"] == 400 and "SKILL" in result["error"]
+    assert fakes[0].calls == []
+
+
+@pytest.mark.parametrize("change", ["record", "source"])
+def test_skill_revision_is_fixed_before_administrative_approval(fakes, monkeypatch, tmp_path, change):
+    from agentcore import skill_binding
+    from registry.model import ValidationError
+    h = _handler()
+    _create(h)
+    if change == "record":
+        api.get_store().rewrite("kwcag-accessibility", "v1", {"description": "Unreviewed edit"}, "admin")
+    else:
+        monkeypatch.setattr(skill_binding, "SKILLS_DIR", tmp_path)
+        (tmp_path / "kwcag-accessibility.md").write_text("Unreviewed replacement")
+    with pytest.raises(ValidationError):
+        _approve(h)
+    assert not fakes[0].calls and not fakes[1].calls
+
+
+def test_custom_harness_embeds_the_exact_approved_skill_and_rechecks_use(fakes):
+    h = _handler()
+    record = _create(h)["record"]
+    _approve(h)
+    saved = fakes[0].harnesses["bank_card_benefit_agent"]
+    binding = record["payload"]["skillBindings"][0]
+    assert binding["contentHash"] in saved["systemPrompt"][0]["text"]
+    assert saved["skills"] == []  # No mutable S3 skill prefix in custom Harness.
+    api.get_store().force_status("kwcag-accessibility", "v1", "DEPRECATED", "admin", "Synthetic retirement")
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hello"})
+    assert gw.posted[-1]["code"] == 409
+    assert not any(call[0] == "invoke" for call in fakes[0].calls)
+
+
+@pytest.mark.parametrize("conflict", ["hash", "approved_consumer", "limits"])
+def test_reconciliation_rejects_unreviewed_or_in_use_harnesses(fakes, monkeypatch, conflict):
+    from agentcore.administration import apply_request, harness_fingerprint
+    from registry.model import ConflictError
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    record = api.get_record("card_benefit_agent", "v1")
+    spec, error = h._validate_create({**record["payload"], "name": record["name"], "description": record["description"]})
+    assert error is None
+    existing = fh.ensure_harness(spec)
+    reviewed_hash = harness_fingerprint(existing)
+    existing["maxIterations"] = 999
+    assert harness_fingerprint(existing) != reviewed_hash
+    if conflict == "approved_consumer":
+        api.create_record({**record, "recordVersion": "v2"}, "admin", status="APPROVED", embed=False)
+        reviewed_hash = harness_fingerprint(existing)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": record["name"], "version": "v1", "to": "APPROVED"})
+    calls_before = len(fh.calls)
+    with pytest.raises(ConflictError):
+        apply_request(gw.posted[-1]["request"]["name"],
+                      reconcile_hash=None if conflict == "limits" else reviewed_hash)
+    assert not fm.calls
+    assert all(call[0] != "ensure" for call in fh.calls[calls_before:])
+    assert api.get_record(record["name"], "v1")["status"] == "PENDING_APPROVAL"
+
+
+def test_admin_requests_are_hidden_from_all_registry_discovery_paths(fakes):
+    from handlers import registry as routes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED",
+                             "reason": "PRIVATE_APPROVAL_REASON"})
+    name = gw.posted[-1]["request"]["name"]
+    assert api.get_record(name, "v1", include_internal=True)["payload"]["reason"] == "PRIVATE_APPROVAL_REASON"
+    ctx, gw = _ctx(user_sub="another-user")
+    for route, body in [(routes.registry_list, {}), (routes.registry_get, {"name": name, "version": "v1"}),
+                        (routes.registry_search, {"q": "agent-request"}), (routes.registry_consumer, {})]:
+        route(ctx, body)
+    assert "PRIVATE_APPROVAL_REASON" not in json.dumps(gw.posted)
+    assert gw.posted[1]["code"] == 404
+    assert api.get_record(name, "v1") is None
+    assert api.audit_trail(name, "v1") == [] and api.version_chain(name, "v1") == []
+    assert all(row["name"] != name for row in api.list_records())
+    api.get_store().force_status(name, "v1", "APPROVED", "admin", "Synthetic completion")
+    assert all(row["name"] != name for row in api.list_approved())
+
+
+def test_stream_error_events_never_expose_upstream_response_bodies(fakes, monkeypatch):
+    from agentcore import invoke
+    h = _handler()
+    _create(h)
+    _approve(h)
+    monkeypatch.setattr(invoke, "stream", lambda *args: iter([
+        ("error", {"message": "UPSTREAM_BODY_SENTINEL Traceback lambda.py", "code": 502}),
+        ("meta", {"stopReason": "error"}),
+    ]))
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "Synthetic request"})
+    assert gw.posted[-1]["error"]
+    assert "UPSTREAM_BODY_SENTINEL" not in json.dumps(gw.posted)
 
 
 def test_admin_approval_fences_specification_changes_during_provisioning(fakes, monkeypatch):

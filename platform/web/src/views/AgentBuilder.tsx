@@ -290,9 +290,9 @@ function CreateForm({ cat, onCreated, onApprove }: {
               {nowStatus === 'PENDING_APPROVAL' && (
                 <div className="flex items-center gap-2 mt-2">
                   <span className="text-amber-700">승인 대기 — Consumer 게이트가 호출을 거부한다.</span>
-                  <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">#/registry 에서 승인 →</a>
+                  <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">Registry에서 상태 보기 →</a>
                   <button onClick={approve} disabled={approving}
-                    className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" title="관리자 편의 — 감사 이벤트에 actor·사유가 남는다">
+                    className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" title="IAM 관리자가 처리할 승인 요청을 기록합니다">
                     {approving ? '요청 중…' : '관리자 승인 요청'}
                   </button>
                 </div>
@@ -479,7 +479,7 @@ function Chat({ sel, onApprove, onRefresh }: {
             <div className="mt-2 rounded-lg border border-amber-300 bg-amber-950/20 p-2 text-[11px] text-amber-700 flex items-center gap-2 flex-wrap">
               <span>{STATUS_KO[sel.status] || sel.status} 상태 — 전송하면 Consumer 게이트가 거부한다 (거부 자체가 시연 포인트).</span>
               {sel.status === 'PENDING_APPROVAL' && <>
-                <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">#/registry 에서 승인 →</a>
+                <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">Registry에서 상태 보기 →</a>
                 <button className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" onClick={approve} disabled={approving}>{approving ? '요청 중…' : '관리자 승인 요청'}</button>
               </>}
               {approveErr && <span className="text-[#E90061]">{approveErr}</span>}

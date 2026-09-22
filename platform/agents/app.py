@@ -216,6 +216,8 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
         meta["skills"] = {"loaded": session.skills_loaded, "missing": session.skills_missing}
         if session.skills_missing:
             yield {"type": "error", "code": 500, "message": "skills missing in image: " + ",".join(session.skills_missing)}
+            meta["stopReason"] = "skills_unavailable"
+            return
         if meta["toolsMissing"]:
             yield {"type": "error", "code": 502,
                    "message": "Configured Gateway tools are unavailable"}

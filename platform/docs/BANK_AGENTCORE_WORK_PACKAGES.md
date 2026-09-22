@@ -46,7 +46,8 @@ sharing history. Verify the deployed Runtime context behavior.
 
 WsFn receives only the listed Harness/Gateway/Registry read operations and
 `InvokeHarness` scoped to the same-account, same-region `harness/bank_*` ARN
-prefix. AgentCore create/update/delete/approval actions and Harness
+prefix, plus the existing exact bank Runtime invocation grant needed by Strands.
+AgentCore create/update/delete/approval actions and Harness
 `iam:PassRole` belong to AdminFn. Remove the three unused workload-token
 permissions from the bank Runtime role.
 The user's explicit AdminFn allocation includes CreateMemory, GetMemory and
@@ -58,15 +59,27 @@ User agent creation saves a local pending specification. Agent transitions
 save `AGENT_ADMIN_REQUEST` records. The generic Registry route cannot bypass
 this request path for Agent records. WsFn cannot invoke AdminFn.
 
+Request records, payloads and audit entries are excluded from user Registry
+listing, get, search, version and consumer APIs. Their namespace is reserved.
 The IAM-only `apply_agent_request` Admin operation validates the exact
 requested record, provisions the approved Harness, applies its Registry
 transition and mirrors it. Changed specifications and conflicting existing
 Harness configurations are rejected. Long-term Harness memory is not enabled
 by these requests without its separate privacy/extraction review.
+Custom Harness Skill selections must be APPROVED; server-derived bindings fix
+the Registry revision and bundled Markdown hash. Approval rechecks those
+bindings and embeds the exact inspected text into the Harness system prompt,
+without a mutable S3 Skill prefix. Invocation rechecks the approval bindings.
+Missing Runtime Skill files also block execution before a model call.
+If local approval succeeds but the metadata mirror fails, the Admin response
+reports `applied=true, completed=false`, the actual local state and mirror
+status. The request stays pending until a successful retry.
 For an unapproved orphan, the IAM-only `reconcile_agent_request` operation
-requires `expectedHarnessHash` from `agentcore.administration.harness_fingerprint`.
+requires `expectedHarnessHash` from the IAM `inspect_agent_request` operation.
 It refuses any active approved consumer and rechecks the request before updating
-the existing Harness to the exact requested configuration. It never deletes it.
+the existing Harness to the exact requested configuration, including iteration,
+token and timeout limits. Unexpected execution extensions require separate IAM
+reconciliation. It never deletes a Harness.
 
 O: synthesized policy checks prove no AgentCore control actions or PassRole on
 WsFn; tests prove no control call on user routes and cover administrative

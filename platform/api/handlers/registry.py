@@ -48,7 +48,7 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
     to = str(body.get("to", "")).strip().upper()
     reason = str(body.get("reason", "") or "").strip()[:500]
     try:
-        record = api.get_record(name, version)
+        record = api.get_record(name, version, include_internal=True)
         if record and record.get("subtype") == "AGENT_ADMIN_REQUEST":
             ctx.post({"type": "registry_transition", "ok": False, "code": 403,
                       "error": "관리자 요청의 처리 상태는 IAM 관리자만 변경할 수 있습니다."})
@@ -74,7 +74,7 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
 def registry_search(ctx: Ctx, body: dict) -> None:
     q = str(body.get("q", "") or body.get("query", "")).strip()[:200]
     res = api.search_detailed(q, body.get("type"))
-    log_event("registry.search", ctx.trace_id, query=q, hits=len(res["hits"]), dense=res["dense"])
+    log_event("registry.search", ctx.trace_id, queryLen=len(q), hits=len(res["hits"]), dense=res["dense"])
     ctx.post({"type": "registry_search", "q": q, "recordType": body.get("type"), **res})
 
 
@@ -89,7 +89,8 @@ def registry_consumer(ctx: Ctx, body: dict) -> None:
 def registry_create(ctx: Ctx, body: dict) -> None:
     record = body.get("record") or {}
     if isinstance(record, dict) and (str(record.get("recordType", "")).strip().upper() == "AGENT"
-                                   or str(record.get("subtype", "")).strip().upper() == "AGENT_ADMIN_REQUEST"):
+                                   or str(record.get("subtype", "")).strip().upper() == "AGENT_ADMIN_REQUEST"
+                                   or str(record.get("name", "")).strip().startswith("agent-request-")):
         ctx.post({"type": "registry_create", "ok": False, "code": 403,
                   "error": "에이전트 명세와 관리 요청은 에이전트 전용 요청 경로를 사용하세요."})
         return

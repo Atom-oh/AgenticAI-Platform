@@ -67,20 +67,26 @@ def build_config(spec: dict) -> dict:
         raise ValueError("Harness requires an explicit nonempty allowedTools list")
     if not GATEWAY_ARN:
         raise ValueError("Harness tools require the configured bank Gateway")
-    _inspect(str(spec.get("systemPrompt", "")), "agentcore.harness.system")
+    system_prompt = str(spec.get("systemPrompt", ""))
+    if "skillBindings" in spec:
+        from agentcore.skill_binding import resolve
+        skill_text = resolve(spec["skillBindings"], spec.get("skills", []))
+        if skill_text:
+            system_prompt += "\n\n" + skill_text
+    _inspect(system_prompt, "agentcore.harness.system")
     tools = []
     if GATEWAY_ARN and spec.get("allowedTools"):
         tools.append({"type": "agentcore_gateway", "name": "bank_platform_tools",
                       "config": {"agentCoreGateway": {"gatewayArn": GATEWAY_ARN, "outboundAuth": {"awsIam": {}}}}})
     skills = []
-    if SKILLS_S3_URI and spec.get("skills"):
+    if "skillBindings" not in spec and SKILLS_S3_URI and spec.get("skills"):
         skills = [{"s3": {"uri": f"{SKILLS_S3_URI.rstrip('/')}/{name}/"}} for name in spec["skills"]]
     cfg = {
         "harnessName": f"bank_{spec['name']}",
         "executionRoleArn": HARNESS_ROLE_ARN,
         "model": {"bedrockModelConfig": {"modelId": spec.get("model", "global.anthropic.claude-sonnet-5"),
                                          "maxTokens": int(spec.get("maxTokens", 2048))}},  # Claude 5: temperature 미지원
-        "systemPrompt": [{"text": spec["systemPrompt"]}],
+        "systemPrompt": [{"text": system_prompt}],
         "tools": tools,
         "skills": skills,
         "allowedTools": [f"bank_platform_tools___{t}" for t in allowed],

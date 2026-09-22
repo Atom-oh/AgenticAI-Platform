@@ -7,6 +7,18 @@ import time
 from registry import api
 from registry.model import ConflictError, NotFoundError, ValidationError, check_transition
 
+HARNESS_FIELDS = ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills",
+                  "maxIterations", "maxTokens", "timeoutSeconds", "memory", "environment",
+                  "environmentArtifact", "environmentVariables", "authorizerConfiguration", "truncation")
+
+
+def harness_settings(value):
+    # The service can represent disabled managed memory explicitly or omit it.
+    settings = {key: value.get(key) for key in HARNESS_FIELDS}
+    if settings["memory"] in (None, {}, {"disabled": {}}):
+        settings["memory"] = None
+    return settings
+
 
 def fingerprint(record):
     value = {key: record.get(key) for key in ("name", "recordVersion", "recordType", "subtype", "status", "stateRevision", "payload", "description")}
@@ -14,8 +26,7 @@ def fingerprint(record):
 
 
 def harness_fingerprint(value):
-    fields = ("harnessId", "executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills")
-    return hashlib.sha256(json.dumps({key: value.get(key) for key in fields},
+    return hashlib.sha256(json.dumps({"harnessId": value.get("harnessId"), **harness_settings(value)},
         sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
@@ -29,7 +40,9 @@ def request_transition(name, version, target, actor, reason):
                "specHash": fingerprint({**record, "status": None, "stateRevision": None}),
                "expectedRevision": record.get("stateRevision", 0), "actor": actor}
     key = "agent-request-" + hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()[:48]
-    saved = api.get_record(key, "v1")
+    saved = api.get_record(key, "v1", include_internal=True)
+    if saved and (saved.get("subtype") != "AGENT_ADMIN_REQUEST" or saved.get("payload") != request):
+        raise ConflictError("The administrative request identifier is already occupied")
     if not saved:
         saved = api.create_record({"name": key, "recordVersion": "v1", "recordType": "CUSTOM",
             "subtype": "AGENT_ADMIN_REQUEST", "description": "IAM administrator agent transition request",
@@ -41,7 +54,7 @@ def request_transition(name, version, target, actor, reason):
 def apply_request(name, version="v1", *, reconcile_hash=None):
     """Called only by admin_handler; this function is not a WebSocket route."""
     from agentcore import harness, registry_mirror
-    request = api.get_record(name, version)
+    request = api.get_record(name, version, include_internal=True)
     if not request or request.get("recordType") != "CUSTOM" or request.get("subtype") != "AGENT_ADMIN_REQUEST":
         raise NotFoundError("Agent administration request not found")
     body = request["payload"]
@@ -56,7 +69,7 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
     if not record or record.get("recordType") != "AGENT":
         raise NotFoundError("Requested agent not found")
     if request["status"] == "APPROVED":
-        return {"record": record, "request": request, "replayed": True}
+        return {"record": record, "request": request, "replayed": True, "applied": True, "completed": True}
     applied = (record["status"] == body["to"] and record.get("stateRevision") == body["expectedRevision"] + 1
                and fingerprint({**record, "status": None, "stateRevision": None}) == body.get("specHash"))
     if fingerprint(record) != body["expectedHash"] and not applied:
@@ -66,6 +79,8 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
     if body["to"] == "APPROVED":
         if record.get("payload", {}).get("runtime") != "AgentCore Harness":
             raise ValidationError("Built-in Runtime approvals use the IAM seed_agents operation")
+        if record["payload"].get("skills") and "skillBindings" not in record["payload"]:
+            raise ValidationError("SKILL approval bindings are missing; submit a new agent specification")
         from handlers.agents import _validate_create
         spec, error = _validate_create({**record["payload"], "name": record["name"],
             "description": record["description"], "title": record["payload"].get("title")})
@@ -76,8 +91,9 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
         expected = harness.build_config(spec)
         existing = harness.find_harness(expected["harnessName"])
         if existing:
-            differs = any(existing.get(field) != expected[field] for field in
-                          ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills"))
+            if existing.get("status") not in {"READY", "ACTIVE"}:
+                raise ConflictError("Existing Harness is not ready for approval")
+            differs = harness_settings(existing) != harness_settings(expected)
             if differs:
                 if not reconcile_hash:
                     raise ConflictError("Existing Harness differs; use reconcile_agent_request with its reviewed configuration hash")
@@ -87,14 +103,17 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
                     raise ConflictError("Deprecate approved consumers before changing their Harness")
                 if fingerprint(api.get_record(record["name"], record["recordVersion"])) != body["expectedHash"]:
                     raise ConflictError("Request source changed before reconciliation")
+                if any(existing.get(key) not in (None, {}, {"disabled": {}}) for key in
+                       ("memory", "environment", "environmentArtifact", "environmentVariables",
+                        "authorizerConfiguration", "truncation")):
+                    raise ConflictError("Remove unexpected Harness extensions through IAM before reconciliation")
                 parameters = {key: value for key, value in expected.items() if key not in {"harnessName", "tags"}}
                 harness.ctl().update_harness(harnessId=existing["harnessId"],
                     clientToken=hashlib.sha256((name + reconcile_hash).encode()).hexdigest(), **parameters)
                 for _ in range(30):
                     current = harness.ctl().get_harness(harnessId=existing["harnessId"])["harness"]
                     if current.get("status") in {"READY", "ACTIVE"}:
-                        if any(current.get(field) != expected[field] for field in
-                               ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills")):
+                        if harness_settings(current) != harness_settings(expected):
                             raise ConflictError("Reconciled Harness does not match the requested specification")
                         break
                     if current.get("status") in {"FAILED", "DELETE_FAILED"}:
@@ -103,17 +122,28 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
                 else:
                     raise RuntimeError("Harness reconciliation did not finish")
         else:
-            harness.ensure_harness(spec)
+            created = harness.ensure_harness(spec)
+            if created.get("status") not in {"READY", "ACTIVE"} or harness_settings(created) != harness_settings(expected):
+                raise ConflictError("Provisioned Harness is not ready with the requested configuration")
+    if body["to"] == "APPROVED":
+        from agentcore.skill_binding import resolve
+        resolve(record["payload"].get("skillBindings", []), record["payload"].get("skills", []))
     updated, audit = ((record, None) if applied else
         api.transition(record["name"], record["recordVersion"], body["to"], "admin", body["reason"], expected_record=record))
     # User prompts, identities and private request reasons are not discovery metadata.
-    mirrored = registry_mirror.mirror({
-        "name": updated["name"], "recordVersion": updated["recordVersion"], "recordType": "AGENT",
-        "status": updated["status"], "description": "Bank Tier 0/1 agent metadata",
-    })
+    try:
+        mirrored = registry_mirror.mirror({
+            "name": updated["name"], "recordVersion": updated["recordVersion"], "recordType": "AGENT",
+            "status": updated["status"], "description": "Bank Tier 0/1 agent metadata",
+        })
+    except Exception as e:
+        mirrored = {"status": "SYNC_PENDING", "errorType": type(e).__name__}
     if mirrored.get("status") != updated["status"]:
-        raise RuntimeError("Agent Registry synchronization is incomplete")
+        # Local approval is already committed; a retry finishes the metadata mirror.
+        return {"record": updated, "request": request, "audit": audit,
+                "agentcoreRegistry": mirrored, "applied": True, "completed": False}
     if request["status"] == "DRAFT":
         api.transition(name, version, "PENDING_APPROVAL", "admin", "IAM administration accepted request")
     saved, _ = api.transition(name, version, "APPROVED", "admin", "Agent transition applied")
-    return {"record": updated, "request": saved, "audit": audit, "agentcoreRegistry": mirrored}
+    return {"record": updated, "request": saved, "audit": audit, "agentcoreRegistry": mirrored,
+            "applied": True, "completed": True}

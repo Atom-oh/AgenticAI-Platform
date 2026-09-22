@@ -365,6 +365,26 @@ def test_missing_qualified_target_is_not_hidden_by_a_loaded_bare_name(runtime_ap
     assert events[-1]["stopReason"] == "tools_unavailable"
 
 
+def test_missing_runtime_skill_blocks_before_streaming(runtime_app, monkeypatch):
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    spec = app.agent_specs.spec_by_name("regulation_impact_agent")
+    monkeypatch.setattr(app.mcp_gateway, "missing_tool_names",
+                        _load_container_module("mcp_gateway").missing_tool_names, raising=False)
+    # Deliberately no Agent/stream: any attempt to invoke it makes this fail.
+    monkeypatch.setattr(app, "_Session", lambda *args: SimpleNamespace(
+        tools=[], discovered=list(spec["allowedTools"]),
+        skills_loaded=[], skills_missing=["required-skill"], close=lambda: None))
+
+    async def collect():
+        return [event async for event in app.run({"agent": spec["name"], "prompt": "hello"}, "s" * 64)]
+
+    events = asyncio.run(collect())
+    assert events[-1]["stopReason"] == "skills_unavailable"
+    assert any(event.get("code") == 500 for event in events)
+    assert not any(event["type"] == "text" for event in events)
+
+
 @pytest.mark.parametrize("tools", [None, [], ["*"]])
 def test_harness_configuration_never_defaults_to_all_tools(tools):
     from agentcore import harness

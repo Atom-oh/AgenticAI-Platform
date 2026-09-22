@@ -60,6 +60,13 @@ Only the IAM Admin Lambda may provision Harnesses or mirror approval changes.
 An administrator processes a recorded request using
 `{"op":"apply_agent_request","name":"agent-request-…","version":"v1"}`.
 User routes cannot invoke AdminFn or call AgentCore control APIs.
+Custom Harness Skill bindings fix approved Registry versions and local file
+hashes; approval embeds their inspected content into the system prompt and
+invocation rechecks the bindings. Missing Runtime Skills block model execution.
+Administrative request payloads are hidden from normal Registry discovery.
+After local approval, a mirror failure reports `applied=true, completed=false`;
+retry the same request to finish synchronization. IAM `inspect_agent_request`
+returns the current Harness fingerprint needed for explicit reconciliation.
 
 ## Local container commands
 

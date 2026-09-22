@@ -89,12 +89,24 @@ def handler(event, context):
                 row["registryError"] = f"{type(e).__name__}: {str(e)[:300]}"
             out.append(row)
         return {"agents": out, "runtimeArn": runtime_arn or None}
+    if op == "inspect_agent_request":
+        from agentcore import harness
+        from agentcore.administration import harness_fingerprint
+        from registry import api
+        request = api.get_record(event["name"], event.get("version", "v1"), include_internal=True)
+        if not request or request.get("subtype") != "AGENT_ADMIN_REQUEST":
+            return {"ok": False, "error": "agent-request-not-found"}
+        existing = harness.find_harness("bank_" + request["payload"]["name"])
+        return {"ok": True, "request": request, "harnessId": (existing or {}).get("harnessId"),
+                "expectedHarnessHash": harness_fingerprint(existing) if existing else None}
     if op in {"apply_agent_request", "reconcile_agent_request"}:
         from agentcore.administration import apply_request
+        from registry.model import RegistryError
         try:
             options = {"reconcile_hash": event["expectedHarnessHash"]} if op == "reconcile_agent_request" else {}
             return {"ok": True, **apply_request(event["name"], event.get("version", "v1"), **options)}
         except Exception as error:
             log_event("admin.agent_request_failed", errorType=type(error).__name__)
-            return {"ok": False, "error": "agent-administration-failed", "errorType": type(error).__name__}
+            return {"ok": False, "error": str(error)[:300] if isinstance(error, RegistryError) else "agent-administration-failed",
+                    "errorType": type(error).__name__}
     return {"error": f"unknown op: {op}"}

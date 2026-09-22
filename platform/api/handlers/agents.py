@@ -106,7 +106,7 @@ def _version_num(v: str) -> int:
 
 
 def _skill_names() -> List[str]:
-    return sorted({r["name"] for r in registry_api.list_records({"type": "SKILL"})})
+    return sorted({r["name"] for r in registry_api.list_approved("SKILL")})
 
 
 def _scenario_of(rec: dict, spec: Optional[dict]) -> str:
@@ -212,7 +212,7 @@ def agents_catalog(ctx: Ctx, body: dict) -> None:
 
     tools = [{"name": t["name"], "description": t.get("description", "")} for t in _tool_schema()]
     skills = [{"name": r["name"], "version": r.get("recordVersion"), "status": r.get("status")}
-              for r in registry_api.list_records({"type": "SKILL"})]
+              for r in registry_api.list_approved("SKILL")]
     log_event("agents.catalog", ctx.trace_id, agents=len(agents), tools=len(tools), skills=len(skills),
               harnessListed=harness_index is not None, agentcoreRegistry=mirror_err is None)
     ctx.post({"type": "agents_catalog", "agents": agents, "tools": tools, "skills": skills, "models": MODELS,
@@ -238,6 +238,8 @@ def _validate_create(body: dict) -> Tuple[Optional[dict], Optional[str]]:
         return None, "시스템 프롬프트가 비어 있습니다."
     if len(system_prompt) > MAX_PROMPT:
         return None, f"시스템 프롬프트는 {MAX_PROMPT}자 이하여야 합니다."
+    if body.get("memory"):
+        return None, "장기 Memory는 별도 개인정보 검토 후 사용할 수 있습니다."
     tools_in = body.get("allowedTools") or []
     skills_in = body.get("skills") or []
     if not isinstance(tools_in, list) or not isinstance(skills_in, list):
@@ -253,15 +255,25 @@ def _validate_create(body: dict) -> Tuple[Optional[dict], Optional[str]]:
     known_skills = set(_skill_names())
     bad_skills = [s for s in skills_in if s not in known_skills]
     if bad_skills:
-        return None, f"Registry 에 없는 SKILL: {', '.join(bad_skills)}"
+        return None, f"승인된 Registry SKILL이 아닙니다: {', '.join(bad_skills)}"
+    from agentcore import skill_binding
+    try:
+        selected_skills = list(dict.fromkeys(skills_in))
+        bindings = body.get("skillBindings")
+        if bindings is None:
+            bindings = skill_binding.capture(selected_skills)
+        skill_binding.resolve(bindings, selected_skills)
+    except (RegistryError, OSError, UnicodeError, ValueError, TypeError) as e:
+        return None, f"SKILL 승인 자료를 확인하지 못했습니다: {type(e).__name__}"
     return {"name": name, "title": title, "description": description or title, "model": model,
             "systemPrompt": system_prompt, "allowedTools": list(dict.fromkeys(tools_in)),
-            "skills": list(dict.fromkeys(skills_in)), "memory": bool(body.get("memory", False)),
+            "skills": selected_skills, "skillBindings": bindings, "memory": bool(body.get("memory", False)),
             "scenario": "custom"}, None
 
 
 def agent_create(ctx: Ctx, body: dict) -> None:
-    spec, err = _validate_create(body)
+    # Bindings are server-derived; the browser cannot select a different source.
+    spec, err = _validate_create({key: value for key, value in body.items() if key != "skillBindings"})
     if err or spec is None:
         ctx.post({"type": "agent_create", "ok": False, "code": 400, "error": err})
         return
@@ -274,6 +286,7 @@ def agent_create(ctx: Ctx, body: dict) -> None:
 
     payload = {"model": spec["model"],
                "allowedTools": spec["allowedTools"], "skills": spec["skills"], "memory": spec["memory"],
+               "skillBindings": spec["skillBindings"],
                "runtime": RUNTIME, "systemPrompt": spec["systemPrompt"], "title": spec["title"],
                "scenario": "custom", "createdBy": ctx.email, "administration": "IAM_ONLY"}
     try:
@@ -364,6 +377,13 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
         ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
     payload = rec.get("payload") or {}
+    if payload.get("administration") == "IAM_ONLY":
+        from agentcore import skill_binding
+        try:
+            skill_binding.resolve(payload.get("skillBindings"), payload.get("skills", []))
+        except (RegistryError, OSError, UnicodeError, ValueError, TypeError):
+            ctx.done("agent", error="승인된 Skill 자료가 변경되었습니다. 새 명세로 승인 요청하세요.", code=409)
+            return
     model_id = payload.get("model")
     from agentcore import invoke as _invoke
     kind = _invoke.kind_of(rec)
@@ -413,8 +433,9 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 boundary_events.append(data if isinstance(data, dict) else {"raw": str(data)[:200]})
                 ctx.stage("agent", "boundary", plane="boundary", **_stage_kw(data))
             elif kind_ev == "error":
-                errors.append(str(data)[:400])
-                ctx.stage("agent", "error", message=str(data)[:400])
+                message = "에이전트 실행을 완료하지 못했습니다."
+                errors.append(message)
+                ctx.stage("agent", "error", message=message)
             elif kind_ev == "meta":
                 usage = (data or {}).get("usage") or {}
                 tools_missing = [str(name) for name in (data or {}).get("toolsMissing", [])]

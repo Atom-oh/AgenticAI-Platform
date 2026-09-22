@@ -200,11 +200,16 @@ class RegistryStore:
         names = {"#st": "status", "#ua": "updatedAt", "#ub": "updatedBy"}
         values = {":to": to_status, ":ts": ts, ":by": actor}
         condition = "attribute_exists(pk) AND " + _revision_condition(cur, names, values)
-        r = self.table().update_item(
-            Key={"pk": rec_pk(name), "sk": version},
-            UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
-            ConditionExpression=condition, ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values, ReturnValues="ALL_NEW")
+        try:
+            r = self.table().update_item(
+                Key={"pk": rec_pk(name), "sk": version},
+                UpdateExpression="SET #st = :to, #ua = :ts, #ub = :by, #revision = :revision",
+                ConditionExpression=condition, ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values, ReturnValues="ALL_NEW")
+        except Exception as e:
+            if _is_conditional_failure(e):
+                raise ConflictError("The record changed during administrative status update") from e
+            raise
         ev = audit_event(actor, cur["status"], to_status, reason, ts, forced=True)
         self.put_audit(name, version, ev)
         return _record_from_item(r.get("Attributes") or {**cur, "status": to_status}), ev

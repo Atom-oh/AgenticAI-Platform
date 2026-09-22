@@ -42,8 +42,13 @@ ROUTES = {"x": handle_x}
   Strands has its separate pre-model boundary hook.
 - Agent creation/transition user actions store local requests. AgentCore
   provisioning, approval mirroring and Harness PassRole are IAM AdminFn
-  operations; WsFn has read actions plus bank-prefix invocation only.
+  operations; WsFn has read actions, bank-prefix Harness invocation and the
+  existing exact bank Runtime invocation grant.
   See [WP1–WP3](BANK_AGENTCORE_WORK_PACKAGES.md) for separate offline/live gates.
+- `agent.done.sessionId` is the client conversation ID; `runtimeSessionId`
+  is the server-derived ID bound to the verified subject and agent version.
+  `toolsMissing` lists configured unavailable Runtime tools and sets `code=502`.
+  Stream error events never forward upstream error bodies.
 - `common.tracing.record_trace` records scenario, identity/query hashes, model,
   token counts, timing, masking/block/cache evidence and plane labels.
   `common.log.log_event` hashes sensitive fields. Do not add raw prompts,
@@ -109,6 +114,12 @@ Record example (illustrative values, not a fixed approved version):
 - Transitions: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` and
   `PENDING_APPROVAL → REJECTED → DRAFT`. Other transitions fail with code `400`.
   `REJECTED` and `DEPRECATED` require a reason.
+- User AGENT transitions return pending `AGENT_ADMIN_REQUEST` receipts; only
+  IAM administration applies them. Generic creation of AGENT records or the
+  administrative request namespace, and user transitions of requests, return
+  `403`. Request payloads and audit entries are omitted from public get,
+  list, search, version and consumer APIs. Only IAM request processing opts
+  into `get_record(..., include_internal=True)`.
 - `name` + `recordVersion` is unique. Conditional writes detect conflicts;
   transitions retain actor/from/to/reason/time audit data.
 - `REGISTRY_TABLE` uses `pk`, `sk`, and GSI `byStatus(status, updatedAt)`.
