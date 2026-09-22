@@ -7,7 +7,7 @@ from workspace.ontology_store import Ontology
 
 
 def _impact_views(ontology, current, body, raw_seeds):
-    from workspace.ontology_impact import analyze
+    from workspace.ontology_impact import analyze, check_output_budget
     seeds, history, history_truncated = list(raw_seeds), [], False
     restricted = False
     if body.get("oldSource"):
@@ -49,6 +49,7 @@ def _impact_views(ontology, current, body, raw_seeds):
         for item in value["items"]:
             item["snapshotGeneration"] = generation
         results.append(value)
+        check_output_budget(item for result in results for item in result["items"])
         snapshots.append({"generation": generation, "manifestHash": snapshot_hash, "historical": bool(snapshot_hash)})
     # At least one empty/current view is processed for an empty selection.
     result = results[0]

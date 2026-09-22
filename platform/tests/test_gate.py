@@ -197,7 +197,10 @@ def test_crossing_log_has_metrics_and_no_payload_text(fakes, capsys):
     assert out.count('"gate.crossing"') == 1
 
 
-def test_refused_log_has_types_not_values(fakes, capsys):
+def test_refused_log_has_types_not_values(fakes, capsys, monkeypatch):
+    # A wall-clock timestamp can coincidentally contain the token's digits.
+    # Fix the clock while retaining the assertion against the entire log.
+    monkeypatch.setattr(gate._common("log").time, "time", lambda: 1700000000)
     with pytest.raises(gate.GateRefused):
         gate.generate("s", "고객 CUST-0042", purpose="s2", trace_id="t9")
     out = capsys.readouterr().out

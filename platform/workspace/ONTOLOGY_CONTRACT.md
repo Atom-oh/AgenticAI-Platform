@@ -49,6 +49,9 @@ Pattern approval stores exact usage-screen revision/hash bindings and explicit
 evidence relationships. Current reads and context reuse require those screens
 and their source audiences to remain current; a later rejection, revision or
 source change invalidates that approval basis.
+Partition replacement preserves server-owned usage proofs for an unchanged,
+still-valid approved Pattern, even when the caller omits those proof edges.
+Changing a usage basis returns the Pattern to candidate and retires its proofs.
 Existing product-guideline
 projection IDs and hashes are preserved; canonical publication adds a project
 manifest in the same product-publication transaction.
@@ -67,6 +70,10 @@ snapshot read applies current source access checks; results name their snapshot
 generation and remain historical candidates. Current and historical views share
 the 500-node/1,000-edge inspection and 50-item budgets, with at most 20 history
 snapshots per request and explicit truncation.
+Repeated impact evidence has a 3,500,000-byte aggregate response budget.
+Overflow fails with `ontology-impact-scope` and a split-scope instruction;
+evidence is never silently discarded. Caller-provided task completion evidence
+is limited to 50 references regardless of graph authority.
 Archived readable sources remain diagnostic candidates. Revoked source metadata
 is hidden; an opaque changed seed can expose only independently readable dependent
 nodes/evidence and reports a restricted boundary. Context/reuse/approval still
@@ -91,12 +98,16 @@ fail instead of running the analyzer again.
 Membership changes alter the project audience and invalidate in-flight source
 authority, even when the requesting actor's own role is unchanged. Title/content
 writes that preserve that audience do not invalidate it.
+Queued analyses pin this authority digest at admission and compare it before
+source analysis, in addition to the checks during publication.
 Deadline-sensitive service commits submit a transaction once. Contention returns
 to the authorized caller, which repeats source and actor deadline checks before
 any retry; storage cannot silently resubmit that transaction after expiry.
 Visibility checks are memoized by source authority within one request. The
 final authority, source-version and expiry checks are always repeated before
 returning data or committing a mutation.
+Opaque pagination cursors use the separate `ontology_cursor` record kind,
+with an application expiry and DynamoDB TTL of at most five minutes.
 
 The v1 schema reserves publication, UX-contract and run-round reference kinds
 for later adapters. Until those adapters are installed, reads fail unavailable.

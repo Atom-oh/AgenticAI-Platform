@@ -99,7 +99,8 @@ def submit(ctx, body):
     pinned = {**ctx.authorization(), "operation": "ontology-analyze", "artifactId": identifier,
               "name": name, "files": copy.deepcopy(files), "sourceRefs": refs,
               "resolver": copy.deepcopy(profile), "resolverHash": schema.digest(profile),
-              "expectedGeneration": generation, "backend": selected_backend(ctx.host)}
+              "expectedGeneration": generation, "backend": selected_backend(ctx.host),
+              "authorityHash": schema.digest(list(reader.authority))}
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
                 "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}
@@ -138,6 +139,8 @@ def process(ctx, pinned, job=None):
     if (current or {}).get("generation") != pinned["expectedGeneration"]:
         fail(409, "ontology-changed", "온톨로지 기준이 변경되었습니다.")
     refs = Sources(ctx)
+    if pinned.get("authorityHash") != schema.digest(list(refs.authority)):
+        fail(409, "ontology-authority-changed", "작업을 접수한 프로젝트 역할 또는 구성원이 변경되었습니다.")
     refs.verify(pinned["sourceRefs"])
     payload, bindings = source_input(ctx, pinned["files"], pinned["resolver"])
     if schema.digest(payload["resolver"]) != pinned["resolverHash"]:

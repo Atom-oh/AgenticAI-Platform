@@ -35,6 +35,33 @@ def collection(wb):
     return files
 
 
+@pytest.mark.parametrize("change", ["other-role", "actor-role", "remove-member", "title"])
+def test_queued_analysis_pins_membership_but_allows_project_title_edits(wb, change, monkeypatch):
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "audience", "name": "audience", "files": collection(wb)})
+    project = wb.storage.get(wb.owner, "project", wb.project["id"])
+    if change == "other-role":
+        project["members"]["bob"]["role"] = "developer"
+    elif change == "actor-role":
+        project["members"]["alice"]["role"] = "designer"
+    elif change == "remove-member":
+        project["members"].pop("bob")
+    else:
+        project["title"] = "New project title"
+    wb.storage.put(wb.owner, "project", project, project["version"])
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    if change == "title":
+        assert process(worker, wb.owner, queued["job"])["artifactId"] == queued["artifact"]["id"]
+    else:
+        from workspace import ontology_jobs
+        monkeypatch.setattr(ontology_jobs, "source_input", lambda *args: pytest.fail("changed audience reached analysis"))
+        with pytest.raises(CollaborationError) as error:
+            process(worker, wb.owner, queued["job"])
+        assert error.value.code == "ontology-authority-changed"
+        assert wb.storage.get(wb.owner, "ontology", "project-current") is None
+
+
 def test_actual_node_parser_projects_exact_source_refs_and_unclassified_components(wb):
     payload, bindings = source_input(context(wb), collection(wb))
     result = local_analyze(payload)

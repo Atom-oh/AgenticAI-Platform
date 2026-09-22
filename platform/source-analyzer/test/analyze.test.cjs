@@ -5,6 +5,16 @@ const text = (path, source, kind = 'code') => ({ path, kind, text: source, sha25
 const asset = path => ({ path, kind: 'asset', sha256: sha(path) });
 const request = files => ({ schemaVersion: 1, files });
 
+test('unsupported CSS resource functions retain location-bound unknown evidence', () => {
+  const result = analyze(request([
+    text('hero.css', '\n.hero { background-image: image("./hero.png", black); }', 'style'),
+    asset('hero.png'),
+  ]));
+  assert.ok(result.unresolved.some(item => item.path === 'hero.css' &&
+    item.reason === 'css-function-not-inspected' && item.line === 2));
+  assert.equal(result.coverage.complete, false);
+});
+
 test('generic call noise cannot starve later dynamic dependency observations', () => {
   const result = analyze(request([
     text('a.ts', 'run();'.repeat(4500)),

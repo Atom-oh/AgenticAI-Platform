@@ -200,6 +200,42 @@ def test_pattern_approval_tracks_exact_usage_screen_hashes(wb):
     assert ids["pattern"] not in {node["id"] for node in Ontology(context(wb)).read()["nodes"]}
 
 
+@pytest.mark.parametrize("change_usage", [False, True])
+def test_partition_replacement_preserves_only_current_pattern_usage_proofs(wb, change_usage):
+    from test_ontology_sources import asset, context
+    from test_ontology_schema import node
+    from workspace.ontology_store import Ontology
+    from workspace import ontology_schema as schema
+    nodes = [node(name, kind, project=wb.project["id"], sourceRefs=[asset_reference(asset(wb, name))],
+                  properties={"usageIds": ["first", "second"]} if kind == "Pattern" else {})
+             for name, kind in [("first", "Screen"), ("second", "Screen"), ("pattern", "Pattern"), ("other", "Atom")]]
+    graph = {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": []}
+    result = Ontology(context(wb)).publish_candidate("reuse", graph, expected_generation=None, request_id="reuse")
+    ids = result["identities"]
+    for name in ["first", "second", "pattern"]:
+        result = Ontology(context(wb)).review_node(ids[name], expected_generation=result["generation"], revision=1,
+            decision="reviewed", reason="Synthetic usage review", request_id="review-" + name)
+    result = Ontology(context(wb)).review_node(ids["pattern"], expected_generation=result["generation"], revision=1,
+        decision="approved", reason="Two reviewed usages", request_id="approve")
+    approved = result["node"]
+    # Ordinary callers resubmit the source partition without server-owned edges.
+    graph["nodes"][-1] = schema.seal({**nodes[-1], "title": "Unrelated mapping edit"})
+    if change_usage:
+        graph["nodes"][0] = schema.seal({**nodes[0], "title": "Changed usage mapping"})
+    Ontology(context(wb)).publish_candidate("reuse", graph,
+        expected_generation=result["generation"], request_id="replace")
+    view = Ontology(context(wb)).read()
+    pattern = next(item for item in view["nodes"] if item["id"] == ids["pattern"])
+    proofs = [item for item in view["edges"] if item["src"]["id"] == ids["pattern"]]
+    if change_usage:
+        assert pattern["reviewState"] == "candidate"
+        assert "usageBindings" not in pattern["properties"]
+        assert proofs == []
+    else:
+        assert pattern == approved
+        assert len(proofs) == 2 and all(item["reviewState"] == "approved" for item in proofs)
+
+
 def test_pattern_approval_cannot_exceed_the_edge_limit_with_retained_tombstones(wb):
     from test_ontology_sources import asset, context
     from test_ontology_schema import node, edge

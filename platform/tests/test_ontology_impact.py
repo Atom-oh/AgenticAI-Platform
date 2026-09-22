@@ -38,6 +38,16 @@ def test_source_revision_seed_reaches_component_screen_procedure_product_and_cod
     assert result["coverage"]["complete"] is False
 
 
+def test_dense_evidence_fails_with_a_typed_split_scope_error_before_returning(monkeypatch):
+    from workspace import ontology_impact
+    from workspace.collaboration import CollaborationError
+    check = ontology_impact.check_output_budget
+    monkeypatch.setattr(ontology_impact, "check_output_budget", lambda parts: check(parts, maximum=1000))
+    with pytest.raises(CollaborationError) as error:
+        run(fixture())
+    assert error.value.status == 422 and error.value.code == "ontology-impact-scope"
+
+
 def test_traversal_stops_before_unreadable_nodes_and_does_not_leak_hidden_path_shape():
     value = fixture()
     result = run(value, can_read=lambda refs: all(r["sourceId"] != "screen" for r in refs))

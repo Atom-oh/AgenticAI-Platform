@@ -5,6 +5,7 @@ from collections import deque
 
 from workbench import knowledge
 from workbench.service import ROLES, _hash, _id, _version, fail, fields, text
+from workspace.ontology_schema import DEPENDENCIES
 
 ROLE_FOR_LABEL = {"Product": "planner", "Flow": "planner", "Guideline": "planner", "Rule": "planner",
                   "Component": "designer", "Icon": "designer", "Screen": "designer",
@@ -37,7 +38,6 @@ def traversal(graph, target_id):
     nodes = {node["id"]: node for node in graph["nodes"]}
     reverse = {}
     for edge in graph["edges"]:
-        from workspace.ontology_schema import DEPENDENCIES
         dependency = (edge["canonicalRelation"] in DEPENDENCIES if "canonicalRelation" in edge
                       else edge["rel"] in knowledge.DEPENDENCIES)
         if (dependency and edge.get("reviewState") != "rejected"
@@ -103,7 +103,7 @@ def traversal(graph, target_id):
         item["staleWitness"] = (any(entry.get("tombstone") or entry.get("reviewState") == "deprecated"
                                    for entry in evidence) or
                                "historical-source-revisions" in graph["coverage"].get("unknown", []) or any(
-            edge.get("tombstone") or any(nodes[edge[end]].get("revision") != edge["canonical"][end]["revision"]
+            edge.get("tombstone") or any(nodes.get(edge[end], {}).get("revision") != edge["canonical"][end]["revision"]
                                        for end in ("src", "dst"))
             for edge in proof_edges.values() if "canonical" in edge))
         item["confidence"] = ("unknown" if item["targetId"] not in nodes else "confirmed" if
@@ -120,6 +120,8 @@ def traversal(graph, target_id):
             item["evidenceStates"] = [{"provenance": provenance, "reviewState": state}
                 for provenance, state in sorted({(entry["provenance"], entry["reviewState"]) for entry in evidence})]
         references.update(refs)
+    from workspace.ontology_impact import check_output_budget
+    check_output_budget([*items, list(references.values())])
     return {"items": items, "generation": graph["generation"], "sourceRefs": list(references.values()),
             "coverage": {**graph["coverage"], "complete": False, "truncated": bool(pending) or graph["coverage"].get("truncated", False),
                          "unknown": sorted(set(graph["coverage"].get("unknown", []) + ["unmapped-dependencies"]))}}
@@ -232,6 +234,8 @@ def update_task(ctx, identifier, body):
         if not member or member["role"] not in {"owner", task["role"]}:
             fail(400, "invalid-assignee", "해당 역할의 현재 프로젝트 구성원만 배정할 수 있습니다.")
     refs = body.get("evidenceRefs", task.get("evidenceRefs", []))
+    if not isinstance(refs, list) or len(refs) > 50:
+        fail(400, "invalid-evidence", "작업 완료 근거는 50개 이하여야 합니다.")
     checks.extend(knowledge.verify_refs(ctx, refs, authority=authority))
     if status == "done":
         change = ctx.get("wb_change", task["changeId"])
