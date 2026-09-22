@@ -67,6 +67,44 @@ def test_nonterminal_task_update_fences_revoked_canonical_source_records(wb):
     assert wb.storage.get(wb.owner, "wb_task", task["id"])["status"] == "open"
 
 
+def test_canonical_task_rejects_untrusted_oversized_evidence_before_verification(wb, monkeypatch):
+    from test_ontology_store import candidate
+    from workbench import knowledge
+    result = Ontology(context(wb)).publish_candidate("task-limit", candidate(wb),
+        expected_generation=None, request_id="task-limit")
+    wb.api.ontology_mode = "canonical"
+    change = call(wb, "POST", "changes", {"requestId": "task-limit-change", "title": "Source update",
+        "targetId": result["identities"]["image"], "changeType": "update",
+        "before": "", "after": "", "reason": "Synthetic"})["change"]
+    task = call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})["tasks"][0]
+    monkeypatch.setattr(knowledge, "verify_refs", lambda *args, **kwargs: pytest.fail("unbounded verification"))
+    with pytest.raises(CollaborationError) as error:
+        call(wb, "PUT", f"tasks/{task['id']}", {"version": task["version"], "status": "in-progress",
+            "evidenceRefs": task["sourceRefs"][:1] * 51})
+    assert error.value.code == "invalid-evidence"
+    assert wb.storage.get(wb.owner, "wb_task", task["id"])["version"] == task["version"]
+
+
+def test_missing_canonical_endpoint_is_unknown_stale_evidence_not_a_crash():
+    from workbench.impact import traversal
+    from test_ontology_schema import ref
+    source = ref("visible")
+    canonical = {"id": "visible", "revision": 1, "contentHash": "a" * 64,
+                 "provenance": "declared", "reviewState": "candidate", "tombstone": False}
+    graph = {"nodes": [{"id": "visible", "label": "Component", "canonicalType": "Atom", "title": "Visible",
+                        "revision": 1, "sourceRef": source, "sourceRefs": [source], **{
+                            key: canonical[key] for key in ("provenance", "reviewState", "tombstone")},
+                        "canonical": canonical}],
+             "edges": [{"src": "visible", "dst": "unmapped", "rel": "USES", "canonicalRelation": "USES",
+                        "sourceRef": source, "sourceRefs": [source], "provenance": "declared", "reviewState": "candidate",
+                        "canonical": {"src": {"id": "visible", "revision": 1}, "dst": {"id": "unmapped", "revision": 1}}}],
+             "generation": "g", "coverage": {"unknown": ["restricted-or-unmapped"]}}
+    result = traversal(graph, "unmapped")
+    assert result["items"][0]["confidence"] == "unknown"
+    assert result["items"][1]["staleWitness"] is True
+    assert "restricted-or-unmapped" in result["coverage"]["unknown"]
+
+
 def test_archived_readable_source_keeps_canonical_change_detail_available(wb):
     from test_ontology_store import candidate
     data = candidate(wb)

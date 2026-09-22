@@ -193,6 +193,10 @@ def test_cursors_are_opaque_and_bound_to_actor_scope_and_generation(wb):
     publish(wb)
     first = Ontology(context(wb)).read(limit=1)
     assert first["cursor"].startswith("cursor-")
+    saved = wb.storage.get(wb.owner, "ontology_cursor", first["cursor"])
+    assert saved["ttl"] == saved["expiresAt"] // 1000
+    assert 0 < saved["expiresAt"] - wb.storage.clock() <= 300000
+    assert wb.storage.get(wb.owner, "ontology", first["cursor"]) is None
     second = Ontology(context(wb)).read(limit=1, cursor=first["cursor"])
     assert first["nodes"][0]["id"] != second["nodes"][0]["id"]
     with pytest.raises(CollaborationError):

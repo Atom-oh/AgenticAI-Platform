@@ -17,7 +17,7 @@ import re
 import time
 from decimal import Decimal
 
-KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership",
+KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership", "ontology_cursor",
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
                    "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
                    "wb_artifact", "wb_pension", "wb_report", "wb_tool",
@@ -141,6 +141,11 @@ class Storage:
                     createdAt=previous["createdAt"] if previous else now, updatedAt=now)
         if kind == "job":
             data["ttl"] = now // 1000 + JOB_RETENTION_SECONDS
+        if kind == "ontology_cursor":
+            expiry = data.get("expiresAt")
+            if type(expiry) is not int or not now < expiry <= now + 300000:
+                raise ValueError("An ontology cursor requires a bounded expiry")
+            data["ttl"] = expiry // 1000
         data.setdefault("status", {"asset": "uploading", "contract": "draft", "job": "queued",
                                   "run": "queued", "product": "draft"}.get(kind, "active"))
         encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, default=str).encode()

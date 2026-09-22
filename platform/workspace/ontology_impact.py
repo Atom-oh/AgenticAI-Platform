@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
+import json
 
 from workspace import ontology_schema as schema
 from workspace.ontology_sources import authority_identity
@@ -13,6 +14,15 @@ CHANGE_EDGES = {
     "kit": STRUCTURAL, "rule": schema.DEPENDENCIES, "product-condition": schema.DEPENDENCIES,
     "procedure": STRUCTURAL, "permission": schema.DEPENDENCIES,
 }
+
+
+def check_output_budget(parts, maximum=3_500_000):
+    from workbench.service import fail
+    total = 0
+    for part in parts:
+        total += len(json.dumps(part, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode())
+        if total > maximum:
+            fail(422, "ontology-impact-scope", "영향 근거의 응답 크기 한도를 초과했습니다. 조회 범위를 나누세요.")
 
 
 def _same_source(left, right):
@@ -154,5 +164,6 @@ def analyze(graph, change, *, generation, can_read):
                          "requestHash": change.get("requestHash", schema.digest(change))},
               "items": items, "coverage": {"complete": False, "truncated": truncated or graph.get("coverage", {}).get("truncated", False),
                                          "unknown": sorted(unknown), "scope": "authorized-manifest-snapshot"}}
+    check_output_budget(items)
     result["hash"] = schema.digest(result)
     return result

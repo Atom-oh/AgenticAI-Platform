@@ -272,6 +272,8 @@ class Ontology:
             if location and location["partition"] != partition:
                 fail(409, "ontology-identity-conflict", "다른 파티션이 소유한 노드 ID입니다.")
             properties = copy.deepcopy(value.get("properties", {}))
+            if value["type"] == "Pattern":
+                properties.pop("usageBindings", None)
             for field in ("usageIds", "slots"):
                 if field in properties:
                     properties[field] = [identities.get(item, item) for item in properties[field]]
@@ -288,6 +290,36 @@ class Ontology:
         own = {n["id"]: n for n in normalized["nodes"]}
         old_edges = {edge["id"]: edge for edge in prior["graph"]["edges"]} if prior else {}
         externals = {}
+        managed, retired_proofs = {}, set()
+        for index, candidate in enumerate(normalized["nodes"]):
+            if candidate["type"] != "Pattern":
+                continue
+            original = old_nodes.get(candidate["id"], {})
+            proofs = {key: edge for key, edge in old_edges.items()
+                      if edge["src"]["id"] == candidate["id"] and edge["type"] == "REFERENCES"
+                      and key == schema.identity("pattern-usage", candidate["id"], edge["dst"]["id"])}
+            bindings = candidate.get("properties", {}).get("usageBindings", [])
+            valid = candidate["reviewState"] == "approved" and len(bindings) >= 2
+            screens = []
+            for binding in bindings:
+                screen = own.get(binding["id"]) or self._node(current or {}, binding["id"])
+                proof = proofs.get(schema.identity("pattern-usage", candidate["id"], binding["id"]))
+                if (not screen or screen["tombstone"] or screen["reviewState"] not in {"reviewed", "approved"}
+                        or any(screen[key] != binding[key] for key in ("revision", "contentHash"))
+                        or not proof or proof["tombstone"] or proof["reviewState"] != "approved"
+                        or not self._visible(screen["sourceRefs"])):
+                    valid = False
+                elif screen["id"] not in own:
+                    screens.append(screen)
+            if valid:
+                managed.update(proofs)
+                externals.update({screen["id"]: screen for screen in screens})
+            elif original.get("reviewState") == "approved":
+                retired_proofs.update(proofs)
+                props = {key: item for key, item in candidate.get("properties", {}).items() if key != "usageBindings"}
+                normalized["nodes"][index] = schema.seal({**candidate, "reviewState": "candidate", "properties": props})
+                own[candidate["id"]] = normalized["nodes"][index]
+        normalized["edges"] = [edge for edge in normalized["edges"] if edge["id"] not in retired_proofs]
         for i, raw in enumerate(normalized["edges"]):
             schema.validate_edge(raw)
             value = copy.deepcopy(raw)
@@ -307,7 +339,15 @@ class Ontology:
             if previous and (previous["type"] != value["type"] or any(
                     previous[end]["id"] != value[end]["id"] for end in ("src", "dst"))):
                 fail(409, "ontology-edge-identity", "관계 종류나 대상을 변경할 때는 새 관계 ID를 사용하세요. 기존 관계는 이력으로 보존됩니다.")
-            normalized["edges"][i] = schema.seal({**value, "id": identifier, "provenance": _producer, "reviewState": "candidate"})
+            if identifier in managed:
+                proof = managed[identifier]
+                if any(value.get(key) != proof.get(key) for key in ("type", "src", "dst", "sourceRefs", "properties")):
+                    fail(409, "ontology-managed-evidence", "승인된 사용 근거는 해당 원본 검토를 통해 변경하세요.")
+                normalized["edges"][i] = copy.deepcopy(proof)
+            else:
+                normalized["edges"][i] = schema.seal({**value, "id": identifier, "provenance": _producer, "reviewState": "candidate"})
+        supplied = {edge["id"] for edge in normalized["edges"]}
+        normalized["edges"].extend(copy.deepcopy(edge) for key, edge in managed.items() if key not in supplied)
         normalized = schema.validate_graph(normalized, external_nodes=list(externals.values()))
         normalized["coverage"] = {**normalized["coverage"], "complete": False,
             "scope": "static-source-unit" if _producer == "parser-extracted" else "declared-project-partition",
@@ -438,7 +478,7 @@ class Ontology:
                                      current["generation"], node_ids, limit])
         if cursor:
             schema._identifier(cursor)
-            saved = self.storage.get(self.ctx.owner, "ontology", cursor)
+            saved = self.storage.get(self.ctx.owner, "ontology_cursor", cursor)
             if not saved or saved.get("fingerprint") != fingerprint or saved.get("expiresAt", 0) <= self.storage.clock():
                 fail(409, "ontology-cursor-stale", "조회 범위 또는 권한이 변경되었습니다.")
             position = saved["position"]
@@ -489,7 +529,7 @@ class Ontology:
         next_cursor = None
         if more:
             next_cursor = "cursor-" + secrets.token_hex(24)
-            self.storage.put(self.ctx.owner, "ontology", {
+            self.storage.put(self.ctx.owner, "ontology_cursor", {
                 "id": next_cursor, "projectId": self.ctx.project_id, "fingerprint": fingerprint,
                 "position": position, "expiresAt": self.storage.clock() + 300000,
                 "ttl": self.storage.clock() // 1000 + 300})

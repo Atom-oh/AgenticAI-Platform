@@ -338,9 +338,10 @@ function analyze(input) {
               reference(file, 'style-import', tokens.at(-1).value, at);
           }
           parsed.walk(token => {
-            if (file.path.toLowerCase().endsWith('.scss') && token.type === 'function' &&
+            if (token.type === 'function' &&
                 !['url', 'image-set', '-webkit-image-set'].includes(token.value.toLowerCase()))
-              problem(file, 'scss-function-not-inspected', at.line, at.column);
+              problem(file, file.path.toLowerCase().endsWith('.scss') ?
+                'scss-function-not-inspected' : 'css-function-not-inspected', at.line, at.column);
             if (token.type === 'function' && ['image-set', '-webkit-image-set'].includes(token.value.toLowerCase())) {
               let first = true;
               for (const child of token.nodes) {
