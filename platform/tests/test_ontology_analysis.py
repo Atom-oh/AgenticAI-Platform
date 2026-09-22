@@ -106,6 +106,36 @@ def test_repeated_jsx_usages_preserve_every_observed_location(wb):
     assert len({edge["sourceRefs"][0]["location"]["column"] for edge in usages}) == 2
 
 
+def test_oversized_export_names_remain_explicit_unknowns_without_blocking_the_file(wb):
+    from test_ontology_sources import asset
+    source = asset(wb, "long-export", ("export const " + "x" * 161 + " = 1;").encode())
+    payload, bindings = source_input(context(wb), [{"assetId": source["id"], "path": "long-export.ts"}])
+    result = local_analyze(payload)
+    graph = project_analysis(context(wb), "long-export", payload, bindings, result["analysis"])
+    assert len(result["analysis"]["exports"][0]["name"]) == 161
+    assert [node["type"] for node in graph["nodes"]] == ["CodeFile"]
+    assert "oversized-symbol-not-projected" in graph["coverage"]["unknown"]
+
+
+def test_registered_package_is_an_authorized_reverse_dependency(wb):
+    from test_ontology_sources import asset
+    from workspace.component_catalog import read_catalog
+    from workspace.ontology_impact import analyze
+    catalog = read_catalog()
+    source = asset(wb, "kit-import", b'import {Button} from "@studio/approved-ui"; export const value=Button;')
+    profile = {"aliases": {}, "packages": {"@studio/approved-ui": {
+        "version": catalog["version"], "sha256": catalog["hash"]}}, "jsonAssetFields": []}
+    payload, bindings = source_input(context(wb), [{"assetId": source["id"], "path": "App.ts"}], profile)
+    graph = project_analysis(context(wb), "kit-import", payload, bindings, local_analyze(payload)["analysis"])
+    package = next(node for node in graph["nodes"] if node["properties"].get("packageName") == "@studio/approved-ui")
+    from workspace import ontology_schema as schema
+    generation = schema.digest(graph)
+    result = analyze(graph, {"id": "kit-change", "kind": "code", "oldSource": package["sourceRefs"][0],
+        "baseGeneration": generation}, generation=generation, can_read=lambda refs: True)
+    assert "App.ts" in {item["title"] for item in result["items"]}
+    assert any(ref["sourceKind"] == "package" for item in result["items"] for ref in item["sourceRefs"])
+
+
 def test_analysis_is_a_durable_job_and_local_backend_requires_explicit_test_opt_in(wb):
     files = collection(wb)
     with pytest.raises(CollaborationError, match="구성"):

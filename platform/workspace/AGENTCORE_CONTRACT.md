@@ -383,8 +383,9 @@ The publishing lifecycle is
 `draft → validating → needs_changes|reviewable → approved → releasing → ready`.
 Failed/indeterminate required checks cannot reach approved.
 Frontend acceptance is a separate version-bound record.
-Planners own published product/rule guidance; designers own UX approval;
-developers prepare/export releases; project owners hold those capabilities.
+Planners own published product/rule guidance; designers own UX approval.
+Designers and developers may prepare releases, preserving SPEC §7-1.
+Developers may export approved releases; project owners hold all these capabilities.
 Agents and service identities cannot approve business/UX content.
 
 An authorized designer/owner approves the generated-file allowance with the
@@ -634,4 +635,3 @@ vocabulary mappings, analyzer and reverse-impact contracts with offline tests;
 infrastructure and Phase 0 receipts; **C**, cohort cutover, actual job/UI wiring
 and end-to-end acceptance. PR A does not claim AgentCore execution, PR B does not
 enable the production default, and PR C does not bypass A/B reviews or gates.
-

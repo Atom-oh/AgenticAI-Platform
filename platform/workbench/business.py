@@ -483,7 +483,7 @@ def _create_report(api, scope, claims, body):
                             *[f"- `{ref['kind']}:{_literal(ref['id'])}` · 버전/해시 `{ref.get('version', ref.get('contentHash', ''))}`"
                               for ref in references]]) + "\n"
     raw = markdown.encode()
-    key = api.storage.key_for(scope["owner"], "wb_report", identifier, "document.md")
+    key = api.storage.key_for(scope["owner"], "wb_report", identifier, hashlib.sha256(raw).hexdigest() + "/document.md")
     record = {"id": identifier, "title": title, "type": kind, "status": "draft",
               "projectId": (scope.get("project") or {}).get("id"),
               "mode": "evidence-template", "contentHash": hashlib.sha256(raw).hexdigest(),
@@ -493,13 +493,13 @@ def _create_report(api, scope, claims, body):
                              "sourceCount": len(references), "generatedNumericClaims": False}}
     from workspace.ontology_impact import check_metadata_budget
     check_metadata_budget([record])
+    checks = _validate_report_sources(api, scope, claims, record, exact=False, snapshot=True)
     api.storage.put_blob_once(key, raw, "text/markdown; charset=utf-8")
-    checks = _validate_report_sources(api, scope, claims, record, exact=False)
     saved = _commit(api, scope, [_write(scope, "wb_report", record)], checks=checks, claims=claims)[0]
     return 201, {"report": _public(saved)}
 
 
-def _validate_report_sources(api, scope, claims, report, exact=True):
+def _validate_report_sources(api, scope, claims, report, exact=True, snapshot=False):
     checks = {}
 
     def remember(check):
@@ -518,15 +518,16 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
             _, value = core_route(api, scope, claims, "GET", ["knowledge", reference["id"]], {}, {})
             document = value.get("document") or {}
             text = document.get("content", document.get("text", ""))
-            if exact and hashlib.sha256(text.encode()).hexdigest() != reference["contentHash"]:
+            if (exact or snapshot) and hashlib.sha256(text.encode()).hexdigest() != reference["contentHash"]:
                 raise CollaborationError(409, "source-changed", "보고서 원본 자료가 변경되었습니다.")
-            if exact:
+            if exact or snapshot:
                 from workbench.service import Service
                 from workbench.knowledge import verify_refs
                 if value.get("evidence") != reference.get("evidence"):
                     raise CollaborationError(409, "source-changed", "보고서 원본 버전 또는 권한이 변경되었습니다.")
-                for check in verify_refs(Service(api, scope, claims), [value["evidence"]]):
-                    remember(check)
+                if exact:
+                    for check in verify_refs(Service(api, scope, claims), [value["evidence"]]):
+                        remember(check)
         else:
             current = _get(api, scope, reference["kind"], reference["id"])
             if reference["kind"] in {"wb_change", "wb_task"}:
@@ -541,7 +542,7 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                 for check in knowledge.authorize_refs(ctx, current.get("sourceRefs", []),
                                                       authority=current.get("graphAuthority", "legacy")):
                     remember(check)
-                if exact:
+                if exact or snapshot:
                     if (current.get("sourceRefs", []) != reference.get("sourceRefs", [])
                             or current.get("graphAuthority", "legacy") != authority):
                         raise CollaborationError(409, "source-changed", "간접 원본 근거가 변경되었습니다.")
@@ -559,9 +560,10 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                         if manifest:
                             check = ctx.check(kind, manifest)
                             remember(check)
-                    for check in knowledge.verify_refs(ctx, reference.get("sourceRefs", []), authority=authority):
-                        remember(check)
-            if exact and current["version"] != reference["version"]:
+                    if exact:
+                        for check in knowledge.verify_refs(ctx, reference.get("sourceRefs", []), authority=authority):
+                            remember(check)
+            if (exact or snapshot) and current["version"] != reference["version"]:
                 raise CollaborationError(409, "source-changed", "보고서 원본 자료가 변경되었습니다.")
             remember({
                 "owner": scope["owner"], "kind": reference["kind"], "id": reference["id"],

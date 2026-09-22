@@ -251,6 +251,26 @@ def test_draft_report_creation_fences_source_expiry_before_publication(wb, monke
     assert wb.storage.list_page(wb.owner, "wb_report")["items"] == []
 
 
+def test_report_creation_compares_the_actual_snapshot_rendered_into_markdown(wb, monkeypatch):
+    from workbench import business
+    change = project_call(wb, "POST", "changes", {"requestId": "render-race", "title": "Original title",
+        "targetId": "target", "changeType": "update", "before": "", "after": "", "reason": "Synthetic"})["change"]
+    render = business._report_sources
+
+    def update_after_render(api, scope, claims, body):
+        result = render(api, scope, claims, body)
+        current = wb.storage.get(wb.owner, "wb_change", change["id"])
+        wb.storage.put(wb.owner, "wb_change", {**current, "title": "Concurrent update"}, current["version"])
+        return result
+
+    monkeypatch.setattr(business, "_report_sources", update_after_render)
+    with pytest.raises(CollaborationError) as error:
+        project_call(wb, "POST", "reports", {"requestId": "render-race-report", "type": "change-impact",
+            "changeId": change["id"]})
+    assert error.value.code == "source-changed"
+    assert wb.storage.list_page(wb.owner, "wb_report")["items"] == []
+
+
 def test_approval_fences_a_source_changed_during_commit(monkeypatch):
     route, api, scope = setup()
     session = call(route, api, scope, "POST", "pension/sessions",

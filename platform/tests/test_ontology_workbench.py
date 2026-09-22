@@ -246,6 +246,48 @@ def test_lossy_legacy_conversion_cannot_replace_an_existing_import(wb, monkeypat
     assert Ontology(context(wb)).current()["generation"] == first["generation"]
 
 
+def test_partial_legacy_import_can_refresh_when_all_existing_mappings_are_preserved(wb):
+    from test_workbench_core import source, documents, queue, run
+    src = source(wb)
+    docs = documents()
+    docs[0]["relations"].append({"src": "owner", "rel": "DEPENDS_ON", "dst": "screen"})
+    run(wb, queue(wb, src, docs))
+    first = import_legacy(context(wb), {"requestId": "partial-first", "expectedGeneration": None})
+    original = {node["id"] for node in Ontology(context(wb)).read()["nodes"]}
+    docs[0]["revision"] = "r2"
+    docs[0]["content"] += " Updated synthetic guidance."
+    run(wb, queue(wb, src, docs, request="refresh"))
+    second = import_legacy(context(wb), {"requestId": "partial-refresh", "expectedGeneration": first["generation"]})
+    assert second["generation"] != first["generation"]
+    current = Ontology(context(wb)).read()
+    assert {node["id"] for node in current["nodes"]} == original
+
+
+def test_source_read_is_not_authorized_by_a_role_that_changed_during_validation(wb, monkeypatch):
+    from workbench import knowledge
+    from test_workbench_core import source, documents, queue, run
+    src = source(wb)
+    docs = documents()
+    docs[0]["allowedRoles"] = ["owner", "planner"]
+    run(wb, queue(wb, src, docs))
+    change = call(wb, "POST", "changes", {"requestId": "role-race", "title": "Restricted change",
+        "targetId": "guide", "changeType": "update", "before": "", "after": "", "reason": "Synthetic"})["change"]
+    call(wb, "POST", f"changes/{change['id']}/analyze", {"version": change["version"]})
+    verify = knowledge.verify_refs
+
+    def change_role(ctx, refs, **kwargs):
+        result = verify(ctx, refs, **kwargs)
+        project = wb.storage.get(wb.owner, "project", wb.project["id"])
+        project["members"]["bob"]["role"] = "designer"
+        wb.storage.put(wb.owner, "project", project, project["version"])
+        return result
+
+    monkeypatch.setattr(knowledge, "verify_refs", change_role)
+    with pytest.raises(CollaborationError) as error:
+        call(wb, "GET", f"changes/{change['id']}", actor="bob")
+    assert error.value.status == 404
+
+
 def test_source_index_keeps_identical_documents_in_the_same_source_separate(wb):
     from test_workbench_core import source, queue, run
     from test_ontology_schema import node

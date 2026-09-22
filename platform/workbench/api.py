@@ -10,10 +10,13 @@ from workbench.service import Service, TOOL_NAMES, _id, _version, fail, fields, 
 
 def _readable(ctx, record):
     try:
+        observed = (ctx.scope["role"], ctx.scope["project"].get("authorityRevision", 0))
         authority = record.get("graphAuthority", "legacy")
         validate = knowledge.authorize_refs if authority == "canonical" else knowledge.verify_refs
         validate(ctx, record.get("sourceRefs", []), authority=authority)
         ctx.fresh()
+        if observed != (ctx.scope["role"], ctx.scope["project"].get("authorityRevision", 0)):
+            return False
         return True
     except CollaborationError as error:
         if error.status in (400, 403, 404, 409):
