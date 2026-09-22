@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ontology_runtime.identity import Gateway
+from ontology_runtime.identity import Gateway, model_schema, RESERVED
 
 
 class Identity:
@@ -64,4 +64,25 @@ def test_missing_explicitly_selected_injected_token_never_uses_another_identity(
     with pytest.raises(RuntimeError, match="workload identity is unavailable"):
         gateway(identity, None, token_provider=lambda: None).call(
             "ontology___stage", {}, capability="synthetic", operation_id="stage-context")
+    assert identity.names == []
+
+
+def test_model_schema_excludes_credentials_and_mutations():
+    wire = {"name": "ontology___source", "inputSchema": {
+        "properties": {RESERVED: {"type": "object"}, "sourceRef": {"type": "object"}},
+        "required": [RESERVED, "sourceRef"]}}
+    result = model_schema(wire)
+    assert RESERVED not in result["inputSchema"]["properties"]
+    assert result["inputSchema"]["required"] == ["sourceRef"]
+    assert RESERVED in wire["inputSchema"]["properties"]
+    for name in ["ontology___stage", "ontology___finish", "unregistered___source"]:
+        with pytest.raises(ValueError, match="read tools"):
+            model_schema({**wire, "name": name})
+
+
+def test_model_authorization_envelope_is_rejected_before_identity_brokering():
+    identity = Identity()
+    with pytest.raises(ValueError, match="authorization"):
+        gateway(identity, None).call("ontology___source", {RESERVED: {}},
+                                     capability="synthetic", operation_id="source")
     assert identity.names == []

@@ -9,6 +9,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as customResources from 'aws-cdk-lib/custom-resources';
+import { createHash } from 'node:crypto';
 
 export interface OntologyStackProps extends cdk.StackProps {
   runtimeDirectory: string;
@@ -60,6 +61,26 @@ export class OntologyStack extends cdk.Stack {
       keySpec: kms.KeySpec.RSA_2048, keyUsage: kms.KeyUsage.SIGN_VERIFY,
       description: 'Runtime evidence; never accepted as an execution capability key',
     });
+    const memoryNamespaceKey = new kms.Key(this, 'MemoryNamespaceKey', {
+      keySpec: kms.KeySpec.HMAC_256, keyUsage: kms.KeyUsage.GENERATE_VERIFY_MAC,
+      description: 'Keyed project and actor namespaces for ontology Memory',
+    });
+    const executionOwner = createHash('sha256').update('ontology-executions').digest('hex');
+    const registryOwner = createHash('sha256').update('ontology-key-registry').digest('hex');
+    const grantExecutionStore = (fn: lambda.Function, resultWriter: boolean) => {
+      table.grantReadData(fn);
+      sources.grantRead(fn, 'workspace/*');
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['dynamodb:ConditionCheckItem'], resources: [table.tableArn],
+      }));
+      fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['dynamodb:PutItem'], resources: [table.tableArn],
+        conditions: { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': [`owner#${executionOwner}`] } },
+      }));
+      if (resultWriter) fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['s3:PutObject'], resources: [sources.arnForObjects(`workspace/${executionOwner}/*`)],
+      }));
+    };
     const principal = () => new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
       conditions: { StringEquals: { 'aws:SourceAccount': this.account } },
     });
@@ -148,8 +169,7 @@ export class OntologyStack extends cdk.Stack {
       environment: { WORKSPACE_TABLE: table.tableName, WORKSPACE_BUCKET: sources.bucketName,
         ONTOLOGY_CONFIGURATION: this.toJsonString(common) },
     });
-    table.grantReadWriteData(tools);
-    sources.grantReadWrite(tools, 'workspace/*');
+    grantExecutionStore(tools, false);
     tools.addToRolePolicy(new iam.PolicyStatement({
       actions: ['kms:Verify', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn],
     }));
@@ -187,6 +207,9 @@ export class OntologyStack extends cdk.Stack {
     const runtimeRole = new iam.Role(this, 'RuntimeRole', { assumedBy: principal() });
     image.repository.grantPull(runtimeRole);
     runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['kms:Sign'], resources: [evidence.keyArn] }));
+    runtimeRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['kms:GenerateMac'], resources: [memoryNamespaceKey.keyArn],
+    }));
     runtimeRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock-agentcore:GetResourceOauth2Token'], resources: [provider.attrCredentialProviderArn,
         gatewayIdentity.attrWorkloadIdentityArn,
@@ -231,11 +254,17 @@ export class OntologyStack extends cdk.Stack {
       environmentVariables: { AWS_REGION: this.region, ONTOLOGY_RUNTIME_CONFIGURATION: this.toJsonString({
         gatewayUrl: gateway.attrGatewayUrl, workload, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
         provider: provider.name, memoryId: memory.attrMemoryId,
+        memoryNamespaceKeyArn: memoryNamespaceKey.keyArn, organization: `${this.account}:${prefix}`,
         evidenceKeyArn: evidence.keyArn,
         interpreter: { ...props.toolArchive, identifier: interpreter.attrCodeInterpreterId,
           region: this.region, architecture: 'arm64', nodeMajor: 24 },
       }) },
     });
+    const endpoint = new agentcore.CfnRuntimeEndpoint(this, 'RuntimeEndpoint', {
+      agentRuntimeId: runtime.attrAgentRuntimeId, agentRuntimeVersion: runtime.attrAgentRuntimeVersion,
+      name: `v${runtime.attrAgentRuntimeVersion}`,
+    });
+    endpoint.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     // Retain the service-managed identity as deployment evidence; the separate
     // M2M identity above is the one authorized to broker Gateway credentials.
     const runtimeIdentityArn = `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:workload-identity-directory/default/workload-identity/${runtime.attrAgentRuntimeId}`;
@@ -247,13 +276,35 @@ export class OntologyStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64, memorySize: 1024, timeout: cdk.Duration.minutes(15),
       reservedConcurrentExecutions: 2,
       environment: { WORKSPACE_TABLE: table.tableName, WORKSPACE_BUCKET: sources.bucketName,
-        ONTOLOGY_CONFIGURATION: this.toJsonString({ ...common, runtimeArn: runtime.attrAgentRuntimeArn }) },
+        ONTOLOGY_CONFIGURATION: this.toJsonString({ ...common, runtimeArn: runtime.attrAgentRuntimeArn,
+          runtimeQualifier: endpoint.name }) },
     });
-    table.grantReadWriteData(authority);
-    sources.grantReadWrite(authority, 'workspace/*');
+    grantExecutionStore(authority, true);
     authority.addToRolePolicy(new iam.PolicyStatement({
       actions: ['kms:Sign', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn],
     }));
+    const bootstrap = new lambda.DockerImageFunction(this, 'KeyRegistryBootstrap', {
+      code: lambda.DockerImageCode.fromEcr(image.repository, {
+        tagOrDigest: image.assetHash, entrypoint: ['python', '-m', 'awslambdaric'],
+        cmd: ['ontology_runtime.bootstrap.handler'],
+      }),
+      architecture: lambda.Architecture.ARM_64, memorySize: 256, timeout: cdk.Duration.minutes(2),
+      environment: { WORKSPACE_TABLE: table.tableName, WORKSPACE_BUCKET: sources.bucketName },
+    });
+    bootstrap.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem'], resources: [table.tableArn],
+      conditions: { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': [`owner#${registryOwner}`] } },
+    }));
+    bootstrap.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn, evidence.keyArn],
+    }));
+    const bootstrapProvider = new customResources.Provider(this, 'KeyRegistryProvider', { onEventHandler: bootstrap });
+    new cdk.CustomResource(this, 'KeyRegistry', {
+      serviceToken: bootstrapProvider.serviceToken,
+      properties: { capabilityKeyArn: capabilities.keyArn, evidenceKeyArn: evidence.keyArn,
+        gatewayId: gateway.attrGatewayIdentifier, targetId: target.attrTargetId,
+        workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn, codeRevision: image.assetHash },
+    });
     authority.addToRolePolicy(new iam.PolicyStatement({
       actions: ['kms:Verify', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [evidence.keyArn],
     }));
@@ -267,9 +318,11 @@ export class OntologyStack extends cdk.Stack {
       const policy = role.node.tryFindChild('DefaultPolicy');
       if (policy) resource.node.addDependency(policy);
     }
+    const authorityVersion = authority.currentVersion;
+    authorityVersion.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     const outputs: Record<string, string> = {
       WorkspaceTable: table.tableName, WorkspaceBucket: sources.bucketName, RuntimeArn: runtime.attrAgentRuntimeArn,
-      AuthorityArn: authority.functionArn, ToolsArn: tools.functionArn, GatewayId: gateway.attrGatewayIdentifier,
+      AuthorityArn: authorityVersion.functionArn, ToolsArn: tools.functionArn, GatewayId: gateway.attrGatewayIdentifier,
       GatewayUrl: gateway.attrGatewayUrl, TargetId: target.attrTargetId, CapabilityKeyArn: capabilities.keyArn,
       EvidenceKeyArn: evidence.keyArn, Workload: workload, RuntimeRoleArn: runtimeRole.roleArn,
       RuntimeWorkloadIdentityArn: runtimeIdentityArn,

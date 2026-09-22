@@ -21,13 +21,20 @@ Runtime receives the capability over its IAM invocation. Fixed workflow code
 adds authorization to Gateway calls; model-facing schemas omit that envelope.
 The separate Gateway target validates the signature, active signing-key record,
 ledger binding, allowed operation, deadlines, current membership, source
-classification and source revisions on every tool call. Source and execution
-writes use the project and source version fences.
+classification and source revisions on every tool call. Execution writes use
+conditional project/source checks without rewriting the project record. Runtime
+roles can write only the execution partition. Authority can create result objects
+only in its execution prefix. Neither role can alter sources or the key registry.
 Each protected call also binds the original artifact and running workspace job.
 Cancellation, terminal artifacts and admission-time membership changes reject
 further work. Coupled writes check those job/artifact versions, and tool commits
 retain the capability's shorter expiry. Execution and operation records retain
 their bounded DynamoDB TTL.
+Admission pins an immutable Authority Lambda version. That version selects a
+retained Runtime version endpoint; changing an unqualified function cannot move
+an admitted job to different code. Unknown transport outcomes carry
+`agentcore-outcome-unknown`, including possible billing, instead of ordinary
+success or automatic replay.
 
 The source-analysis workflow obtains context/source data through Gateway, reads
 scoped structured Memory events, runs the pinned analyzer in Code Interpreter,
@@ -66,7 +73,25 @@ and its customer-profile tools are separate resources.
 Project read access is distinct from AgentCore admission. A project owner must
 record `synthetic`, `public` or `internal-non-sensitive` classification against
 an exact current source reference. Admission records have their own version
-fences. Changing source bytes/revision requires another classification.
+fences. The ledger pins those exact record versions through completion.
+Private intake independently scans the actual text and metadata using the
+platform rule detector and records the detector/source hashes. Detected
+identifiers block admission; a cleaned derivative must be registered separately.
+The owner label is not a replacement for inspection. These rule checks are not
+a complete semantic PII certification.
+
+Source analysis transfers TS/TSX/JS/JSX/HTML/CSS/JSON text. Binary resources
+contribute path/hash descriptors only; this receipt never authorizes sending
+their original bytes. Image normalization and binary transfer remain separate
+cutover work. Changing source bytes/revision or the inspection profile requires
+another classification.
+
+`POST /ontology/sources/admission` is owner-only and accepts `requestId`,
+`sourceRef`, `classification` and `reason`. It returns `{admission}` with the
+source, classification, inspection and record version. The same source/request
+ID and exact body replay the existing inspected result; changing the body or
+inspection profile under that ID fails with `admission-request-changed`.
+Updates use conditional record versions and current source/project fences.
 
 Code Interpreter's role reads only the pinned S3 tool-archive object version.
 The adapter verifies archive/code/lock hashes and the observed architecture/
@@ -76,12 +101,14 @@ Actual interpreter/session/tool/input hashes are retained in execution receipts.
 
 The Browser adapter uses authenticated automation against the configured
 isolated VPC browser. It delegates static-bundle fulfillment and checks to the
-existing verifier. Browser credentials never enter page resources. The module
+existing verifier. It records the actual Browser version, viewport, adapter,
+verifier and axe hashes. Browser credentials never enter page resources. The module
 also provides compiler/browser adapters; source-analysis success alone is not
 compile, browser, generation, release or customer-workflow acceptance.
 
 Memory has no extraction strategies. It stores bounded structured continuity
-events and hashes under derived project/actor/session scopes. It does not grant
+events and hashes under managed-HMAC organization/project/actor namespaces and
+execution sessions. Reads exclude superseded attempts. It does not grant
 source access or replace source/approval revalidation.
 
 ## Validation
@@ -92,7 +119,9 @@ Use Python 3.12, the workspace requirements and the pinned infra dependencies:
 PYTHONPATH=platform python -m pytest \
   platform/tests/test_agentcore_capability.py \
   platform/tests/test_agentcore_identity.py \
-  platform/tests/test_agentcore_authorization.py -q
+  platform/tests/test_agentcore_authorization.py \
+  platform/tests/test_agentcore_workflow.py \
+  platform/tests/test_agentcore_adapters.py -q
 cd platform/infra
 npm ci
 node --test test/ontology-stack.test.cjs
@@ -101,7 +130,10 @@ npx tsc --noEmit
 
 Prepare Docker contexts using `prepare_context.py --output <empty-build-dir>
 --axe <installed-axe-core-dir>`. It copies only the listed public module/tool
-files, refuses source symlinks and records their hashes. Customer archives,
+files, rejects symlinks in every input path component, and records code,
+axe/license, Dockerfile and dependency-lock hashes. The image verifies those
+copied bytes during its build. Its base digest and complete Python 3.12/arm64
+wheel hashes are pinned. Customer archives,
 credential files, private operation receipts and unrelated worktrees are not
 Docker build inputs.
 
@@ -109,6 +141,11 @@ Docker build inputs.
 Supply the isolated network, immutable archive descriptor and public code
 context. Omitting workspace storage selects retained synthetic test stores.
 Verify the target AWS account and role before deploying.
+CloudFormation provisions the fixed capability/evidence/Gateway key-registry
+records through a dedicated bootstrap Lambda. Only that IAM administrative role
+can write the registry partition. It refuses key replacement or reactivation;
+those require an explicit rotation procedure. Retained Authority versions and
+Runtime endpoints let admitted jobs retain their configured version.
 
 Keep live receipts outside Git. Verify actual Runtime/Identity/Gateway/Lambda/
 Memory/Interpreter execution and negative cases; provisioning a READY resource

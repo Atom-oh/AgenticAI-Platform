@@ -2,7 +2,9 @@
 from types import SimpleNamespace
 
 from ontology_runtime.capability import AuthorizationDenied
-from workbench.service import Service
+from workbench.service import Service, check_source_deadlines
+from workspace.collaboration import CollaborationError
+from workspace.storage import Conflict
 from workspace import ontology_schema as schema
 from workspace.ontology_sources import Sources
 
@@ -35,3 +37,26 @@ def active_job(storage, collaboration, project_id, artifact_id, *, deadline=None
         raise AuthorizationDenied()
     checks = [ctx.check("wb_artifact", artifact), ctx.check("job", job)]
     return ctx, artifact, job, sources, checks
+
+
+def commit_execution(ctx, writes, checks):
+    """The Runtime roles can write only their execution partition."""
+    if any(write["owner"] != "ontology-executions" or write["kind"] not in {"ac_execution", "ac_operation"}
+           for write in writes):
+        raise AuthorizationDenied()
+    project = ctx.scope["project"]
+    checks = [*checks, ctx.check("project", project)]
+    unique = {}
+    for check in checks:
+        key = check["owner"], check["kind"], check["id"]
+        if key in unique and unique[key] != check:
+            raise AuthorizationDenied()
+        unique[key] = check
+    observed = list(unique.values())
+    if len(writes) + len(observed) > 100:
+        raise AuthorizationDenied()
+    try:
+        return ctx.storage.put_many(writes, checks=observed, retry_conflicts=False,
+            before_attempt=lambda: check_source_deadlines(ctx.storage, observed, ctx.claims))
+    except Conflict as error:
+        raise CollaborationError(409, "execution-conflict", "실행 또는 원본 권한이 변경되었습니다.") from error

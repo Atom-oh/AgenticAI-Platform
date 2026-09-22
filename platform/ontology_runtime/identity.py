@@ -11,6 +11,8 @@ RESERVED = "_executionAuthorization"
 
 def model_schema(wire):
     """Credentials never enter model tool schemas or model-created arguments."""
+    if wire.get("name") not in {"ontology___context", "ontology___source"}:
+        raise ValueError("Only authorized ontology read tools are model-visible")
     result = copy.deepcopy(wire)
     result["inputSchema"]["properties"].pop(RESERVED, None)
     result["inputSchema"]["required"] = [name for name in result["inputSchema"].get("required", []) if name != RESERVED]
@@ -63,7 +65,8 @@ class Gateway:
                 result = json.loads(data)
         except Exception:
             raise RuntimeError("Dedicated Gateway operation did not complete") from None
-        if result.get("id") != operation_id or result.get("error") or result.get("result", {}).get("isError"):
+        if (not isinstance(result, dict) or not isinstance(result.get("result"), dict)
+                or result.get("id") != operation_id or result.get("error") or result["result"].get("isError")):
             raise RuntimeError("Dedicated Gateway did not return successful tool evidence")
         content = result["result"].get("content", [])
         try:

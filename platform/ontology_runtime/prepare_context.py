@@ -2,11 +2,10 @@
 from pathlib import Path
 import hashlib
 import json
-import shutil
 
 
 def prepare(platform, destination, axe):
-    platform, destination = Path(platform).resolve(), Path(destination).resolve()
+    platform, destination, axe = Path(platform).absolute(), Path(destination).resolve(), Path(axe).absolute()
     if destination.exists() and any(destination.iterdir()):
         raise ValueError("Use a new empty directory for each Runtime context")
     destination.mkdir(parents=True, exist_ok=True)
@@ -16,20 +15,22 @@ def prepare(platform, destination, axe):
     files.extend(platform.glob("api/common/*.py"))
     files.extend(path for path in (platform / "react-kit/ui").rglob("*") if path.is_file())
     files.extend(platform / "react-kit" / name for name in ("catalog.json", "package.json", "package-lock.json"))
+    planned = [(source, "code/" + source.relative_to(platform).as_posix(),
+                source.relative_to(platform).as_posix()) for source in sorted(files)]
+    planned.extend([(axe / "axe.min.js", "code/workspace/axe.min.js", "workspace/axe.min.js"),
+                    (axe / "LICENSE", "code/workspace/AXE_LICENSE", "workspace/AXE_LICENSE")])
+    planned.extend((platform / "ontology_runtime" / name, name, "@build/" + name)
+                   for name in ("Dockerfile", "requirements.txt", "requirements.lock"))
+    for source, _, _ in planned:
+        if not source.is_file() or any(path.is_symlink() for path in (source, *source.parents)):
+            raise ValueError("Every Runtime input must be a regular file without symlink parents")
     manifest = []
-    for source in sorted(files):
-        if source.is_symlink():
-            raise ValueError("The Runtime context cannot include source symlinks")
-        target = destination / "code" / source.relative_to(platform)
+    for source, relative, name in planned:
+        raw = source.read_bytes()
+        target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-        manifest.append({"path": source.relative_to(platform).as_posix(),
-                         "sha256": hashlib.sha256(source.read_bytes()).hexdigest()})
-    axe = Path(axe).resolve()
-    shutil.copyfile(axe / "axe.min.js", destination / "code/workspace/axe.min.js")
-    shutil.copyfile(axe / "LICENSE", destination / "code/workspace/AXE_LICENSE")
-    for name in ("Dockerfile", "requirements.txt"):
-        shutil.copyfile(platform / "ontology_runtime" / name, destination / name)
+        target.write_bytes(raw)
+        manifest.append({"path": name, "sha256": hashlib.sha256(raw).hexdigest()})
     (destination / "source-manifest.json").write_text(json.dumps(manifest, indent=2))
     return destination
 

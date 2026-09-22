@@ -105,7 +105,7 @@ class Capabilities:
         return token, {"capabilityHash": hashlib.sha256(token.encode()).hexdigest(),
                        "capabilityClaims": claims, "capabilityKeyId": key_id}
 
-    def verify(self, token, load_execution, *, operation, workload):
+    def verify(self, token, load_execution, *, operation, workload, allow_result_ready=False):
         try:
             if not isinstance(token, str) or len(token) > 16000:
                 raise AuthorizationDenied()
@@ -121,7 +121,8 @@ class Capabilities:
                 raise AuthorizationDenied()
             _claims(claims, int(self.clock()))
             ledger = load_execution(claims["executionId"])
-            if (not ledger or ledger.get("status") not in LIVE
+            live = LIVE | ({"result-ready"} if allow_result_ready and operation == "execution.finish" else set())
+            if (not ledger or ledger.get("status") not in live
                     or ledger.get("capabilityKeyId") != header["kid"]
                     or ledger.get("capabilityHash") != hashlib.sha256(token.encode()).hexdigest()
                     or ledger.get("capabilityClaims") != claims

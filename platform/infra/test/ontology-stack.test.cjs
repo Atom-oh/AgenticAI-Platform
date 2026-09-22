@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const cdk = require('aws-cdk-lib');
 const { Template } = require('aws-cdk-lib/assertions');
 const { OntologyStack } = require('../lib/ontology-stack');
@@ -56,6 +57,24 @@ test('ontology service roles separate source authority, sandbox tools and capabi
     assert(!tools.includes('kms:Sign'));
     assert(!tools.includes('lambda:InvokeFunction'));
     assert(!tools.some(action => action.startsWith('bedrock:')));
+    const executionOwner = createHash('sha256').update('ontology-executions').digest('hex');
+    for (const prefix of ['OntologyTools', 'ExecutionAuthority']) {
+      const statements = policy(prefix);
+      assert(!actions(statements).some(action => ['dynamodb:DeleteItem', 'dynamodb:UpdateItem', 'dynamodb:BatchWriteItem',
+        's3:DeleteObject', 's3:DeleteObjectVersion'].includes(action)));
+      const writes = statements.filter(statement => [].concat(statement.Action).includes('dynamodb:PutItem'));
+      assert.equal(writes.length, 1);
+      assert.deepEqual(writes[0].Condition['ForAllValues:StringEquals']['dynamodb:LeadingKeys'], [`owner#${executionOwner}`]);
+    }
+    assert(!tools.includes('s3:PutObject'));
+    const sourceWrites = policy('ExecutionAuthority').filter(statement => [].concat(statement.Action).includes('s3:PutObject'));
+    assert.equal(sourceWrites.length, 1);
+    assert(JSON.stringify(sourceWrites[0].Resource).includes(`workspace/${executionOwner}/`));
+    const registryOwner = createHash('sha256').update('ontology-key-registry').digest('hex');
+    const bootstrap = policy('KeyRegistryBootstrap').find(statement => [].concat(statement.Action).includes('dynamodb:PutItem'));
+    assert.deepEqual(bootstrap.Condition['ForAllValues:StringEquals']['dynamodb:LeadingKeys'], [`owner#${registryOwner}`]);
+    assert(runtime.includes('kms:GenerateMac'));
+    assert.equal(byType('AWS::BedrockAgentCore::RuntimeEndpoint').length, 1);
     const gateway = actions(policy('GatewayRole'));
     assert.deepEqual(gateway, ['lambda:InvokeFunction']);
     const runtimeSign = policy('RuntimeRole').find(statement => [].concat(statement.Action).includes('kms:Sign'));

@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 
 from ontology_runtime import admission
-from ontology_runtime.authorization import active_job
+from ontology_runtime.authorization import active_job, commit_execution
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.identity import RESERVED
 from workbench.service import fail, fields
@@ -45,7 +45,7 @@ class Tools:
         except (ValueError, TypeError):
             raise AuthorizationDenied() from None
         claims, ledger = self.capabilities.verify(envelope["capability"], self.load,
-            operation=operation, workload=self.workload)
+            operation=operation, workload=self.workload, allow_result_ready=operation == "execution.finish")
         ctx, artifact, _, sources, checks = active_job(self.storage, self.collaboration,
             claims["projectId"], ledger["artifactId"], deadline=min(claims["exp"], ledger["deadline"]))
         if (ctx.actor != claims["actor"] or artifact["jobInput"]["sourceRefs"] != ledger["sourceRefs"]
@@ -56,12 +56,16 @@ class Tools:
         fingerprint = schema.digest({"operation": operation, "arguments": arguments})
         marker_id = schema.identity("operation", claims["executionId"], claims["attemptId"], operation_id)
         prior = self.storage.get(EXECUTIONS, "ac_operation", marker_id)
+        if ledger.get("status") == "result-ready" and not prior:
+            raise AuthorizationDenied()
         if prior and prior["requestHash"] != fingerprint:
             fail(409, "execution-operation-changed", "같은 작업 ID의 내용이 다릅니다.")
-        if ledger.get("calls", 0) >= 60 or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024:
+        if not prior and (ledger.get("calls", 0) >= 60 or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024):
             fail(422, "execution-budget", "실행의 도구 조회 한도를 초과했습니다.")
-        for reference in ledger["sourceRefs"]:
-            checks.append(admission.require(ctx, reference))
+        admissions = [admission.require(ctx, reference) for reference in ledger["sourceRefs"]]
+        if admissions != ledger.get("admissions"):
+            raise AuthorizationDenied()
+        checks.extend(admissions)
         sources.verify(ledger["sourceRefs"])
         manifest = Ontology(ctx).current()
         if (manifest or {}).get("generation") != ledger["graphGeneration"]:
@@ -105,13 +109,13 @@ class Tools:
         else:
             fields(arguments, {"manifestHash"})
             schema._hash(arguments.get("manifestHash"))
-            if ledger["stage"] not in {"analyzed", "verified"}:
+            if not prior and ledger["stage"] not in {"analyzed", "verified"}:
                 fail(409, "execution-stage", "검증된 실행 결과가 필요합니다.")
             result = {"manifestHash": arguments["manifestHash"], "stage": "completed"}
         # Reads are never replayed without current source/admission checks.
         checks.extend(sources.recheck())
         _, latest = self.capabilities.verify(envelope["capability"], self.load,
-            operation=operation, workload=self.workload)
+            operation=operation, workload=self.workload, allow_result_ready=operation == "execution.finish")
         if latest["version"] != ledger["version"]:
             fail(409, "execution-changed", "실행 기록이 변경되었습니다.")
         if prior:
@@ -125,12 +129,13 @@ class Tools:
         changed.update(calls=ledger.get("calls", 0) + 1, retrievedBytes=ledger.get("retrievedBytes", 0) + size)
         if operation == "execution.stage":
             changed["stage"] = arguments["stage"]
+            changed["stageReceipts"] = {**ledger.get("stageReceipts", {}), arguments["stage"]: arguments["receiptHash"]}
         if operation == "execution.finish":
             changed.update(stage="completed", status="result-ready", manifestHash=arguments["manifestHash"])
         marker = {"id": marker_id, "projectId": ctx.project_id, "executionId": claims["executionId"],
             "requestHash": fingerprint, "resultHash": schema.digest(result), "operation": operation,
             "expiresAt": claims["exp"] * 1000, "ttl": claims["exp"] + 86400}
-        ctx.commit([
+        commit_execution(ctx, [
             self.collaboration._write(EXECUTIONS, "ac_execution", changed, ledger["version"]),
             self.collaboration._write(EXECUTIONS, "ac_operation", marker),
         ], checks)

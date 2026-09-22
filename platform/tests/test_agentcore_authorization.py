@@ -20,7 +20,7 @@ from workspace.ontology_sources import asset_reference
 def admitted(wb):
     wb.api.ontology_analyzer_ready = True
     wb.api.ontology_analyzer = RuntimeAnalyzer(
-        "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority", "a" * 64)
+        "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
     files = collection(wb)
     for file in files:
         source = wb.storage.get(wb.owner, "asset", file["assetId"])

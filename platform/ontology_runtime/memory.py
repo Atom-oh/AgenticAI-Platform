@@ -9,13 +9,18 @@ STAGES = frozenset({"admitted", "context", "analyzed", "generated", "compiled", 
 
 
 class Memory:
-    def __init__(self, client, identifier):
+    def __init__(self, client, identifier, kms, key_arn, organization):
         self.client, self.identifier = client, identifier
+        self.kms, self.key, self.organization = kms, key_arn, organization
+        self.namespaces = {}
 
-    @staticmethod
-    def scope(claims):
-        return {"actorId": "actor-" + schema.digest([claims["projectId"], claims["actor"]])[:48],
-                "sessionId": claims["executionId"]}
+    def scope(self, claims):
+        key = (claims["projectId"], claims["actor"])
+        if key not in self.namespaces:
+            result = self.kms.generate_mac(KeyId=self.key, MacAlgorithm="HMAC_SHA_256",
+                Message=schema.canonical([self.organization, *key]))
+            self.namespaces[key] = "actor-" + result["Mac"].hex()[:48]
+        return {"actorId": self.namespaces[key], "sessionId": claims["executionId"]}
 
     def append(self, claims, stage, evidence_hash):
         if stage not in STAGES:
@@ -38,6 +43,7 @@ class Memory:
                 value = payload.get("json", {}).get("content")
                 if (isinstance(value, dict) and value.get("schemaVersion") == 1
                         and value.get("executionId") == claims["executionId"]
+                        and value.get("attemptId") == claims["attemptId"]
                         and value.get("resourcesHash") == claims["resourcesHash"]
                         and value.get("stage") in STAGES):
                     schema._hash(value.get("evidenceHash"))

@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import os
+from pathlib import Path
 
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 from workspace.browser import evaluate_bundle
 from workspace.rules import validate_contract
+from workspace import browser as verifier, ontology_schema as schema
 
 
 class Browser:
@@ -41,8 +45,19 @@ class Browser:
 
             result = evaluate_bundle(files, contract, reference, visual_tolerance,
                 expected_hash=build["bundleHash"], _context_factory=context)
+            axe = Path(os.environ.get("AXE_PATH", str(Path(verifier.__file__).parent / "axe.min.js")))
+            if not axe.is_file():
+                axe = Path(verifier.__file__).parents[1] / "gates/node_modules/axe-core/axe.min.js"
+            profile = {"browserVersion": remote.version if remote is not None else None,
+                "viewport": contract["viewport"], "visualTolerance": str(visual_tolerance),
+                "verifierHash": hashlib.sha256(Path(verifier.__file__).read_bytes()).hexdigest(),
+                "adapterHash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "axeHash": hashlib.sha256(axe.read_bytes()).hexdigest() if axe.is_file() else None}
+            if not profile["browserVersion"] or not profile["axeHash"]:
+                raise ValueError("The actual browser and verifier profile is unavailable")
             result["browserExecution"] = {"backend": "agentcore-browser", "browserId": self.identifier,
-                "sessionId": session_id, "region": self.region, "bundleHash": result["bundleHash"]}
+                "sessionId": session_id, "region": self.region, "bundleHash": result["bundleHash"],
+                "profile": profile, "profileHash": schema.digest(profile)}
             return result
         finally:
             self.client.stop_browser_session(browserIdentifier=self.identifier, sessionId=session_id)

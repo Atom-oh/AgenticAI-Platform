@@ -43,7 +43,9 @@ def invoke(payload, context):
             gateway = Gateway(client, http, endpoint=configuration["gatewayUrl"], workload=configuration["workload"],
                 provider=configuration["provider"], scopes=["ontology/tools"])
             workflow = Workflow(gateway, Interpreter(client, configuration["interpreter"]),
-                Memory(client, configuration["memoryId"]), Evidence(session.client("kms"), configuration["evidenceKeyArn"]))
+                Memory(client, configuration["memoryId"], session.client("kms"),
+                       configuration["memoryNamespaceKeyArn"], configuration["organization"]),
+                Evidence(session.client("kms"), configuration["evidenceKeyArn"]))
             return workflow.analyze(payload, context.session_id)
     except Exception as error:
         operation = getattr(error, "operation_name", None)

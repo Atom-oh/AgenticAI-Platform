@@ -26,7 +26,8 @@ class Workflow:
             "executionId": event["executionId"], "runtimeSessionId": runtime_session_id})}, "stage-context")
         claims, request = started["scope"], started["request"]
         if (claims["executionId"] != event["executionId"] or claims["runtimeSessionId"] != runtime_session_id
-                or claims["workloadIdentity"] != event["workloadIdentity"]):
+                or claims["workloadIdentity"] != event["workloadIdentity"]
+                or schema.digest(request) != claims["resourcesHash"]):
             raise AuthorizationDenied()
         if request["toolArchiveHash"] != self.interpreter.config["archiveHash"]:
             raise AuthorizationDenied()

@@ -124,7 +124,7 @@ def process(ctx, pinned, job=None):
     remote = type(analyzer) is RuntimeAnalyzer
     if not remote and not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
-    if pinned.get("backend") != selected_backend(ctx.host):
+    if pinned.get("backend", {"name": "local-offline"}) != selected_backend(ctx.host):
         fail(409, "ontology-backend-changed", "요청 당시의 분석 실행 환경이 변경되었습니다. 새 작업을 시작하세요.")
     if not remote and analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
