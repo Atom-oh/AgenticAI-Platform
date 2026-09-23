@@ -266,6 +266,7 @@ def _relay_runtime(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
                                     record["recordVersion"], uuid.uuid4().hex]).encode()).hexdigest()
     result, meta, errors = None, {}, []
     inspected = False
+    boundary_sequence, text_sequence = 0, None
     for kind, data in runtime.invoke_stream(RUNTIME_ARN, AGENT_NAME, "", session_id=sid, model=model,
             extra={"design": design, "approvedSourceHash": payload["runtimeSourceHash"]}):
         if kind == "stage":
@@ -273,14 +274,20 @@ def _relay_runtime(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
             step = str(d.pop("step", "") or "stage")
             ctx.stage(KIND, step, plane="agentcore", **d)
         elif kind == "text":
-            if not inspected:
+            if not inspected or type(text_sequence) is not int or text_sequence != boundary_sequence:
                 raise ValueError("Design output preceded independent boundary evidence")
+            text_sequence = None
             ctx.token(KIND, data)
+        elif kind == "text_boundary":
+            text_sequence = data.get("seq") if isinstance(data, dict) else None
         elif kind == "boundary":
             if (any(type(data.get(key)) is not int or data[key] < 0
                     for key in ("chars", "estTokens", "piiRules", "piiCount"))
                     or data.get("piiDetectors") not in (["rules"], ["rules", "guardrail"])):
                 raise ValueError("Incomplete design boundary evidence")
+            if type(data.get("seq")) is not int or data["seq"] != boundary_sequence + 1:
+                raise ValueError("Incomplete design model-call sequence")
+            boundary_sequence = data["seq"]
             inspected = data["piiCount"] == 0 and data["piiDetectors"] == ["rules", "guardrail"]
             ctx.stage(KIND, "boundary", plane="boundary", **data)
         elif kind == "design_done":

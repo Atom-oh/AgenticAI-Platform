@@ -369,7 +369,8 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
                     continue
                 if "data" in ev and isinstance(ev["data"], str):
                     text_chars += len(ev["data"])
-                    yield {"type": "text", "t": ev["data"]}
+                    yield {"type": "text", "t": ev["data"],
+                           "modelCallSeq": (getattr(gate, "last", None) or {}).get("seq")}
                 elif "current_tool_use" in ev and isinstance(ev["current_tool_use"], dict):
                     tu = ev["current_tool_use"]
                     tid = str(tu.get("toolUseId") or "")
@@ -479,6 +480,7 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
     DONE = object()
     deps = _dd.make_deps(model_id)
     stopped = threading.Event()
+    boundary_seq = 0
 
     def guard(fn):
         def call(*args, **kwargs):
@@ -490,11 +492,21 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
     deps = {key: guard(value) if key in {"generate", "llm_judge"} else value
             for key, value in deps.items()}
 
+    def drain_boundaries():
+        nonlocal boundary_seq
+        if stopped.is_set():
+            return
+        for event in deps.get("drain_boundary", lambda: [])():
+            boundary_seq += 1
+            loop.call_soon_threadsafe(q.put_nowait, {**event, "seq": boundary_seq})
+
     def emit(ev: dict) -> None:
         if stopped.is_set():
             return
+        drain_boundaries()
         if ev.get("type") == "token":
-            loop.call_soon_threadsafe(q.put_nowait, {"type": "text", "t": ev.get("text", "")})
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "text", "t": ev.get("text", ""),
+                                                    "modelCallSeq": boundary_seq})
         else:
             loop.call_soon_threadsafe(q.put_nowait, ev)
 
@@ -503,18 +515,17 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
             res = loop_run(design["productSpec"], design["smModel"], list(design.get("checklists") or []), deps, emit=emit,
                            output_type=str(design.get("outputType") or "design"))
             if not stopped.is_set():
-                loop.call_soon_threadsafe(q.put_nowait, {"type": "design_done", "result": res})
+                emit({"type": "design_done", "result": res})
         except _DesignStopped:
             pass
         except Exception as e:  # noqa: BLE001
             refusal = find_gate_refusal(e)
-            loop.call_soon_threadsafe(q.put_nowait, {
+            emit({
                 "type": "error", "code": 422 if refusal else 500, "message": _err(e),
                 **({"gate": "refused", "types": refusal.types} if refusal else {})})
         finally:
             try:
-                for event in deps.get("drain_boundary", lambda: [])():
-                    emit(event)
+                drain_boundaries()
             except Exception:
                 loop.call_soon_threadsafe(q.put_nowait, {
                     "type": "error", "code": 500, "message": "Boundary evidence unavailable"})

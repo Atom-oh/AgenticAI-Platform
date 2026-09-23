@@ -207,3 +207,25 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
     fs.rmSync(outdir, { recursive: true, force: true });
   }
 });
+
+test('Runtime image fingerprint excludes nested generated Python bytecode', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bank-runtime-fingerprint-'));
+  try {
+    const source = path.resolve(__dirname, '../../agents');
+    const clean = path.join(root, 'clean');
+    const dirty = path.join(root, 'dirty');
+    fs.cpSync(source, clean, {recursive: true,
+      filter: name => path.basename(name) !== '__pycache__' && !name.endsWith('.pyc')});
+    fs.cpSync(clean, dirty, {recursive: true});
+    const cache = path.join(dirty, '_ctx/design_loop/__pycache__');
+    fs.mkdirSync(cache, {recursive: true});
+    fs.writeFileSync(path.join(cache, 'synthetic.pyc'), Buffer.from([0, 1, 7, 255]));
+    const app = new cdk.App({autoSynth: false, outdir: path.join(root, 'out'), context: {'aws:cdk:asset-staging': false}});
+    const stack = new cdk.Stack(app, 'Fingerprint');
+    const { DockerImageAsset, Platform } = require('aws-cdk-lib/aws-ecr-assets');
+    const fingerprint = (name, directory) => new DockerImageAsset(stack, name, {directory, platform: Platform.LINUX_ARM64}).assetHash;
+    assert.equal(fingerprint('Clean', clean), fingerprint('Dirty', dirty));
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});

@@ -131,8 +131,8 @@ def test_runtime_tuples_pass_stage_and_design_done():
            {"type": "design_done", "result": {"ok": True}}, {"type": "meta", "usage": {"inputTokens": 1, "outputTokens": 1}}]
     out = list(runtime.to_tuples(evs, "sid"))
     kinds = [k for k, _ in out]
-    assert kinds == ["stage", "text", "design_done", "meta"]
-    assert out[0][1] == {"step": "prd", "status": "done"} and out[2][1]["result"]["ok"] is True
+    assert kinds == ["stage", "text_boundary", "text", "design_done", "meta"]
+    assert out[0][1] == {"step": "prd", "status": "done"} and out[3][1]["result"]["ok"] is True
 
 
 def test_design_seed_records_are_valid_registry_records():

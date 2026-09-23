@@ -211,6 +211,9 @@ The existing sample lookup uses its configured synthetic default. Authenticated
 customer MyData intake remains the separate S2 privacy workflow.
 The design-flow compatibility adapter emits measured boundary events for successful
 model attempts and local privacy refusals, retaining the refusal classification.
+Each text frame identifies its model-call sequence. Runtime/design relays require
+the matching accepted boundary, and a tool result invalidates the previous call's
+evidence. Design measurements are queued before that call's text and final result.
 It also inspects arguments before executing a tool, including nested model
 adapter calls inside tools.
 Gate and document results are projected from their expected response schemas;

@@ -412,7 +412,18 @@ def test_harness_session_reuse_requires_known_terminal_history(monkeypatch, outc
             list(stream)
     else:
         list(stream)
-    # A distinct store instance uses the same durable table, as another WsFn would.
+    item = store.table().get_item(Key={"pk": "harness-session#" + sid, "sk": "state"})["Item"]
+    assert item["phase"] == ("COMPLETE" if outcome == "complete" else "FAILED")
+    assert set(item) == {"pk", "sk", "phase", "turnToken"}
+    # Load a fresh module, retaining only the durable table across simulated WsFn processes.
+    import importlib.util
+    import sys
+    import agentcore.session_store as original
+    spec = importlib.util.spec_from_file_location("agentcore.session_store", original.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    monkeypatch.setitem(sys.modules, "agentcore.session_store", fresh)
+    HarnessSessionUnavailable = fresh.HarnessSessionUnavailable
     monkeypatch.setattr(api, "get_store", lambda: RegistryStore(table=store.table()))
     if outcome == "complete":
         list(harness.invoke_stream("synthetic", "Next safe turn", sid))

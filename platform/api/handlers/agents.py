@@ -439,14 +439,22 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
     blocked, pii_outbound = False, None
     started = time.time()
     runtime_kind = kind
+    text_sequence, boundary_sequence, minimum_sequence = None, 0, 1
     try:
         for kind_ev, data in _invoke.stream(rec, message, session_id):
             if kind_ev == "text":
                 if (not boundary_events or boundary_events[-1]["piiCount"]
                         or boundary_events[-1].get("blocked")):
                     raise ValueError("Model output preceded accepted boundary evidence")
+                if runtime_kind == "strands" and (
+                        type(text_sequence) is not int or text_sequence != boundary_sequence
+                        or text_sequence < minimum_sequence):
+                    raise ValueError("Model output does not match its inspected call")
+                text_sequence = None
                 text_len += len(data)
                 ctx.token("agent", data)
+            elif kind_ev == "text_boundary":
+                text_sequence = data.get("seq") if isinstance(data, dict) else None
             elif kind_ev == "tool_start":
                 tool_calls += 1
                 ctx.stage("agent", "tool_start", plane="agentcore", **_stage_kw(data))
@@ -458,6 +466,9 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                           name=str(value.get("name", ""))[:160], toolUseId=str(value.get("toolUseId", ""))[:160],
                           chars=size if type(size) is int and size >= 0 else 0, inputRedacted=True)
             elif kind_ev == "tool_result":
+                if runtime_kind == "strands":
+                    minimum_sequence = boundary_sequence + 1
+                    text_sequence = None
                 ctx.stage("agent", "tool_result", plane="agentcore", **_stage_kw(data))
             elif kind_ev == "boundary":
                 if not isinstance(data, dict):
@@ -472,6 +483,10 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                     raise ValueError("Independent verification evidence is missing")
                 if data["piiCount"] > 0 and detectors == ["rules"] and not data.get("refusedTypes"):
                     raise ValueError("Local refusal evidence is missing")
+                if runtime_kind == "strands":
+                    if type(data.get("seq")) is not int or data["seq"] != boundary_sequence + 1:
+                        raise ValueError("Incomplete model-call boundary sequence")
+                    boundary_sequence = data["seq"]
                 boundary_events.append(data)
                 inspection_detectors.update(detector for detector in detectors
                                             if detector in {"rules", "guardrail"})

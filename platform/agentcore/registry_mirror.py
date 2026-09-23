@@ -177,6 +177,9 @@ def mirror(record: dict) -> dict:
                 sync_status(rec_id, "DEPRECATED", current["status"], "Replace legacy mirror with version-bound metadata")
                 if _ready_record(rec_id)["status"] != "DEPRECATED":
                     raise RuntimeError("Legacy mirror retirement was not confirmed")
+            if target == "DEPRECATED":
+                return {"recordId": rec_id, "status": "DEPRECATED", "action": "archived", "archived": True,
+                        "metadataCurrent": False, "descriptorType": current.get("descriptorType")}
             existing, current = None, None
         elif current["status"] == "DEPRECATED":
             raise MirrorUnsupported("A deprecated mirror requires a new immutable platform version")

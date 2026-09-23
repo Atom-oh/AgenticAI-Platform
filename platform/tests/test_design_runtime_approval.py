@@ -24,8 +24,8 @@ def invocation(monkeypatch):
     monkeypatch.setattr(design, "RUNTIME_ARN", ARN)
     seen, published = [], []
     events = [("boundary", {"chars": 10, "estTokens": 3, "piiRules": 0, "piiCount": 0,
-                             "piiDetectors": ["rules", "guardrail"]}),
-              ("text", "safe"), ("design_done", {"result": {"ok": True}}),
+                             "piiDetectors": ["rules", "guardrail"], "seq": 1}),
+              ("text_boundary", {"seq": 1}), ("text", "safe"), ("design_done", {"result": {"ok": True}}),
               ("meta", {"stopReason": "end_turn"})]
 
     def invoke(*args, **kwargs):

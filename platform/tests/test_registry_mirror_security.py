@@ -234,3 +234,17 @@ def test_legacy_active_mirror_is_retired_before_clean_replacement(monkeypatch):
     result = mirror.mirror(record)
     assert result['recordId'] == 'new' and result['status'] == 'APPROVED'
     assert old['status'] == 'DEPRECATED' and 'PRIVATE_' in json.dumps(old['descriptors'])
+
+
+def test_retiring_legacy_mirror_does_not_create_a_replacement_archive(monkeypatch):
+    record = {'name': 'retirement_probe', 'recordVersion': 'v1', 'recordType': 'AGENT', 'status': 'DEPRECATED'}
+    old = {'recordId': 'old', 'name': mirror._old_hash_name(record['name']), 'recordVersion': 'v1',
+           'status': 'APPROVED', 'descriptorType': 'CUSTOM',
+           'descriptors': {'custom': {'inlineContent': json.dumps(record)}}}
+    def status(**request):
+        old['status'] = request['status']
+    monkeypatch.setattr(mirror, 'find_record', lambda *args: old)
+    monkeypatch.setattr(mirror, 'ctl', lambda: SimpleNamespace(
+        get_registry_record=lambda **kwargs: copy.deepcopy(old), update_registry_record_status=status))
+    result = mirror.mirror(record)
+    assert result['archived'] and result['recordId'] == 'old' and old['status'] == 'DEPRECATED'

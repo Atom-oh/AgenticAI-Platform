@@ -53,7 +53,7 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
     import design_loop
 
     def run(product, state, checks, deps, *, emit, output_type):
-        deps["generate"]("Synthetic system", product["text"], None)
+        deps["generate"]("Synthetic system", product["text"], lambda text: emit({"type": "token", "text": text}))
         deps["llm_judge"]({"id": "rule", "text": "Synthetic requirement", "target": "screen"},
                           {"prd": {"steps": [{"id": "step-one"}]}, "flowText": "Synthetic complete flow"})
         return {"ok": True}
@@ -82,3 +82,22 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
         assert len(verified) == 2 and "Synthetic complete flow" in verified[1] and "step-one" in verified[1]
         assert measurements[0]["source"] == "design-model" and measurements[0]["piiRules"] == 0
         assert events[-1]["usage"] == {"inputTokens": 4, "outputTokens": 2}
+        first_text = next(i for i, event in enumerate(events) if event["type"] == "text")
+        first_boundary = next(i for i, event in enumerate(events) if event["type"] == "boundary")
+        done_index = next(i for i, event in enumerate(events) if event["type"] == "design_done")
+        assert first_boundary < first_text < done_index
+        assert events[first_text]["modelCallSeq"] == measurements[0]["seq"] == 1
+        assert max(i for i, event in enumerate(events) if event["type"] == "boundary") < done_index
+        from agentcore import runtime
+        from handlers import design
+        from registry import api
+        approved = {"name": "design_flow_agent", "recordVersion": "v1",
+                    "payload": {"runtimeArn": "synthetic", "runtimeSourceHash": "a" * 64}}
+        monkeypatch.setattr(api, "list_approved", lambda *args: [approved])
+        monkeypatch.setattr(design, "RUNTIME_ARN", "synthetic")
+        monkeypatch.setattr(runtime, "invoke_stream", lambda *args, **kwargs: runtime.to_tuples(events, "s" * 64))
+        output = []
+        ctx = SimpleNamespace(user_sub="synthetic-actor", token=lambda *args: output.append(args),
+                              stage=lambda *args, **kwargs: None)
+        result, _, errors = design._relay_runtime(ctx, {}, None)
+        assert result == {"ok": True} and output and not errors

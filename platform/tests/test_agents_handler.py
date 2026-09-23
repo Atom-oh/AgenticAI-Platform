@@ -895,3 +895,23 @@ def test_handler_returns_measured_rules_only_harness_refusal(fakes, monkeypatch,
     assert evidence["piiDetectors"] == ["rules"] and evidence["refusedTypes"] == ["EMAIL"]
     trace = next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
     assert trace["blocked"] and trace["piiOutbound"] > 0 and trace["piiDetectors"] == ["rules(harness-input)"]
+
+
+@pytest.mark.parametrize('second_boundary', [False, True])
+def test_each_runtime_model_call_needs_its_own_boundary(fakes, monkeypatch, second_boundary):
+    from agentcore import invoke
+    h = _handler()
+    api.create_record({'name': 'runtime_sequence_probe', 'recordVersion': 'v1', 'recordType': 'AGENT',
+        'payload': {'runtime': 'agentcore-runtime/strands', 'runtimeArn': 'synthetic', 'runtimeSourceHash': 'a'*64}},
+        'admin', status='APPROVED', embed=False)
+    first = {'chars': 10, 'estTokens': 3, 'piiRules': 0, 'piiCount': 0, 'piiDetectors': ['rules','guardrail'], 'seq': 1}
+    events = [('boundary',first), ('text_boundary',{'seq':1}), ('text','FIRST_SAFE'),
+              ('tool_result',{'name':'synthetic','chars':10,'status':'success'})]
+    if second_boundary:
+        events.append(('boundary',{**first,'seq':2}))
+    events += [('text_boundary',{'seq':2}), ('text','SECOND_OUTPUT'), ('meta',{'stopReason':'end_turn','usage':{}})]
+    monkeypatch.setattr(invoke,'stream',lambda *args,**kwargs:iter(events))
+    ctx,gw = _ctx()
+    h.agent_invoke(ctx,{'name':'runtime_sequence_probe','message':'safe'})
+    assert ('SECOND_OUTPUT' in json.dumps(gw.posted)) is second_boundary
+    assert bool(gw.posted[-1].get('error')) is not second_boundary

@@ -102,6 +102,7 @@ def to_tuples(events: Iterable[dict], session_id: str) -> Iterator[Tuple[str, An
         if t == "text":
             s = ev.get("t", "")
             if s:
+                yield ("text_boundary", {"seq": ev.get("modelCallSeq")})
                 yield ("text", str(s))
         elif t in ("tool_start", "tool_input", "tool_result", "boundary", "stage", "design_done"):
             yield (t, {k: v for k, v in ev.items() if k != "type"})

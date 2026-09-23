@@ -75,7 +75,7 @@ SSE_LINES = [
 def test_parse_sse_yields_harness_tuple_protocol():
     out = list(runtime.to_tuples(runtime.parse_events(FakeBody(SSE_LINES)), "fallback-sid"))
     kinds = [k for k, _ in out]
-    assert kinds == ["boundary", "text", "tool_start", "tool_input", "tool_result", "text", "error", "meta"]
+    assert kinds == ["boundary", "text_boundary", "text", "tool_start", "tool_input", "tool_result", "text_boundary", "text", "error", "meta"]
     assert "".join(d for k, d in out if k == "text") == "규정 영향 분석 결과"
     tool_start = next(d for k, d in out if k == "tool_start")
     assert tool_start == {"name": "analyze_regulation_impact", "toolUseId": "tu-1"}
@@ -92,7 +92,8 @@ def test_parse_sse_yields_harness_tuple_protocol():
 def test_parse_sse_without_meta_synthesizes_final_meta():
     body = FakeBody(['data: {"type":"text","t":"partial"}', "garbage", ""])
     out = list(runtime.to_tuples(runtime.parse_events(body), "sid-1234567890123456789012345678901234"))
-    assert out[0] == ("text", "partial")
+    assert out[0] == ("text_boundary", {"seq": None})
+    assert out[1] == ("text", "partial")
     assert out[-1][0] == "meta"
     assert out[-1][1]["sessionId"] == "sid-1234567890123456789012345678901234"
     assert out[-1][1].get("incomplete") is True
