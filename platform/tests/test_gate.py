@@ -80,7 +80,7 @@ def fakes(monkeypatch):
     monkeypatch.delenv("LLM_ROUTE", raising=False)
     monkeypatch.delenv("GATE_REFUSE_TYPES", raising=False)
     c = FakeAdapter("claude", "0/1", "global.anthropic.claude-sonnet-5", "bedrock-runtime", "ap-northeast-2")
-    g = FakeAdapter("gemma", "2", "google.gemma-4-31b", "bedrock-mantle", "us-west-2")
+    g = FakeAdapter("gemma", "0/1", "google.gemma-4-31b", "bedrock-mantle", "us-west-2")
     gate.set_adapter("claude", c)
     gate.set_adapter("gemma", g)
     yield {"claude": c, "gemma": g}
@@ -162,7 +162,7 @@ def test_route_selection_env_override_and_aliases(fakes, monkeypatch):
     assert gate.current_route() == "claude"
     monkeypatch.setenv("LLM_ROUTE", "gemma")
     st = gate.stream("s", "u", purpose="s2")
-    assert st.route == "gemma" and st.tier == "2" and st.model_id == "google.gemma-4-31b" and st.endpoint == "bedrock-mantle"
+    assert st.route == "gemma" and st.tier == "0/1" and st.model_id == "google.gemma-4-31b" and st.endpoint == "bedrock-mantle"
     list(st)
     assert fakes["gemma"].calls and not fakes["claude"].calls
     text, usage, info = gate.generate("s", "u", route="claude", purpose="x")   # 호출별 override
@@ -197,7 +197,10 @@ def test_crossing_log_has_metrics_and_no_payload_text(fakes, capsys):
     assert out.count('"gate.crossing"') == 1
 
 
-def test_refused_log_has_types_not_values(fakes, capsys):
+def test_refused_log_has_types_not_values(fakes, capsys, monkeypatch):
+    # A wall-clock timestamp can coincidentally contain the token's digits.
+    # Fix the clock while retaining the assertion against the entire log.
+    monkeypatch.setattr(gate._common("log").time, "time", lambda: 1700000000)
     with pytest.raises(gate.GateRefused):
         gate.generate("s", "고객 CUST-0042", purpose="s2", trace_id="t9")
     out = capsys.readouterr().out
@@ -286,10 +289,10 @@ def test_embed_and_rerank_are_measured_and_refuse_identifiers(fakes, monkeypatch
 # ---------- 표기 (§8-3 · §11) ----------
 def test_route_info_and_badges_are_truthful(fakes):
     g = gate.route_info("gemma")
-    assert g["badge"]["prod"] == "IDC GPU + vLLM (EKS Hybrid Nodes)"
-    assert g["badge"]["demo"] == "Bedrock Gemma 4 31B @ us-west-2 — GPU 미구성 대체"
-    assert g["tier"] == "2" and g["modelId"] == "google.gemma-4-31b" and g["inferenceRouting"] == "us-west-2 direct"
-    assert g["storage"] == "ap-northeast-2" and g["badge"]["substituted"] is True
+    assert g["badge"]["prod"] == "Bedrock Gemma 4 31B · 설명 어댑터"
+    assert g["badge"]["demo"] == "Bedrock Gemma 4 31B @ us-west-2 · 개인정보 처리기와 별도"
+    assert g["tier"] == "0/1" and g["modelId"] == "google.gemma-4-31b" and g["inferenceRouting"] == "us-west-2 direct"
+    assert g["storage"] == "ap-northeast-2" and g["badge"]["substituted"] is False
     c = gate.route_info("claude")
     assert c["tier"] == "0/1" and c["endpoint"] == "bedrock-runtime" and c["region"] == "ap-northeast-2"
     assert c["inferenceRouting"] == "global" and c["inferenceRoutingLabel"] == "global (전 세계 상용 리전)"
@@ -380,8 +383,17 @@ def _py_files():
 def test_gate_is_the_only_path_to_models_repo_wide():
     violations = []
     seen = set()
+    for name in ("pii.py", "log.py", "__init__.py"):
+        assert (ROOT / "agents/_ctx/common" / name).is_file(), "Prepare the Runtime context before pytest"
     for rel, src in _py_files():
         seen.add(rel)
+        copies = {"agents/_ctx/common/" + name: "api/common/" + name
+                  for name in ("pii.py", "log.py", "__init__.py")}
+        if rel in copies:
+            assert src == (ROOT / copies[rel]).read_text(encoding="utf-8"), \
+                "Runtime common modules must exactly match their canonical inspected sources"
+            if copies[rel] in _ALLOWED_FILES:
+                continue
         if rel in _ALLOWED_FILES:
             continue
         for i, line in enumerate(src.splitlines(), 1):

@@ -69,9 +69,9 @@ implemented. `modelRevision="unverified"` is an explicit unknown. See
 | Path | Runtime and limits |
 | --- | --- |
 | Scenario agents | `AdminFn seed_agents` prefers AgentCore Runtime/Strands when `AGENTS_RUNTIME_ARN` exists; otherwise it provisions Harness records. There are five specs, including `design_flow_agent`. |
-| Custom agent builder | `api/handlers/agents.py` creates Harness agents. `agentcore/invoke.py` dispatches by record payload; `APPROVED` is required by the platform invocation handler. |
+| Custom agent builder | `api/handlers/agents.py` records specifications and administration requests; IAM AdminFn provisions approved Harness configurations. `agentcore/invoke.py` dispatches only approved records. |
 | Legacy F5 screen generation | `screengen/agent.py` reads approved Registry component schemas and three skills. At most one regeneration. Node gates use synthetic `@atom/ui` declarations and semantic stubs; visual evidence is an HTML structure snapshot. |
-| Process generation | `design_loop/` derives a PRD and checklist, generates step HTML, then reviews it. At most one regeneration, plus one parse retry within each attempt. `api/handlers/design.py` runs locally through the gate unless `DESIGN_USE_RUNTIME=1` and a runtime ARN are set. |
+| Process generation | `design_loop/` derives a PRD and checklist, generates step HTML, then reviews it. At most one regeneration, plus one parse retry within each attempt. `api/handlers/design.py` uses the approved Runtime whenever its ARN is configured; generation is unavailable until that Runtime is configured and approved. |
 | Legacy HTML Studio | `studio/loop.py` uses `studio-*.md` skills, DesignSpec checks and up to 20 rounds. This is a separate workflow from F5 and the React workspace. |
 | React workspace | `workspace/` uses an approved rule contract and pinned `react-kit/`, with one to five rounds (default three). HTML verification remains available as a prototype path. |
 
@@ -161,6 +161,7 @@ this documentation audit:
 ```bash
 python3 seed/generate.py
 python3 seed/corpus.py
+bash agents/prepare_context.sh
 python3 -m pytest tests/ -q
 (cd gates && npm ci && npm test)
 (cd react-kit && npm ci --ignore-scripts && npm test)

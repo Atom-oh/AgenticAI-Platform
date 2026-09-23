@@ -11,8 +11,8 @@
     agent.stage(gate | tool_start | tool_input | error) · agent.token · agent.done{usage, stopReason, sessionId, modelId, runtime}
     ★ Consumer 게이트: 플랫폼 Registry 상태가 APPROVED 가 아니면 Harness 를 호출하지 않고 agent.done(error) 로 끝낸다.
 
-정직성 규칙: 에이전트(LLM)는 Bedrock 을 직접 호출한다. 개인데이터는 Gateway 도구가 VPC 내부에서 마스킹한 뒤에만 반환한다
-(도구 출력 = 경계). 이 핸들러는 페이로드를 스캔하지 않으므로 piiOutbound 는 도구 이그레스 게이트 기준으로만 기록한다.
+정직성 규칙: 사용자 경로는 생성/승인 요청만 기록하며 실제 제어 작업은 IAM AdminFn이 수행한다.
+Runtime 훅 또는 Harness 입력 어댑터가 모델 호출 전에 검사한다. 수신한 경계 검사와 차단 상태를 기록한다.
 boto3 클라이언트는 agentcore 모듈 안에서만 지연 생성된다. 로그에는 프롬프트·메시지 원문을 남기지 않는다 (§12.5).
 """
 from __future__ import annotations
@@ -27,8 +27,10 @@ from common import tracing
 from common.ctx import Ctx
 from common.log import log_event
 from registry import api as registry_api
-from registry.model import RegistryError
+from registry.model import RegistryError, STATUSES
 from engine import model_catalog
+from engine.gate import GateRefused
+from common.pii import PiiVerificationUnavailable
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
 MODELS = list(model_catalog.MODEL_IDS)
@@ -37,9 +39,9 @@ SCENARIOS = ("S1", "S2", "S3", "F7")
 MAX_PROMPT = 6000
 MAX_MESSAGE = 4000
 # Harness 상세에서 클라이언트로 내보내는 키 — executionRoleArn·clientToken 은 화이트리스트에 없다
-HARNESS_KEYS = ("harnessId", "harnessName", "arn", "harnessArn", "status", "statusReason", "model", "tools", "skills",
+HARNESS_KEYS = ("harnessId", "harnessName", "arn", "harnessArn", "status", "model", "tools", "skills",
                 "allowedTools", "memory", "maxIterations", "maxTokens", "timeoutSeconds", "tags", "createdAt",
-                "updatedAt", "systemPrompt")
+                "updatedAt")
 
 
 # ---------- 지연 import (boto3 클라이언트는 agentcore 모듈 안에서만 만들어진다) ----------
@@ -66,7 +68,7 @@ def _tool_schema() -> List[dict]:
 
 
 def _err(e: BaseException) -> str:
-    return f"{type(e).__name__}: {str(e)[:300]}"
+    return type(e).__name__
 
 
 def _harness_name(name: str) -> str:
@@ -106,7 +108,7 @@ def _version_num(v: str) -> int:
 
 
 def _skill_names() -> List[str]:
-    return sorted({r["name"] for r in registry_api.list_records({"type": "SKILL"})})
+    return sorted({r["name"] for r in registry_api.list_approved("SKILL")})
 
 
 def _scenario_of(rec: dict, spec: Optional[dict]) -> str:
@@ -126,7 +128,7 @@ def _find_agent_record(name: str, version: Optional[str] = None) -> Optional[dic
     if version:
         rec = registry_api.get_record(name, version)
         return rec if rec and rec.get("recordType") == "AGENT" else None
-    recs = [r for r in registry_api.list_records({"type": "AGENT", "q": name}) if r.get("name") == name]
+    recs = [registry_api.strip(r) for r in registry_api.get_store().versions(name) if r.get("recordType") == "AGENT"]
     if not recs:
         return None
     recs.sort(key=lambda r: (r.get("status") == "APPROVED", _version_num(r.get("recordVersion"))), reverse=True)
@@ -134,15 +136,16 @@ def _find_agent_record(name: str, version: Optional[str] = None) -> Optional[dic
 
 
 def _resolve_harness_arn(rec: dict) -> Tuple[Optional[str], Optional[dict], Optional[str]]:
-    """payload.harnessArn → 없으면 find_harness(bank_<name>). 반환 (arn, harness, error)."""
+    """Resolve bank_<name> and verify any stored ARN; return the live configuration."""
     payload = rec.get("payload") or {}
-    if payload.get("harnessArn"):
-        return str(payload["harnessArn"]), None, None
     try:
         h = _harness().find_harness(_harness_name(rec["name"]))
     except Exception as e:  # noqa: BLE001
         return None, None, _err(e)
-    return _harness_arn(h), h, None
+    arn = _harness_arn(h)
+    if payload.get("harnessArn") and payload["harnessArn"] != arn:
+        return None, h, "Harness configuration differs from the approved record"
+    return arn, h, None
 
 
 # ---------- 카탈로그 ----------
@@ -212,7 +215,7 @@ def agents_catalog(ctx: Ctx, body: dict) -> None:
 
     tools = [{"name": t["name"], "description": t.get("description", "")} for t in _tool_schema()]
     skills = [{"name": r["name"], "version": r.get("recordVersion"), "status": r.get("status")}
-              for r in registry_api.list_records({"type": "SKILL"})]
+              for r in registry_api.list_approved("SKILL")]
     log_event("agents.catalog", ctx.trace_id, agents=len(agents), tools=len(tools), skills=len(skills),
               harnessListed=harness_index is not None, agentcoreRegistry=mirror_err is None)
     ctx.post({"type": "agents_catalog", "agents": agents, "tools": tools, "skills": skills, "models": MODELS,
@@ -238,10 +241,14 @@ def _validate_create(body: dict) -> Tuple[Optional[dict], Optional[str]]:
         return None, "시스템 프롬프트가 비어 있습니다."
     if len(system_prompt) > MAX_PROMPT:
         return None, f"시스템 프롬프트는 {MAX_PROMPT}자 이하여야 합니다."
+    if body.get("memory"):
+        return None, "장기 Memory는 별도 개인정보 검토 후 사용할 수 있습니다."
     tools_in = body.get("allowedTools") or []
     skills_in = body.get("skills") or []
     if not isinstance(tools_in, list) or not isinstance(skills_in, list):
         return None, "allowedTools / skills 는 문자열 배열이어야 합니다."
+    if not tools_in:
+        return None, "허용할 Gateway 도구를 한 개 이상 선택하세요."
     tools_in = [str(t) for t in tools_in]
     skills_in = [str(s) for s in skills_in]
     known_tools = {t["name"] for t in _tool_schema()}
@@ -251,15 +258,25 @@ def _validate_create(body: dict) -> Tuple[Optional[dict], Optional[str]]:
     known_skills = set(_skill_names())
     bad_skills = [s for s in skills_in if s not in known_skills]
     if bad_skills:
-        return None, f"Registry 에 없는 SKILL: {', '.join(bad_skills)}"
+        return None, f"승인된 Registry SKILL이 아닙니다: {', '.join(bad_skills)}"
+    from agentcore import skill_binding
+    try:
+        selected_skills = list(dict.fromkeys(skills_in))
+        bindings = body.get("skillBindings")
+        if bindings is None:
+            bindings = skill_binding.capture(selected_skills)
+        skill_binding.resolve(bindings, selected_skills)
+    except (RegistryError, OSError, UnicodeError, ValueError, TypeError) as e:
+        return None, f"SKILL 승인 자료를 확인하지 못했습니다: {type(e).__name__}"
     return {"name": name, "title": title, "description": description or title, "model": model,
             "systemPrompt": system_prompt, "allowedTools": list(dict.fromkeys(tools_in)),
-            "skills": list(dict.fromkeys(skills_in)), "memory": bool(body.get("memory", False)),
+            "skills": selected_skills, "skillBindings": bindings, "memory": bool(body.get("memory", False)),
             "scenario": "custom"}, None
 
 
 def agent_create(ctx: Ctx, body: dict) -> None:
-    spec, err = _validate_create(body)
+    # Bindings are server-derived; the browser cannot select a different source.
+    spec, err = _validate_create({key: value for key, value in body.items() if key != "skillBindings"})
     if err or spec is None:
         ctx.post({"type": "agent_create", "ok": False, "code": 400, "error": err})
         return
@@ -270,48 +287,27 @@ def agent_create(ctx: Ctx, body: dict) -> None:
                   "error": f"이미 존재하는 에이전트 이름입니다: {name} — Harness 이름(bank_{name})이 겹치므로 다른 이름을 사용하세요."})
         return
 
-    hz = _harness()
-    reused = False
-    try:
-        reused = hz.find_harness(_harness_name(name)) is not None
-        h = hz.ensure_harness(spec)
-    except Exception as e:  # noqa: BLE001
-        log_event("agent.create_failed", ctx.trace_id, name=name, stage="harness", error=_err(e))
-        ctx.post({"type": "agent_create", "ok": False, "code": 502, "stage": "harness",
-                  "error": f"Harness 생성 실패 — {_err(e)}"})
-        return
-    harness_arn, harness_status = _harness_arn(h), (h or {}).get("status")
-
-    payload = {"harnessArn": harness_arn, "harnessId": (h or {}).get("harnessId"), "model": spec["model"],
+    payload = {"model": spec["model"],
                "allowedTools": spec["allowedTools"], "skills": spec["skills"], "memory": spec["memory"],
+               "skillBindings": spec["skillBindings"],
                "runtime": RUNTIME, "systemPrompt": spec["systemPrompt"], "title": spec["title"],
-               "scenario": "custom", "createdBy": ctx.email, "harnessReused": reused}
+               "scenario": "custom", "createdBy": ctx.email, "administration": "IAM_ONLY"}
     try:
         registry_api.create_record({"name": name, "recordVersion": version, "recordType": "AGENT", "subtype": "HARNESS",
                                     "description": spec["description"], "owner": str(ctx.email)[:80],
-                                    "tags": ["custom", "harness", "builder"], "payload": payload}, actor=ctx.email)
+                                    "tags": ["custom", "harness", "builder"], "payload": payload}, actor=ctx.email, embed=False)
         rec, ev = registry_api.transition(name, version, "PENDING_APPROVAL", ctx.email, "빌더 생성 — 승인 대기")
     except RegistryError as e:
         ctx.post({"type": "agent_create", "ok": False, "code": getattr(e, "code", 400), "stage": "registry",
-                  "error": str(e)[:300], "errorType": type(e).__name__,
-                  "harness": {"arn": harness_arn, "status": harness_status}})
+                  "error": str(e)[:300], "errorType": type(e).__name__})
         return
-
-    try:
-        mirrored: dict = _mirror().mirror({**rec, "statusReason": "빌더 생성 — 승인 대기"})
-    except Exception as e:  # noqa: BLE001
-        mirrored = {"error": _err(e)}
-
-    log_event("agent.created", ctx.trace_id, name=name, version=version, model=spec["model"],
+    log_event("agent.requested", ctx.trace_id, name=name, version=version, model=spec["model"],
               tools=len(spec["allowedTools"]), skills=len(spec["skills"]), memory=spec["memory"],
-              promptLen=len(spec["systemPrompt"]), harnessStatus=harness_status, harnessReused=reused,
-              agentcoreRegistry=mirrored.get("status") or mirrored.get("error"), email=ctx.email,
-              transition=ev.get("transition"))
-    ctx.post({"type": "agent_create", "ok": True, "record": rec,
-              "harness": {"arn": harness_arn, "status": harness_status, "reused": reused,
-                          "note": ("기존 Harness 재사용 — 제출한 프롬프트·도구가 Harness 설정에 반영되지 않았을 수 있습니다"
-                                   if reused else None)},
-              "agentcoreRegistry": mirrored, "audit": ev})
+              promptLen=len(spec["systemPrompt"]), email=ctx.email)
+    ctx.post({"type": "agent_create", "ok": True, "record": registry_api.public_record(rec),
+              "harness": {"arn": None, "status": "PENDING_ADMIN", "reused": False},
+              "agentcoreRegistry": {"status": "PENDING_ADMIN"}, "audit": registry_api.public_agent_audit([ev])[0],
+              "message": "명세를 저장했습니다. 승인 요청 후 IAM 관리자가 실행 환경을 준비합니다."})
 
 
 # ---------- 전이 ----------
@@ -321,22 +317,16 @@ def agent_transition(ctx: Ctx, body: dict) -> None:
     to = str(body.get("to", "") or "").strip().upper()
     reason = str(body.get("reason", "") or "").strip()[:500]
     try:
-        rec, ev = registry_api.transition(name, version, to, actor=ctx.email, reason=reason)
+        from agentcore.administration import request_transition
+        result = request_transition(name, version, to, ctx.email, reason)
     except RegistryError as e:
-        log_event("agent.transition_rejected", ctx.trace_id, name=name, version=version, to=to,
+        log_event("agent.transition_rejected", ctx.trace_id, name=name, version=version, to=to if to in STATUSES else "invalid",
                   code=getattr(e, "code", 400), errorType=type(e).__name__)
         ctx.post({"type": "agent_transition", "ok": False, "error": str(e)[:300], "code": getattr(e, "code", 400),
                   "errorType": type(e).__name__, "name": name, "version": version, "to": to})
         return
-    try:
-        mirrored: dict = _mirror().mirror({**rec, "statusReason": reason or f"platform transition → {to}"})
-    except Exception as e:  # noqa: BLE001
-        mirrored = {"error": _err(e)}
-    log_event("agent.transition", ctx.trace_id, name=name, version=version, transition=ev.get("transition"),
-              fromStatus=ev.get("from"), toStatus=ev.get("to"), reasonLen=len(reason), email=ctx.email,
-              agentcoreRegistry=mirrored.get("status") or mirrored.get("error"))
-    ctx.post({"type": "agent_transition", "ok": True, "record": rec, "audit": ev, "transition": ev.get("transition"),
-              "agentcoreRegistry": mirrored, "auditTrail": registry_api.audit_trail(name, version)})
+    ctx.post({"type": "agent_transition", "ok": True, **result,
+              "auditTrail": registry_api.public_agent_audit(registry_api.audit_trail(name, version))})
 
 
 # ---------- 조회 ----------
@@ -352,17 +342,26 @@ def agent_get(ctx: Ctx, body: dict) -> None:
         harness_summary = _harness_summary(_harness().find_harness(_harness_name(name)))
     except Exception as e:  # noqa: BLE001
         harness_err = _err(e)
-    ctx.post({"type": "agent_get", "ok": True, "record": rec, "harness": harness_summary, "harnessError": harness_err,
-              "audit": registry_api.audit_trail(name, rec["recordVersion"])})
+    ctx.post({"type": "agent_get", "ok": True, "record": registry_api.public_record(rec), "harness": harness_summary, "harnessError": harness_err,
+              "audit": registry_api.public_agent_audit(registry_api.audit_trail(name, rec["recordVersion"]))})
 
 
 # ---------- 호출 (스트리밍) ----------
 def agent_invoke(ctx: Ctx, body: dict) -> None:
     name = str(body.get("name", "") or "").strip()
     version = str(body.get("version", "") or "").strip() or None
-    message = str(body.get("message", "") or "").strip()[:MAX_MESSAGE]
+    message = str(body.get("message", "") or "").strip()
     session_id = body.get("sessionId")
-    session_id = str(session_id)[:128] if isinstance(session_id, str) and session_id.strip() else None
+    if session_id is not None and (not isinstance(session_id, str)
+                                   or not session_id.strip() or len(session_id) > 128):
+        ctx.done("agent", error="대화 ID는 1~128자의 문자열이어야 합니다.", code=400)
+        return
+    if not ctx.user_sub:
+        ctx.done("agent", error="인증된 사용자 식별자가 필요합니다. 다시 연결하세요.", code=401)
+        return
+    if len(message) > MAX_MESSAGE:
+        ctx.done("agent", error="메시지 길이 제한을 초과했습니다.", code=413)
+        return
     if not name or not message:
         ctx.done("agent", error="에이전트 이름과 메시지가 필요합니다.", name=name)
         return
@@ -380,6 +379,13 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                  name=name, version=rec.get("recordVersion"), gate="consumer", runtime=RUNTIME)
         return
 
+    import hashlib
+    import uuid
+    client_session_id = session_id or uuid.uuid4().hex
+    session_id = hashlib.sha256(json.dumps(
+        ["bank-agent-session-v1", ctx.user_sub, rec["name"], rec["recordVersion"], client_session_id],
+        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
     payload = rec.get("payload") or {}
     model_id = payload.get("model")
     from agentcore import invoke as _invoke
@@ -396,6 +402,23 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                                      " (파이프라인형 에이전트는 각 시나리오 화면에서 실행)")),
                      status=status, name=name, version=rec.get("recordVersion"), runtime=payload.get("runtime"))
             return
+        from agentcore import skill_binding
+        from agentcore.administration import harness_settings
+        try:
+            # Legacy approved records receive the same gate; creation date or
+            # absence of an administration marker is never an exemption.
+            skill_binding.resolve(payload.get("skillBindings"), payload.get("skills", []))
+            spec, error = _validate_create({**payload, "name": rec["name"], "description": rec.get("description", "")})
+            if error or not spec or (_h or {}).get("status") not in {"READY", "ACTIVE"}:
+                raise ValueError("Harness approval needs reconciliation")
+            if harness_settings(_h) != harness_settings(_harness().build_config(spec)):
+                raise ValueError("Harness configuration changed after approval")
+        except (RegistryError, OSError, UnicodeError, ValueError, TypeError, GateRefused):
+            ctx.done("agent", error="승인된 Harness·Skill 구성을 확인하지 못했습니다. IAM 관리자 검토가 필요합니다.", code=409)
+            return
+        except PiiVerificationUnavailable:
+            ctx.done("agent", error="개인정보 검사를 완료하지 못했습니다. 잠시 후 다시 시도하세요.", code=503)
+            return
         kind = "harness"
         runtime_label = _invoke.RUNTIME_HARNESS
         runtime_badge = _invoke.BADGE_HARNESS
@@ -410,55 +433,143 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
     stop_reason, out_sid = "", session_id
     tool_calls, text_len, errors = 0, 0, []
     boundary_events: list = []
+    inspection_detectors = set()
+    tools_missing: list = []
+    new_session_required = False
+    blocked, pii_outbound = False, None
     started = time.time()
+    runtime_kind = kind
+    refusal_seen = False
+    text_sequence, boundary_sequence, minimum_sequence = None, 0, 1
     try:
         for kind_ev, data in _invoke.stream(rec, message, session_id):
-            kind = kind_ev
-            if kind == "text":
+            if kind_ev == "text":
+                if (not boundary_events or boundary_events[-1]["piiCount"]
+                        or boundary_events[-1].get("blocked")):
+                    raise ValueError("Model output preceded accepted boundary evidence")
+                if runtime_kind == "strands" and (
+                        type(text_sequence) is not int or text_sequence != boundary_sequence
+                        or text_sequence < minimum_sequence):
+                    raise ValueError("Model output does not match its inspected call")
+                text_sequence = None
                 text_len += len(data)
                 ctx.token("agent", data)
-            elif kind == "tool_start":
+            elif kind_ev == "text_boundary":
+                text_sequence = data.get("seq") if isinstance(data, dict) else None
+            elif kind_ev == "tool_start":
                 tool_calls += 1
-                ctx.stage("agent", "tool_start", plane="vpc", **_stage_kw(data))
-            elif kind == "tool_input":
-                ctx.stage("agent", "tool_input", plane="vpc", **_stage_kw(data))
-            elif kind == "tool_result":
-                ctx.stage("agent", "tool_result", plane="vpc", **_stage_kw(data))
-            elif kind == "boundary":
-                boundary_events.append(data if isinstance(data, dict) else {"raw": str(data)[:200]})
+                ctx.stage("agent", "tool_start", plane="agentcore", **_stage_kw(data))
+            elif kind_ev == "tool_input":
+                value = data if isinstance(data, dict) else {}
+                raw = value.get("input")
+                size = len(raw) if isinstance(raw, str) else value.get("chars", 0)
+                ctx.stage("agent", "tool_input", plane="agentcore",
+                          name=str(value.get("name", ""))[:160], toolUseId=str(value.get("toolUseId", ""))[:160],
+                          chars=size if type(size) is int and size >= 0 else 0, inputRedacted=True)
+            elif kind_ev == "tool_result":
+                if runtime_kind == "strands":
+                    minimum_sequence = boundary_sequence + 1
+                    text_sequence = None
+                ctx.stage("agent", "tool_result", plane="agentcore", **_stage_kw(data))
+            elif kind_ev == "boundary":
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid boundary evidence")
+                if any(type(data.get(key)) is not int or data[key] < 0
+                       for key in ("chars", "estTokens", "piiRules", "piiCount")):
+                    raise ValueError("Incomplete boundary measurement")
+                detectors = data.get("piiDetectors")
+                if detectors not in (["rules"], ["rules", "guardrail"]):
+                    raise ValueError("Incomplete detector evidence")
+                if data["piiCount"] == 0 and detectors != ["rules", "guardrail"]:
+                    raise ValueError("Independent verification evidence is missing")
+                if data["piiCount"] > 0 and detectors == ["rules"] and not data.get("refusedTypes"):
+                    raise ValueError("Local refusal evidence is missing")
+                if runtime_kind == "strands":
+                    if type(data.get("seq")) is not int or data["seq"] != boundary_sequence + 1:
+                        raise ValueError("Incomplete model-call boundary sequence")
+                    boundary_sequence = data["seq"]
+                boundary_events.append(data)
+                inspection_detectors.update(detector for detector in detectors
+                                            if detector in {"rules", "guardrail"})
                 ctx.stage("agent", "boundary", plane="boundary", **_stage_kw(data))
-            elif kind == "error":
-                errors.append(str(data)[:400])
-                ctx.stage("agent", "error", message=str(data)[:400])
-            elif kind == "meta":
+            elif kind_ev == "error":
+                error_message = "에이전트 실행을 완료하지 못했습니다."
+                errors.append(error_message)
+                ctx.stage("agent", "error", message=error_message)
+            elif kind_ev == "failure":
+                if isinstance(data, dict):
+                    refusal_seen = refusal_seen or data.get("blocked") is True
+            elif kind_ev == "meta":
                 usage = (data or {}).get("usage") or {}
+                tools_missing = [str(name) for name in (data or {}).get("toolsMissing", [])]
                 stop_reason = (data or {}).get("stopReason", "")
                 out_sid = (data or {}).get("sessionId") or out_sid
+                if (data or {}).get("incomplete"):
+                    errors.append("에이전트 응답이 완료되지 않았습니다.")
+                new_session_required = new_session_required or bool(
+                    (data or {}).get("newSessionRequired") or (data or {}).get("cleanupFailed")
+                    or stop_reason == "cleanup_failed")
         meta_model = None
-        done_kw: Dict[str, Any] = {"usage": usage, "stopReason": stop_reason, "sessionId": out_sid,
-                                   "modelId": model_id, "runtime": runtime_label, "runtimeBadge": runtime_badge, "runtimeKind": kind, "name": name,
+        blocked = refusal_seen or stop_reason == "gate_refused"
+        if blocked:
+            stop_reason = "gate_refused"
+        if not errors and not blocked and not boundary_events:
+            raise ValueError("Completed execution has no boundary evidence")
+        pii_outbound = sum(int(event.get("piiCount", event.get("piiRules", 0)) or 0)
+                           for event in boundary_events) if boundary_events else None
+        done_kw: Dict[str, Any] = {"usage": usage, "stopReason": stop_reason, "sessionId": client_session_id,
+                                   "runtimeSessionId": session_id,
+                                   "newSessionRequired": new_session_required,
+                                   "toolsMissing": tools_missing,
+                                   "modelId": model_id, "runtime": runtime_label, "runtimeBadge": runtime_badge, "runtimeKind": runtime_kind, "name": name,
                                    "boundary": boundary_events[-1] if boundary_events else None,
                                    "boundaryCrossings": len(boundary_events),
                                    "version": rec.get("recordVersion"), "toolCalls": tool_calls, "errors": errors}
-        if errors and text_len == 0:
+        if tools_missing:
+            done_kw.update(code=502, error="구성된 Gateway 도구를 사용할 수 없습니다.")
+        if stop_reason == "session_busy":
+            done_kw.update(code=409, error="같은 세션의 이전 요청이 진행 중입니다. 완료 후 다시 보내세요.")
+        if stop_reason == "cleanup_failed":
+            done_kw.update(code=503, error="세션 정리를 완료하지 못했습니다. 새 대화를 시작하세요.")
+        if new_session_required and runtime_kind == "harness":
+            done_kw.update(code=502, error="관리형 대화가 완료되지 않았습니다. 새 대화를 시작하세요.")
+        if blocked:
+            done_kw.update(blocked=True, blockedBy="gate", code=422, error="안전 정책에 따라 요청이 차단됐습니다.")
+        if errors and "error" not in done_kw:
             done_kw["error"] = "에이전트 스트림 오류 — " + errors[-1][:200]
         ctx.done("agent", **done_kw)
     except Exception as e:  # noqa: BLE001
         errors.append(_err(e))
-        ctx.done("agent", error=f"Harness 호출 실패 — {_err(e)}", name=name, version=rec.get("recordVersion"),
-                 modelId=model_id, runtime=RUNTIME, sessionId=out_sid, usage=usage, toolCalls=tool_calls)
+        if isinstance(e, GateRefused):
+            blocked, pii_outbound, stop_reason = True, e.count, "gate_refused"
+            inspection_detectors.update(e.boundary.get("verification", {}).get("detectors", ["rules"]))
+            if not boundary_events:
+                evidence = _harness()._boundary_event(e.boundary, e.types)
+                boundary_events.append(evidence)
+                ctx.stage("agent", "boundary", plane="boundary", **evidence)
+        ctx.done("agent", error=f"에이전트 호출 실패 — {_err(e)}", name=name, version=rec.get("recordVersion"),
+                 modelId=model_id, runtime=runtime_label, sessionId=client_session_id,
+                 runtimeSessionId=session_id, usage=usage, toolCalls=tool_calls,
+                 blocked=blocked, stopReason=stop_reason,
+                 code=422 if blocked else 502,
+                 boundary=boundary_events[-1] if boundary_events else None,
+                 newSessionRequired=runtime_kind == "harness" and not isinstance(e, GateRefused))
     finally:
         tokens_in, tokens_out = int(usage.get("inputTokens", 0) or 0), int(usage.get("outputTokens", 0) or 0)
         elapsed = int((time.time() - started) * 1000)
         try:
             tracing.record_trace({"traceId": ctx.trace_id, "scenario": "AGENT", "email": ctx.email, "query": message,
                                   "tokensIn": tokens_in, "tokensOut": tokens_out, "modelId": model_id,
-                                  "route": "harness", "plane": "agentcore", "blocked": False,
-                                  "piiOutbound": 0, "piiDetectors": ["tool-egress-gate"], "agent": name,
+                                  "route": "strands" if runtime_kind == "strands" else "harness", "plane": "agentcore", "blocked": blocked,
+                                  **({"piiOutbound": pii_outbound} if pii_outbound is not None else {}),
+                                  "piiDetectors": [
+                                      ("rules(harness-input)" if runtime_kind == "harness" else "rules(gate)")
+                                      if detector == "rules" else detector
+                                      for detector in sorted(inspection_detectors, reverse=True)], "agent": name,
                                   "toolCalls": tool_calls, "errors": len(errors), "cached": False,
                                   "elapsedMs": elapsed})
         except Exception as e:  # noqa: BLE001
-            log_event("agent.trace_failed", ctx.trace_id, error=_err(e))
+            log_event("agent.trace_failed", ctx.trace_id, errorType=type(e).__name__)
         try:
             from common import costguard
             costguard.add_usage(tokens_in + tokens_out)

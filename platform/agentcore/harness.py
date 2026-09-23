@@ -1,6 +1,6 @@
 """AgentCore Harness 래퍼 — 에이전트 생성(멱등)·조회·스트리밍 호출.
 
-환경변수: HARNESS_ROLE_ARN(실행 역할), GATEWAY_ARN(bank-platform-tools), SKILLS_S3_URI(s3://bucket/skills/), AWS_REGION.
+환경변수: HARNESS_ROLE_ARN(실행 역할), GATEWAY_ARN(bank-platform-tools), AWS_REGION.
 Harness API는 최신 boto3가 필요하다 — deploy.sh가 boto3를 배포 패키지에 동봉한다.
 """
 from __future__ import annotations
@@ -15,7 +15,6 @@ import boto3
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 HARNESS_ROLE_ARN = os.environ.get("HARNESS_ROLE_ARN", "")
 GATEWAY_ARN = os.environ.get("GATEWAY_ARN", "")
-SKILLS_S3_URI = os.environ.get("SKILLS_S3_URI", "")
 PLATFORM_TAG = {"platform": "bank-agentic-platform"}
 
 _ctl = None
@@ -61,31 +60,54 @@ def find_harness(name: str) -> dict | None:
 
 def build_config(spec: dict) -> dict:
     """에이전트 명세 → create_harness 파라미터."""
+    allowed = spec.get("allowedTools")
+    if not isinstance(allowed, list) or not allowed or any(
+            not isinstance(tool, str) or not tool.strip() or "*" in tool for tool in allowed):
+        raise ValueError("Harness requires an explicit nonempty allowedTools list")
+    if not GATEWAY_ARN:
+        raise ValueError("Harness tools require the configured bank Gateway")
+    if spec.get("memory"):
+        raise ValueError("Long-term Harness Memory requires separate privacy review")
+    system_prompt = str(spec.get("systemPrompt", ""))
+    from agentcore.skill_binding import resolve
+    skill_text = resolve(spec.get("skillBindings"), spec.get("skills", []))
+    if skill_text:
+        system_prompt += "\n\n" + skill_text
+    _inspect(system_prompt, "agentcore.harness.system")
     tools = []
     if GATEWAY_ARN and spec.get("allowedTools"):
         tools.append({"type": "agentcore_gateway", "name": "bank_platform_tools",
                       "config": {"agentCoreGateway": {"gatewayArn": GATEWAY_ARN, "outboundAuth": {"awsIam": {}}}}})
-    skills = []
-    if SKILLS_S3_URI and spec.get("skills"):
-        skills = [{"s3": {"uri": f"{SKILLS_S3_URI.rstrip('/')}/{name}/"}} for name in spec["skills"]]
     cfg = {
         "harnessName": f"bank_{spec['name']}",
         "executionRoleArn": HARNESS_ROLE_ARN,
         "model": {"bedrockModelConfig": {"modelId": spec.get("model", "global.anthropic.claude-sonnet-5"),
+                                         "apiFormat": "converse_stream",
                                          "maxTokens": int(spec.get("maxTokens", 2048))}},  # Claude 5: temperature 미지원
-        "systemPrompt": [{"text": spec["systemPrompt"]}],
+        "systemPrompt": [{"text": system_prompt}],
         "tools": tools,
-        "skills": skills,
-        "allowedTools": [f"bank_platform_tools___{t}" for t in spec.get("allowedTools", [])] or ["*"],
+        "skills": [],
+        "allowedTools": [f"bank_platform_tools___{t}" for t in allowed],
         "maxIterations": int(spec.get("maxIterations", 12)),
         "maxTokens": 8192,
         "timeoutSeconds": 120,
+        "memory": {"disabled": {}},
+        "environment": {"agentCoreRuntimeEnvironment": {
+            "networkConfiguration": {"networkMode": "PUBLIC"},
+            "lifecycleConfiguration": {"idleRuntimeSessionTimeout": 900, "maxLifetime": 28800},
+        }},
+        "environmentVariables": {},
+        "truncation": {"strategy": "sliding_window", "config": {"slidingWindow": {"messagesCount": 150}}},
         "tags": {**PLATFORM_TAG, "scenario": str(spec.get("scenario", "custom")), "createdBy": str(spec.get("createdBy", "platform"))[:64]},
     }
-    if spec.get("memory"):
-        cfg["memory"] = {"managedMemoryConfiguration": {"strategies": ["SEMANTIC"], "eventExpiryDuration": 30}}
-    # memory 미사용이면 키를 생략한다 (구형 botocore 모델에는 'disabled'가 없다)
     return cfg
+
+
+def update_parameters(config: dict) -> dict:
+    """UpdateHarness wraps Memory even though Create/Get expose the value directly."""
+    parameters = {key: value for key, value in config.items() if key not in {"harnessName", "tags"}}
+    parameters["memory"] = {"optionalValue": config["memory"]}
+    return parameters
 
 
 def ensure_harness(spec: dict) -> dict:
@@ -110,10 +132,34 @@ def ensure_harness(spec: dict) -> dict:
 
 def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
     """invoke_harness 스트림을 (event_type, payload) 튜플로 정규화해 yield. 마지막에 usage/stop을 담은 'meta'."""
+    from engine.gate import GateRefused
+    from agentcore.session_store import turn
+    try:
+        measured = _inspect(text, "agentcore.harness.input")
+    except GateRefused as refusal:
+        yield ("boundary", _boundary_event(refusal.boundary, refusal.types))
+        raise
+    yield ("boundary", _boundary_event(measured))
     sid = session_id or (uuid.uuid4().hex + "-session")
+    with turn(sid) as state:
+        yield from _managed_stream(harness_arn, text, sid, state)
+
+
+def _boundary_event(measured, refused_types=None):
+    return {"chars": measured["chars"], "estTokens": measured["estTokens"],
+            "piiRules": measured["piiRules"]["count"], "source": "harness-input",
+            "piiCount": measured["verification"]["count"],
+            "piiDetectors": measured["verification"]["detectors"],
+            "blocked": bool(measured["verification"].get("policyDenied") or measured["verification"]["count"]),
+            "refusedTypes": refused_types or []}
+
+
+def _managed_stream(harness_arn, text, sid, state):
     r = data().invoke_harness(harnessArn=harness_arn, runtimeSessionId=sid,
                               messages=[{"role": "user", "content": [{"text": text}]}])
     usage, stop = {}, ""
+    terminal = False
+    failed = False
     tool_name = None
     tool_buf: list[str] = []
     for ev in r["stream"]:
@@ -131,13 +177,43 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
                 tool_buf.append(delta["toolUse"].get("input", ""))
         elif "contentBlockStop" in ev:
             if tool_name:
-                yield ("tool_input", {"name": tool_name, "input": "".join(tool_buf)[:2000]})
+                yield ("tool_input", {"name": tool_name, "chars": sum(map(len, tool_buf)), "inputRedacted": True})
                 tool_name = None
         elif "messageStop" in ev:
             stop = ev["messageStop"].get("stopReason", "")
+            terminal = bool(stop)
         elif "metadata" in ev:
             usage = ev["metadata"].get("usage", {}) or usage
         elif any(k in ev for k in ("validationException", "internalServerException", "runtimeClientError",
                                    "throttlingException", "accessDeniedException")):
-            yield ("error", json.dumps(ev, ensure_ascii=False, default=str)[:400])
-    yield ("meta", {"usage": usage, "stopReason": stop, "sessionId": sid})
+            stop = "error"
+            failed = True
+            yield ("error", "Harness transport failed; upstream details are withheld")
+    if not terminal and stop != "error":
+        stop = "incomplete"
+        yield ("error", "Harness stream ended without a terminal result")
+    state["complete"] = terminal and not failed and stop != "error"
+    yield ("meta", {"usage": usage, "stopReason": stop, "sessionId": sid,
+                    "incomplete": not state["complete"], "newSessionRequired": not state["complete"]})
+
+
+def _inspect(text, purpose):
+    from engine import gate
+    from common import pii as verifier
+    measured = gate.measure("", text)
+    try:
+        result = verifier.scan_outbound(text, strict=True, max_chars=20000)
+    except verifier.GuardrailPolicyDenied:
+        measured["verification"] = {"count": 0, "types": [], "detectors": ["rules", "guardrail"],
+                                    "policyDenied": True}
+        gate._log("agentcore.harness.boundary", purpose=purpose, chars=measured["chars"],
+                  estTokens=measured["estTokens"], piiCount=0, piiDetectors=["rules", "guardrail"], blocked=True)
+        raise gate.GateRefused([], 0, measured, purpose) from None
+    types = sorted({hit["type"] for hit in result["hits"]})
+    measured["verification"] = {"count": result["count"], "types": types, "detectors": result["detectors"]}
+    gate._log("agentcore.harness.boundary", purpose=purpose, chars=measured["chars"],
+              estTokens=measured["estTokens"], piiCount=result["count"], piiTypes=types,
+              piiDetectors=result["detectors"])
+    if result["count"]:
+        raise gate.GateRefused(types, result["count"], measured, purpose)
+    return measured

@@ -1,8 +1,7 @@
-"""플랫폼 시나리오 에이전트 명세 — AgentCore Harness로 생성되는 4종 (+ 빌더가 만드는 사용자 정의).
+"""Five bank scenario specifications, preferably dispatched through Strands Runtime.
 
-Harness = 코드 없는 관리형 에이전트 루프: 모델·시스템프롬프트·skills(S3 SKILL.md)·tools(Gateway/MCP)·managed memory.
-도구는 Gateway `bank-platform-tools`(IAM 인바운드)의 Lambda 타깃이 제공하며, 개인데이터는 도구가 VPC 내부에서
-마스킹한 뒤에만 반환한다 — 에이전트(LLM)는 마스킹된 데이터만 본다 (SPEC v2 §3-2 경계).
+Managed Memory is disabled. Harness provisioning uses approved bundled Skill
+bindings; Gateway inputs/results require independent boundary inspection.
 """
 from __future__ import annotations
 
@@ -41,7 +40,7 @@ SCENARIO_AGENTS: list[dict] = [
             "확정 신청은 영업점/앱을 안내한다. " + COMMON_RULES),
         "allowedTools": ["lookup_customer_profile", "resolve_metric", "calc_preferential_rate", "calc_jeonse_limit"],
         "skills": [],
-        "memory": True,
+        "memory": False,
         "scenario": "S2",
     },
     {
@@ -91,3 +90,20 @@ SCENARIO_AGENTS: list[dict] = [
 
 def spec_by_name(name: str) -> dict | None:
     return next((s for s in SCENARIO_AGENTS if s["name"] == name), None)
+
+
+def source_hash(spec, skills_dir):
+    """Bind the executable specification and exact bundled Skill bytes."""
+    import hashlib
+    import json
+    from pathlib import Path
+    root = Path(skills_dir).resolve()
+    skills = {}
+    for name in spec.get("skills", []):
+        path = (root / (name + ".md")).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("Skill source escaped its bundle")
+        skills[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    value = {"spec": spec, "skills": skills}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()

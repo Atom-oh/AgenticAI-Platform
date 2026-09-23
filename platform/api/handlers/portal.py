@@ -249,8 +249,8 @@ def _registry_view(n) -> dict:
     try:
         rec = reg.get_record(name, ver)
     except Exception as e:  # noqa: BLE001
-        return {"available": True, "record": None, "tier": TIER_BADGE, "error": f"{type(e).__name__}: {str(e)[:120]}"}
-    return {"available": True, "record": rec, "name": name, "recordVersion": ver, "tier": TIER_BADGE,
+        return {"available": True, "record": None, "tier": TIER_BADGE, "error": f"Registry lookup failed: {type(e).__name__}"}
+    return {"available": True, "record": reg.public_record(rec) if rec else None, "name": name, "recordVersion": ver, "tier": TIER_BADGE,
             "backend": reg.backend()}
 
 
@@ -584,7 +584,7 @@ def portal_publish(ctx: Ctx, body: dict) -> None:
     record = existing
     if existing is None:
         try:
-            record = reg.create_record(rec_in, actor=ctx.email)  # DRAFT 로 시작 — 승인은 Registry 화면에서
+            record = reg.create_record(rec_in, actor=ctx.email)  # DRAFT; final decisions require IAM administration.
             action = "created"
         except RegistryError as e:
             if getattr(e, "code", 400) == 409:  # 동시 발행 경합 — 기존 레코드를 돌려준다
@@ -593,15 +593,25 @@ def portal_publish(ctx: Ctx, body: dict) -> None:
                 ctx.post({"type": "portal_publish", "ok": False, "code": e.code, "id": n.id, "error": str(e)[:300],
                           "errorType": type(e).__name__})
                 return
+    def source_payload(value):
+        # Publication time is receipt metadata, not an ontology source revision.
+        return {key: item for key, item in (value.get("payload") or {}).items() if key != "publishedAt"}
+    if (not record or any(record.get(key) != rec_in.get(key)
+                          for key in ("recordType", "subtype", "description"))
+            or source_payload(record) != source_payload(rec_in)):
+        ctx.post({"type": "portal_publish", "ok": False, "code": 409, "id": n.id,
+                  "error": "기존 Registry 버전의 원본이 다릅니다. 새 불변 버전으로 발행하세요."})
+        return
     log_event("portal.publish", ctx.trace_id, id=n.id, label=n.label, action=action, email=ctx.email,
               recordType=rec_in["recordType"], subtype=rec_in["subtype"], status=(record or {}).get("status"),
               ms=_elapsed(t0))
-    ctx.post({"type": "portal_publish", "ok": True, "id": n.id, "label": n.label, "action": action, "record": record,
+    ctx.post({"type": "portal_publish", "ok": True, "id": n.id, "label": n.label, "action": action,
+              "record": reg.public_record(record) if record else None,
               "target": {"recordType": rec_in["recordType"], "subtype": rec_in["subtype"], "name": rec_in["name"],
                          "recordVersion": rec_in["recordVersion"]},
               "mapping": _mapping_for(n.label), "tier": TIER_BADGE, "registryBackend": reg.backend(),
-              "note": ("기존 Registry 레코드 — Portal 은 덮어쓰지 않는다 (상태 전이는 Agent Registry 화면에서)" if action == "existing"
-                       else "DRAFT 로 생성 — 승인 요청 → 승인은 Agent Registry 화면의 상태 전이로 진행"),
+              "note": ("기존 Registry 레코드는 덮어쓰지 않습니다. 승인·반려·폐기는 관리자 검토 후 처리됩니다" if action == "existing"
+                       else "DRAFT 로 생성 — 초안 제출 후 관리자 검토로 승인합니다"),
               "elapsedMs": _elapsed(t0)})
 
 

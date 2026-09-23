@@ -2,6 +2,7 @@
 
 Current code audit: 2026-09-13. Read [root instructions](../../AGENTS.md),
 [review context](../../docs/REVIEW_CONTEXT.md), and [SPEC.md](../../SPEC.md) first.
+Security implementation amendment: 2026-09-23; separate live evidence is required.
 This document describes integration interfaces, not a permanent allocation of
 files to earlier implementation workers. Dated plans and guidebooks are not
 additional requirements unless the current task explicitly adopts them.
@@ -32,11 +33,31 @@ ROUTES = {"x": handle_x}
   `<kind>.token`, and `<kind>.done`; `sock.run` completes on `.done`.
 - `ctx.email` is authenticated connection identity used for scenario audit.
   Workspace HTTP uses JWT `sub` instead; do not interchange their owner keys.
+- `ctx.user_sub` is the verified Cognito subject for actor-bound agent sessions.
+  WebSocket tokens must belong to the configured pool/client and remain within
+  their recorded expiry. Legacy connections without that binding must reconnect.
 - `ctx.error(message)` emits `type="error"`; terminal scenario failures can use
   `ctx.done(kind, error=...)`. Entry-point exceptions are also reported as errors.
 - Use `engine.gate` for platform LLM generation; `engine.bedrock.Stream` and
   `generate` are compatibility wrappers. Actual usage comes from the adapter.
-  Strands has its separate pre-model boundary hook.
+  Strands has its separate pre-model boundary hook, which checks system content,
+  messages and tool schemas with rules plus strict independent Guardrail coverage.
+  Runtime verification is bounded at 100,000 characters; Gateway/Harness at 20,000;
+  all reject unverified overflow rather than truncate. Gateway/Harness block EMAIL
+  and KR_PASSPORT as well as other identifier types. Raw customer email references
+  are not admitted there; the sample lookup is separate from authenticated S2.
+- Agent creation/transition user actions store local requests. AgentCore
+  provisioning, approval mirroring and Harness PassRole are IAM AdminFn
+  operations; WsFn has read actions, bank-prefix Harness invocation and the
+  existing exact bank Runtime invocation grant.
+  See [WP1–WP3](BANK_AGENTCORE_WORK_PACKAGES.md) for separate offline/live gates.
+- `agent.done.sessionId` is the client conversation ID; `runtimeSessionId`
+  is the server-derived ID bound to the verified subject and agent version.
+  `toolsMissing` lists configured unavailable Runtime tools and sets `code=502`.
+  Missing tools, terminal error codes and incomplete streams remain failures
+  even when some text was already emitted. A concurrent same-session Runtime
+  request returns `409` with `stopReason=session_busy`.
+  Stream error events never forward upstream error bodies.
 - `common.tracing.record_trace` records scenario, identity/query hashes, model,
   token counts, timing, masking/block/cache evidence and plane labels.
   `common.log.log_event` hashes sensitive fields. Do not add raw prompts,
@@ -102,11 +123,41 @@ Record example (illustrative values, not a fixed approved version):
 - Transitions: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` and
   `PENDING_APPROVAL → REJECTED → DRAFT`. Other transitions fail with code `400`.
   `REJECTED` and `DEPRECATED` require a reason.
+- Generic MCP/SKILL/CUSTOM creation and draft submission are available to invited
+  users. Approval, rejection and deprecation are IAM-only Admin decisions:
+  `inspect_registry_record` returns the current record and `expectedHash`;
+  `transition_registry_record` requires that exact hash and conditionally commits
+  the decision and audit. Generic Admin decisions cannot target AGENT/internal
+  request records. User attempts return `403`. Public `allowedTargets` excludes
+  these decisions and `adminRequiredTargets` identifies them for the UI.
+- IAM decision audit actors are `iam-invoke:<Lambda aws_request_id>`, supplied by
+  trusted execution context, not request fields. This identifies the invocation;
+  direct Lambda context does not expose the calling IAM principal. Operator
+  identity correlation requires retained AWS invocation audit and operator
+  receipts; this contract does not claim that CloudTrail data events are enabled.
+- After creation submits the initial draft, user AGENT transitions return
+  pending `AGENT_ADMIN_REQUEST` receipts; only
+  IAM administration applies them. Generic creation of AGENT records or the
+  administrative request namespace, and user transitions of requests, return
+  `403`. Request payloads and audit entries are omitted from public get,
+  list, search, version and consumer APIs. Trusted request collision checks and
+  IAM processing opt into `get_record(..., include_internal=True)` internally;
+  user request bodies cannot enable that option.
+- Generic decision responses separate local `applied` from mirror `completed`.
+  Mirror failures retain the committed local audit; a fresh exact-hash inspection
+  permits synchronization retry without another lifecycle event.
+- Generic transitions conditionally bind the authorized record type, subtype,
+  payload and revision in the same transaction as the status and audit writes.
+  Missing or concurrently reclassified records cannot bypass Agent administration.
 - `name` + `recordVersion` is unique. Conditional writes detect conflicts;
-  transitions retain actor/from/to/reason/time audit data.
+  record creation/status changes and their actor/from/to/reason/time audit
+  insertions commit atomically. Agent discovery omits operational prompts;
+  Agent audit responses expose identity/reason hashes rather than private text.
 - `REGISTRY_TABLE` uses `pk`, `sk`, and GSI `byStatus(status, updatedAt)`.
   No table configuration selects the in-memory test store.
-- Consumer queries return only `APPROVED` records. Administrative hybrid search
+- Consumer queries re-read GSI candidates with strongly consistent base-table
+  reads and return only current `APPROVED` records. New approvals can wait for
+  index propagation; deprecated/removed candidates are rejected immediately.  Administrative hybrid search
   is separate: `search` returns scored hit objects containing `record`.
   Embeddings can be disabled or unavailable; `search_detailed` reports
   keyword-only operation rather than claiming dense retrieval.
@@ -181,6 +232,7 @@ blocks S2, with no shared cache fallback. See
 From `platform/`, with dependencies/browser assets installed as in CI:
 
 ```bash
+bash agents/prepare_context.sh
 python3 -m pytest tests/ -q
 (cd gates && npm test)
 (cd react-kit && npm test)
