@@ -263,7 +263,7 @@ export class BankPlatformStack extends cdk.Stack {
     });
     registryTable.grantReadData(toolsFn);
     toolsFn.addToRolePolicy(bedrockInvoke);
-    toolsFn.addToRolePolicy(new iam.PolicyStatement({
+    const inspectedPayloadGuardrailApply = new iam.PolicyStatement({
       // APAC profile destinations from Seoul, verified 2026-09-23.
       // AWS bedrock/userguide/guardrail-profiles-permissions and guardrails-cross-region-support.
       actions: ['bedrock:ApplyGuardrail'], resources: [
@@ -271,7 +271,8 @@ export class BankPlatformStack extends cdk.Stack {
         ...['ap-south-1', 'ap-northeast-3', 'ap-northeast-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1']
           .map(destination => `arn:aws:bedrock:${destination}:${account}:guardrail-profile/apac.guardrail.v1:0`),
       ],
-    }));
+    });
+    toolsFn.addToRolePolicy(inspectedPayloadGuardrailApply);
     if (gatesFn) gatesFn.grantInvoke(toolsFn);
     if (props.planeDeployed) {
       toolsFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [bridgeFnArn] }));
@@ -494,6 +495,8 @@ export class BankPlatformStack extends cdk.Stack {
       logRetention: logs.RetentionDays.ONE_WEEK,
       environment: {
         REGISTRY_TABLE: registryTable.tableName,
+        GUARDRAIL_ID: guardrail.attrGuardrailId,
+        GUARDRAIL_VERSION: guardrailVersion.attrVersion,
         REGISTRY_EMBED: '1',
         GRAPH_BACKEND: props.graphBackend,
         NEPTUNE_ENDPOINT: neptuneEndpoint,
@@ -507,6 +510,7 @@ export class BankPlatformStack extends cdk.Stack {
       description: 'bank-platform admin ops (IAM invoke only)',
     });
     registryTable.grantReadWriteData(adminFn);
+    adminFn.addToRolePolicy(inspectedPayloadGuardrailApply);
     adminFn.addToRolePolicy(bedrockInvoke);
     adminFn.addToRolePolicy(agentcoreRead);
     adminFn.addToRolePolicy(agentcoreAdmin);

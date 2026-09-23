@@ -148,6 +148,8 @@ def build_system_prompt(spec: dict) -> tuple[str, list[str], list[str]]:
 
 
 def build_model(model_id: str):
+    if not GUARDRAIL_ID:
+        raise RuntimeError("A configured bank Guardrail is required")
     from strands.models import BedrockModel
 
     # Claude 5 는 `temperature` 를 거부한다 (ConverseStream ValidationException: "`temperature` is deprecated for this model")
@@ -465,9 +467,19 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
         except _DesignStopped:
             pass
         except Exception as e:  # noqa: BLE001
-            loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "code": 500, "message": _err(e)})
+            refusal = find_gate_refusal(e)
+            loop.call_soon_threadsafe(q.put_nowait, {
+                "type": "error", "code": 422 if refusal else 500, "message": _err(e),
+                **({"gate": "refused", "types": refusal.types} if refusal else {})})
         finally:
-            loop.call_soon_threadsafe(q.put_nowait, DONE)
+            try:
+                for event in deps.get("drain_boundary", lambda: [])():
+                    emit(event)
+            except Exception:
+                loop.call_soon_threadsafe(q.put_nowait, {
+                    "type": "error", "code": 500, "message": "Boundary evidence unavailable"})
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, DONE)
 
     log.info("design_loop start spec=%s model=%s", str(design["productSpec"].get("id")), model_id)
     fut = loop.run_in_executor(None, work)
@@ -478,7 +490,7 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
             if ev is DONE:
                 break
             if ev.get("type") == "error":
-                stop = "error"
+                stop = "gate_refused" if ev.get("gate") == "refused" else "error"
             yield ev
     finally:
         stopped.set()

@@ -41,7 +41,7 @@ session history; earlier successful calls in the same run can already have usage
 An initial gate refusal can report zero usage and `stopReason="gate_refused"`.
 
 Environment: `AWS_REGION` (default `ap-northeast-2`), `GATEWAY_URL`, `GATEWAY_ARN`,
-`GUARDRAIL_ID`, `GUARDRAIL_VERSION`, and optional `LOG_LEVEL`, `MAX_TOKENS`,
+`GUARDRAIL_ID` (required), `GUARDRAIL_VERSION`, and optional `LOG_LEVEL`, `MAX_TOKENS`,
 `MAX_PROMPT_CHARS`, `SKILLS_DIR`, `TEMPERATURE`. Model selection uses the exact
 allowlist copied from `engine/model_catalog.py`; it is not limited to the two
 original Claude specs. A default spec supplies its model; arbitrary `GEN_MODEL`
@@ -55,7 +55,9 @@ agent/version and client conversation ID. It returns the original client ID
 for subsequent turns. Pool, client and connection expiry are checked.
 Overlapping turns for the same Runtime session return `409/session_busy` before
 another agent is built. Completion and cancellation release the claim after
-cleanup; the client can retry the same conversation ID.
+successful cleanup; the client can then retry the same conversation ID. Failed
+cleanup quarantines that ID and requires a new conversation. Quarantine retains
+at most 20 IDs; overflow refuses work until the Runtime process is recycled.
 This is not durable managed memory. ADOT is not yet installed; WP5/WP6 in
 [the bank work packages](../docs/BANK_AGENTCORE_WORK_PACKAGES.md) track these gaps.
 

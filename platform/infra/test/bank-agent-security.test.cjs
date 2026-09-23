@@ -132,6 +132,16 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
     ...['ap-south-1', 'ap-northeast-3', 'ap-northeast-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1']
       .map(region => `arn:aws:bedrock:${region}:111122223333:guardrail-profile/apac.guardrail.v1:0`),
   ]);
+  const adminFunction = Object.values(resources).find(resource =>
+    resource.Type === 'AWS::Lambda::Function' && resource.Properties.Handler === 'admin_handler.handler');
+  assert.deepEqual(adminFunction.Properties.Environment.Variables.GUARDRAIL_ID,
+    tools.Properties.Environment.Variables.GUARDRAIL_ID);
+  assert.deepEqual(adminFunction.Properties.Environment.Variables.GUARDRAIL_VERSION,
+    tools.Properties.Environment.Variables.GUARDRAIL_VERSION);
+  const adminVerification = statements('AdminFn').filter(row =>
+    [].concat(row.Action).includes('bedrock:ApplyGuardrail'));
+  assert.equal(adminVerification.length, 1);
+  assert.deepEqual(adminVerification[0].Resource, verification[0].Resource);
   for (const [prefix, sources] of [
     ['GatewayExecRole', ['gateway/*']],
     ['HarnessExecRole', ['harness/bank_*', 'runtime/harness_bank_*']],

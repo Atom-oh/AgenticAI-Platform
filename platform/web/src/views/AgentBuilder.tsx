@@ -278,13 +278,14 @@ function CreateForm({ cat, onCreated, onApprove }: {
                 <b className="text-sm">{rec.payload?.title || rec.name}</b>
                 <span className="font-mono text-slate-500">{rec.name}@{rec.recordVersion}</span>
                 {nowStatus && <RegChip s={nowStatus} />}
-                <HarnessChip s={res.harness?.status || 'unknown'} />
-                <AcChip s={approved?.ok ? approved.agentcoreRegistry?.status : (res.agentcoreRegistry?.error ? null : res.agentcoreRegistry?.status)} />
+                {res.harness?.arn && <HarnessChip s={res.harness.status || 'unknown'} />}
+                {res.agentcoreRegistry?.recordId && <AcChip s={res.agentcoreRegistry.status} />}
               </div>
-              <div className="text-slate-400 mt-1.5 font-mono break-all">Harness ARN: {res.harness?.arn || '—'}</div>
+              {!res.harness?.arn && <div className="text-amber-700 mt-1.5">관리자 처리 대기 — 실행 환경과 Registry 미러가 아직 준비되지 않았습니다.</div>}
+              {res.harness?.arn && <div className="text-slate-400 mt-1.5 font-mono break-all">Harness ARN: {res.harness.arn}</div>}
               {res.harness?.note && <div className="text-amber-700 mt-1">{res.harness.note}</div>}
               {res.agentcoreRegistry?.error && <div className="text-amber-700 mt-1">AgentCore Registry 미러 실패 — {res.agentcoreRegistry.error} (플랫폼 Registry 에는 등록됨)</div>}
-              {!res.agentcoreRegistry?.error && res.agentcoreRegistry && (
+              {!res.agentcoreRegistry?.error && res.agentcoreRegistry?.recordId && (
                 <div className="text-slate-500 mt-1">AgentCore Registry: {res.agentcoreRegistry.action} · {res.agentcoreRegistry.status} · {res.agentcoreRegistry.recordId}</div>
               )}
               {nowStatus === 'PENDING_APPROVAL' && (

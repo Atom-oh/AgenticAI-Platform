@@ -22,6 +22,9 @@ before(async () => {
             if (action === 'agents_catalog') return window.catalog;
             if (action === 'agent_transition') return {type:action,ok:true,record:{status:'PENDING_APPROVAL'},
               request:{name:'synthetic-request',status:'PENDING_ADMIN'},agentcoreRegistry:{status:'PENDING_ADMIN'}};
+            if (action === 'agent_create') return {type:action,ok:true,
+              record:{name:payload.name,recordVersion:'v1',status:'PENDING_APPROVAL',payload:{title:payload.title}},
+              harness:{arn:null,status:'PENDING_ADMIN'},agentcoreRegistry:{status:'PENDING_ADMIN'}};
             return {type:action,ok:true};
           },
           async run(action,payload,onEvent) {
@@ -92,4 +95,14 @@ test('an accepted administration request is not shown as completed approval', as
   await page.getByText('관리자 승인 요청을 접수했습니다.', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('body').innerText(), /승인됨 —/);
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.action === 'agent_transition').length), 1);
+});
+
+test('a saved local specification is not displayed as a provisioned service', async t => {
+  const page = await pageFor(t, 'APPROVED');
+  await page.getByPlaceholder('card_benefit_agent', { exact: true }).fill('synthetic_pending');
+  await page.getByPlaceholder('카드 혜택 상담 에이전트', { exact: true }).fill('합성 검토 명세');
+  await page.getByRole('button', { name: 'missing_tool', exact: true }).click();
+  await page.getByRole('button', { name: '명세 저장 → 승인 대기', exact: true }).click();
+  await page.getByText('관리자 처리 대기 — 실행 환경과 Registry 미러가 아직 준비되지 않았습니다.', { exact: true }).waitFor();
+  assert.doesNotMatch(await page.locator('body').innerText(), /PENDING_ADMIN/);
 });

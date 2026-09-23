@@ -106,7 +106,10 @@ seeding, require explicit bindings; even an empty selection uses `[]`. Invocatio
 rechecks the approval bindings. Creation explicitly selects `converse_stream` to
 match the managed service protocol returned by GetHarness. Existing Agent mirror
 descriptors are replaced with metadata and verified before status synchronization;
-completion is verified again afterward.
+completion is verified again afterward. Remote names use the complete original
+name hash. Legacy CUSTOM records are adopted only when their embedded original
+name/version match; ambiguous legacy typed records are not silently adopted.
+Descriptor errors never downgrade MCP/SKILL to CUSTOM or truncate approved text.
 Every Harness invocation, including legacy approved custom records, also checks
 the actual READY service configuration against the reviewed fields. A missing
 binding, wildcard tool, changed limit, or enabled Memory blocks invocation until
@@ -137,7 +140,11 @@ Harness creation requires a configured Gateway and explicit tools; its managed
 execution reports bounded service failures and does not provide the Runtime's
 client-side `toolsMissing` preflight. Do not claim that unimplemented equivalence.
 Runtime/Harness upstream exception bodies are not returned to the user.
-Harness input/system text is inspected before managed execution. The bank
+Harness input/system text is inspected with rules and strict, coverage-verified
+Guardrails before managed execution. Rule hits reject locally; every admitted
+input has both detectors. Missing Guardrail configuration or failed coverage
+blocks Harness approval/invocation. The Admin Lambda has the same exact Guardrail
+and APAC-profile grants needed to inspect system/Skill text. The bank
 Gateway Lambda independently measures and scans every outgoing tool result,
 blocks residual identifiers or failed inspection, and returns bounded errors.
 Every admitted payload requires both rules and the configured Guardrail's
@@ -150,6 +157,8 @@ sends the complete serialized payload in one request; it never truncates or
 splits context. The shared S2 verifier retains its separate 4,000-character bound.
 The Tools Lambda can apply only that Guardrail and its existing APAC profile
 in the six documented destination Regions from Seoul.
+The design-flow compatibility adapter emits measured boundary events for successful
+model attempts and local privacy refusals, retaining the refusal classification.
 It also inspects arguments before executing a tool, including nested model
 adapter calls inside tools.
 Gate and document results are projected from their expected response schemas;

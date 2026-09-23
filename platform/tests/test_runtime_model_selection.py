@@ -126,3 +126,14 @@ def test_uncataloged_spec_model_is_not_an_allowlist_exception(runtime_app, monke
     assert events[0]["message"] == "model not allowed: unapproved-spec-model"
     assert events[-1]["stopReason"] == "error"
     assert not calls
+
+
+def test_model_construction_requires_bank_guardrail_configuration(runtime_app, monkeypatch):
+    app, _ = runtime_app
+    monkeypatch.setattr(app, "GUARDRAIL_ID", "")
+    with pytest.raises(RuntimeError, match="Guardrail"):
+        app.build_model("global.anthropic.claude-sonnet-5")
+    deps = _load("_design_guardrail_configuration", ROOT / "agents/design_deps.py")
+    monkeypatch.setattr(deps, "GUARDRAIL_ID", "")
+    with pytest.raises(RuntimeError, match="Guardrail"):
+        deps._model("global.anthropic.claude-sonnet-5", 10)

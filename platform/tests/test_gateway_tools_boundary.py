@@ -250,3 +250,50 @@ def test_screen_gate_aggregate_rejects_unapproved_component_evidence(monkeypatch
         invoke=lambda **request: {"Payload": io.BytesIO(json.dumps(body).encode())}))
     result = gateway_tools.tool_run_screen_gates({"code": "// Button@v3\nexport default function Screen() {}"})
     assert result["registry"]["ok"] is False and result["ok"] is False
+
+
+@pytest.mark.parametrize("failure", ["name", "coverage", "service", "missing"])
+def test_harness_requires_independent_verification_before_transport(monkeypatch, verified_guardrail, failure):
+    from agentcore import harness
+    from common import pii
+    from engine.gate import GateRefused
+    normal = verified_guardrail.apply_guardrail
+
+    def inspect(**request):
+        result = normal(**request)
+        if failure == "name":
+            result["assessments"] = [{"sensitiveInformationPolicy": {
+                "piiEntities": [{"type": "NAME", "action": "NONE", "detected": True}]}}]
+        elif failure == "coverage":
+            result["guardrailCoverage"]["textCharacters"]["guarded"] = 0
+        elif failure == "service":
+            raise RuntimeError("PRIVATE_UPSTREAM_MARKER")
+        return result
+
+    verified_guardrail.apply_guardrail = inspect
+    if failure == "missing":
+        monkeypatch.setattr(pii, "GUARDRAIL_ID", "")
+    monkeypatch.setattr(harness, "data", lambda: pytest.fail("unverified Harness input reached transport"))
+    expected = GateRefused if failure == "name" else pii.PiiVerificationUnavailable
+    with pytest.raises(expected):
+        list(harness.invoke_stream("synthetic-harness", "Synthetic natural language", "s" * 64))
+    monkeypatch.setattr(harness, "GATEWAY_ARN", "arn:synthetic:gateway")
+    with pytest.raises(expected):
+        harness.build_config({"name": "synthetic", "allowedTools": ["list_regulations"],
+                              "skills": [], "skillBindings": [], "systemPrompt": "Synthetic natural language"})
+
+
+def test_harness_admitted_input_reports_both_real_detector_paths(monkeypatch):
+    from agentcore import harness
+    calls = []
+    def invoke(**request):
+        calls.append(request)
+        return {"stream": [
+            {"contentBlockDelta": {"delta": {"text": "safe"}}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 1}}},
+        ]}
+    monkeypatch.setattr(harness, "data", lambda: SimpleNamespace(invoke_harness=invoke))
+    events = list(harness.invoke_stream("synthetic-harness", "safe", "s" * 64))
+    assert len(calls) == 1 and events[0][0] == "boundary"
+    assert events[0][1]["piiDetectors"] == ["rules", "guardrail"]

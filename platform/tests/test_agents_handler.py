@@ -72,7 +72,8 @@ class FakeHarness:
             raise RuntimeError("ThrottlingException: slow down")
         measured = harness_mod._inspect(text, "synthetic.harness.input")
         yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
-                            "piiRules": measured["piiRules"]["count"], "source": "harness-input"})
+                            "piiRules": measured["piiRules"]["count"], "source": "harness-input",
+                            "piiDetectors": measured["verification"]["detectors"]})
         yield ("text", "안녕")
         yield ("tool_start", {"name": "lookup_customer_profile", "toolUseId": "t1"})
         yield ("tool_input", {"name": "lookup_customer_profile", "input": json.dumps({"question": "우대금리"})})
@@ -112,7 +113,15 @@ class _FakeApigw:
 
 
 @pytest.fixture(autouse=True)
-def fresh_store():
+def fresh_store(monkeypatch):
+    from common import pii
+    from types import SimpleNamespace
+    def verify(**request):
+        text = request["content"][0]["text"]["text"]
+        return {"action": "NONE", "assessments": [], "usage": {"sensitiveInformationPolicyUnits": 1},
+                "guardrailCoverage": {"textCharacters": {"guarded": len(text), "total": len(text)}}}
+    monkeypatch.setattr(pii, "GUARDRAIL_ID", "synthetic-guardrail")
+    monkeypatch.setattr(pii.boto3, "client", lambda *args, **kwargs: SimpleNamespace(apply_guardrail=verify))
     api.reset_for_tests()
     for s in ("bank-publishing-conventions", "kwcag-accessibility"):
         api.create_record({"name": s, "recordVersion": "v1", "recordType": "SKILL", "description": "스킬",
@@ -681,7 +690,7 @@ def test_transition_then_invoke_streams(fakes, capsys):
     trace = next(json.loads(l) for l in out.splitlines() if '"event": "trace.recorded"' in l)
     assert trace["scenario"] == "AGENT" and trace["tokensIn"] == 120 and trace["tokensOut"] == 45
     assert trace["route"] == "harness" and trace["plane"] == "agentcore" and trace["agent"] == "card_benefit_agent"
-    assert trace["piiOutbound"] == 0 and trace["piiDetectors"] == ["rules(harness-input)"] and trace["blocked"] is False
+    assert trace["piiOutbound"] == 0 and trace["piiDetectors"] == ["rules(harness-input)", "guardrail"] and trace["blocked"] is False
     assert SECRET_MESSAGE_MARK not in out and ACTOR not in out and "queryHash" in trace
     # Client conversation ID is echoed; Harness receives the actor-bound Runtime ID.
     sid = "0123456789abcdef0123456789abcdef-session"

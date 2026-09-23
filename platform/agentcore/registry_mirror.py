@@ -1,12 +1,12 @@
-"""AgentCore Agent Registry 미러 — 플랫폼 Registry(DynamoDB, 감사·유일성)의 AGENT/MCP/SKILL 레코드를
-AgentCore Registry(us-east-1, `AGENTCORE_REGISTRY_ID`)에 동기화한다. 승인 워크플로우는
-submit_registry_record_for_approval / update_registry_record_status 로 그대로 반영된다.
+"""AgentCore Registry integration; platform records remain the approval authority.
 
-에이전트 발견(discovery)의 정본은 AgentCore Registry, 거버넌스 원장(감사 이벤트·유일성·하이브리드 검색)은 플랫폼 Registry.
+AGENT descriptors expose metadata only. Typed MCP/SKILL descriptors retain their
+inspected type, and failed or oversized descriptors never become partial mirrors.
 """
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 
 import boto3
@@ -30,18 +30,39 @@ def _descriptor(record: dict) -> tuple[str, dict]:
     if rt == "MCP":
         tools = payload.get("tools") or []
         return "MCP", {"mcp": {"tools": {"protocolVersion": "2025-06-18",
-                                        "inlineContent": json.dumps({"tools": tools}, ensure_ascii=False)}}}
+                                        "inlineContent": _bounded(json.dumps({"tools": tools}, ensure_ascii=False))}}}
     if rt == "SKILL" and payload.get("skillMd"):
-        return "AGENT_SKILLS", {"agentSkills": {"skillMd": {"inlineContent": str(payload["skillMd"])[:60000]}}}
+        return "AGENT_SKILLS", {"agentSkills": {"skillMd": {"inlineContent": _bounded(str(payload["skillMd"]))}}}
     if rt == "AGENT":
         body = {key: record.get(key) for key in ("name", "recordVersion", "recordType", "subtype", "description")}
     else:
         body = {k: v for k, v in record.items() if k not in ("embedding",)}
-    return "CUSTOM", {"custom": {"inlineContent": json.dumps(body, ensure_ascii=False, default=str)[:60000]}}
+    return "CUSTOM", {"custom": {"inlineContent": _bounded(json.dumps(body, ensure_ascii=False, default=str))}}
+
+
+def _bounded(text):
+    if len(text.encode("utf-8")) > 60000:
+        raise ValueError("Registry descriptor exceeds its admitted size")
+    return text
+
+
+def _legacy_name(name):
+    import re
+    return re.sub(r"[^a-zA-Z0-9_]", "_", name)[:48]
+
+
+def _legacy_identity(current, name, version):
+    try:
+        original = json.loads(current["descriptors"]["custom"]["inlineContent"])
+        return (current.get("name") == _legacy_name(name) and original.get("name") == name
+                and str(original.get("recordVersion")) == version)
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def find_record(name: str, version: str) -> dict | None:
     token = None
+    legacy = []
     while True:
         kw = {"registryId": REGISTRY_ID, "maxResults": 100}
         if token:
@@ -50,14 +71,21 @@ def find_record(name: str, version: str) -> dict | None:
         for rec in r.get("registryRecords", []):
             if rec.get("name") == _mirror_name(name) and str(rec.get("recordVersion", "")) == str(version):
                 return rec
+            if rec.get("name") == _legacy_name(name) and str(rec.get("recordVersion", "")) == str(version):
+                legacy.append(rec)
         token = r.get("nextToken")
         if not token:
-            return None
+            break
+    for record in legacy:
+        rid = record.get("recordId") or str(record.get("recordArn", "")).rsplit("/", 1)[-1]
+        current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rid)
+        if _legacy_identity(current, name, str(version)):
+            return current
+    return None
 
 
 def _mirror_name(name: str) -> str:
-    import re
-    return re.sub(r"[^a-zA-Z0-9_]", "_", name)[:48]
+    return "p_" + hashlib.sha256(("platform-registry-name-v1:" + name).encode()).hexdigest()[:46]
 
 
 def mirror(record: dict) -> dict:
@@ -66,48 +94,38 @@ def mirror(record: dict) -> dict:
     dtype, descriptors = _descriptor(record)
     existing = find_record(name, version)
     if existing is None:
-        try:
-            r = ctl().create_registry_record(registryId=REGISTRY_ID, name=_mirror_name(name),
-                                             description=(record.get("description") or name)[:1000],
-                                             descriptorType=dtype, descriptors=descriptors, recordVersion=version)
-        except Exception as e:  # AGENT_SKILLS 미지원 등 — CUSTOM으로 재시도
-            if dtype != "CUSTOM":
-                dtype, descriptors = "CUSTOM", {"custom": {"inlineContent": json.dumps(
-                    {k: v for k, v in record.items() if k != "embedding"}, ensure_ascii=False, default=str)[:60000]}}
-                r = ctl().create_registry_record(registryId=REGISTRY_ID, name=_mirror_name(name),
-                                                 description=(record.get("description") or name)[:1000],
-                                                 descriptorType=dtype, descriptors=descriptors, recordVersion=version)
-            else:
-                raise e
+        r = ctl().create_registry_record(registryId=REGISTRY_ID, name=_mirror_name(name),
+                                         description=(record.get("description") or name)[:1000],
+                                         descriptorType=dtype, descriptors=descriptors, recordVersion=version)
         # CreateRegistryRecord 는 recordArn 만 돌려준다 — ARN 마지막 세그먼트가 recordId
         rec_id = r.get("recordId") or str(r.get("recordArn", "")).rsplit("/", 1)[-1]
         action = "created"
     else:
         rec_id = existing.get("recordId") or str(existing.get("recordArn", "")).rsplit("/", 1)[-1]
         action = "exists"
-        if record.get("recordType") == "AGENT":
-            # Old CUSTOM mirrors can contain prompts. Refresh and verify their
-            # descriptor before any approval/status synchronization.
+        # Old CUSTOM mirrors can contain prompts. Refresh and verify their
+        # descriptor before any approval/status synchronization.
+        current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
+        if (str(current.get("recordVersion")) != version or
+                current.get("name") != _mirror_name(name) and not _legacy_identity(current, name, version)):
+            raise RuntimeError("Agent mirror identity changed before synchronization")
+        if (current.get("descriptorType") != dtype or current.get("descriptors") != descriptors
+                or current.get("name") != _mirror_name(name)):
+            ctl().update_registry_record(registryId=REGISTRY_ID, recordId=rec_id,
+                name=_mirror_name(name), descriptorType=dtype, descriptors=descriptors,
+                description=(record.get("description") or name)[:1000])
             current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
-            if current.get("name") != _mirror_name(name) or str(current.get("recordVersion")) != version:
-                raise RuntimeError("Agent mirror identity changed before synchronization")
             if current.get("descriptorType") != dtype or current.get("descriptors") != descriptors:
-                ctl().update_registry_record(registryId=REGISTRY_ID, recordId=rec_id,
-                    descriptorType=dtype, descriptors=descriptors,
-                    description=(record.get("description") or name)[:1000])
-                current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
-                if current.get("descriptorType") != dtype or current.get("descriptors") != descriptors:
-                    raise RuntimeError("Agent mirror metadata replacement was not confirmed")
-                action = "updated"
-            existing = {**existing, "status": current.get("status")}
+                raise RuntimeError("Agent mirror metadata replacement was not confirmed")
+            action = "updated"
+        existing = {**existing, "status": current.get("status")}
     status = sync_status(rec_id, record.get("status", "DRAFT"), existing.get("status") if existing else "DRAFT",
                          reason=record.get("statusReason") or "platform registry sync")
-    if record.get("recordType") == "AGENT":
-        current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
-        if (current.get("name") != _mirror_name(name) or str(current.get("recordVersion")) != version
-                or current.get("descriptorType") != dtype or current.get("descriptors") != descriptors
-                or current.get("status") != record.get("status", "DRAFT")):
-            raise RuntimeError("Agent mirror completion was not confirmed")
+    current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
+    if (current.get("name") != _mirror_name(name) or str(current.get("recordVersion")) != version
+            or current.get("descriptorType") != dtype or current.get("descriptors") != descriptors
+            or current.get("status") != record.get("status", "DRAFT")):
+        raise RuntimeError("Agent mirror completion was not confirmed")
     return {"recordId": rec_id, "status": status, "action": action, "descriptorType": dtype}
 
 

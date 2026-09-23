@@ -601,8 +601,8 @@ def portal_publish(ctx: Ctx, body: dict) -> None:
               "target": {"recordType": rec_in["recordType"], "subtype": rec_in["subtype"], "name": rec_in["name"],
                          "recordVersion": rec_in["recordVersion"]},
               "mapping": _mapping_for(n.label), "tier": TIER_BADGE, "registryBackend": reg.backend(),
-              "note": ("기존 Registry 레코드 — Portal 은 덮어쓰지 않는다 (상태 전이는 Agent Registry 화면에서)" if action == "existing"
-                       else "DRAFT 로 생성 — 승인 요청 → 승인은 Agent Registry 화면의 상태 전이로 진행"),
+              "note": ("기존 Registry 레코드는 덮어쓰지 않습니다. 승인·반려·폐기는 관리자 검토 후 처리됩니다" if action == "existing"
+                       else "DRAFT 로 생성 — 초안 제출 후 관리자 검토로 승인합니다"),
               "elapsedMs": _elapsed(t0)})
 
 

@@ -196,7 +196,7 @@ function Drawer({ detail, busy, err, onClose, onTransition, onOpenVersion }: {
 
 /* ---------------- 신규 레코드 폼 ---------------- */
 function CreateForm({ onCreated }: { onCreated: (r: Rec) => void }) {
-  const [f, setF] = useState({ name: '', recordVersion: 'v1', recordType: 'AGENT', subtype: '', description: '', owner: '', tags: '' });
+  const [f, setF] = useState({ name: '', recordVersion: 'v1', recordType: 'MCP', subtype: '', description: '', owner: '', tags: '' });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF(s => ({ ...s, [k]: e.target.value }));
@@ -212,11 +212,12 @@ function CreateForm({ onCreated }: { onCreated: (r: Rec) => void }) {
   const cls = 'px-2 py-1.5 rounded-lg bg-white border border-slate-300 text-xs';
   return (
     <details className="panel p-3 mt-4">
-      <summary className="cursor-pointer text-sm font-semibold">새 레코드 등록 (DRAFT 로 시작 → 승인 요청 → 승인)</summary>
+      <summary className="cursor-pointer text-sm font-semibold">새 레코드 등록 (DRAFT → 승인 요청 → 관리자 검토)</summary>
+      <a href="#/agents" className="chip mt-2">에이전트는 에이전트 빌더에서 등록하세요</a>
       <div className="grid grid-cols-6 gap-2 mt-3">
         <input className={cls} placeholder="name (영문/숫자/._-)" value={f.name} onChange={set('name')} />
         <input className={cls} placeholder="recordVersion (v1)" value={f.recordVersion} onChange={set('recordVersion')} />
-        <select className={cls} value={f.recordType} onChange={set('recordType')}>{['MCP', 'AGENT', 'SKILL', 'CUSTOM'].map(t => <option key={t}>{t}</option>)}</select>
+        <select className={cls} value={f.recordType} onChange={set('recordType')}>{['MCP', 'SKILL', 'CUSTOM'].map(t => <option key={t}>{t}</option>)}</select>
         <input className={cls} placeholder="subtype (CUSTOM 은 필수, 예: COMPONENT)" value={f.subtype} onChange={set('subtype')} />
         <input className={cls} placeholder="owner" value={f.owner} onChange={set('owner')} />
         <input className={cls} placeholder="tags (쉼표 구분)" value={f.tags} onChange={set('tags')} />

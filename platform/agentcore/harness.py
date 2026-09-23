@@ -134,7 +134,8 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
     """invoke_harness 스트림을 (event_type, payload) 튜플로 정규화해 yield. 마지막에 usage/stop을 담은 'meta'."""
     measured = _inspect(text, "agentcore.harness.input")
     yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
-                        "piiRules": measured["piiRules"]["count"], "source": "harness-input"})
+                        "piiRules": measured["piiRules"]["count"], "source": "harness-input",
+                        "piiDetectors": measured["verification"]["detectors"]})
     sid = session_id or (uuid.uuid4().hex + "-session")
     r = data().invoke_harness(harnessArn=harness_arn, runtimeSessionId=sid,
                               messages=[{"role": "user", "content": [{"text": text}]}])
@@ -171,10 +172,14 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
 
 def _inspect(text, purpose):
     from engine import gate
+    from common import pii as verifier
     measured = gate.measure("", text)
-    pii = measured["piiRules"]
+    result = verifier.scan_outbound(text, strict=True, max_chars=20000)
+    types = sorted({hit["type"] for hit in result["hits"]})
+    measured["verification"] = {"count": result["count"], "types": types, "detectors": result["detectors"]}
     gate._log("agentcore.harness.boundary", purpose=purpose, chars=measured["chars"],
-              estTokens=measured["estTokens"], piiCount=pii["count"], piiTypes=sorted(pii["byType"]))
-    if pii["count"]:
-        raise gate.GateRefused(sorted(pii["byType"]), pii["count"], measured, purpose)
+              estTokens=measured["estTokens"], piiCount=result["count"], piiTypes=types,
+              piiDetectors=result["detectors"])
+    if result["count"]:
+        raise gate.GateRefused(types, result["count"], measured, purpose)
     return measured

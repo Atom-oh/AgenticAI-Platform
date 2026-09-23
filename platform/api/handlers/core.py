@@ -49,9 +49,9 @@ def _control_room(method: str, path: str, id_token: str, body: dict | None = Non
     try:
         return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
     except urllib.error.HTTPError as e:
-        return {"error": f"{e.code}: {e.read().decode()[:200]}"}
+        return {"error": "Control-room request failed", "code": e.code}
     except Exception as e:
-        return {"error": str(e)[:200]}
+        return {"error": "Control-room request failed", "errorType": type(e).__name__}
 
 
 def _agentcore_records() -> list[dict]:

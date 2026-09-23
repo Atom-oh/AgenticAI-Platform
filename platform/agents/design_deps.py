@@ -20,6 +20,8 @@ JUDGE_MAX_TOKENS = int(os.environ.get("DESIGN_JUDGE_MAX_TOKENS", "500"))
 
 
 def _model(model_id: str, max_tokens: int):
+    if not GUARDRAIL_ID:
+        raise RuntimeError("A configured bank Guardrail is required")
     from strands.models import BedrockModel
     kw: Dict[str, Any] = {"model_id": model_id, "region_name": REGION, "streaming": True, "max_tokens": max_tokens}
     if os.environ.get("GEN_TEMPERATURE"):
@@ -31,9 +33,23 @@ def _model(model_id: str, max_tokens: int):
 
 def make_deps(model_id: str) -> Dict[str, Any]:
     from strands import Agent
-    from boundary_gate import BoundaryGateHook, scan_rules
+    from boundary_gate import BoundaryGateHook, GateRefused, measure
 
     acc = {"inputTokens": 0, "outputTokens": 0, "calls": 0}
+    measurements = []
+    emitted = 0
+
+    def capture(row, source):
+        measurements.append({"type": "boundary", "chars": row["chars"], "estTokens": row["estTokens"],
+                             "piiRules": row["piiRules"], "refusedTypes": row.get("hits", []),
+                             "messages": row.get("messages", 0), "source": source,
+                             "seq": len(measurements) + 1, "piiDetectors": ["rules"]})
+
+    def drain():
+        nonlocal emitted
+        result = measurements[emitted:]
+        emitted = len(measurements)
+        return [dict(row) for row in result]
 
     def _acc(res: Any) -> None:
         try:
@@ -45,12 +61,18 @@ def make_deps(model_id: str) -> Dict[str, Any]:
         acc["calls"] += 1
 
     def _run(system: str, user: str, max_tokens: int) -> str:
-        hits = scan_rules(system + "\n" + user)
-        if hits:  # 경계: 식별자가 프롬프트에 있으면 모델 호출 없이 거부
-            raise RuntimeError("boundary refused (identifier rule hit): " + ",".join(sorted({h["type"] for h in hits})))
-        agent = Agent(model=_model(model_id, max_tokens), system_prompt=system, hooks=[BoundaryGateHook()],
+        measured = measure([{"role": "user", "content": [{"text": user}]}], system)
+        if measured["piiRules"]:
+            capture(measured, "design-preflight")
+            raise GateRefused(measured["hits"], measured)
+        gate = BoundaryGateHook()
+        agent = Agent(model=_model(model_id, max_tokens), system_prompt=system, hooks=[gate],
                       callback_handler=None)
-        res = agent(user)
+        try:
+            res = agent(user)
+        finally:
+            for row in gate.drain():
+                capture(row, "design-model")
         _acc(res)
         return str(res)
 
@@ -79,4 +101,4 @@ def make_deps(model_id: str) -> Dict[str, Any]:
         v = str(obj.get("verdict", "")).lower()
         return {"verdict": v if v in ("pass", "fail", "incomplete") else "incomplete", "evidence": str(obj.get("evidence", ""))[:600]}
 
-    return {"generate": generate, "llm_judge": llm_judge, "usage": lambda: dict(acc)}
+    return {"generate": generate, "llm_judge": llm_judge, "usage": lambda: dict(acc), "drain_boundary": drain}

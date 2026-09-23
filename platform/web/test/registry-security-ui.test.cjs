@@ -55,4 +55,10 @@ test('Registry displays administrator decisions without offering staff approval'
   assert.equal(await dialog.getByRole('button', { name: '→ 승인', exact: true }).isDisabled(), true);
   assert.doesNotMatch(await page.locator('body').innerText(), /원클릭 반전|① Button v2 →/);
   assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.action === 'registry_transition')), []);
+  await dialog.getByRole('button', { name: '닫기 ✕', exact: true }).click();
+  const form = page.locator('details').filter({ hasText: '새 레코드 등록' }).last();
+  await form.locator('summary').click();
+  assert.deepEqual(await form.locator('select option').allTextContents(), ['MCP', 'SKILL', 'CUSTOM']);
+  assert.equal(await form.locator('select').inputValue(), 'MCP');
+  assert.equal(await form.getByRole('link').getAttribute('href'), '#/agents');
 });

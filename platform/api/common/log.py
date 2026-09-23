@@ -1,6 +1,6 @@
 """구조화 로그 (SPEC §10 관측성, §12.3).
 
-CloudWatch에는 메트릭과 traceId만 남긴다 — 프롬프트 원문·개인데이터 필드는 절대 넣지 않는다.
+CloudWatch에는 허용된 메트릭·범주 태그·탐지기/유형 목록·해시·traceId만 남긴다. 원문과 개인데이터는 남기지 않는다.
 금지 키(prompt/query/answer/payload/text/email)는 길이·해시로 치환한다.
 """
 from __future__ import annotations

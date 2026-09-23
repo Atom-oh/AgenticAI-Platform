@@ -30,6 +30,7 @@ from registry import api as registry_api
 from registry.model import RegistryError, STATUSES
 from engine import model_catalog
 from engine.gate import GateRefused
+from common.pii import PiiVerificationUnavailable
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
 MODELS = list(model_catalog.MODEL_IDS)
@@ -409,6 +410,9 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
         except (RegistryError, OSError, UnicodeError, ValueError, TypeError, GateRefused):
             ctx.done("agent", error="승인된 Harness·Skill 구성을 확인하지 못했습니다. IAM 관리자 검토가 필요합니다.", code=409)
             return
+        except PiiVerificationUnavailable:
+            ctx.done("agent", error="개인정보 검사를 완료하지 못했습니다. 잠시 후 다시 시도하세요.", code=503)
+            return
         kind = "harness"
         runtime_label = _invoke.RUNTIME_HARNESS
         runtime_badge = _invoke.BADGE_HARNESS
@@ -423,6 +427,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
     stop_reason, out_sid = "", session_id
     tool_calls, text_len, errors = 0, 0, []
     boundary_events: list = []
+    inspection_detectors = set()
     tools_missing: list = []
     blocked, pii_outbound = False, None
     started = time.time()
@@ -440,7 +445,12 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
             elif kind_ev == "tool_result":
                 ctx.stage("agent", "tool_result", plane="agentcore", **_stage_kw(data))
             elif kind_ev == "boundary":
-                boundary_events.append(data if isinstance(data, dict) else {"raw": str(data)[:200]})
+                if not isinstance(data, dict):
+                    errors.append("경계 검사 증빙이 올바르지 않습니다.")
+                    continue
+                boundary_events.append(data)
+                inspection_detectors.update(detector for detector in (data or {}).get("piiDetectors", ["rules"])
+                                            if detector in {"rules", "guardrail"})
                 ctx.stage("agent", "boundary", plane="boundary", **_stage_kw(data))
             elif kind_ev == "error":
                 error_message = "에이전트 실행을 완료하지 못했습니다."
@@ -476,6 +486,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
         errors.append(_err(e))
         if isinstance(e, GateRefused):
             blocked, pii_outbound, stop_reason = True, e.count, "gate_refused"
+            inspection_detectors.update(e.boundary.get("verification", {}).get("detectors", ["rules"]))
         ctx.done("agent", error=f"에이전트 호출 실패 — {_err(e)}", name=name, version=rec.get("recordVersion"),
                  modelId=model_id, runtime=runtime_label, sessionId=client_session_id,
                  runtimeSessionId=session_id, usage=usage, toolCalls=tool_calls,
@@ -488,8 +499,10 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                                   "tokensIn": tokens_in, "tokensOut": tokens_out, "modelId": model_id,
                                   "route": "strands" if runtime_kind == "strands" else "harness", "plane": "agentcore", "blocked": blocked,
                                   **({"piiOutbound": pii_outbound} if pii_outbound is not None else {}),
-                                  "piiDetectors": (["rules(harness-input)" if runtime_kind == "harness" else "rules(gate)"]
-                                                   if boundary_events or blocked else []), "agent": name,
+                                  "piiDetectors": [
+                                      ("rules(harness-input)" if runtime_kind == "harness" else "rules(gate)")
+                                      if detector == "rules" else detector
+                                      for detector in sorted(inspection_detectors, reverse=True)], "agent": name,
                                   "toolCalls": tool_calls, "errors": len(errors), "cached": False,
                                   "elapsedMs": elapsed})
         except Exception as e:  # noqa: BLE001

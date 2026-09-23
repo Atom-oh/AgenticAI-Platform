@@ -70,8 +70,13 @@ def handler(event, context):
             else:
                 try:
                     from agentcore import harness, skill_binding
+                    from agentcore.administration import harness_settings
                     bindings = skill_binding.capture(spec.get("skills", []))
-                    h = harness.ensure_harness({**spec, "skillBindings": bindings})
+                    bound = {**spec, "skillBindings": bindings}
+                    expected = harness.build_config(bound)
+                    h = harness.ensure_harness(bound)
+                    if h.get("status") not in {"READY", "ACTIVE"} or harness_settings(h) != harness_settings(expected):
+                        raise ValueError("Seeded Harness requires exact-configuration reconciliation")
                     payload.update({"runtime": "AgentCore Harness", "harnessArn": h.get("arn"),
                                     "harnessId": h.get("harnessId"), "skillBindings": bindings,
                                     "systemPrompt": spec["systemPrompt"]})
