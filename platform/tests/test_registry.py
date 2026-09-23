@@ -28,7 +28,9 @@ ACTOR = "demo@atomai.click"
 
 
 @pytest.fixture(autouse=True)
-def fresh_store():
+def fresh_store(monkeypatch):
+    from agentcore import registry_mirror
+    monkeypatch.setattr(registry_mirror, "mirror", lambda record: {"status": record["status"], "recordId": "synthetic"})
     yield api.reset_for_tests()
 
 
@@ -538,13 +540,14 @@ def test_handler_does_not_log_reason_or_description_text(capsys):
     """로그에는 사유·설명 원문이 남지 않는다 (§12.3) — 길이/해시만."""
     h = _handler_module()
     ctx, gw = _ctx()
-    seedmod.seed(ACTOR)
+    api.create_record(_rec("log_probe", rtype="CUSTOM", subtype="COMPONENT"), ACTOR, embed=False)
     secret_reason = "고객 홍길동 관련 사유 XYZ123"
-    h.registry_transition(ctx, {"name": "Button", "version": "v2", "to": "DEPRECATED", "reason": secret_reason})
+    h.registry_transition(ctx, {"name": "log_probe", "version": "v1", "to": "PENDING_APPROVAL", "reason": secret_reason})
     out = capsys.readouterr().out
+    assert "registry.transition" in out
     assert secret_reason not in out and "XYZ123" not in out
     assert ACTOR not in out  # 이메일은 해시로만
-    assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 403
+    assert gw.posted[-1]["ok"] is True
 
 
 def test_store_write_sanitizes_floats_for_dynamodb():

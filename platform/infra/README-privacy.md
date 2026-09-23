@@ -105,7 +105,11 @@ otherwise the check fails and requires an independent dependency installation.
 Both synths use the same explicitly recorded asset fixture; they do not certify
 runtime code or deployed artifacts. Other main-stack changes must exactly match
 the base and resource inventory in `privacy/deploy/reviewed-main-delta.json`.
-An unlisted resource, omitted expected change or different base fails the check.
+An unlisted resource, omitted expected change, different base, or changed resource
+configuration hash fails the check. Generated Lambda S3/container asset digests are
+normalized because worker bundles contain the manifest itself; bucket, handler,
+role, environment and all policy contents remain hash-bound. Code bytes require
+the separate exact-source deployment artifact checks.
 The manifest and each resource's complete diff still require current AI review
 and the bank IAM isolation test; they are not privacy-toggle effects. Results are in
 `platform/infra/cdk.out/privacy-check/verified.json`. Existing main-stack runtime

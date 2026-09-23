@@ -10,9 +10,13 @@ from registry.model import ConflictError, NotFoundError, ValidationError, check_
 HARNESS_FIELDS = ("executionRoleArn", "model", "systemPrompt", "allowedTools", "tools", "skills",
                   "maxIterations", "maxTokens", "timeoutSeconds", "memory", "environment",
                   "environmentArtifact", "environmentVariables", "authorizerConfiguration", "truncation", "hooks")
+HARNESS_METADATA = frozenset({"harnessId", "harnessName", "arn", "harnessArn", "status", "harnessVersion",
+                              "createdAt", "updatedAt", "statusReason", "tags", "clientToken"})
 
 
 def harness_settings(value):
+    if not isinstance(value, dict) or set(value) - set(HARNESS_FIELDS) - HARNESS_METADATA:
+        raise ValidationError("Unreviewed Harness configuration fields require IAM review")
     settings = {key: value.get(key) for key in HARNESS_FIELDS}
     environment = settings.get("environment")
     if isinstance(environment, dict) and isinstance(environment.get("agentCoreRuntimeEnvironment"), dict):

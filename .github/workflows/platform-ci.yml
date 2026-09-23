@@ -28,6 +28,7 @@ jobs:
       - run: python -m workspace.fetch_axe gates/package-lock.json /tmp/studio-axe
       - run: python3 seed/generate.py
       - run: python3 seed/corpus.py   # corpus.jsonl (임베딩 캐시 seed/out/corpus.embeddings.json 은 커밋됨)
+      - run: bash agents/prepare_context.sh
       - run: python3 -m pytest tests/ -q
         env: { AXE_PATH: '/tmp/studio-axe/axe.min.js' }
       - name: 금지 패턴 검사 (비밀번호·실 계정·프롬프트 원문 로그)

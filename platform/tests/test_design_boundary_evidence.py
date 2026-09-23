@@ -24,7 +24,11 @@ def load(name, path):
 def test_design_reports_boundary_events_and_refusal_without_originals(runtime_app, monkeypatch, blocked):
     boundary = load("design_boundary", ROOT / "agents/boundary_gate.py")
     monkeypatch.setitem(sys.modules, "boundary_gate", boundary)
-    monkeypatch.setattr(boundary, "verify_independent", lambda text: {"count": 0, "hits": [], "detectors": ["rules", "guardrail"]})
+    verified = []
+    def verify(text):
+        verified.append(text)
+        return {"count": 0, "hits": [], "detectors": ["rules", "guardrail"]}
+    monkeypatch.setattr(boundary, "verify_independent", verify)
     calls = []
 
     class Result:
@@ -38,6 +42,7 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
 
         def __call__(self, user):
             self.gate.check([{"role": "user", "content": [{"text": user}]}], self.system)
+            assert verified[-1] == self.system + "\nuser\n" + user
             calls.append("model")
             return Result()
 
@@ -49,6 +54,8 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
 
     def run(product, state, checks, deps, *, emit, output_type):
         deps["generate"]("Synthetic system", product["text"], None)
+        deps["llm_judge"]({"id": "rule", "text": "Synthetic requirement", "target": "screen"},
+                          {"prd": {"steps": [{"id": "step-one"}]}, "flowText": "Synthetic complete flow"})
         return {"ok": True}
 
     monkeypatch.setattr(design_loop, "run", run)
@@ -62,7 +69,7 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
 
     events = asyncio.run(exercise())
     measurements = [event for event in events if event["type"] == "boundary"]
-    assert len(measurements) == 1 and measurements[0]["chars"] > 0
+    assert len(measurements) == (1 if blocked else 2) and measurements[0]["chars"] > 0
     assert measurements[0]["piiDetectors"] == (["rules"] if blocked else ["rules", "guardrail"])
     if blocked:
         assert not calls
@@ -71,6 +78,7 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
         assert any(event.get("code") == 422 for event in events)
         assert "CUST-0042" not in json.dumps(events)
     else:
-        assert calls == ["model"]
+        assert calls == ["model", "model"]
+        assert len(verified) == 2 and "Synthetic complete flow" in verified[1] and "step-one" in verified[1]
         assert measurements[0]["source"] == "design-model" and measurements[0]["piiRules"] == 0
-        assert events[-1]["usage"] == {"inputTokens": 2, "outputTokens": 1}
+        assert events[-1]["usage"] == {"inputTokens": 4, "outputTokens": 2}

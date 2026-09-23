@@ -350,11 +350,14 @@ def agent_get(ctx: Ctx, body: dict) -> None:
 def agent_invoke(ctx: Ctx, body: dict) -> None:
     name = str(body.get("name", "") or "").strip()
     version = str(body.get("version", "") or "").strip() or None
-    message = str(body.get("message", "") or "").strip()[:MAX_MESSAGE]
+    message = str(body.get("message", "") or "").strip()
     session_id = body.get("sessionId")
     session_id = str(session_id)[:128] if isinstance(session_id, str) and session_id.strip() else None
     if not ctx.user_sub:
         ctx.done("agent", error="인증된 사용자 식별자가 필요합니다. 다시 연결하세요.", code=401)
+        return
+    if len(message) > MAX_MESSAGE:
+        ctx.done("agent", error="메시지 길이 제한을 초과했습니다.", code=413)
         return
     if not name or not message:
         ctx.done("agent", error="에이전트 이름과 메시지가 필요합니다.", name=name)
@@ -441,15 +444,29 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 tool_calls += 1
                 ctx.stage("agent", "tool_start", plane="agentcore", **_stage_kw(data))
             elif kind_ev == "tool_input":
-                ctx.stage("agent", "tool_input", plane="agentcore", **_stage_kw(data))
+                value = data if isinstance(data, dict) else {}
+                raw = value.get("input")
+                size = len(raw) if isinstance(raw, str) else value.get("chars", 0)
+                ctx.stage("agent", "tool_input", plane="agentcore",
+                          name=str(value.get("name", ""))[:160], toolUseId=str(value.get("toolUseId", ""))[:160],
+                          chars=size if type(size) is int and size >= 0 else 0, inputRedacted=True)
             elif kind_ev == "tool_result":
                 ctx.stage("agent", "tool_result", plane="agentcore", **_stage_kw(data))
             elif kind_ev == "boundary":
                 if not isinstance(data, dict):
-                    errors.append("경계 검사 증빙이 올바르지 않습니다.")
-                    continue
+                    raise ValueError("Invalid boundary evidence")
+                if any(type(data.get(key)) is not int or data[key] < 0
+                       for key in ("chars", "estTokens", "piiRules", "piiCount")):
+                    raise ValueError("Incomplete boundary measurement")
+                detectors = data.get("piiDetectors")
+                if detectors not in (["rules"], ["rules", "guardrail"]):
+                    raise ValueError("Incomplete detector evidence")
+                if data["piiCount"] == 0 and detectors != ["rules", "guardrail"]:
+                    raise ValueError("Independent verification evidence is missing")
+                if data["piiCount"] > 0 and detectors == ["rules"] and not data.get("refusedTypes"):
+                    raise ValueError("Local refusal evidence is missing")
                 boundary_events.append(data)
-                inspection_detectors.update(detector for detector in (data or {}).get("piiDetectors", ["rules"])
+                inspection_detectors.update(detector for detector in detectors
                                             if detector in {"rules", "guardrail"})
                 ctx.stage("agent", "boundary", plane="boundary", **_stage_kw(data))
             elif kind_ev == "error":
@@ -465,6 +482,8 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                     errors.append("에이전트 응답이 완료되지 않았습니다.")
         meta_model = None
         blocked = stop_reason == "gate_refused"
+        if not errors and not blocked and not boundary_events:
+            raise ValueError("Completed execution has no boundary evidence")
         pii_outbound = sum(int(event.get("piiCount", event.get("piiRules", 0)) or 0)
                            for event in boundary_events) if boundary_events else None
         done_kw: Dict[str, Any] = {"usage": usage, "stopReason": stop_reason, "sessionId": client_session_id,

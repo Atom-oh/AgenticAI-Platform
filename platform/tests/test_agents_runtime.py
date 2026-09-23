@@ -338,6 +338,7 @@ def test_runtime_uses_only_the_authenticated_session_and_reports_missing_tools(r
             streamed.append(True)
             messages.append({"role": "user", "content": [{"text": prompt}]})
             yield {"data": "VICTIM_HISTORY_MARKER" if "VICTIM_HISTORY_MARKER" in json.dumps(messages) else "safe"}
+            yield {"result": SimpleNamespace(stop_reason="end_turn", metrics=SimpleNamespace(accumulated_usage={}))}
 
         return SimpleNamespace(
             tools=[SimpleNamespace(tool_name=name) for name in spec["allowedTools"]] if tools_available else [],
@@ -452,6 +453,7 @@ def test_same_session_turns_cannot_overwrite_history_and_release_after_exit(runt
                 yield {"data": "started"}
                 await release.wait()
                 messages.append({"text": prompt})
+                yield {"result": SimpleNamespace(stop_reason="end_turn", metrics=SimpleNamespace(accumulated_usage={}))}
 
             return SimpleNamespace(
                 tools=[], discovered=[], skills_loaded=[], skills_missing=[],
@@ -666,3 +668,32 @@ def test_cleanup_failure_quarantines_but_releases_active_claim(runtime_app, monk
         assert retry[0]["code"] == 503 and constructed == [True]
 
     asyncio.run(exercise())
+
+
+def test_runtime_rejects_oversized_input_before_constructing_an_agent(runtime_app):
+    app, _ = runtime_app
+    async def exercise():
+        return [event async for event in app.run(
+            {"agent": "regulation_impact_agent", "prompt": "x" * (app.MAX_PROMPT_CHARS + 1)}, "s" * 64)]
+    events = asyncio.run(exercise())
+    assert events[0]["code"] == 413
+
+
+def test_runtime_missing_terminal_result_never_commits_partial_history(runtime_app, monkeypatch):
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    sid = "s" * 64
+    app._session_put(sid, [{"text": "prior"}])
+    async def stream(prompt):
+        yield {"data": "partial"}
+    monkeypatch.setattr(app.mcp_gateway, "missing_tool_names", lambda *args: [], raising=False)
+    monkeypatch.setattr(app, "_Session", lambda *args: SimpleNamespace(
+        tools=[], discovered=[], skills_loaded=[], skills_missing=[], close=lambda: None,
+        gate=SimpleNamespace(drain=lambda: [], summary=lambda: {}),
+        agent=SimpleNamespace(messages=[{"text": "partial"}], stream_async=stream)))
+    async def exercise():
+        return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
+    events = asyncio.run(exercise())
+    assert events[-1]["incomplete"] is True and events[-1]["stopReason"] == "incomplete"
+    assert any(event.get("code") == 502 for event in events)
+    assert app._session_get(sid) == [{"text": "prior"}]

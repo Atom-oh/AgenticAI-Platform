@@ -118,6 +118,11 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
   }
   const gateway = Object.values(resources).find(resource => resource.Type === 'AWS::BedrockAgentCore::Gateway');
   const [guardrailId] = Object.entries(resources).find(([, resource]) => resource.Type === 'AWS::Bedrock::Guardrail');
+  const passport = resources[guardrailId].Properties.SensitiveInformationPolicyConfig.RegexesConfig
+    .find(rule => rule.Name === 'KR_PASSPORT');
+  assert(passport && passport.Action === 'BLOCK');
+  for (const value of ['M12345678', 'm12345678', 'M 123A4567']) assert(new RegExp(passport.Pattern).test(value));
+  assert(resources.GuardrailV && resources.GuardrailSecurityV, 'Retain the prior version and add a reviewed policy version');
   const tools = Object.values(resources).find(resource =>
     resource.Type === 'AWS::Lambda::Function' && resource.Properties.Handler === 'agentcore.gateway_tools.handler');
   assert.deepEqual(tools.Properties.Environment.Variables.GUARDRAIL_ID, {

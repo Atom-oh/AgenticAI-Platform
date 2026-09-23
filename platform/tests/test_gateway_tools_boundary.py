@@ -316,3 +316,30 @@ def test_residual_tool_identifier_is_a_privacy_refusal(monkeypatch):
     result = gateway_tools.handler({}, context())
     assert result["code"] == "BOUNDARY_REFUSED" and result["piiTypes"] == ["CUSTOMER_TOKEN"]
     assert result["piiDetectors"] == ["rules"]
+
+
+def test_guardrail_only_passport_variant_blocks_output(monkeypatch, verified_guardrail):
+    original = verified_guardrail.apply_guardrail
+    def inspect(**request):
+        result = original(**request)
+        if "m12345678" in request["content"][0]["text"]["text"]:
+            result["assessments"] = [{"sensitiveInformationPolicy": {"regexes": [
+                {"name": "KR_PASSPORT", "action": "BLOCKED", "match": "m12345678"}]}}]
+        return result
+    verified_guardrail.apply_guardrail = inspect
+    monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: {"reference": "m12345678"})
+    assert gateway_tools.handler({}, context())["code"] == "BOUNDARY_REFUSED"
+
+
+def test_rule_positive_output_never_reaches_cloud_inspection(monkeypatch, verified_guardrail):
+    requests = []
+    original = verified_guardrail.apply_guardrail
+    def inspect(**request):
+        text = request["content"][0]["text"]["text"]
+        assert "CUST-0042" not in text
+        requests.append(text)
+        return original(**request)
+    verified_guardrail.apply_guardrail = inspect
+    monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: {"value": "CUST-0042"})
+    assert gateway_tools.handler({}, context())["code"] == "BOUNDARY_REFUSED"
+    assert requests == ["{}"]

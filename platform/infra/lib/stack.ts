@@ -173,6 +173,8 @@ export class BankPlatformStack extends cdk.Stack {
         ],
         regexesConfig: [
           { name: 'KR_RRN', description: '주민등록번호/외국인등록번호 형식', pattern: '\\d{6}-?[1-8]\\d{6}', action: 'BLOCK' },
+          { name: 'KR_PASSPORT', description: '여권 형태 식별자 (영문·숫자 및 구분자 변형)',
+            pattern: '[MSRODGmsrodg][ -]?(?:[0-9]{8}|[0-9]{3}[A-Za-z][0-9]{4})', action: 'BLOCK' },
           { name: 'CUSTOMER_TOKEN', description: '고객 토큰 식별자', pattern: 'CUST-\\d{3,}', action: 'ANONYMIZE', inputAction: 'NONE', outputAction: 'ANONYMIZE' },
           { name: 'ACCOUNT_TOKEN', description: '계좌 토큰 식별자', pattern: 'ACCT-\\d{3,}', action: 'ANONYMIZE', inputAction: 'NONE', outputAction: 'ANONYMIZE' },
         ],
@@ -185,9 +187,13 @@ export class BankPlatformStack extends cdk.Stack {
       },
       wordPolicyConfig: { managedWordListsConfig: [{ type: 'PROFANITY' }] },
     });
-    const guardrailVersion = new bedrock.CfnGuardrailVersion(this, 'GuardrailV', {
+    new bedrock.CfnGuardrailVersion(this, 'GuardrailV', {
       guardrailIdentifier: guardrail.attrGuardrailId,
       description: 'bank platform release 3 (STANDARD tier + APAC profile, NAME detect-only)',
+    });
+    const guardrailVersion = new bedrock.CfnGuardrailVersion(this, 'GuardrailSecurityV', {
+      guardrailIdentifier: guardrail.attrGuardrailId,
+      description: 'bank security boundary revision (passport coverage)',
     });
 
     // ---------- 플레인 스택 값 (SSM, 배포 시 해석) ----------

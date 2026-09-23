@@ -75,6 +75,10 @@ Approval, rejection and deprecation require the IAM Admin operations
 `expectedHash` returned by inspection. The generic Admin operation rejects AGENT
 and internal-request records. The user UI displays administrator-required states
 and cannot perform the former one-click approval/deprecation demo.
+Generic IAM decisions also synchronize their typed AgentCore mirrors. A local
+commit followed by a mirror failure reports `applied=true, completed=false`;
+reinspect the current record and retry that exact hash to finish synchronization
+without duplicating the decision audit.
 Consumer discovery re-reads GSI candidates from the authoritative table; a stale
 APPROVED index image cannot return a deprecated or removed record. New approvals
 can still await GSI propagation, which is a completeness delay, not permission
@@ -123,7 +127,12 @@ requires `expectedHarnessHash` from the IAM `inspect_agent_request` operation.
 It refuses any active approved consumer and rechecks the request before updating
 the existing Harness to the exact requested configuration, including iteration,
 token and timeout limits. Unexpected execution extensions require separate IAM
-reconciliation. It never deletes a Harness.
+reconciliation. It never deletes a Harness. IAM seeding compares the latest immutable Registry
+version even when its runtime label is unchanged. Specification drift creates a
+new version. Service drift leaves it pending and returns an administration request
+for the existing inspect/reconcile flow. Skill bindings are rechecked after service
+creation and immediately before approval; old approved consumers must be deprecated
+before their shared Harness can be changed.
 
 O: synthesized policy checks prove no AgentCore control actions or PassRole on
 WsFn; tests prove no control call on user routes and cover administrative
@@ -139,7 +148,12 @@ Remove production Gateway DEBUG exception output. Empty or wildcard
 Harness creation requires a configured Gateway and explicit tools; its managed
 execution reports bounded service failures and does not provide the Runtime's
 client-side `toolsMissing` preflight. Do not claim that unimplemented equivalence.
-Runtime/Harness upstream exception bodies are not returned to the user.
+Runtime/Harness upstream exception bodies are not returned to the user. Streamed
+tool arguments expose size and identity metadata only. Requests exceeding the
+handler/container message limits are rejected rather than truncated, and a stream
+without its terminal result is incomplete and cannot replace session history.
+Unknown Harness execution fields are rejected; only explicit service metadata is
+excluded from configuration comparisons.
 Harness input/system text is inspected with rules and strict, coverage-verified
 Guardrails before managed execution. Rule hits reject locally; every admitted
 input has both detectors. Missing Guardrail configuration or failed coverage
@@ -156,7 +170,9 @@ Gateway verifier's 20,000-character limit block the tool boundary. Inspection
 sends the complete serialized payload in one request; it never truncates or
 splits context. The shared S2 verifier retains its separate 4,000-character bound.
 The Tools Lambda can apply only that Guardrail and its existing APAC profile
-in the six documented destination Regions from Seoul.
+in the six documented destination Regions from Seoul. Passport-format variants
+have an independent Guardrail regex. A new immutable policy version is selected by
+its consumers, while the prior policy version remains available for rollback.
 The Runtime pre-model hook independently verifies the complete collected text,
 including system content, message history and tool specifications, before each
 model call. Its explicit 100,000-character verification bound never truncates;

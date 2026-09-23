@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 
 function assertMainPrivacyDelta(baseline, enabled, arn) {
   const resources = baseline.Resources;
@@ -40,11 +41,36 @@ function assertMainPrivacyDelta(baseline, enabled, arn) {
   return changed;
 }
 
-function assertReviewedMainChanges(base, changes, manifest) {
+function resourceHash(resource) {
+  resource = structuredClone(resource);
+  // Bundled worker code contains this manifest, so hashing its generated S3
+  // digest here would be self-referential. Release artifact hashes are checked
+  // separately; retain all deployment configuration and the asset bucket.
+  const code = resource?.Type === 'AWS::Lambda::Function' && resource.Properties?.Code;
+  if (code && typeof code.S3Key === 'string' && /^[0-9a-f]{64}\.zip$/.test(code.S3Key)) {
+    code.S3Key = '<generated-asset-digest>.zip';
+  }
+  if (code?.ImageUri) {
+    if (typeof code.ImageUri === 'string') code.ImageUri = code.ImageUri.replace(/:[0-9a-f]{64}$/, ':<generated-asset-digest>');
+    else if (typeof code.ImageUri['Fn::Sub'] === 'string') {
+      code.ImageUri['Fn::Sub'] = code.ImageUri['Fn::Sub'].replace(/:[0-9a-f]{64}$/, ':<generated-asset-digest>');
+    }
+  }
+  const canonical = value => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
+    : value;
+  return createHash('sha256').update(JSON.stringify(canonical(resource))).digest('hex');
+}
+
+function assertReviewedMainChanges(base, changes, manifest, resources) {
   if (!changes.length) return;
   assert.equal(manifest.base, base, 'Main-stack changes require a review manifest for this exact PR base');
   assert.deepEqual([...changes].sort(), [...manifest.resources].sort(),
     'Main-stack changes differ from the committed review manifest');
+  for (const id of changes) {
+    assert.equal(resourceHash(resources[id]), manifest.resourceSha256?.[id],
+      `Main-stack resource content differs from reviewed manifest: ${id}`);
+  }
 }
 
-module.exports = { assertMainPrivacyDelta, assertReviewedMainChanges };
+module.exports = { assertMainPrivacyDelta, assertReviewedMainChanges, resourceHash };

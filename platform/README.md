@@ -160,6 +160,7 @@ this documentation audit:
 ```bash
 python3 seed/generate.py
 python3 seed/corpus.py
+bash agents/prepare_context.sh
 python3 -m pytest tests/ -q
 (cd gates && npm ci && npm test)
 (cd react-kit && npm ci --ignore-scripts && npm test)

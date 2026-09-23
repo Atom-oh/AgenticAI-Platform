@@ -47,6 +47,15 @@ def transition(name, version, target, expected_hash, reason="", *, actor_ref):
         raise ConflictError("Registry content changed after inspection")
     if not isinstance(actor_ref, str) or not re.fullmatch(r"iam-invoke:[0-9a-f-]{36}", actor_ref):
         raise ValidationError("A trusted administrative invocation reference is required")
-    record, audit = api.transition(name, version, target, actor=actor_ref, reason=reason,
-                                   expected_record=current["record"])
-    return {"record": record, "audit": audit}
+    if current["record"]["status"] == target:
+        record, audit = current["record"], None
+    else:
+        record, audit = api.transition(name, version, target, actor=actor_ref, reason=reason,
+                                       expected_record=current["record"])
+    from agentcore import registry_mirror
+    try:
+        mirrored = registry_mirror.mirror(record)
+    except Exception as error:
+        mirrored = {"status": "SYNC_PENDING", "errorType": type(error).__name__}
+    return {"record": record, "audit": audit, "applied": True,
+            "completed": mirrored.get("status") == target, "agentcoreRegistry": mirrored}

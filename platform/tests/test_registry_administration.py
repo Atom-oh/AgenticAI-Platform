@@ -20,7 +20,9 @@ ADMIN_CONTEXT = SimpleNamespace(aws_request_id="11111111-1111-4111-8111-11111111
 
 
 @pytest.fixture(autouse=True)
-def store():
+def store(monkeypatch):
+    from agentcore import registry_mirror
+    monkeypatch.setattr(registry_mirror, "mirror", lambda record: {"status": record["status"], "recordId": "synthetic"})
     yield api.reset_for_tests()
 
 
@@ -60,17 +62,25 @@ def test_staff_cannot_apply_generic_decisions_or_spoof_admin(store, kind, target
 
 
 @pytest.mark.parametrize("kind", ["MCP", "SKILL", "CUSTOM"])
-def test_iam_decision_uses_exact_inspected_record(kind):
-    item = record(kind)
+@pytest.mark.parametrize("target", ["APPROVED", "REJECTED", "DEPRECATED"])
+def test_iam_decision_uses_exact_inspected_record(kind, target):
+    item = record(kind, "APPROVED" if target == "DEPRECATED" else "DRAFT")
     ctx, messages = context()
-    routes.registry_transition(ctx, {"name": item["name"], "version": "v1", "to": "PENDING_APPROVAL"})
-    assert messages[-1]["ok"] is True
+    if target != "DEPRECATED":
+        routes.registry_transition(ctx, {"name": item["name"], "version": "v1", "to": "PENDING_APPROVAL"})
+        assert messages[-1]["ok"] is True
     inspected = admin_handler.handler({"op": "inspect_registry_record", "name": item["name"], "version": "v1"}, ADMIN_CONTEXT)
-    result = admin_handler.handler({"op": "transition_registry_record", "name": item["name"],
-                                    "version": "v1", "to": "APPROVED", "expectedHash": inspected["expectedHash"]}, ADMIN_CONTEXT)
-    assert result["ok"] and result["record"]["status"] == "APPROVED"
+    event = {"op": "transition_registry_record", "name": item["name"], "version": "v1", "to": target,
+             "expectedHash": inspected["expectedHash"], "reason": "Synthetic decision"}
+    stale = admin_handler.handler({**event, "expectedHash": "0" * 64}, ADMIN_CONTEXT)
+    assert stale["ok"] is False and stale["code"] == 409
+    if target in {"REJECTED", "DEPRECATED"}:
+        missing = admin_handler.handler({**event, "reason": ""}, ADMIN_CONTEXT)
+        assert missing["ok"] is False
+    result = admin_handler.handler(event, ADMIN_CONTEXT)
+    assert result["ok"] and result["record"]["status"] == target
     assert result["audit"]["actor"] == "iam-invoke:" + ADMIN_CONTEXT.aws_request_id
-    assert [r["name"] for r in api.list_approved()] == [item["name"]]
+    assert [r["name"] for r in api.list_approved()] == ([item["name"]] if target == "APPROVED" else [])
 
 
 @pytest.mark.parametrize("timing", ["after_inspection", "before_commit"])
@@ -115,6 +125,40 @@ def test_admin_audit_uses_lambda_context_not_claimed_operator():
     assert rejected["ok"] is False
     result = admin_handler.handler(event, ADMIN_CONTEXT)
     assert result["ok"] and result["audit"]["actor"] == "iam-invoke:" + ADMIN_CONTEXT.aws_request_id
+
+
+def test_generic_mirror_failure_is_partial_and_retry_uses_fresh_inspection(monkeypatch):
+    from agentcore import registry_mirror
+    item = record(status="PENDING_APPROVAL")
+    inspected = administration.inspect(item["name"], "v1")
+    monkeypatch.setattr(registry_mirror, "mirror", lambda record: (_ for _ in ()).throw(RuntimeError("failed")))
+    result = administration.transition(item["name"], "v1", "APPROVED", inspected["expectedHash"],
+                                       actor_ref="iam-invoke:" + ADMIN_CONTEXT.aws_request_id)
+    assert result["applied"] and not result["completed"] and result["record"]["status"] == "APPROVED"
+    before = api.audit_trail(item["name"], "v1")
+    monkeypatch.setattr(registry_mirror, "mirror", lambda record: {"status": record["status"], "recordId": "synthetic"})
+    inspected = administration.inspect(item["name"], "v1")
+    retried = administration.transition(item["name"], "v1", "APPROVED", inspected["expectedHash"],
+                                        actor_ref="iam-invoke:" + ADMIN_CONTEXT.aws_request_id)
+    assert retried["completed"] and retried["audit"] is None
+    assert api.audit_trail(item["name"], "v1") == before
+
+
+@pytest.mark.parametrize("target,status", [("APPROVED", "PENDING_APPROVAL"),
+                                         ("REJECTED", "PENDING_APPROVAL"), ("DEPRECATED", "APPROVED")])
+def test_iam_decision_and_audit_rollback_together(store, monkeypatch, target, status):
+    item = record(status=status)
+    reviewed = administration.inspect(item["name"], "v1")
+    before = store.table().dump()
+    put = store.table().put_item
+    def fail_audit(**kwargs):
+        if kwargs["Item"]["pk"].startswith("audit#"):
+            raise RuntimeError("synthetic audit failure")
+        return put(**kwargs)
+    monkeypatch.setattr(store.table(), "put_item", fail_audit)
+    result = admin_handler.handler({"op": "transition_registry_record", "name": item["name"], "version": "v1",
+                                    "to": target, "reason": "Synthetic", "expectedHash": reviewed["expectedHash"]}, ADMIN_CONTEXT)
+    assert result["ok"] is False and store.table().dump() == before
 
 
 @pytest.mark.parametrize("change", ["deprecate", "remove"])

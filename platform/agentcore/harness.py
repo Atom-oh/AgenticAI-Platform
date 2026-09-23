@@ -135,6 +135,7 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
     measured = _inspect(text, "agentcore.harness.input")
     yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
                         "piiRules": measured["piiRules"]["count"], "source": "harness-input",
+                        "piiCount": measured["verification"]["count"],
                         "piiDetectors": measured["verification"]["detectors"]})
     sid = session_id or (uuid.uuid4().hex + "-session")
     r = data().invoke_harness(harnessArn=harness_arn, runtimeSessionId=sid,
@@ -157,7 +158,7 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
                 tool_buf.append(delta["toolUse"].get("input", ""))
         elif "contentBlockStop" in ev:
             if tool_name:
-                yield ("tool_input", {"name": tool_name, "input": "".join(tool_buf)[:2000]})
+                yield ("tool_input", {"name": tool_name, "chars": sum(map(len, tool_buf)), "inputRedacted": True})
                 tool_name = None
         elif "messageStop" in ev:
             stop = ev["messageStop"].get("stopReason", "")

@@ -383,6 +383,8 @@ def _py_files():
 def test_gate_is_the_only_path_to_models_repo_wide():
     violations = []
     seen = set()
+    for name in ("pii.py", "log.py", "__init__.py"):
+        assert (ROOT / "agents/_ctx/common" / name).is_file(), "Prepare the Runtime context before pytest"
     for rel, src in _py_files():
         seen.add(rel)
         copies = {"agents/_ctx/common/" + name: "api/common/" + name

@@ -117,7 +117,8 @@ def mirror(record: dict) -> dict:
                 name=_mirror_name(name), descriptorType=dtype, descriptors=descriptors,
                 description=(record.get("description") or name)[:1000])
             current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
-            if current.get("descriptorType") != dtype or current.get("descriptors") != descriptors:
+            if (current.get("descriptorType") != dtype or current.get("descriptors") != descriptors
+                    or current.get("name") != _mirror_name(name) or str(current.get("recordVersion")) != version):
                 raise RuntimeError("Agent mirror metadata replacement was not confirmed")
             action = "updated"
         existing = {**existing, "status": current.get("status")}

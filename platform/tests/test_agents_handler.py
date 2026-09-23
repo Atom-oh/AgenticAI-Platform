@@ -73,7 +73,8 @@ class FakeHarness:
         measured = harness_mod._inspect(text, "synthetic.harness.input")
         yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
                             "piiRules": measured["piiRules"]["count"], "source": "harness-input",
-                            "piiDetectors": measured["verification"]["detectors"]})
+                            "piiDetectors": measured["verification"]["detectors"],
+                            "piiCount": measured["verification"]["count"]})
         yield ("text", "안녕")
         yield ("tool_start", {"name": "lookup_customer_profile", "toolUseId": "t1"})
         yield ("tool_input", {"name": "lookup_customer_profile", "input": json.dumps({"question": "우대금리"})})
@@ -174,11 +175,18 @@ def _types(gw):
 
 
 def _approve(h, name="card_benefit_agent"):
-    from agentcore.administration import apply_request
+    import admin_handler
+    from types import SimpleNamespace
     ctx, gw = _ctx()
     h.agent_transition(ctx, {"name": name, "version": "v1", "to": "APPROVED", "reason": "Synthetic administrator approval"})
     request = gw.posted[-1]["request"]
-    return apply_request(request["name"], request["version"])
+    result = admin_handler.handler({"op": "apply_agent_request", "name": request["name"], "version": request["version"]},
+                                   SimpleNamespace(aws_request_id="11111111-1111-4111-8111-111111111111"))
+    if not result["ok"]:
+        from registry import model
+        error = getattr(model, result["errorType"], RuntimeError)
+        raise error(result["error"])
+    return result
 
 
 # ---------------- 라우트 ----------------
@@ -370,6 +378,47 @@ def test_agent_invocation_requires_the_verified_subject(fakes):
     _handler().agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hello", "userSub": "forged"})
     assert gw.posted[-1]["code"] == 401
     assert not fh.calls
+
+
+def test_oversized_handler_input_is_rejected_without_truncation(fakes):
+    handler = _handler()
+    ctx, gw = _ctx()
+    handler.agent_invoke(ctx, {"name": "synthetic", "message": "x" * handler.MAX_MESSAGE + "CUST-0042"})
+    assert gw.posted[-1]["code"] == 413 and not fakes[0].calls
+
+
+def test_unknown_harness_execution_configuration_is_not_ignored(fakes):
+    handler = _handler()
+    _create(handler)
+    _approve(handler)
+    fakes[0].harnesses["bank_card_benefit_agent"]["unexpectedExecutionExtension"] = {"enabled": True}
+    ctx, gw = _ctx()
+    handler.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "safe"})
+    assert gw.posted[-1]["code"] == 409
+    assert not any(call[0] == "invoke" for call in fakes[0].calls)
+
+
+@pytest.mark.parametrize("missing", ["chars", "piiCount", "piiDetectors", "independent"])
+def test_incomplete_boundary_is_not_recorded_as_clean_evidence(fakes, monkeypatch, capsys, missing):
+    from agentcore import invoke
+    handler = _handler()
+    _create(handler)
+    _approve(handler)
+    boundary = {"chars": 10, "estTokens": 3, "piiRules": 0, "piiCount": 0,
+                "piiDetectors": ["rules", "guardrail"]}
+    if missing == "independent":
+        boundary["piiDetectors"] = ["rules"]
+    else:
+        boundary.pop(missing)
+    monkeypatch.setattr(invoke, "stream", lambda *args: iter([
+        ("boundary", boundary), ("text", "UNVERIFIED_OUTPUT"),
+        ("meta", {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}})]))
+    capsys.readouterr()
+    ctx, gw = _ctx()
+    handler.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "safe"})
+    assert gw.posted[-1]["error"] and "UNVERIFIED_OUTPUT" not in json.dumps(gw.posted)
+    trace = next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace["piiDetectors"] == [] and "piiOutbound" not in trace
 
 
 def test_admin_rejects_legacy_empty_skill_records_without_explicit_bindings(fakes):
@@ -660,8 +709,11 @@ def test_transition_then_invoke_streams(fakes, capsys):
     assert ev["type"] == "agent_transition" and ev["ok"] and ev["record"]["status"] == "PENDING_APPROVAL"
     assert fh.calls == [] and fm.calls == []
     from agentcore.administration import apply_request
-    applied = apply_request(ev["request"]["name"])
-    assert applied["record"]["status"] == "APPROVED" and applied["audit"]["actor"] == "admin"
+    import admin_handler
+    from types import SimpleNamespace
+    applied = admin_handler.handler({"op": "apply_agent_request", "name": ev["request"]["name"]},
+                                    SimpleNamespace(aws_request_id="11111111-1111-4111-8111-111111111111"))
+    assert applied["record"]["status"] == "APPROVED" and applied["audit"]["actor"].startswith("iam-invoke:")
     assert len(fm.calls) == 1 and fm.calls[-1]["status"] == "APPROVED"
     assert SECRET_PROMPT_MARK not in json.dumps(fm.calls) and ACTOR not in json.dumps(fm.calls)
     # 호출
@@ -677,7 +729,7 @@ def test_transition_then_invoke_streams(fakes, capsys):
     ts = next(s for s in stages if s["step"] == "tool_start")
     assert ts["name"] == "lookup_customer_profile" and ts["toolUseId"] == "t1" and ts["plane"] == "agentcore"
     ti = next(s for s in stages if s["step"] == "tool_input")
-    assert json.loads(ti["input"]) == {"question": "우대금리"}
+    assert "input" not in ti and ti["inputRedacted"] is True and ti["chars"] > 0
     done = gw.posted[-1]
     assert done["usage"]["inputTokens"] == 120 and done["usage"]["outputTokens"] == 45
     assert done["modelId"] == "global.anthropic.claude-sonnet-5" and done["runtime"] == "AgentCore Harness"

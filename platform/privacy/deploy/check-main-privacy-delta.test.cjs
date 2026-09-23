@@ -1,17 +1,21 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { assertMainPrivacyDelta, assertReviewedMainChanges } = require('./check-main-privacy-delta.cjs');
+const { assertMainPrivacyDelta, assertReviewedMainChanges, resourceHash } = require('./check-main-privacy-delta.cjs');
 const { loadBaselineModule } = require('./load-baseline.cjs');
 const Module = require('node:module');
 const path = require('node:path');
 
 test('cross-revision drift requires the exact committed base and resource inventory', () => {
   const manifest = {base: 'a'.repeat(40), resources: ['WsPolicy', 'Gateway']};
-  assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy'], manifest);
-  assertReviewedMainChanges('b'.repeat(40), [], manifest);
-  assert.throws(() => assertReviewedMainChanges('b'.repeat(40), ['Gateway', 'WsPolicy'], manifest));
-  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy', 'WorkspacePolicy'], manifest));
-  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway'], manifest));
+  const resources = {WsPolicy: {Action: 'read-only'}, Gateway: {auth: 'IAM'}};
+  manifest.resourceSha256 = Object.fromEntries(Object.entries(resources).map(([id, value]) => [id, resourceHash(value)]));
+  assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy'], manifest, resources);
+  assertReviewedMainChanges('b'.repeat(40), [], manifest, resources);
+  assert.throws(() => assertReviewedMainChanges('b'.repeat(40), ['Gateway', 'WsPolicy'], manifest, resources));
+  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy', 'WorkspacePolicy'], manifest, resources));
+  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway'], manifest, resources));
+  resources.WsPolicy.Action = '*';
+  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy'], manifest, resources));
 });
 
 test('baseline compilation cannot reuse changed HEAD workspace policy code', () => {

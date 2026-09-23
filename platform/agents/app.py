@@ -253,7 +253,7 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
     started = time.time()
     payload = payload if isinstance(payload, dict) else {}
     name = str(payload.get("agent") or "").strip()
-    prompt = str(payload.get("prompt") or "").strip()[:MAX_PROMPT_CHARS]
+    prompt = str(payload.get("prompt") or "").strip()
     sid = runtime_session_id if isinstance(runtime_session_id, str) else ""
     spec = agent_specs.spec_by_name(name) if name else None
     model_id = str(payload.get("model") or (spec or {}).get("model") or agent_specs.DEFAULT_MODEL)
@@ -267,6 +267,10 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
         yield {"type": "error", "code": 400, "message": "A verified Runtime session is required"}
         meta["stopReason"] = "error"
         yield meta
+        return
+    if len(prompt) > MAX_PROMPT_CHARS:
+        yield {"type": "error", "code": 413, "message": "Prompt exceeds the admitted length"}
+        yield {**meta, "stopReason": "error"}
         return
 
     if spec is None:
@@ -332,6 +336,7 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
         stop_reason = ""
         text_chars = 0
         refused = False
+        completed = False
         try:
             async for ev in agent.stream_async(prompt):
                 for m in gate.drain():
@@ -366,7 +371,8 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
                                 meta["toolCalls"] += 1
                                 yield {"type": "tool_start", "name": tool_name_by_id[tid], "toolUseId": tid}
                             yield {"type": "tool_input", "name": tool_name_by_id.get(tid, ""), "toolUseId": tid,
-                                   "input": json.dumps(tu.get("input"), ensure_ascii=False, default=str)[:2000]}
+                                   "chars": len(json.dumps(tu.get("input"), ensure_ascii=False, default=str)),
+                                   "inputRedacted": True}
                         elif "toolResult" in block:
                             tr = block["toolResult"]
                             tid = str(tr.get("toolUseId") or "")
@@ -376,6 +382,7 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
                 elif "result" in ev:
                     res = ev["result"]
                     stop_reason = str(getattr(res, "stop_reason", "") or "")
+                    completed = bool(stop_reason)
                     metrics = getattr(res, "metrics", None)
                     usage = dict(getattr(metrics, "accumulated_usage", {}) or {})
                     meta["usage"] = {"inputTokens": int(usage.get("inputTokens", 0) or 0),
@@ -402,12 +409,16 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
                    "piiRules": m["piiRules"], "piiCount": m.get("piiCount", m["piiRules"]),
                    "piiDetectors": m.get("piiDetectors", ["rules"]),
                    "seq": m.get("seq"), "messages": m.get("messages")}
+        if not completed and stop_reason not in {"error", "gate_refused"}:
+            stop_reason = "incomplete"
+            meta["incomplete"] = True
+            yield {"type": "error", "code": 502, "message": "Model stream ended without a terminal result"}
         meta["stopReason"] = stop_reason
         meta["boundary"] = gate.summary()
         meta["textChars"] = text_chars
         if refused:
             _session_drop(sid)  # 식별자가 든 턴은 이력에 남기지 않는다
-        else:
+        elif completed and stop_reason != "error":
             _session_put(sid, agent.messages)
     except (CancelledError, GeneratorExit):
         aborted = True

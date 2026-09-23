@@ -143,6 +143,9 @@ Record example (illustrative values, not a fixed approved version):
   list, search, version and consumer APIs. Trusted request collision checks and
   IAM processing opt into `get_record(..., include_internal=True)` internally;
   user request bodies cannot enable that option.
+- Generic decision responses separate local `applied` from mirror `completed`.
+  Mirror failures retain the committed local audit; a fresh exact-hash inspection
+  permits synchronization retry without another lifecycle event.
 - Generic transitions conditionally bind the authorized record type, subtype,
   payload and revision in the same transaction as the status and audit writes.
   Missing or concurrently reclassified records cannot bypass Agent administration.

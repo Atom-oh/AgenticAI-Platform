@@ -28,17 +28,28 @@ def boundary(monkeypatch):
     return module, client, calls
 
 
-def test_runtime_verifies_system_content_messages_and_tool_specs(boundary):
+@pytest.mark.parametrize("content_blocks", [False, True])
+def test_runtime_verifies_system_content_messages_and_tool_specs(boundary, content_blocks):
     module, client, calls = boundary
     hook = module.BoundaryGateHook()
-    agent = SimpleNamespace(messages=[{"role": "user", "content": [{"text": "question"}]}],
-        system_prompt="obsolete", _system_prompt_content=[{"text": "current system"}],
-        tool_registry=SimpleNamespace(get_all_tool_specs=lambda: [{"name": "lookup", "description": "tool metadata"}]))
+    tools = [{"name": "lookup", "description": "complete tool metadata",
+              "inputSchema": {"json": {"type": "object", "properties": {"query": {"type": "string"}},
+                                       "required": ["query"]}}}]
+    agent = SimpleNamespace(messages=[
+        {"role": "user", "content": [{"text": "history question"}]},
+        {"role": "assistant", "content": [{"text": "history answer"}]},
+        {"role": "user", "content": [{"text": "current question"}]}],
+        system_prompt="plain system",
+        tool_registry=SimpleNamespace(get_all_tool_specs=lambda: tools))
+    if content_blocks:
+        agent._system_prompt_content = [{"text": "first system block"}, {"text": "second system block"}]
     hook.before_model_call(SimpleNamespace(agent=agent))
     assert len(calls) == 1
     text = calls[0]["content"][0]["text"]["text"]
-    assert all(value in text for value in ["question", "current system", "tool metadata"])
-    assert "obsolete" not in text
+    expected_system = "first system block\nsecond system block" if content_blocks else "plain system"
+    expected = (expected_system + "\nuser\nhistory question\nassistant\nhistory answer\nuser\ncurrent question\nsystem\n"
+                + json.dumps({"tools": tools}, ensure_ascii=False))
+    assert text == expected
     result = hook.drain()[0]
     assert result["piiDetectors"] == ["rules", "guardrail"] and result["piiCount"] == 0
 
@@ -85,4 +96,15 @@ def test_runtime_retains_complete_larger_context_and_rejects_opaque_media(bounda
                     {"document": {"source": {"s3Location": {"uri": "s3://private"}}}}]:
         with pytest.raises(ValueError):
             hook.check([{"role": "user", "content": [content]}])
+    assert len(calls) == 1
+
+
+def test_runtime_exact_limit_is_complete_and_overflow_is_not_sent(boundary):
+    module, client, calls = boundary
+    text = "x" * (100000 - len("user\n"))
+    module.BoundaryGateHook().check([{"role": "user", "content": [{"text": text}]}])
+    assert calls[0]["content"][0]["text"]["text"] == "user\n" + text
+    assert len(calls[0]["content"][0]["text"]["text"]) == 100000
+    with pytest.raises(pii.PiiVerificationUnavailable):
+        module.BoundaryGateHook().check([{"role": "user", "content": [{"text": text + "x"}]}])
     assert len(calls) == 1

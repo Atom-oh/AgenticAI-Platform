@@ -200,7 +200,7 @@ const mainIds = new Set([...Object.keys(baseline.Resources), ...Object.keys(disa
 const reviewedMainChanges = [...mainIds].filter(id =>
   JSON.stringify(baseline.Resources[id]) !== JSON.stringify(disabled.Resources[id]));
 const reviewedDelta = JSON.parse(fs.readFileSync(path.join(__dirname, 'reviewed-main-delta.json'), 'utf8'));
-assertReviewedMainChanges(baselineHead, reviewedMainChanges, reviewedDelta);
+assertReviewedMainChanges(baselineHead, reviewedMainChanges, reviewedDelta, disabled.Resources);
 console.log('Main-stack resources changed between revisions (review separately):', reviewedMainChanges.join(', '));
 fs.writeFileSync(path.join(out, 'verified.json'), JSON.stringify({
   privacyResources: Object.keys(json.Resources).length,

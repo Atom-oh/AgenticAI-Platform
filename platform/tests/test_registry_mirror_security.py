@@ -94,3 +94,32 @@ def test_path_only_skill_does_not_silently_become_custom(monkeypatch):
     with pytest.raises(ValueError):
         mirror.mirror({'name': 'synthetic', 'recordVersion': 'v1', 'recordType': 'SKILL',
                        'payload': {'path': 'skills/synthetic.md'}})
+
+
+@pytest.mark.parametrize("stage,field", [
+    ("pre", "name"), ("pre", "recordVersion"), ("pre", "descriptorType"), ("pre", "descriptors"),
+    ("post", "name"), ("post", "recordVersion"), ("post", "descriptorType"),
+    ("post", "descriptors"), ("post", "status"),
+])
+def test_mirror_requires_exact_pre_status_and_post_status_evidence(monkeypatch, stage, field):
+    record = {"name": "agent_probe", "recordVersion": "v1", "recordType": "AGENT", "status": "APPROVED"}
+    current = {"name": "agent_probe", "recordVersion": "v1", "recordId": "synthetic", "status": "DRAFT",
+               "descriptorType": "CUSTOM", "descriptors": {"custom": {"inlineContent": json.dumps(record)}}}
+    reads, statuses = [], []
+    def get(**kwargs):
+        reads.append(True)
+        result = copy.deepcopy(current)
+        if len(reads) == (2 if stage == "pre" else 3):
+            result[field] = {"custom": {"inlineContent": "{}"}} if field == "descriptors" else "WRONG"
+        return result
+    def update(**request):
+        current.update(name=request["name"], descriptorType=request["descriptorType"], descriptors=request["descriptors"])
+    def status(**request):
+        statuses.append(True)
+        current["status"] = request["status"]
+    monkeypatch.setattr(mirror, "find_record", lambda *args: {"recordId": "synthetic", "status": "DRAFT"})
+    monkeypatch.setattr(mirror, "ctl", lambda: SimpleNamespace(
+        get_registry_record=get, update_registry_record=update, update_registry_record_status=status))
+    with pytest.raises(RuntimeError):
+        mirror.mirror(record)
+    assert len(statuses) == (0 if stage == "pre" else 1)

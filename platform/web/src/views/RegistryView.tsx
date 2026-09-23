@@ -403,7 +403,7 @@ export default function RegistryView() {
         <div className="flex items-center gap-2 mb-2">
           <span className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--cloud)' }} />
           <b className="text-sm">AgentCore Agent Registry (us-east-1) 서피스 — 읽기 전용</b>
-          <span className="text-xs text-slate-500">플랫폼 서피스(컨트롤룸·스튜디오 등) 등록 레코드. 승인·폐기는 CloudTrail 에 감사된다. 위 F4 레지스트리(서울 · DynamoDB)와는 별개 시스템.</span>
+          <span className="text-xs text-slate-500">플랫폼 서피스(컨트롤룸·스튜디오 등) 등록 레코드. 승인·폐기는 플랫폼 Registry에 기록되며 AWS 호출 감사 구성은 별도 확인이 필요하다. 위 F4 레지스트리(서울 · DynamoDB)와는 별개 시스템.</span>
         </div>
         {!surfaces ? <div className="text-xs text-slate-400">로딩…</div> : surfaces.error ? <div className="text-xs text-[#E90061]">조회 실패: {surfaces.error}</div> : (
           <table className="w-full text-sm">
