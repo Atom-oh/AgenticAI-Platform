@@ -32,6 +32,9 @@ logs or review artifacts.
 - Overlapping turns for one Runtime session fail with `409/session_busy`
   before constructing another agent. Completion, cancellation and stream closure
   release the session claim after cleanup.
+  Design cancellation stops further generation/judging calls and joins the
+  admitted worker before release. Failed Gateway cleanup quarantines the
+  affected session; a new conversation is required.
 - `agentcore/runtime.py` sends `runtimeSessionId` in the API request and no
   payload `sessionId`, including through additional payload fields.
 - `api/ws_handler.py` retains the Cognito-verified `sub`; it verifies the
@@ -118,10 +121,16 @@ Runtime/Harness upstream exception bodies are not returned to the user.
 Harness input/system text is inspected before managed execution. The bank
 Gateway Lambda independently measures and scans every outgoing tool result,
 blocks residual identifiers or failed inspection, and returns bounded errors.
-It requires the configured Guardrail's independent sensitive-information check
-in addition to rules, with complete coverage. Missing configuration, incomplete
-coverage, service errors and inputs/results above the verifier's 4,000-character
-limit block the tool boundary. The Tools Lambda can apply only that Guardrail.
+Every admitted payload requires both rules and the configured Guardrail's
+independent sensitive-information check, with complete coverage. A rules hit
+blocks locally without sending the identified content to Guardrails; it records
+rules-only rejection evidence, never a completed Guardrail check. Missing
+configuration, incomplete coverage, service errors and inputs/results above the
+Gateway verifier's 20,000-character limit block the tool boundary. Inspection
+sends the complete serialized payload in one request; it never truncates or
+splits context. The shared S2 verifier retains its separate 4,000-character bound.
+The Tools Lambda can apply only that Guardrail and its existing APAC profile
+in the six documented destination Regions from Seoul.
 It also inspects arguments before executing a tool, including nested model
 adapter calls inside tools.
 Gate and document results are projected from their expected response schemas;

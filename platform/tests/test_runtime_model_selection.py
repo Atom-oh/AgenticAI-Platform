@@ -43,6 +43,7 @@ def runtime_app(monkeypatch):
     boundary.scan_rules = _no_live_dependency
     gateway = ModuleType("mcp_gateway")
     gateway.open_tools = _no_live_dependency
+    gateway.GatewayCleanupFailed = type("GatewayCleanupFailed", (RuntimeError,), {})
 
     class StubApp:
         def entrypoint(self, function):

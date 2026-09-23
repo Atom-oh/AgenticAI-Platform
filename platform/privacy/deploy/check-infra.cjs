@@ -2,8 +2,10 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const Module = require('node:module');
+const { execFileSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { assertMainPrivacyDelta } = require('./check-main-privacy-delta.cjs');
+const { loadBaselineModule } = require('./load-baseline.cjs');
 const root = path.resolve(__dirname, '../..');
 const infra = path.join(root, 'infra');
 // Existing stack assets are relative to the CDK project working directory.
@@ -145,19 +147,39 @@ for (const resource of Object.values(json.Resources)) {
 }
 scope.synth();
 
-// Compile the supplied PR-base source in memory, using the original import directory.
-// No shared file is temporarily replaced while the parent works in this tree.
-const sourcePath = path.join(infra, 'lib/stack.ts');
-// Supply `git show "$PR_BASE_SHA":platform/infra/lib/stack.ts` on stdin. Keeping Git outside
-// Node also works in runners which prohibit nested subprocesses.
+// Verify stdin against the named revision and compile its entire relative source
+// dependency closure, including workspace.ts, without reusing HEAD modules.
+const repository = path.dirname(root);
+const git = args => execFileSync('git', args, { cwd: repository, encoding: 'utf8' });
+const baselineHead = process.env.PR_BASE_SHA || git(['rev-parse', 'HEAD']).trim();
+assert.match(baselineHead, /^[0-9a-f]{40}$/);
+const entry = 'platform/infra/lib/stack.ts';
+const tracked = new Set(git(['ls-tree', '-r', '--name-only', baselineHead]).trim().split('\n'));
+const baselineSources = new Map();
+const sourceHashes = {};
+const readSource = name => {
+  if (!tracked.has(name)) return null;
+  if (!baselineSources.has(name)) {
+    const text = git(['show', `${baselineHead}:${name}`]);
+    baselineSources.set(name, text);
+    sourceHashes[name] = createHash('sha256').update(text).digest('hex');
+  }
+  return baselineSources.get(name);
+};
 const oldSource = fs.readFileSync(0, 'utf8');
 assert.ok(oldSource.includes('export class BankPlatformStack'), 'PR-base stack source required on stdin');
-const oldModule = new Module(sourcePath, module);
-oldModule.filename = sourcePath;
-oldModule.paths = Module._nodeModulePaths(path.dirname(sourcePath));
-oldModule._compile(ts.transpileModule(oldSource, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
-}).outputText, sourcePath);
+assert.equal(oldSource, readSource(entry), 'stdin does not match PR_BASE_SHA (defaults to HEAD)');
+for (const file of ['package.json', 'package-lock.json', 'tsconfig.json']) {
+  const name = `platform/infra/${file}`;
+  assert.equal(fs.readFileSync(path.join(repository, name), 'utf8'), readSource(name),
+    'Baseline package/compiler configuration changed; independent dependency installation is required');
+}
+const oldExports = loadBaselineModule(entry, {
+  root: repository, readSource,
+  compile: text => ts.transpileModule(text, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+  }).outputText,
+});
 const arn = 'arn:aws:lambda:ap-northeast-2:180294183052:function:bank-platform-mydata-privacy-relay';
 function mainTemplate(Stack, name, privacyArn) {
   return Template.fromStack(new Stack(app(name), 'BankPlatform', {
@@ -166,8 +188,8 @@ function mainTemplate(Stack, name, privacyArn) {
     mydataPrivacyFunctionArn: privacyArn,
   })).toJSON();
 }
-const baseline = mainTemplate(oldModule.exports.BankPlatformStack, 'baseline');
-const baselineEnabled = mainTemplate(oldModule.exports.BankPlatformStack, 'baseline-enabled', arn);
+const baseline = mainTemplate(oldExports.BankPlatformStack, 'baseline');
+const baselineEnabled = mainTemplate(oldExports.BankPlatformStack, 'baseline-enabled', arn);
 assertMainPrivacyDelta(baseline, baselineEnabled, arn);
 const disabled = mainTemplate(BankPlatformStack, 'disabled');
 const enabled = mainTemplate(BankPlatformStack, 'enabled', arn);
@@ -182,6 +204,8 @@ fs.writeFileSync(path.join(out, 'verified.json'), JSON.stringify({
   privacyResources: Object.keys(json.Resources).length,
   existingMainResources: Object.keys(disabled.Resources).length,
   baselinePrivacyDeltaVerified: true, currentPrivacyDeltaVerified: true,
+  baselineHead, baselineSourceHashes: sourceHashes,
+  assetFixture: 'shared current-checkout assets; source modules loaded from their named revision',
   separatelyReviewedMainChangedResources: reviewedMainChanges,
   enabledMainChangedResources: changed,
 }, null, 2));

@@ -264,7 +264,13 @@ export class BankPlatformStack extends cdk.Stack {
     registryTable.grantReadData(toolsFn);
     toolsFn.addToRolePolicy(bedrockInvoke);
     toolsFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock:ApplyGuardrail'], resources: [guardrail.attrGuardrailArn],
+      // APAC profile destinations from Seoul, verified 2026-09-23.
+      // AWS bedrock/userguide/guardrail-profiles-permissions and guardrails-cross-region-support.
+      actions: ['bedrock:ApplyGuardrail'], resources: [
+        guardrail.attrGuardrailArn,
+        ...['ap-south-1', 'ap-northeast-3', 'ap-northeast-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1']
+          .map(destination => `arn:aws:bedrock:${destination}:${account}:guardrail-profile/apac.guardrail.v1:0`),
+      ],
     }));
     if (gatesFn) gatesFn.grantInvoke(toolsFn);
     if (props.planeDeployed) {

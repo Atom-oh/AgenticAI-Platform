@@ -1,6 +1,37 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { assertMainPrivacyDelta } = require('./check-main-privacy-delta.cjs');
+const { loadBaselineModule } = require('./load-baseline.cjs');
+const Module = require('node:module');
+const path = require('node:path');
+
+test('baseline compilation cannot reuse changed HEAD workspace policy code', () => {
+  const root = path.resolve(__dirname, '../../../');
+  const workspace = path.join(root, 'lib/workspace.ts');
+  const previous = require.cache[workspace];
+  const head = new Module(workspace);
+  head.exports = { policy: 'HEAD_USER_ADMIN' };
+  require.cache[workspace] = head;
+  const sources = new Map([
+    ['lib/stack.ts', "module.exports = {policy: require('./workspace').policy};"],
+    ['lib/workspace.ts', "module.exports = {policy: require('./policy').value};"],
+    ['lib/policy.ts', "module.exports = {value: 'BASE_ADMIN_ONLY'};"],
+  ]);
+  try {
+    const result = loadBaselineModule('lib/stack.ts', {
+      root, readSource: name => sources.get(name) ?? null, compile: text => text,
+    });
+    assert.equal(result.policy, 'BASE_ADMIN_ONLY');
+    assert.equal(require.cache[workspace].exports.policy, 'HEAD_USER_ADMIN');
+    sources.delete('lib/policy.ts');
+    assert.throws(() => loadBaselineModule('lib/stack.ts', {
+      root, readSource: name => sources.get(name) ?? null, compile: text => text,
+    }), /Missing baseline dependency/);
+  } finally {
+    if (previous) require.cache[workspace] = previous;
+    else delete require.cache[workspace];
+  }
+});
 
 const arn = 'arn:aws:lambda:ap-northeast-2:000000000000:function:privacy-test';
 const functionIds = ['WsFnABCD', 'DesignerWorkspaceApiABCD'];

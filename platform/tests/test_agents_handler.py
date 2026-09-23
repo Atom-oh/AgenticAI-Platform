@@ -218,6 +218,9 @@ def test_create_rejects_unknown_tool(fakes):
     ({"skills": ["nonexistent-skill"]}, "SKILL"),
     ({"systemPrompt": "   "}, "프롬프트"),
     ({"model": "global.anthropic.claude-haiku-9"}, "모델"),
+    ({"allowedTools": []}, "도구"),
+    ({"allowedTools": ["*"]}, "도구"),
+    ({"memory": True}, "Memory"),
 ])
 def test_create_validation(fakes, bad, needle):
     fh, _ = fakes
@@ -321,6 +324,8 @@ def test_iam_reconciliation_updates_an_unapproved_orphan_with_an_exact_hash(fake
     from agentcore.administration import apply_request, harness_fingerprint
     fh, _ = fakes
     existing = fh.ensure_harness(_create_body(systemPrompt="Old synthetic specification"))
+    existing.update(maxIterations=999, maxTokens=999999, timeoutSeconds=999)
+    existing["model"]["bedrockModelConfig"]["maxTokens"] = 999999
     h = _handler()
     _create(h)
     ctx, gw = _ctx()
@@ -340,6 +345,8 @@ def test_iam_reconciliation_updates_an_unapproved_orphan_with_an_exact_hash(fake
     assert result["record"]["status"] == "APPROVED"
     assert len(calls) == 1 and calls[0]["harnessId"] == existing["harnessId"]
     assert SECRET_PROMPT_MARK in existing["systemPrompt"][0]["text"]
+    assert (existing["maxIterations"], existing["maxTokens"], existing["timeoutSeconds"]) == (12, 8192, 120)
+    assert existing["model"]["bedrockModelConfig"]["maxTokens"] == 2048
 
 
 def test_agent_invocation_requires_the_verified_subject(fakes):
@@ -469,7 +476,8 @@ def test_stream_error_events_never_expose_upstream_response_bodies(fakes, monkey
     assert trace["queryHash"] == hash8("Synthetic request")
 
 
-@pytest.mark.parametrize("drift", ["legacy", "wildcard", "limits", "memory"])
+@pytest.mark.parametrize("drift", ["legacy", "wildcard", "maxIterations", "maxTokens", "timeoutSeconds",
+                                 "modelTokens", "memory"])
 def test_all_approved_harness_versions_require_the_reviewed_configuration(fakes, drift):
     h = _handler()
     _create(h)
@@ -481,8 +489,10 @@ def test_all_approved_harness_versions_require_the_reviewed_configuration(fakes,
         api.get_store().rewrite(record["name"], "v1", {"payload": payload}, "admin")
     elif drift == "wildcard":
         existing["allowedTools"] = ["*"]
-    elif drift == "limits":
-        existing["maxIterations"] = 999
+    elif drift in {"maxIterations", "maxTokens", "timeoutSeconds"}:
+        existing[drift] = 999999
+    elif drift == "modelTokens":
+        existing["model"]["bedrockModelConfig"]["maxTokens"] = 999999
     else:
         existing["memory"] = {"managedMemoryConfiguration": {"arn": "arn:synthetic:memory/unreviewed"}}
     ctx, gw = _ctx()

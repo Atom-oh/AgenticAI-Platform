@@ -22,7 +22,14 @@ function checkUserPolicy(resources) {
     if (policy.Ref && resources[policy.Ref]?.Type === 'AWS::IAM::ManagedPolicy') {
       statements.push(...resources[policy.Ref].Properties.PolicyDocument.Statement);
     } else {
-      assert(JSON.stringify(policy).includes(':iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'),
+      let arn = policy;
+      if (policy['Fn::Join']) {
+        const [separator, parts] = policy['Fn::Join'];
+        arn = parts.map(part => part.Ref === 'AWS::Partition' ? 'aws' : part).join(separator);
+      } else if (typeof policy['Fn::Sub'] === 'string') {
+        arn = policy['Fn::Sub'].replace('${AWS::Partition}', 'aws');
+      }
+      assert.equal(arn, 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole',
         'Every external managed policy must be explicitly reviewed');
     }
   }
@@ -34,13 +41,24 @@ function checkUserPolicy(resources) {
     if (row.Effect === 'Deny') continue;
     assert.equal(row.Effect, 'Allow');
     for (const action of [].concat(row.Action)) {
-      assert(action !== '*' && !action.startsWith('iam:'), 'No global action or IAM authority on WsFn');
-      if (action.startsWith('bedrock-agentcore:'))
+      const normalized = action.toLowerCase();
+      assert(action !== '*' && !normalized.startsWith('iam:'), 'No global action or IAM authority on WsFn');
+      if (normalized.startsWith('bedrock-agentcore:'))
         assert(allowed.has(action.split(':')[1]), `Unreviewed AgentCore action ${action}`);
-      if (action.startsWith('lambda:')) {
+      if (normalized.startsWith('lambda:')) {
         assert.equal(action, 'lambda:InvokeFunction');
         assert(!JSON.stringify(row.Resource).includes('AdminFn'));
-        assert(![].concat(row.Resource).some(resource => typeof resource === 'string' && resource.includes('*')));
+        for (const resource of [].concat(row.Resource)) {
+          if (!JSON.stringify(resource).includes('*')) continue;
+          // CDK grantInvoke covers versions/aliases of the exact same function.
+          // A wildcard in the function identity is never accepted.
+          const join = resource['Fn::Join'];
+          assert(join && join[0] === '' && join[1].length === 2 && join[1][1] === ':*');
+          const ref = join[1][0]['Fn::GetAtt'];
+          assert(ref && ref.length === 2 && ref[1] === 'Arn');
+          assert.equal(resources[ref[0]]?.Type, 'AWS::Lambda::Function');
+          assert(!ref[0].startsWith('AdminFn'));
+        }
       }
       if (action === 'bedrock-agentcore:InvokeHarness') {
         harnessGrants++;
@@ -103,7 +121,11 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
   const verification = statements('PlatformToolsFn').filter(row =>
     [].concat(row.Action).includes('bedrock:ApplyGuardrail'));
   assert.equal(verification.length, 1);
-  assert.deepEqual([].concat(verification[0].Resource), [{'Fn::GetAtt': [guardrailId, 'GuardrailArn']}]);
+  assert.deepEqual([].concat(verification[0].Resource), [
+    {'Fn::GetAtt': [guardrailId, 'GuardrailArn']},
+    ...['ap-south-1', 'ap-northeast-3', 'ap-northeast-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1']
+      .map(region => `arn:aws:bedrock:${region}:111122223333:guardrail-profile/apac.guardrail.v1:0`),
+  ]);
   for (const [prefix, sources] of [
     ['GatewayExecRole', ['gateway/*']],
     ['HarnessExecRole', ['harness/bank_*', 'runtime/harness_bank_*']],
@@ -121,11 +143,23 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
   }
   assert.equal(gateway.Properties.AuthorizerType, 'AWS_IAM');
   assert.equal(gateway.Properties.ExceptionLevel, undefined);
+  for (const policy of [
+    'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRoleExtra',
+    { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':iam::aws:policy/service-role/AWSLambdaBasicExecutionRoleExtra']] },
+    { 'Fn::Sub': 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRoleExtra' },
+  ]) {
+    const unsafe = structuredClone(resources);
+    unsafe[userRole].Properties.ManagedPolicyArns = [policy];
+    assert.throws(() => checkUserPolicy(unsafe), /Every external managed policy/);
+  }
   for (const statement of [
     { Effect: 'Allow', Action: 'bedrock-agentcore:*', Resource: '*' },
     { Effect: 'Allow', Action: 'iam:*', Resource: '*' },
     { Effect: 'Allow', Action: 'bedrock-agentcore:InvokeHarness', Resource: '*' },
     { Effect: 'Allow', Action: 'lambda:InvokeFunction', Resource: '*' },
+    { Effect: 'Allow', Action: 'lambda:InvokeFunction',
+      Resource: { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' },
+        ':lambda:ap-northeast-2:111122223333:function:*']] } },
   ]) {
     const changed = structuredClone(resources);
     changed.UnrelatedLogicalName = { Type: 'AWS::IAM::Policy', Properties: {

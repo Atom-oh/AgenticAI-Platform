@@ -24,6 +24,9 @@ SERVICE_NAME = "bedrock-agentcore"
 SIGNED_HEADERS = {"content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id"}
 TOOL_NAME_SEP = "___"
 
+class GatewayCleanupFailed(RuntimeError):
+    pass
+
 
 def bare_name(name: str) -> str:
     """'platform___list_regulations' → 'list_regulations' (이미 bare 면 그대로)."""
@@ -162,10 +165,13 @@ def open_tools(allowed: Optional[Sequence[str]], url: Optional[str] = None, regi
     if not allowed or any(not isinstance(name, str) or not name.strip() or "*" in name for name in allowed):
         raise ValueError("An explicit nonempty tool allowlist is required")
     client = make_client(url, region)
-    client.start()
     try:
+        client.start()
         tools, discovered = load_tools(client, allowed)
     except Exception:
-        client.stop(None, None, None)
+        try:
+            client.stop(None, None, None)
+        except Exception:
+            raise GatewayCleanupFailed("Gateway setup cleanup failed") from None
         raise
     return client, tools, discovered

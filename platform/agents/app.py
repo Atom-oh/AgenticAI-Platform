@@ -24,7 +24,7 @@ import os
 import sys
 import threading
 import time
-from asyncio import CancelledError
+from asyncio import CancelledError, create_task, shield
 from collections import OrderedDict
 from contextlib import aclosing
 from pathlib import Path
@@ -64,6 +64,29 @@ app = BedrockAgentCoreApp()
 _sessions: "OrderedDict[str, list]" = OrderedDict()
 _sessions_lock = threading.Lock()
 _active_sessions: set[str] = set()
+_quarantined_sessions: set[str] = set()
+
+
+class _SessionCleanupFailed(RuntimeError):
+    pass
+
+
+class _DesignStopped(RuntimeError):
+    pass
+
+
+async def _finish_task(task, *, propagate_cancel=True):
+    """Keep ownership until a thread-backed task really finishes."""
+    cancelled = False
+    while not task.done():
+        try:
+            await shield(task)
+        except CancelledError:
+            cancelled = True
+    result = task.result()
+    if cancelled and propagate_cancel:
+        raise CancelledError
+    return result
 
 
 def _session_get(sid: str) -> list:
@@ -136,21 +159,52 @@ class _Session:
     def __init__(self, spec: dict, model_id: str, sid: str):
         from strands import Agent
 
+        self.sid = sid
         self.gate = BoundaryGateHook()
         self.system_prompt, self.skills_loaded, self.skills_missing = build_system_prompt(spec)
         sys_hits = scan_rules(self.system_prompt)
         if sys_hits:  # 시스템 프롬프트/스킬 자체가 식별자 규칙에 걸리면 배포 결함 — 즉시 실패
             raise RuntimeError("system prompt/skills contain identifier-rule hits: " + ",".join(sorted({h["type"] for h in sys_hits})))
-        self.client, self.tools, self.discovered = mcp_gateway.open_tools(spec.get("allowedTools") or [])
-        self.agent = Agent(model=build_model(model_id), system_prompt=self.system_prompt, tools=self.tools,
-                           hooks=[self.gate], callback_handler=None, messages=_session_get(sid),
-                           name=spec["name"], description=spec.get("description"))
+        try:
+            self.client, self.tools, self.discovered = mcp_gateway.open_tools(spec.get("allowedTools") or [])
+        except mcp_gateway.GatewayCleanupFailed:
+            with _sessions_lock:
+                _quarantined_sessions.add(sid)
+            raise _SessionCleanupFailed("Gateway setup cleanup failed") from None
+        try:
+            self.agent = Agent(model=build_model(model_id), system_prompt=self.system_prompt, tools=self.tools,
+                               hooks=[self.gate], callback_handler=None, messages=_session_get(sid),
+                               name=spec["name"], description=spec.get("description"))
+        except BaseException:
+            self.close()
+            raise
 
     def close(self) -> None:
         try:
             self.client.stop(None, None, None)
         except Exception as e:  # noqa: BLE001
             log.warning("mcp client stop failed: %s", _err(e))
+            with _sessions_lock:
+                _quarantined_sessions.add(self.sid)
+            raise _SessionCleanupFailed("Gateway cleanup failed") from None
+
+
+async def _start_session(spec, model_id, sid):
+    task = create_task(asyncio.to_thread(_Session, spec, model_id, sid))
+    try:
+        return await shield(task)
+    except CancelledError:
+        # A cancelled to_thread await does not stop its constructor.
+        try:
+            session = await _finish_task(task, propagate_cancel=False)
+        except Exception:
+            pass  # Constructor failures close their initialized client.
+        else:
+            try:
+                await _finish_task(create_task(asyncio.to_thread(session.close)), propagate_cancel=False)
+            except _SessionCleanupFailed:
+                pass  # close() quarantines the session on failed cleanup.
+        raise
 
 
 async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIterator[dict]:
@@ -158,13 +212,17 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
     claimed = False
     if 33 <= len(sid) <= 256:
         with _sessions_lock:
-            if sid not in _active_sessions:
+            quarantined = sid in _quarantined_sessions
+            if not quarantined and sid not in _active_sessions:
                 _active_sessions.add(sid)
                 claimed = True
         if not claimed:
-            yield {"type": "error", "code": 409, "message": "Runtime session is busy; retry this turn"}
+            yield {"type": "error", "code": 503 if quarantined else 409,
+                   "message": "Runtime session cleanup failed; use a new conversation" if quarantined
+                   else "Runtime session is busy; retry this turn"}
             meta = {"type": "meta", "usage": {"inputTokens": 0, "outputTokens": 0},
-                    "stopReason": "session_busy", "sessionId": sid, "runtime": RUNTIME_LABEL}
+                    "stopReason": "cleanup_failed" if quarantined else "session_busy",
+                    "sessionId": sid, "runtime": RUNTIME_LABEL}
             if isinstance(payload, dict) and "sessionId" in payload:
                 meta["ignoredPayloadSessionId"] = True
             yield meta
@@ -176,7 +234,8 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
     finally:
         if claimed:
             with _sessions_lock:
-                _active_sessions.discard(sid)
+                if sid not in _quarantined_sessions:
+                    _active_sessions.discard(sid)
 
 
 async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIterator[dict]:
@@ -213,8 +272,9 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
             meta["stopReason"] = "error"
             yield meta
             return
-        async for ev in _run_design(payload, model_id, meta, started):
-            yield ev
+        async with aclosing(_run_design(payload, model_id, meta, started)) as stream:
+            async for ev in stream:
+                yield ev
         return
     if not prompt:
         yield {"type": "error", "code": 400, "message": "prompt is required"}
@@ -234,7 +294,7 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
     aborted = False
     try:
         try:
-            session = await asyncio.to_thread(_Session, spec, model_id, sid)
+            session = await _start_session(spec, model_id, sid)
         except Exception as e:  # noqa: BLE001 — Gateway/MCP/자격증명 실패는 그대로 보고한다 (도구 결과를 흉내내지 않음)
             log.error("session build failed agent=%s: %s", name, _err(e))
             yield {"type": "error", "code": 502, "message": "agent setup failed — " + _err(e)}
@@ -337,7 +397,12 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
         raise
     finally:
         if session is not None:
-            await asyncio.to_thread(session.close)
+            try:
+                await _finish_task(create_task(asyncio.to_thread(session.close)))
+            except _SessionCleanupFailed:
+                meta.update(stopReason="cleanup_failed", incomplete=True)
+                if not aborted:
+                    yield {"type": "error", "code": 503, "message": "Runtime session cleanup failed"}
         meta["elapsedMs"] = int((time.time() - started) * 1000)
         log.info("done agent=%s stop=%s toolCalls=%d in=%s out=%s ms=%d", name, meta["stopReason"], meta["toolCalls"],
                  meta["usage"]["inputTokens"], meta["usage"]["outputTokens"], meta["elapsedMs"])
@@ -362,8 +427,21 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
     q: asyncio.Queue = asyncio.Queue()
     DONE = object()
     deps = _dd.make_deps(model_id)
+    stopped = threading.Event()
+
+    def guard(fn):
+        def call(*args, **kwargs):
+            if stopped.is_set():
+                raise _DesignStopped
+            return fn(*args, **kwargs)
+        return call
+
+    deps = {key: guard(value) if key in {"generate", "llm_judge"} else value
+            for key, value in deps.items()}
 
     def emit(ev: dict) -> None:
+        if stopped.is_set():
+            return
         if ev.get("type") == "token":
             loop.call_soon_threadsafe(q.put_nowait, {"type": "text", "t": ev.get("text", "")})
         else:
@@ -373,7 +451,10 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
         try:
             res = loop_run(design["productSpec"], design["smModel"], list(design.get("checklists") or []), deps, emit=emit,
                            output_type=str(design.get("outputType") or "design"))
-            loop.call_soon_threadsafe(q.put_nowait, {"type": "design_done", "result": res})
+            if not stopped.is_set():
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "design_done", "result": res})
+        except _DesignStopped:
+            pass
         except Exception as e:  # noqa: BLE001
             loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "code": 500, "message": _err(e)})
         finally:
@@ -382,14 +463,17 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
     log.info("design_loop start spec=%s model=%s", str(design["productSpec"].get("id")), model_id)
     fut = loop.run_in_executor(None, work)
     stop = "end_turn"
-    while True:
-        ev = await q.get()
-        if ev is DONE:
-            break
-        if ev.get("type") == "error":
-            stop = "error"
-        yield ev
-    await fut
+    try:
+        while True:
+            ev = await q.get()
+            if ev is DONE:
+                break
+            if ev.get("type") == "error":
+                stop = "error"
+            yield ev
+    finally:
+        stopped.set()
+        await _finish_task(fut)
     meta["usage"] = {k: v for k, v in deps["usage"]().items() if k in ("inputTokens", "outputTokens")}
     meta["llmCalls"] = deps["usage"]().get("calls", 0)
     meta["stopReason"] = stop

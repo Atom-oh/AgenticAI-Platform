@@ -109,15 +109,15 @@ def test_gateway_guardrails_only_identifier_blocks_boundary(monkeypatch, verifie
 
 
 @pytest.mark.parametrize("failure", ["missing", "coverage", "service", "length"])
-def test_gateway_outgoing_strict_verification_failure_blocks_result(monkeypatch, verified_guardrail, failure):
-    from common import pii
+@pytest.mark.parametrize("side", ["input", "output"])
+def test_gateway_strict_verification_failure_blocks_input_and_result(monkeypatch, verified_guardrail, failure, side):
     calls, requests = [], []
     normal = verified_guardrail.apply_guardrail
 
     def inspect(**request):
         requests.append(request)
         response = normal(**request)
-        if len(requests) == 2:
+        if len(requests) == (1 if side == "input" else 2):
             if failure == "service":
                 raise RuntimeError("PRIVATE_UPSTREAM_MARKER")
             if failure == "coverage":
@@ -128,14 +128,15 @@ def test_gateway_outgoing_strict_verification_failure_blocks_result(monkeypatch,
 
     def tool(args):
         calls.append(args)
-        return {"result": "safe" * (1100 if failure == "length" else 1)}
+        return {"result": "safe" * (5100 if failure == "length" and side == "output" else 1)}
 
     verified_guardrail.apply_guardrail = inspect
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", tool)
-    result = gateway_tools.handler({}, context())
-    assert calls == [{}] and result["code"] == "TOOL_FAILED"
+    args = {"question": "safe" * 5100} if failure == "length" and side == "input" else {}
+    result = gateway_tools.handler(args, context())
+    assert calls == ([{}] if side == "output" else []) and result["code"] == "TOOL_FAILED"
     assert "PRIVATE_UPSTREAM_MARKER" not in json.dumps(result)
-    assert len(requests) == (1 if failure == "length" else 2)
+    assert len(requests) == (1 if side == "input" else 2) - (1 if failure == "length" else 0)
 
 
 def test_gateway_missing_verifier_blocks_before_tool(monkeypatch):
@@ -145,14 +146,15 @@ def test_gateway_missing_verifier_blocks_before_tool(monkeypatch):
     assert gateway_tools.handler({}, context())["code"] == "TOOL_FAILED"
 
 
-def test_gateway_input_is_inspected_before_tool_execution(monkeypatch):
+def test_gateway_input_is_inspected_before_tool_execution(monkeypatch, verified_guardrail):
     calls = []
+    verified_guardrail.apply_guardrail = lambda **kwargs: pytest.fail("identified input reached cloud inspection")
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: calls.append(args))
     assert gateway_tools.handler({"question": "CUST-0042"}, context())["code"] == "BOUNDARY_REFUSED"
     assert calls == []
 
 
-def test_gateway_uses_authenticated_tool_name_and_rejects_unknown_tools(monkeypatch):
+def test_gateway_uses_context_tool_name_and_rejects_unknown_tools(monkeypatch):
     calls = []
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: calls.append("synthetic") or {"ok": True})
     monkeypatch.setitem(gateway_tools.TOOLS, "other", lambda args: pytest.fail("payload selected tool"))
@@ -160,6 +162,46 @@ def test_gateway_uses_authenticated_tool_name_and_rejects_unknown_tools(monkeypa
     assert calls == ["synthetic"]
     ctx = SimpleNamespace(client_context=SimpleNamespace(custom={"bedrockAgentCoreToolName": "platform___unknown"}))
     assert gateway_tools.handler({"tool": "synthetic"}, ctx)["code"] == "UNKNOWN_TOOL"
+    for missing in [None, SimpleNamespace(), SimpleNamespace(client_context=SimpleNamespace(custom={})),
+                    SimpleNamespace(client_context=SimpleNamespace(custom=["invalid"]))]:
+        assert gateway_tools.handler({"tool": "synthetic"}, missing)["code"] == "UNKNOWN_TOOL"
+    assert calls == ["synthetic"]
+
+
+def test_gateway_checks_complete_seed_sized_impact_and_large_source(monkeypatch, verified_guardrail):
+    from pathlib import Path
+    from graph.store import get_store
+    monkeypatch.setenv("GRAPH_BACKEND", "local")
+    monkeypatch.setattr(gateway_tools, "_store", get_store(Path(__file__).resolve().parents[1] / "seed" / "out"))
+    expected = gateway_tools.tool_analyze_regulation_impact({"reg_code": "REG-LN-001"})
+    serialized = json.dumps(expected, ensure_ascii=False, separators=(",", ":"))
+    assert 4000 < len(serialized) < gateway_tools.MAX_VERIFICATION_CHARS
+    requests = []
+    normal = verified_guardrail.apply_guardrail
+
+    def inspect(**request):
+        requests.append(request["content"][0]["text"]["text"])
+        return normal(**request)
+
+    verified_guardrail.apply_guardrail = inspect
+    ctx = SimpleNamespace(client_context=SimpleNamespace(custom={
+        "bedrockAgentCoreToolName": "platform___analyze_regulation_impact"}))
+    assert gateway_tools.handler({"reg_code": "REG-LN-001"}, ctx) == expected
+    assert requests[-1] == serialized
+    large_source = {"code": "const x = 'synthetic';\\n" * 300}
+    monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: {"ok": True})
+    assert gateway_tools.handler(large_source, context()) == {"ok": True}
+    assert json.dumps(large_source, ensure_ascii=False, separators=(",", ":")) in requests
+
+
+def test_shared_verifier_keeps_the_existing_default_bound(verified_guardrail):
+    from common import pii
+    verified_guardrail.apply_guardrail = lambda **kwargs: pytest.fail("default verifier sent oversized text")
+    with pytest.raises(pii.PiiVerificationUnavailable):
+        pii.scan_outbound("safe" * 1001, strict=True)
+    for invalid in [0, -1, 20001, True]:
+        with pytest.raises(pii.PiiVerificationUnavailable):
+            pii.scan_guardrail("safe", strict=True, max_chars=invalid)
 
 
 def test_gate_summary_keeps_verdicts_without_backend_diagnostic_bodies():

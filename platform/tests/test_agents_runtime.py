@@ -287,6 +287,33 @@ def test_mcp_gateway_name_filtering_without_strands():
     assert mg.bare_name("platform___run_screen_gates") == "run_screen_gates" and mg.bare_name("resolve_metric") == "resolve_metric"
     assert mg.SERVICE_NAME == "bedrock-agentcore"
 
+@pytest.mark.parametrize("phase", ["start", "load"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_mcp_setup_failure_closes_partial_clients(monkeypatch, phase, cleanup_fails):
+    from types import SimpleNamespace
+    mg = _load_container_module("mcp_gateway")
+    events = []
+
+    def start():
+        events.append("start")
+        if phase == "start":
+            raise ValueError("synthetic setup failure")
+
+    def load(*args):
+        events.append("load")
+        raise ValueError("synthetic setup failure")
+
+    def stop(*args):
+        events.append("stop")
+        if cleanup_fails:
+            raise RuntimeError("synthetic close failure")
+
+    monkeypatch.setattr(mg, "make_client", lambda *args: SimpleNamespace(start=start, stop=stop))
+    monkeypatch.setattr(mg, "load_tools", load)
+    with pytest.raises(mg.GatewayCleanupFailed if cleanup_fails else ValueError):
+        mg.open_tools(["tool"])
+    assert events == (["start", "stop"] if phase == "start" else ["start", "load", "stop"])
+
 
 @pytest.mark.parametrize("tools_available", [True, False])
 def test_runtime_uses_only_the_authenticated_session_and_reports_missing_tools(runtime_app, monkeypatch, tools_available):
@@ -462,3 +489,128 @@ def test_same_session_turns_cannot_overwrite_history_and_release_after_exit(runt
         assert opened == [sid, sid] and closed == [sid, sid] and not app._active_sessions
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("finish", ["cancel", "close"])
+def test_design_cancellation_joins_worker_before_same_session_retry(runtime_app, monkeypatch, finish):
+    import threading
+    from types import SimpleNamespace
+    import design_loop
+    app = _load_container_module("app")
+    release, finished = threading.Event(), threading.Event()
+    calls = []
+
+    def work(product, state, checks, deps, *, emit, output_type):
+        emit({"type": "stage", "step": "generate"})
+        try:
+            assert release.wait(5), "test failed to release synthetic in-flight model"
+            deps["generate"]("system", "user", None)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(design_loop, "run", work)
+    monkeypatch.setitem(sys.modules, "design_deps", SimpleNamespace(make_deps=lambda model: {
+        "generate": lambda *args: calls.append("new-model-call"),
+        "llm_judge": lambda *args: calls.append("new-judge-call"),
+        "usage": lambda: {"inputTokens": 0, "outputTokens": 0, "calls": 0},
+    }))
+    payload = {"agent": "design_flow_agent",
+               "design": {"productSpec": {"id": "synthetic"}, "smModel": {"id": "synthetic"}}}
+    sid = "d" * 64
+
+    async def exercise():
+        stream = app.run(payload, sid)
+        assert (await anext(stream))["type"] == "stage"
+        if finish == "close":
+            closing = asyncio.create_task(stream.aclose())
+        else:
+            closing = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done() and not finished.is_set()
+        rejected = [event async for event in app.run(payload, sid)]
+        assert rejected[0]["code"] == 409
+        release.set()
+        if finish == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await closing
+        else:
+            await closing
+        assert finished.is_set() and not calls and sid not in app._active_sessions
+        await stream.aclose()
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("failure", ["model", "agent", "cleanup"])
+def test_session_constructor_closes_gateway_and_quarantines_failed_cleanup(runtime_app, monkeypatch, failure):
+    from types import SimpleNamespace
+    app = _load_container_module("app")
+    stopped = []
+
+    def stop(*args):
+        stopped.append(True)
+        if failure == "cleanup":
+            raise RuntimeError("synthetic stop failure")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic constructor failure")
+
+    monkeypatch.setattr(app, "BoundaryGateHook", lambda: None)
+    monkeypatch.setattr(app, "build_system_prompt", lambda spec: ("safe", [], []))
+    monkeypatch.setattr(app, "scan_rules", lambda text: [])
+    monkeypatch.setattr(app, "build_model", fail if failure == "model" else lambda model: object())
+    monkeypatch.setattr(app.mcp_gateway, "open_tools", lambda tools: (SimpleNamespace(stop=stop), [], []))
+    monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=fail))
+    sid = "s" * 64
+    with pytest.raises(RuntimeError):
+        app._Session({"name": "synthetic", "allowedTools": ["tool"]}, "synthetic-model", sid)
+    assert stopped == [True]
+    assert (sid in app._quarantined_sessions) == (failure == "cleanup")
+    if failure == "cleanup":
+        async def rejected():
+            return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
+        result = asyncio.run(rejected())
+        assert result[0]["code"] == 503 and result[-1]["stopReason"] == "cleanup_failed"
+        assert stopped == [True]
+
+
+def test_cancelled_session_constructor_is_joined_and_closed_before_retry(runtime_app, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    monkeypatch.setattr(app, "asyncio", asyncio)
+    entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+    sid = "c" * 64
+
+    def construct(*args):
+        entered.set()
+        assert release.wait(5), "test failed to release synthetic constructor"
+        return SimpleNamespace(close=closed.set)
+
+    monkeypatch.setattr(app, "_Session", construct)
+    payload = {"agent": "regulation_impact_agent", "prompt": "safe"}
+
+    async def exercise():
+        async def collect():
+            return [event async for event in app.run(payload, sid)]
+        active = asyncio.create_task(collect())
+        assert await asyncio.to_thread(entered.wait, 5)
+        active.cancel()
+        await asyncio.sleep(0)
+        assert not active.done()
+        rejected = await collect()
+        assert rejected[0]["code"] == 409
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        assert closed.is_set() and sid not in app._active_sessions
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        release.set()

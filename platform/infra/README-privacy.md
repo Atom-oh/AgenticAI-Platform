@@ -97,7 +97,13 @@ The command above uses HEAD as the baseline main-stack source; CI supplies the
 PR base instead. At both the baseline and current revision, enabling privacy may
 add only the WebSocket and Workspace API environment entries and exact
 `lambda:InvokeFunction` permissions. Each enabled template is compared with its
-own revision's disabled template. Other main-stack changes between revisions are
+own revision's disabled template. Baseline source modules are loaded from the
+named `PR_BASE_SHA` (default HEAD), including all relative
+TypeScript dependencies such as `workspace.ts`; stdin must match that revision.
+The installed package/compiler configuration must have identical baseline locks,
+otherwise the check fails and requires an independent dependency installation.
+Both synths use the same explicitly recorded asset fixture; they do not certify
+runtime code or deployed artifacts. Other main-stack changes between revisions are
 reported for separate review and validation, including the bank IAM isolation
 test; they are not privacy-toggle effects. Results are in
 `platform/infra/cdk.out/privacy-check/verified.json`. Existing main-stack runtime

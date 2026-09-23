@@ -20,6 +20,7 @@ for p in (ROOT, os.path.join(ROOT, "api")):
 from common.log import log_event  # noqa: E402
 
 _store = None
+MAX_VERIFICATION_CHARS = 20_000
 
 
 def _graph():
@@ -249,8 +250,10 @@ def _inspect(value, tool, event):
     from engine import gate
 
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if len(text) > MAX_VERIFICATION_CHARS:
+        raise pii.PiiVerificationUnavailable("Gateway verification size limit")
     measured = gate.measure("", text)
-    result = pii.scan_outbound(text, strict=True)
+    result = pii.scan_outbound(text, strict=True, max_chars=MAX_VERIFICATION_CHARS)
     log_event(event, tool=tool, chars=measured["chars"], estTokens=measured["estTokens"],
               piiCount=result["count"], piiTypes=sorted({hit["type"] for hit in result["hits"]}),
               piiDetectors=result["detectors"], blocked=bool(result["count"]))
@@ -260,9 +263,9 @@ def _inspect(value, tool, event):
 def handler(event, context):
     name = ""
     cc = getattr(context, "client_context", None)
-    if cc and getattr(cc, "custom", None):
+    if isinstance(getattr(cc, "custom", None), dict):
         name = cc.custom.get("bedrockAgentCoreToolName", "")
-    name = name.split("___")[-1] or (event.get("tool") if isinstance(event, dict) else "")
+    name = name.split("___")[-1] if isinstance(name, str) else ""
     args = event if isinstance(event, dict) else {}
     fn = TOOLS.get(name)
     if fn is None:
