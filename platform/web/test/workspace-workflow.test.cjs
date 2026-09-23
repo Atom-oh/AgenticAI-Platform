@@ -20,6 +20,8 @@ test('workflow links retain exact scoped artifacts and reject malformed identiti
   assert.equal(initialWorkflowStep(value, 'designer'), 'handoff');
   assert.equal(initialWorkflowStep(readWorkflowRoute('#/studio?runId=run'), 'developer'), 'review');
   assert.equal(initialWorkflowStep(readWorkflowRoute('#/studio'), 'developer'), 'handoff');
+  assert.equal(initialWorkflowStep(readWorkflowRoute('#/studio'), 'designer'), 'review');
+  assert.equal(initialWorkflowStep(readWorkflowRoute('#/studio?step=define'), 'designer'), 'define');
   for (const hash of ['#/studio?projectId=../other', '#/studio?projectId=p%0Aother', '#/studio?runId=bad/id', '#/studio?round=0'])
     assert.equal(readWorkflowRoute(hash).invalid, true);
   const changed = workflowHash('#/studio?projectId=old&runId=private-old&round=2&productId=old',

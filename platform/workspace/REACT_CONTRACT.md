@@ -202,6 +202,17 @@ Tool navigation
 retains project/product/run context and browser history, and previously opened
 tools stay mounted so switching tools does not discard an in-progress edit.
 Tool-only route changes leave the selected run/page discussion anchor intact.
+The default workspace stage is the canvas (`review`); developers retain the
+handoff default and explicit stage links retain their meaning. Request/settings
+and history share a left rail, with the private preview and revision composer
+beside it. A new brief proposes criteria for explicit review/approval before
+generation. Verification evidence and human approval remain available in a
+disclosure below the canvas.
+Element selection uses bounded advisory messages through the two opaque preview
+frames. It does not relax sandbox/CSP restrictions, run selectors in the host,
+or change approval evidence. The selected hint is bound to the viewed round and
+artifact hashes; changing rounds clears it. Changing preview width does not
+change the frozen verification viewport or reload the simulated state.
 Explicitly opening a gallery draft starts a fresh Playground session for that
 selection, including a repeated selection, so another draft's score cannot carry over.
 The global ontology explorer remains visible in common navigation across work-area

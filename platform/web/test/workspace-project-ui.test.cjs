@@ -324,6 +324,7 @@ test('project scope, collaboration, guided baselines and real release metadata r
     await page.getByRole('button', { name: '기준안 + 변형 5개 만들기' }).click();
     await page.waitForFunction(() => document.querySelectorAll('.ws-comparison button').length === 6);
     await page.locator('.ws-comparison button').filter({ hasText: '시안 4' }).click();
+    await page.getByText('검수 근거·승인', { exact: true }).click();
     await page.getByText('시작 화면 변형은 사람의 검토가 필요합니다.', { exact: true }).waitFor();
     const consent = page.getByLabel('허용된 배치·강조 변형과 시작 화면 차이를 확인하고 수용합니다', { exact: true });
     const reviewed = page.getByLabel('이 라운드의 동작·시작 화면 비교 범위와 근거를 확인했습니다', { exact: true });
@@ -349,6 +350,7 @@ test('project scope, collaboration, guided baselines and real release metadata r
     await page.getByLabel('저장된 시안 비교', { exact: true }).selectOption('batch-2');
     await page.waitForFunction(() => document.querySelectorAll('.ws-comparison button').length === 6);
     await page.getByLabel('협업할 화면', { exact: false }).selectOption('review');
+    await page.getByText('팀 의견·상품·개발 정보', { exact: true }).click();
     await page.getByText('이 작업에 의견 남기기', { exact: true }).click();
     await page.getByLabel('의견 내용', { exact: true }).fill('선택한 화면의 강조를 확인해 주세요.');
     const beforeTool = new URL(page.url()).hash;

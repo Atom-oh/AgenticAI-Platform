@@ -318,10 +318,8 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await page.getByLabel('규칙 1', { exact: true }).fill('미저장 변경');
     await page.getByRole('button', { name: '4 시안·검수', exact: true }).click();
     const loop = page.locator('.ws-loop');
-    assert.equal(await loop.isVisible(), true);
-    assert.equal(await loop.locator('[data-stage]').count(), 5);
-    assert.equal(await loop.locator('[aria-current]').count(), 0);
-    assert.equal(await loop.locator('[data-stage="browser"]').getAttribute('data-state'), 'pending');
+    assert.equal(await page.locator('.ws-canvas-empty').isVisible(), true);
+    assert.equal(await loop.count(), 0, 'No result means no fabricated verification receipt');
     assert.equal(await page.getByRole('button', { name: '시안 1개 만들기', exact: true }).isDisabled(), true);
     await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).isDisabled(), true);
@@ -342,6 +340,7 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     await page.getByText('잠시 후 다시 시도하세요.', { exact: false }).waitFor();
     await page.getByRole('button', { name: '기준안 + 변형 2개 만들기', exact: true }).click();
     await page.getByRole('button', { name: '엄격 기준안 결과 보기', exact: true }).click();
+    await page.getByText('검수 근거·승인', { exact: true }).click();
     await page.getByText('라운드 2의 금액 전달 근거', { exact: true }).waitFor();
     assert.equal(await loop.locator('[data-stage="browser"]').getAttribute('data-state'), 'passed');
     assert.equal(await loop.locator('[data-stage="evidence"]').getAttribute('data-state'), 'recorded');
@@ -424,6 +423,7 @@ const root=createRoot(document.getElementById('root'));root.render(<div classNam
     const beforeVerify = calls.filter(call => call.routePath === '/runs' && call.method === 'POST').length;
     await page.getByRole('button', { name: '반입 HTML 검사', exact: true }).click();
     await page.getByRole('heading', { name: '원본 HTML 검사', exact: true }).waitFor();
+    await page.getByText('검수 근거·승인', { exact: true }).click();
     await page.getByText('원본 HTML 검사 근거', { exact: true }).waitFor();
     assert.match(await loop.locator('[data-stage="artifact"]').innerText(), /반입 HTML/);
     assert.equal(await loop.locator('[data-stage="approval"]').getAttribute('data-state'), 'pending');

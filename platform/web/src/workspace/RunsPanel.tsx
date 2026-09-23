@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { listAll, messageOf, readPrivateBlob, resource } from './client';
 import { useWorkspaceScope, useWorkspaceClient } from './WorkspaceScope';
 import { buildPassed, can, currentGuideline, generationRequest } from './project';
@@ -7,19 +7,23 @@ import { contractProblems, importedHtmlAssets, isOriginalHtmlCheck, roundApprova
 import { JobProgress, ModelPicker, Notice, PrivatePreview, useDownload } from './shared';
 import VerificationLoop, { deriveVerificationLoop, hasExactApproval } from './VerificationLoop';
 import { StateEvidence } from './StatePlan';
-import type { Asset, Batch, Contract, Job, Product, Round, Run, Selection, WorkspaceConfig } from './types';
+import CanvasRequest from './CanvasRequest';
+import type { PreviewSelection } from './previewSelection';
+import type { Asset, Batch, Contract, GuideRef, Job, Product, Round, Run, Selection, WorkspaceConfig } from './types';
 
 type Attempt = { id: string; label: string; payload: Record<string, unknown>; job?: Job; run?: Run; error?: string };
 const VARIANTS = { balanced: '기본 구성', baseline: '엄격 기준안', layout: '배치 변형', dense: '정보를 한눈에',
   emphasis: '핵심 강조', flow: '진행 흐름 강조', information: '정보 순서 변형' } as const;
 
 export default function RunsPanel({ config, assets, contracts, runs, refresh, preferredContract, preferredSelection = 0, editing, onSelection, product,
-  initialRunId, initialRound, onHandoff }: {
+  initialRunId, initialRound, onHandoff, onCriteria, onAssets, selectedAssets = [], guideRefs = [], onComposeDirty }: {
   config: WorkspaceConfig; assets: Asset[]; contracts: Contract[]; runs: Run[]; refresh: () => void;
   preferredContract: string; editing: { id: string; dirty: boolean };
   onSelection?: (selection: Selection) => void; product?: Product;
   preferredSelection?: number;
   initialRunId?: string; initialRound?: number; onHandoff?: (runId: string, round: number) => void;
+  onCriteria?: (contractId?: string) => void; onAssets?: () => void;
+  selectedAssets?: string[]; guideRefs?: GuideRef[]; onComposeDirty?: (dirty: boolean) => void;
 }) {
   const { client: workspaceClient, role } = useWorkspaceScope();
   const mayGenerate = can(role, 'generate'), mayApprove = can(role, 'approve');
@@ -64,6 +68,12 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const [pageId, setPageId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [instruction, setInstruction] = useState('');
+  const [composing, setComposing] = useState(false);
+  const requestDirty = useCallback((dirty: boolean) => setComposing(dirty), []);
+  const [selectMode, setSelectMode] = useState(false);
+  const [picked, setPicked] = useState<{ key: string; value: PreviewSelection } | null>(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => { onComposeDirty?.(composing || !!instruction.trim()); }, [composing, instruction, onComposeDirty]);
   const instructionId = useId();
   const [approvedCheck, setApprovedCheck] = useState(false);
   const [variationConsent, setVariationConsent] = useState('');
@@ -144,6 +154,9 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   useEffect(() => { onSelection?.(run?.id === runId ? { run, round: selectedRound, pageId: selectedPage } : null); },
     [onSelection, run, runId, selectedRound, selectedPage]);
   const evidenceKey = `${runId}:${roundNumber}:${selectedRound?.artifactSha256 || ''}:${selectedRound?.sourceHash || ''}:${selectedRound?.bundleHash || ''}`;
+  const selectedElement = picked?.key === evidenceKey ? picked.value : null;
+  const selectElement = useCallback((value: PreviewSelection) => setPicked({ key: evidenceKey, value }), [evidenceKey]);
+  useEffect(() => { setPicked(null); setSelectMode(false); }, [evidenceKey]);
   const currentEvidence = evidence?.key === evidenceKey ? evidence.report : undefined;
   const verification = deriveVerificationLoop({ run: run?.id === runId ? run : null, round: selectedRound, evidence: currentEvidence });
   const approvalReady = !!selectedRound && roundApprovable(selectedRound) && (run?.outputType !== 'react' ||
@@ -175,7 +188,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
     sendingRef.current = false; if (!controller.signal.aborted) setSending(false);
   };
   const generate = async (retryPayload?: Record<string, unknown>) => {
-    if (!canGenerate || !contract || sendingRef.current) return;
+    if (!canGenerate || composing || !contract || sendingRef.current) return;
     const fields = { contractId: contract.id, contractVersion: contract.version, model, maxRounds: rounds, outputType: 'react',
       ...generationRequest(mode, variationCount),
         ...(reference ? { referenceAssetId: reference, referencePage, visualTolerance: tolerance } : {}),
@@ -232,7 +245,9 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       requestId: id, contractId: run.contractId, contractVersion: run.contractVersion, mode: 'generate', outputType: 'react', model, maxRounds: rounds,
       variant: run.variant && Object.hasOwn(VARIANTS, run.variant) ? run.variant : 'balanced',
       generationMode: run.generationMode || 'creative',
-      baseRunId: run.id, baseRound: selectedRound.number, instruction: instruction.trim(),
+      baseRunId: run.id, baseRound: selectedRound.number, instruction: selectedElement
+        ? `선택한 수정 대상: ${selectedElement.label}\n요소 위치: ${selectedElement.selector}\n수정 요청: ${instruction.trim()}`
+        : instruction.trim(),
       ...(run.referenceAssetId ? { referenceAssetId: run.referenceAssetId, referencePage: run.referencePage ?? 1, visualTolerance: run.visualTolerance ?? 0.15 } : {}),
     } };
     setAttempts(previous => [entry, ...previous]); void submit([entry]);
@@ -267,9 +282,14 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const compared = batch ? [batch.baselineRunId, ...batch.runIds.filter(id => id !== batch.baselineRunId)].filter((id): id is string => !!id) : [];
   const slots = batch?.slots?.length ? [...batch.slots].sort((a, b) => a.index - b.index) : compared.map((id, index) =>
     ({ index, role: id === batch?.baselineRunId ? 'baseline' : 'variation', runId: id, error: undefined }));
-  return <div className="ws-runs">
-    <section className="ws-section">
-      <div className="ws-section-heading"><div><h2>승인한 기준으로 React 시안 만들기</h2><p>고정 컴포넌트와 업무 규칙을 지키며 만듭니다. 반입 HTML 검사는 원본 확인용이며, 동작 검증·시작 화면 비교·사람 승인은 별도입니다. 실제 금융 API는 호출하지 않습니다.</p></div></div>
+  return <div className="ws-runs ws-canvas-layout">
+    <aside className="ws-canvas-sidebar" aria-label="요청과 시안 이력">
+    <section className="ws-section ws-canvas-settings">
+      {onCriteria && <CanvasRequest model={model} available={config.models.some(option => option.id === model)}
+        assetIds={selectedAssets} guideRefs={guideRefs} product={product} onDirty={requestDirty}
+        onReady={id => { setContractId(id); refresh(); onCriteria(id); }} />}
+      <div className="ws-canvas-shortcuts">{onAssets && <button onClick={onAssets}>디자인 자료 · {selectedAssets.length}</button>}
+        {onCriteria && <button onClick={() => onCriteria(contractId || undefined)}>확인 기준</button>}</div>
       {!mayGenerate && <Notice>현재 역할에서는 결과를 조회할 수 있습니다. 생성·수정은 디자인·관리자가 수행합니다.</Notice>}
       <div className="ws-generation-fields">
         <label className="ws-field">사용할 규칙<select aria-label="사용할 규칙" value={contractId} onChange={event => setContractId(event.target.value)} disabled={sending}>
@@ -297,7 +317,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       {contract && <p className="ws-muted">고정할 규칙: {contract.title} · 버전 {contract.version} · {contract.rules.length}개 · {contract.viewport.width}×{contract.viewport.height}</p>}
       {product && contract && !currentGuideline(product, contract) &&
         <Notice error>선택한 규칙은 최신 게시 지침과 연결되지 않았습니다. 최신 상품 지침으로 새 규칙을 만들고 승인하세요.</Notice>}
-      {!canUseContract && <Notice>미해결 내용이 없는 규칙을 저장·승인한 뒤 선택하세요. 같은 규칙의 미저장 변경이 있으면 검사하거나 생성할 수 없습니다.</Notice>}
+      {!canUseContract && <p className="ws-muted">요청을 입력하거나 승인한 확인 기준을 선택하세요.</p>}
       {htmlSources.length > 0 && <div className="ws-original-source">
         <div className="ws-field"><label htmlFor={sourceSelectId}>검사할 반입 HTML</label><select id={sourceSelectId} value={selectedHtmlId}
           disabled={sending || approving} onChange={event => setSourceAssetId(event.target.value)}>
@@ -305,7 +325,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         </select></div>
         <p className="ws-muted">승인한 규칙에 포함된 HTML만 선택할 수 있습니다. ‘반입 HTML 검사’는 AI로 코드를 다시 쓰지 않고 한 번 검사합니다. 모델·화면 방향·반복 횟수는 AI 생성에만 적용됩니다.</p>
       </div>}
-      <div className="ws-actions"><button className="ws-primary" onClick={() => void generate()} disabled={!canGenerate || sending || approving}>
+      <div className="ws-actions"><button className="ws-primary" onClick={() => void generate()} disabled={!canGenerate || composing || sending || approving}>
         {mode === 'creative' ? '시안 1개 만들기' : `기준안 + 변형 ${variationCount}개 만들기`}</button>
         {htmlSources.length > 0 && <button onClick={verifyOriginal} disabled={!mayGenerate || !canUseContract || !selectedHtmlId || sending || approving}>반입 HTML 검사</button>}</div>
       <label className="ws-field">저장된 시안 비교<select aria-label="저장된 시안 비교" value={batchId} onChange={event => {
@@ -342,7 +362,6 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         .map(item => <JobProgress key={item.jobId} job={{ id: item.jobId!, task: 'run', status: item.status as 'queued' | 'running' }}
           label={`${isOriginalHtmlCheck(item) ? '원본 HTML 검사' : contracts.find(value => value.id === item.contractId)?.title || '시안'} 진행 계속 조회`} onComplete={jobFinished} onFailure={jobFinished} />)}
     </section>
-    <div className="ws-results-layout">
       <section className="ws-section ws-run-list"><h2>내 시안 이력</h2>
         {!runs.length && <div className="ws-empty">시안 생성 후 이곳에서 결과와 이전 라운드를 확인할 수 있습니다.</div>}
         {runs.map(item => <button className={`ws-run-choice ${item.id === runId ? 'is-selected' : ''}`} key={item.id} onClick={() => selectRun(item.id)}>
@@ -351,15 +370,13 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
           {isOriginalHtmlCheck(item) ? <small>원본 HTML 검사</small> : <small>{item.baseRunId ? '수정본 · ' : ''}{VARIANTS[item.variant as keyof typeof VARIANTS] || '기본 구성'} · {config.models.find(value => value.id === item.model)?.label || '생성 모델 기록'} · {item.rounds?.length || 0}라운드</small>}
         </button>)}
       </section>
-      <section className="ws-section ws-result">
+    </aside>
+      <section className="ws-section ws-result ws-canvas-main" aria-label="시안 캔버스">
         {error && <Notice error>{error} <button onClick={() => setRefreshKey(value => value + 1)}>결과 다시 조회</button></Notice>}
         {downloading.error && <Notice error>{downloading.error}</Notice>}
-        <VerificationLoop run={run?.id === runId ? run : null} round={run?.id === runId ? selectedRound : undefined}
-          evidence={run?.id === runId ? currentEvidence : undefined} />
-        {run?.contract && (run.contract.requiredStates?.length || run.contract.changeRequest) ? <StateEvidence contract={run.contract}
-          evidence={verification.nodes.find(node => node.id === 'evidence')?.state === 'recorded' ? currentEvidence : undefined} /> : null}
-        {!run ? <div className="ws-empty">{runId ? '시안 기록을 불러오고 있습니다…' : '확인할 시안을 선택하세요.'}</div> : <>
-          <div className="ws-section-heading"><div><h2>{inspectingOriginal ? '원본 HTML 검사' : '라운드별 결과 확인'}</h2><p>규칙 버전 {run.contractVersion} · {stateLabel(run.status)}</p></div>
+        {!run ? <div className="ws-canvas-empty" role="status"><span aria-hidden="true">✧</span><h2>{runId ? '시안을 불러오고 있어요' : '어떤 화면을 만들어 볼까요?'}</h2>
+          <p>왼쪽에 요청을 입력하거나, 이력에서 시안을 열어 보세요.</p><small>화면을 보면서 요소를 선택하고 바로 수정할 수 있습니다.</small></div> : <>
+          <div className="ws-section-heading"><div><h2>{inspectingOriginal ? '원본 HTML 검사' : run.contract?.title || '시안 미리보기'}</h2><p>규칙 버전 {run.contractVersion} · {stateLabel(run.status)}</p></div>
             <button onClick={() => setRefreshKey(value => value + 1)}>진행 새로 조회</button></div>
           {inspectingOriginal && <Notice>AI 생성 없이 반입 HTML을 검사한 결과입니다. 검사 대상: {run.assetSnapshots?.find(asset => asset.id === run.sourceAssetId)?.name ||
             assets.find(asset => asset.id === run.sourceAssetId)?.name || '선택한 반입 HTML'}. 원본 파일은 그대로 보관됩니다.</Notice>}
@@ -369,7 +386,6 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               setRoundNumber(round.number); setInstruction(''); setApprovedCheck(false); }}>
             라운드 {round.number} · {round.passed && (run.outputType !== 'react' || buildPassed(round, run.catalogHash)) ? '필수 검사 통과' : '확인 필요'}{round.number === run.bestRound ? ' · 최종 선택' : ''}</button>)}</div>
           {selectedRound ? <>
-            {run.outputType === 'react' && <BuildGates evidence={selectedRound} catalogHash={run.catalogHash} />}
             {!!selectedRound.pageSources?.length && <label className="ws-field">협업할 화면<select aria-label="협업할 화면" value={selectedPage || ''} onChange={event => setPageId(event.target.value)}>
               {selectedRound.pageSources.map((page, index) => <option key={page.pageId} value={page.pageId}>화면 {index + 1}</option>)}</select>
               <span className="ws-muted">의견은 선택한 화면에 연결됩니다. 실행 미리보기와 픽셀 비교의 시작 화면은 바뀌지 않습니다.</span></label>}
@@ -378,6 +394,30 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               <Verification label="시작 화면 기준 비교" status={roundStatus(selectedRound, run, 'visualStatus', currentEvidence)} />
               <div><strong>사람의 승인</strong><span>{hasExactApproval(run, selectedRound) ? '이 라운드 승인됨' : '미승인'}</span></div>
             </div>
+            <div className="ws-canvas-toolbar" role="group" aria-label="미리보기 도구">
+              <span>라운드 {selectedRound.number}</span>
+              <button aria-pressed={wide} onClick={() => setWide(value => !value)}>{wide ? '전체 폭' : '모바일 폭'}</button>
+              <button aria-pressed={selectMode} disabled={!selectedRound.hasHtml} onClick={() => setSelectMode(value => !value)}>
+                {selectMode ? '요소 선택 중' : '요소 선택'}</button>
+            </div>
+            <div className="ws-canvas-surface">{selectedRound.hasHtml === true ? <PrivatePreview
+              path={`/runs/${resource(run.id)}/blob?kind=html&round=${selectedRound.number}`}
+              title={`${inspectingOriginal ? '원본 HTML 검사' : '생성 시안'} 라운드 ${selectedRound.number}`} executable
+              height={640} width={wide ? undefined : run.contract?.viewport.width || 390}
+              selectMode={selectMode} onSelect={selectElement} /> : <Notice>이 라운드에는 조회할 HTML 시안이 없습니다.</Notice>}</div>
+            <div className="ws-canvas-composer">
+              <div className="ws-canvas-selection" aria-live="polite"><span>{selectedElement ? selectedElement.label : '전체 화면 수정'}</span>
+                {selectedElement && <button onClick={() => { setPicked(null); setSelectMode(false); }}>선택 해제</button>}</div>
+              <div className="ws-field"><label className="ws-sr" htmlFor={instructionId}>라운드 {selectedRound.number} 수정 지시</label>
+                <textarea id={instructionId} rows={2} maxLength={3500} value={instruction}
+                  placeholder="수정할 내용을 적어 주세요. 예: 이 버튼을 더 크게, 문구는 ‘지금 환전하기’로"
+                  onChange={event => setInstruction(event.target.value)} /></div>
+              <button className="ws-primary" onClick={revise} disabled={!mayGenerate || sending || approving || selectedRound.hasHtml !== true || !instruction.trim() ||
+                !config.models.some(option => option.id === model) || (editing.id === run.contractId && editing.dirty)}>
+                {inspectingOriginal ? `AI로 라운드 ${selectedRound.number} 수정본 생성·재검수` : `보고 있는 라운드 ${selectedRound.number} 수정·재검수`}</button>
+            </div>
+            <p className="ws-muted ws-canvas-caption">실제 금융 API를 호출하지 않는 미리보기입니다. 수정본도 같은 규칙 버전 {run.contractVersion}으로 검수합니다.</p>
+            <details className="ws-canvas-evidence"><summary>검수 근거·승인</summary>
             {selectedRound.visualStatus === 'review-required' && <Notice>
               <strong>시작 화면 변형은 사람의 검토가 필요합니다.</strong>
               <p>필수 동작·컴포넌트 규칙과 별도로 허용된 배치·강조 차이를 검토하세요. 변형 수용은 픽셀 일치 통과를 뜻하지 않습니다.</p>
@@ -401,28 +441,20 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               <p>선택한 파일 중 일부 내용이나 이미지가 AI 입력에서 제한되었습니다. 검수 통과와 자료 전체 반영은 별개입니다.</p>
               <ul>{run.contextWarnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
             </Notice></div>}
-            <div className="ws-result-columns">
-              <div>{selectedRound.hasHtml === true ? <PrivatePreview path={`/runs/${resource(run.id)}/blob?kind=html&round=${selectedRound.number}`}
-                title={`${inspectingOriginal ? '원본 HTML 검사' : '생성 시안'} 라운드 ${selectedRound.number}`} executable height={run.contract?.viewport.height || 760} width={run.contract?.viewport.width} />
-                : <Notice>이 라운드에는 조회할 HTML 시안이 없습니다.</Notice>}
-                <p className="ws-muted">격리된 시뮬레이션입니다. 화면 안의 모의 상태만 바뀌며, 실제 금융 API를 호출하거나 서버 검증 기록을 바꾸지 않습니다.</p>
-                <div className="ws-actions"><button disabled={downloading.busy || selectedRound.hasHtml !== true} onClick={() => void downloading.download(
-                  `/runs/${resource(run.id)}/blob?kind=html&round=${selectedRound.number}`, `시안-라운드${selectedRound.number}.html`)}>{inspectingOriginal ? '검사 HTML 내려받기' : '이 라운드 HTML 내려받기'}</button>
-                  <button disabled={downloading.busy || selectedRound.hasReport !== true} onClick={() => void downloading.download(
-                    `/runs/${resource(run.id)}/blob?kind=report&round=${selectedRound.number}`, `검수근거-라운드${selectedRound.number}.json`)}>검수 근거 내려받기</button></div>
-              </div>
-              <div className="ws-evidence"><RoundEvidence key={evidenceKey} run={run} round={selectedRound}
-                onLoaded={report => setEvidence({ key: evidenceKey, report })} />
-                {!!selectedRound.blockingFindings?.length && <Notice error><strong>수정이 필요한 내용</strong>
-                  <ul>{selectedRound.blockingFindings.map((finding, index) => <li key={index}>{findingText(finding)}</li>)}</ul></Notice>}
-                <div className="ws-field"><label htmlFor={instructionId}>라운드 {selectedRound.number} 수정 지시</label><textarea id={instructionId} rows={4} maxLength={4000} value={instruction}
-                  placeholder="예: 다음 버튼을 누르면 입력 금액을 유지하고, 미동의 상태에서는 진행을 막아 주세요."
-                  onChange={event => setInstruction(event.target.value)} /></div>
-                <button className="ws-primary" onClick={revise} disabled={!mayGenerate || sending || approving || selectedRound.hasHtml !== true || !instruction.trim() ||
-                  !config.models.some(option => option.id === model) || (editing.id === run.contractId && editing.dirty)}>
-                  {inspectingOriginal ? `AI로 라운드 ${selectedRound.number} 수정본 생성·재검수` : `보고 있는 라운드 ${selectedRound.number} 수정·재검수`}</button>
-                <p className="ws-muted">원본 라운드와 규칙 버전 {run.contractVersion}을 고정해 새 시안을 만듭니다. 기존 시안은 유지됩니다.</p>
-              </div>
+
+        <VerificationLoop run={run?.id === runId ? run : null} round={run?.id === runId ? selectedRound : undefined}
+          evidence={run?.id === runId ? currentEvidence : undefined} />
+        {run?.contract && (run.contract.requiredStates?.length || run.contract.changeRequest) ? <StateEvidence contract={run.contract}
+          evidence={verification.nodes.find(node => node.id === 'evidence')?.state === 'recorded' ? currentEvidence : undefined} /> : null}
+            {run.outputType === 'react' && <BuildGates evidence={selectedRound} catalogHash={run.catalogHash} />}
+            <div className="ws-evidence"><RoundEvidence key={evidenceKey} run={run} round={selectedRound}
+              onLoaded={report => setEvidence({ key: evidenceKey, report })} />
+              {!!selectedRound.blockingFindings?.length && <Notice error><strong>수정이 필요한 내용</strong>
+                <ul>{selectedRound.blockingFindings.map((finding, index) => <li key={index}>{findingText(finding)}</li>)}</ul></Notice>}
+              <div className="ws-actions"><button disabled={downloading.busy || selectedRound.hasHtml !== true} onClick={() => void downloading.download(
+                `/runs/${resource(run.id)}/blob?kind=html&round=${selectedRound.number}`, `시안-라운드${selectedRound.number}.html`)}>{inspectingOriginal ? '검사 HTML 내려받기' : '이 라운드 HTML 내려받기'}</button>
+                <button disabled={downloading.busy || selectedRound.hasReport !== true} onClick={() => void downloading.download(
+                  `/runs/${resource(run.id)}/blob?kind=report&round=${selectedRound.number}`, `검수근거-라운드${selectedRound.number}.json`)}>검수 근거 내려받기</button></div>
             </div>
             <div className="ws-approval"><label className="ws-check"><input type="checkbox" checked={approvedCheck}
               disabled={!mayApprove || !approvalReady || approving} onChange={event => setApprovedCheck(event.target.checked)} />
@@ -436,10 +468,10 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               {onHandoff && run.outputType === 'react' && hasExactApproval(run, selectedRound) &&
                 <button className="ws-primary" disabled={!verification.complete} onClick={() => onHandoff(run.id, selectedRound.number)}>승인본 개발 전달</button>}
               {!roundApprovable(selectedRound) && <p>필수 검사 통과와 HTML·검수 기록·실행 화면 근거가 모두 있어야 승인할 수 있습니다.</p>}</div>
+            </details>
           </> : <Notice>아직 검수가 끝난 라운드가 없습니다. 작업 진행을 확인하거나 결과를 다시 조회하세요.</Notice>}
         </>}
       </section>
-    </div>
   </div>;
 }
 
