@@ -114,8 +114,9 @@ The Studio and asset portal also share a private, page-searchable
 creates a text-only JSON pack; the original documents stay local. Selected page
 hashes and citations are fixed in the rule contract and reused by generation.
 Guideline names do not imply that a customer's React package is installed.
-The [UX workflow](workspace/WORKFLOW.md) makes definition, criteria/assets,
-stateful design, verification and developer handoff explicit stages. Required
+The [UX workflow](workspace/WORKFLOW.md) opens a canvas with request/history on
+the left and the preview/revision composer beside it. Definition, criteria/assets,
+stateful design, verification and developer handoff remain accessible. Required
 states must have required assertions before criteria approval; the existing
 source, browser, release and permission checks remain authoritative.
 

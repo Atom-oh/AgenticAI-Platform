@@ -91,7 +91,7 @@ test('files step lazily opens three isolated interactive samples and native down
   const { page, requests } = await mount(t, { workspace: true });
   const gallery = page.getByRole('region', { name: 'React 예제로 연습하기' });
   await page.getByRole('heading', { name: 'UX 설계 작업실' }).waitFor();
-  await page.getByRole('button', { name: '2 기준·자산' }).click();
+  await page.getByRole('button', { name: '기준·자산' }).click();
   await page.getByRole('button', { name: '화면·그래픽 자료', exact: true }).click();
   assert.equal(await page.title(), 'Studio sample gallery test');
   assert.equal(await gallery.locator('details').first().getAttribute('open'), null);
@@ -137,9 +137,9 @@ test('files step lazily opens three isolated interactive samples and native down
       await gallery.screenshot({ path: path.join(process.env.STUDIO_SAMPLES_SCREENSHOT_DIR, `gallery-${width}.png`) });
     }
   }
-  await page.getByRole('button', { name: '3 흐름·상태 설계' }).click();
+  await page.getByRole('button', { name: '흐름·상태 설계' }).click();
   assert.equal(await page.locator('iframe').count(), 0);
-  await page.getByRole('button', { name: '2 기준·자산' }).click();
+  await page.getByRole('button', { name: '기준·자산' }).click();
   await page.getByText('React 샘플 둘러보기', { exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.ws-samples iframe'));
   assert.equal(await gallery.locator('iframe').count(), 0);
