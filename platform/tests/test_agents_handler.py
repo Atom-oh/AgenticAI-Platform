@@ -337,7 +337,10 @@ def test_iam_reconciliation_updates_an_unapproved_orphan_with_an_exact_hash(fake
 
     def update(**parameters):
         calls.append(parameters)
-        existing.update({key: value for key, value in parameters.items() if key not in {"harnessId", "clientToken"}})
+        assert parameters["memory"] == {"optionalValue": {"disabled": {}}}
+        existing.update({key: value for key, value in parameters.items()
+                         if key not in {"harnessId", "clientToken", "memory"}})
+        existing["memory"] = parameters["memory"]["optionalValue"]
         existing["status"] = "READY"
         return {}
 

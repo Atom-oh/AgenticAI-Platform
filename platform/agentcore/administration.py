@@ -110,7 +110,7 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
                 if any(existing.get(key) not in (None, {}, []) for key in
                        ("environmentArtifact", "authorizerConfiguration", "hooks")):
                     raise ConflictError("Remove unexpected Harness extensions through IAM before reconciliation")
-                parameters = {key: value for key, value in expected.items() if key not in {"harnessName", "tags"}}
+                parameters = harness.update_parameters(expected)
                 harness.ctl().update_harness(harnessId=existing["harnessId"],
                     clientToken=hashlib.sha256((name + reconcile_hash).encode()).hexdigest(), **parameters)
                 for _ in range(30):

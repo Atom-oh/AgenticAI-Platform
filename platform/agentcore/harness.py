@@ -103,6 +103,13 @@ def build_config(spec: dict) -> dict:
     return cfg
 
 
+def update_parameters(config: dict) -> dict:
+    """UpdateHarness wraps Memory even though Create/Get expose the value directly."""
+    parameters = {key: value for key, value in config.items() if key not in {"harnessName", "tags"}}
+    parameters["memory"] = {"optionalValue": config["memory"]}
+    return parameters
+
+
 def ensure_harness(spec: dict) -> dict:
     """이름 기준 멱등 생성. 이미 있으면 그대로 반환 (설정 변경은 update_harness)."""
     existing = find_harness(f"bank_{spec['name']}")
