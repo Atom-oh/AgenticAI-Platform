@@ -155,4 +155,14 @@ test('request-first entry preserves model and source context, retries idempotent
   assert.equal(calls[0].payload.model, 'fable'); assert.deepEqual(calls[0].payload.assetIds, ['private-guide']);
   assert.equal(await page.getByLabel('무엇을 만들까요?', { exact: true }).inputValue(), '');
   assert.equal(calls.some(call => call.target.includes('approve') || call.target === '/batches'), false);
+  pollFailed = false;
+  await page.getByLabel('무엇을 만들까요?', { exact: true }).fill('접수할 원래 요청');
+  await page.getByRole('button', { name: '이 요청으로 시작하기' }).click();
+  await page.getByText('진행 조회 연결이 끊겼습니다.', { exact: false }).waitFor();
+  await page.getByLabel('무엇을 만들까요?', { exact: true }).fill('조회 실패 뒤 새로 작성한 요청을 유지하세요.');
+  const beforePollRetry = calls.length;
+  await page.getByRole('button', { name: '진행 다시 조회', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.ws-job'));
+  assert.equal(await page.getByLabel('무엇을 만들까요?', { exact: true }).inputValue(), '조회 실패 뒤 새로 작성한 요청을 유지하세요.');
+  assert.equal(calls.length, beforePollRetry, 'Resuming observation does not start another proposal');
 });
