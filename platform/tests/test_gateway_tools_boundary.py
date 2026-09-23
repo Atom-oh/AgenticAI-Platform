@@ -208,7 +208,7 @@ def test_shared_verifier_keeps_the_existing_default_bound(verified_guardrail):
     verified_guardrail.apply_guardrail = lambda **kwargs: pytest.fail("default verifier sent oversized text")
     with pytest.raises(pii.PiiVerificationUnavailable):
         pii.scan_outbound("safe" * 1001, strict=True)
-    for invalid in [0, -1, 20001, True]:
+    for invalid in [0, -1, 100001, True]:
         with pytest.raises(pii.PiiVerificationUnavailable):
             pii.scan_guardrail("safe", strict=True, max_chars=invalid)
 
@@ -297,3 +297,22 @@ def test_harness_admitted_input_reports_both_real_detector_paths(monkeypatch):
     events = list(harness.invoke_stream("synthetic-harness", "safe", "s" * 64))
     assert len(calls) == 1 and events[0][0] == "boundary"
     assert events[0][1]["piiDetectors"] == ["rules", "guardrail"]
+
+
+def test_domain_not_found_keeps_actionable_guidance(monkeypatch):
+    from graph.store import LocalGraphStore
+    monkeypatch.setattr(gateway_tools, "_store", LocalGraphStore())
+    ctx = SimpleNamespace(client_context=SimpleNamespace(custom={
+        "bedrockAgentCoreToolName": "platform___analyze_regulation_impact"}))
+    result = gateway_tools.handler({"reg_code": "UNKNOWN"}, ctx)
+    assert result["found"] is False and result["reason"] == "regulation-not-found"
+    assert "list_regulations" in result["hint"] and "error" not in result
+
+
+def test_residual_tool_identifier_is_a_privacy_refusal(monkeypatch):
+    def refused(args):
+        raise gateway_tools.ToolBoundaryRefused(["CUSTOMER_TOKEN"])
+    monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", refused)
+    result = gateway_tools.handler({}, context())
+    assert result["code"] == "BOUNDARY_REFUSED" and result["piiTypes"] == ["CUSTOMER_TOKEN"]
+    assert result["piiDetectors"] == ["rules"]

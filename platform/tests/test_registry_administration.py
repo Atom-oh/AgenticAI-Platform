@@ -15,6 +15,8 @@ from handlers import registry as routes
 from registry import api, administration
 from registry.model import ValidationError
 import admin_handler
+from types import SimpleNamespace
+ADMIN_CONTEXT = SimpleNamespace(aws_request_id="11111111-1111-4111-8111-111111111111")
 
 
 @pytest.fixture(autouse=True)
@@ -63,11 +65,11 @@ def test_iam_decision_uses_exact_inspected_record(kind):
     ctx, messages = context()
     routes.registry_transition(ctx, {"name": item["name"], "version": "v1", "to": "PENDING_APPROVAL"})
     assert messages[-1]["ok"] is True
-    inspected = admin_handler.handler({"op": "inspect_registry_record", "name": item["name"], "version": "v1"}, None)
+    inspected = admin_handler.handler({"op": "inspect_registry_record", "name": item["name"], "version": "v1"}, ADMIN_CONTEXT)
     result = admin_handler.handler({"op": "transition_registry_record", "name": item["name"],
-                                    "version": "v1", "to": "APPROVED", "expectedHash": inspected["expectedHash"]}, None)
+                                    "version": "v1", "to": "APPROVED", "expectedHash": inspected["expectedHash"]}, ADMIN_CONTEXT)
     assert result["ok"] and result["record"]["status"] == "APPROVED"
-    assert result["audit"]["actor"] == "iam-admin"
+    assert result["audit"]["actor"] == "iam-invoke:" + ADMIN_CONTEXT.aws_request_id
     assert [r["name"] for r in api.list_approved()] == [item["name"]]
 
 
@@ -88,7 +90,7 @@ def test_iam_decision_rejects_changed_content_without_approval(store, monkeypatc
             return write(*args, **kwargs)
         monkeypatch.setattr(store, "_write_with_audit", concurrent)
     result = admin_handler.handler({"op": "transition_registry_record", "name": item["name"],
-                                    "version": "v1", "to": "APPROVED", "expectedHash": inspected["expectedHash"]}, None)
+                                    "version": "v1", "to": "APPROVED", "expectedHash": inspected["expectedHash"]}, ADMIN_CONTEXT)
     assert result["ok"] is False and result["code"] == 409
     assert store.get(item["name"], "v1")["status"] == "PENDING_APPROVAL"
     assert not any(event["to"] == "APPROVED" for event in store.audit(item["name"], "v1"))
@@ -99,9 +101,20 @@ def test_generic_admin_cannot_bypass_agent_administration():
     with pytest.raises(ValidationError):
         administration.inspect(item["name"], "v1")
     result = admin_handler.handler({"op": "transition_registry_record", "name": item["name"], "version": "v1",
-                                    "to": "APPROVED", "expectedHash": administration.fingerprint(item)}, None)
+                                    "to": "APPROVED", "expectedHash": administration.fingerprint(item)}, ADMIN_CONTEXT)
     assert result["ok"] is False
     assert api.get_record(item["name"], "v1")["status"] == "PENDING_APPROVAL"
+
+
+def test_admin_audit_uses_lambda_context_not_claimed_operator():
+    item = record(status="PENDING_APPROVAL")
+    reviewed = administration.inspect(item["name"], "v1")
+    event = {"op": "transition_registry_record", "name": item["name"], "version": "v1", "to": "APPROVED",
+             "expectedHash": reviewed["expectedHash"], "actor": "forged-operator", "callerArn": "forged-arn"}
+    rejected = admin_handler.handler(event, None)
+    assert rejected["ok"] is False
+    result = admin_handler.handler(event, ADMIN_CONTEXT)
+    assert result["ok"] and result["audit"]["actor"] == "iam-invoke:" + ADMIN_CONTEXT.aws_request_id
 
 
 @pytest.mark.parametrize("change", ["deprecate", "remove"])

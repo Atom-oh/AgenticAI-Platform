@@ -336,7 +336,9 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
             async for ev in agent.stream_async(prompt):
                 for m in gate.drain():
                     yield {"type": "boundary", "chars": m["chars"], "estTokens": m["estTokens"],
-                           "piiRules": m["piiRules"], "seq": m.get("seq"), "messages": m.get("messages")}
+                           "piiRules": m["piiRules"], "piiCount": m.get("piiCount", m["piiRules"]),
+                           "piiDetectors": m.get("piiDetectors", ["rules"]),
+                           "seq": m.get("seq"), "messages": m.get("messages")}
                 if not isinstance(ev, dict):
                     continue
                 if "data" in ev and isinstance(ev["data"], str):
@@ -382,8 +384,10 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
             gr = find_gate_refusal(e)
             for m in gate.drain():
                 yield {"type": "boundary", "chars": m["chars"], "estTokens": m["estTokens"],
-                       "piiRules": m["piiRules"], "seq": m.get("seq"), "messages": m.get("messages"),
-                       "refusedTypes": m.get("hits") if m.get("piiRules") else []}
+                       "piiRules": m["piiRules"], "piiCount": m.get("piiCount", m["piiRules"]),
+                       "piiDetectors": m.get("piiDetectors", ["rules"]),
+                       "seq": m.get("seq"), "messages": m.get("messages"),
+                       "refusedTypes": m.get("hits") if m.get("piiCount", m["piiRules"]) else []}
             if gr is not None:
                 refused = True
                 stop_reason = "gate_refused"
@@ -395,7 +399,9 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
                 yield {"type": "error", "code": 500, "message": _err(e)}
         for m in gate.drain():
             yield {"type": "boundary", "chars": m["chars"], "estTokens": m["estTokens"],
-                   "piiRules": m["piiRules"], "seq": m.get("seq"), "messages": m.get("messages")}
+                   "piiRules": m["piiRules"], "piiCount": m.get("piiCount", m["piiRules"]),
+                   "piiDetectors": m.get("piiDetectors", ["rules"]),
+                   "seq": m.get("seq"), "messages": m.get("messages")}
         meta["stopReason"] = stop_reason
         meta["boundary"] = gate.summary()
         meta["textChars"] = text_chars

@@ -123,7 +123,7 @@ def verify_guardrail_coverage(response: dict, text: str, *, context_chars: int =
 
 def scan_guardrail(text: str, *, strict: bool = False, max_chars: int = 4000) -> list[dict]:
     """Bedrock Guardrails PII 평가 — 마스킹 규칙과 독립된 ML 탐지기. 실패 시 빈 목록(로그)."""
-    if type(max_chars) is not int or not 1 <= max_chars <= 20_000:
+    if type(max_chars) is not int or not 1 <= max_chars <= 100_000:
         raise PiiVerificationUnavailable("Invalid PII verification size limit")
     if not GUARDRAIL_ID or not text:
         if strict:

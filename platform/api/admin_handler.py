@@ -16,7 +16,7 @@ from common.log import log_event
 
 def handler(event, context):
     op = event.get("op")
-    log_event("admin.op", op=op)
+    log_event("admin.op", getattr(context, "aws_request_id", ""), op=op)
     if op == "health":
         out = {"plane": plane.mode(), "graphBackend": os.environ.get("GRAPH_BACKEND", "local")}
         if plane.mode() == "bridge":
@@ -48,7 +48,7 @@ def handler(event, context):
                 return {"ok": True, **administration.inspect(event["name"], event["version"])}
             return {"ok": True, **administration.transition(
                 event["name"], event["version"], event["to"], event["expectedHash"],
-                str(event.get("reason", ""))[:500])}
+                str(event.get("reason", ""))[:500], actor_ref=administration.invocation_actor(context))}
         except Exception as error:
             log_event("admin.registry_decision_failed", errorType=type(error).__name__)
             return {"ok": False, "error": "registry-administration-failed",
@@ -125,8 +125,10 @@ def handler(event, context):
         from agentcore.administration import apply_request
         from registry.model import RegistryError
         try:
+            from registry.administration import invocation_actor
             options = {"reconcile_hash": event["expectedHarnessHash"]} if op == "reconcile_agent_request" else {}
-            return {"ok": True, **apply_request(event["name"], event.get("version", "v1"), **options)}
+            return {"ok": True, **apply_request(event["name"], event.get("version", "v1"),
+                                              actor_ref=invocation_actor(context), **options)}
         except Exception as error:
             log_event("admin.agent_request_failed", errorType=type(error).__name__)
             return {"ok": False, "error": str(error)[:300] if isinstance(error, RegistryError) else "agent-administration-failed",

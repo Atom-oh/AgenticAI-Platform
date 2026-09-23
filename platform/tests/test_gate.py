@@ -385,6 +385,13 @@ def test_gate_is_the_only_path_to_models_repo_wide():
     seen = set()
     for rel, src in _py_files():
         seen.add(rel)
+        copies = {"agents/_ctx/common/" + name: "api/common/" + name
+                  for name in ("pii.py", "log.py", "__init__.py")}
+        if rel in copies:
+            assert src == (ROOT / copies[rel]).read_text(encoding="utf-8"), \
+                "Runtime common modules must exactly match their canonical inspected sources"
+            if copies[rel] in _ALLOWED_FILES:
+                continue
         if rel in _ALLOWED_FILES:
             continue
         for i, line in enumerate(src.splitlines(), 1):

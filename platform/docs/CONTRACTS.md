@@ -40,7 +40,12 @@ ROUTES = {"x": handle_x}
   `ctx.done(kind, error=...)`. Entry-point exceptions are also reported as errors.
 - Use `engine.gate` for platform LLM generation; `engine.bedrock.Stream` and
   `generate` are compatibility wrappers. Actual usage comes from the adapter.
-  Strands has its separate pre-model boundary hook.
+  Strands has its separate pre-model boundary hook, which checks system content,
+  messages and tool schemas with rules plus strict independent Guardrail coverage.
+  Runtime verification is bounded at 100,000 characters; Gateway/Harness at 20,000;
+  all reject unverified overflow rather than truncate. Gateway/Harness block EMAIL
+  and KR_PASSPORT as well as other identifier types. Raw customer email references
+  are not admitted there; the sample lookup is separate from authenticated S2.
 - Agent creation/transition user actions store local requests. AgentCore
   provisioning, approval mirroring and Harness PassRole are IAM AdminFn
   operations; WsFn has read actions, bank-prefix Harness invocation and the
@@ -125,6 +130,11 @@ Record example (illustrative values, not a fixed approved version):
   the decision and audit. Generic Admin decisions cannot target AGENT/internal
   request records. User attempts return `403`. Public `allowedTargets` excludes
   these decisions and `adminRequiredTargets` identifies them for the UI.
+- IAM decision audit actors are `iam-invoke:<Lambda aws_request_id>`, supplied by
+  trusted execution context, not request fields. This identifies the invocation;
+  direct Lambda context does not expose the calling IAM principal. Operator
+  identity correlation requires retained AWS invocation audit and operator
+  receipts; this contract does not claim that CloudTrail data events are enabled.
 - After creation submits the initial draft, user AGENT transitions return
   pending `AGENT_ADMIN_REQUEST` receipts; only
   IAM administration applies them. Generic creation of AGENT records or the

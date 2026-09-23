@@ -465,7 +465,8 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                     errors.append("에이전트 응답이 완료되지 않았습니다.")
         meta_model = None
         blocked = stop_reason == "gate_refused"
-        pii_outbound = sum(int(event.get("piiRules", 0) or 0) for event in boundary_events) if boundary_events else None
+        pii_outbound = sum(int(event.get("piiCount", event.get("piiRules", 0)) or 0)
+                           for event in boundary_events) if boundary_events else None
         done_kw: Dict[str, Any] = {"usage": usage, "stopReason": stop_reason, "sessionId": client_session_id,
                                    "runtimeSessionId": session_id,
                                    "toolsMissing": tools_missing,

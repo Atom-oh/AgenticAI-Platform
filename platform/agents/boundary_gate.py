@@ -76,8 +76,6 @@ def _collect(node: Any, out: List[str]) -> None:
         for k, v in node.items():
             if k in ("json", "input") and not isinstance(v, str):
                 out.append(json.dumps(v, ensure_ascii=False, default=str))
-            elif k in ("bytes", "source"):
-                continue  # 이미지/문서 바이트 — 텍스트 규칙 대상 아님
             else:
                 _collect(v, out)
     elif isinstance(node, (list, tuple)):
@@ -92,6 +90,23 @@ def outgoing_text(messages: Optional[List[dict]], system_prompt: Any = None) -> 
     _collect(messages or [], parts)
     return "\n".join(parts)
 
+
+def verify_independent(text):
+    from common.pii import scan_outbound
+    return scan_outbound(text, strict=True, max_chars=100000)
+
+
+def require_text_payload(value):
+    if isinstance(value, (bytes, bytearray)):
+        raise ValueError("Binary model payloads are outside the bank text boundary")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"image", "document", "video", "audio"} and isinstance(item, dict) and "source" in item:
+                raise ValueError("Media model payloads require a separate boundary")
+            require_text_payload(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            require_text_payload(item)
 
 def measure(messages: Optional[List[dict]], system_prompt: Any = None) -> Dict[str, Any]:
     """반환: {chars, estTokens, piiRules, hits:[type,...], messages}. hits 에는 값이 아니라 규칙 이름만 담는다."""
@@ -139,19 +154,34 @@ class BoundaryGateHook(HookProvider):  # type: ignore[misc]
     def before_model_call(self, event: "BeforeModelCallEvent") -> None:
         agent = getattr(event, "agent", None)
         messages = list(getattr(agent, "messages", []) or [])
-        system_prompt = getattr(agent, "system_prompt", None)
-        self.check(messages, system_prompt)
+        system_prompt = getattr(agent, "_system_prompt_content", None)
+        if system_prompt is None:
+            system_prompt = getattr(agent, "system_prompt", None)
+        registry = getattr(agent, "tool_registry", None)
+        tool_specs = registry.get_all_tool_specs() if registry is not None else []
+        self.check(messages, system_prompt, tool_specs)
 
-    def check(self, messages: List[dict], system_prompt: Any = None) -> Dict[str, Any]:
+    def check(self, messages: List[dict], system_prompt: Any = None, tool_specs=None) -> Dict[str, Any]:
         """훅 본체 (strands 없이도 테스트 가능). 히트 시 GateRefused."""
-        m = measure(messages, system_prompt)
+        require_text_payload([messages, system_prompt, tool_specs])
+        inspected = list(messages)
+        if tool_specs:
+            inspected.append({"role": "system", "content": [{"json": {"tools": tool_specs}}]})
+        m = measure(inspected, system_prompt)
+        m["piiCount"] = m["piiRules"]
+        m["piiDetectors"] = ["rules"]
+        if not m["piiRules"]:
+            verification = verify_independent(outgoing_text(inspected, system_prompt))
+            m["piiCount"] = verification["count"]
+            m["piiDetectors"] = verification["detectors"]
+            m["hits"] = sorted({hit["type"] for hit in verification["hits"]})
         with self._lock:
             self.calls += 1
             m["seq"] = self.calls
             self.measurements.append(m)
-            if m["piiRules"]:
+            if m["piiCount"]:
                 self.refused = m
-        if m["piiRules"]:
+        if m["piiCount"]:
             raise GateRefused(m["hits"], m)
         return m
 
@@ -174,6 +204,7 @@ class BoundaryGateHook(HookProvider):  # type: ignore[misc]
                 "chars": sum(int(m.get("chars", 0)) for m in self.measurements),
                 "estTokens": sum(int(m.get("estTokens", 0)) for m in self.measurements),
                 "piiRules": sum(int(m.get("piiRules", 0)) for m in self.measurements),
+                "piiCount": sum(int(m.get("piiCount", 0)) for m in self.measurements),
                 "refused": bool(self.refused),
                 "refusedTypes": list(self.refused["hits"]) if self.refused else [],
             }

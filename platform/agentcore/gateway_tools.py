@@ -23,6 +23,12 @@ _store = None
 MAX_VERIFICATION_CHARS = 20_000
 
 
+class ToolBoundaryRefused(RuntimeError):
+    def __init__(self, types):
+        self.types = sorted(set(types))
+        super().__init__("Tool privacy boundary refused")
+
+
 def _graph():
     global _store
     if _store is None:
@@ -50,11 +56,12 @@ def tool_analyze_regulation_impact(args: dict) -> dict:
         from engine.graphrag import _select_seed
         seed, conf, cands = _select_seed(store, [args["question"]])
         if not seed:
-            return {"error": "질문에서 규정을 특정하지 못했습니다.", "candidates": cands}
+            return {"found": False, "reason": "regulation-unresolved", "candidates": cands[:10],
+                    "hint": "list_regulations에서 규정 코드를 선택하세요"}
         code = seed["code"]
     r = store.impact_of_regulation(code)
     if not r.regulation:
-        return {"error": f"규정 없음: {code}", "hint": "list_regulations로 코드를 먼저 찾으세요"}
+        return {"found": False, "reason": "regulation-not-found", "hint": "list_regulations로 코드를 먼저 찾으세요"}
     out = {"regulation": {"code": code, **{k: r.regulation.props.get(k) for k in ("title", "article", "version")}},
            "counts": r.counts(),
            "products": _nodes(r.products, ["productCode", "name", "category"]),
@@ -71,10 +78,10 @@ def tool_impact_of_component(args: dict) -> dict:
     store = _graph()
     fn = getattr(store, "impact_of_component", None)
     if fn is None:
-        return {"error": "미구현: impact_of_component (온톨로지 v2 배포 전)"}
+        return {"available": False, "reason": "component-impact-unavailable"}
     r = fn(args["component_id"])
     if not r.component:
-        return {"error": f"컴포넌트 없음: {args['component_id']}"}
+        return {"found": False, "reason": "component-not-found"}
     return {"component": {"id": r.component.id, **{k: r.component.props.get(k) for k in ("name", "version", "approvalStatus")}},
             "counts": r.counts(),
             "screens": _nodes(r.screens, ["screenId", "name"]), "patterns": _nodes(r.patterns, ["patternId", "name"]),
@@ -85,7 +92,7 @@ def tool_resolve_metric(args: dict) -> dict:
     from semantic.loader import SemanticLayer
     m = SemanticLayer().resolve(args.get("term", ""))
     if not m:
-        return {"error": "Semantic Layer에 정의 없음", "available": [x.name for x in SemanticLayer().metrics]}
+        return {"found": False, "reason": "metric-not-found", "available": [x.name for x in SemanticLayer().metrics]}
     return {"name": m.name, "unit": m.unit, "ownerDept": m.owner_dept, "description": m.description, "sqlTemplate": m.sql_template}
 
 
@@ -107,7 +114,7 @@ def tool_lookup_customer_profile(args: dict) -> dict:
     from common import pii
     scan = pii.scan_rules(prep["maskedPayload"])
     if scan:
-        return {"error": "익명화 게이트 거부: 마스킹 페이로드에 식별자 잔존", "hits": [h["type"] for h in scan]}
+        raise ToolBoundaryRefused([h["type"] for h in scan])
     log_event("tool.lookup_customer_profile", plane=mode, maskedFields=len(prep.get("maskedFields", [])))
     return {"maskedProfile": prep["maskedPayload"], "rate": prep["rate"], "limit": prep["limit"],
             "maskedFields": [f["field"] for f in prep.get("maskedFields", [])], "dataSource": source,
@@ -285,6 +292,9 @@ def handler(event, context):
         if not _inspect(body, name, "tool.boundary"):
             return {"error": "Tool output blocked by privacy boundary", "code": "BOUNDARY_REFUSED"}
         return body
+    except ToolBoundaryRefused as e:
+        return {"error": "Tool output blocked by privacy boundary", "code": "BOUNDARY_REFUSED",
+                "piiTypes": e.types, "piiDetectors": ["rules"]}
     except Exception as e:
         log_event("tool.failed", tool=name, errorType=type(e).__name__)
         return {"error": "Tool execution failed", "code": "TOOL_FAILED"}

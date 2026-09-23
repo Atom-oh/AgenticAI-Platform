@@ -24,6 +24,7 @@ def load(name, path):
 def test_design_reports_boundary_events_and_refusal_without_originals(runtime_app, monkeypatch, blocked):
     boundary = load("design_boundary", ROOT / "agents/boundary_gate.py")
     monkeypatch.setitem(sys.modules, "boundary_gate", boundary)
+    monkeypatch.setattr(boundary, "verify_independent", lambda text: {"count": 0, "hits": [], "detectors": ["rules", "guardrail"]})
     calls = []
 
     class Result:
@@ -62,7 +63,7 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
     events = asyncio.run(exercise())
     measurements = [event for event in events if event["type"] == "boundary"]
     assert len(measurements) == 1 and measurements[0]["chars"] > 0
-    assert measurements[0]["piiDetectors"] == ["rules"]
+    assert measurements[0]["piiDetectors"] == (["rules"] if blocked else ["rules", "guardrail"])
     if blocked:
         assert not calls
         assert measurements[0]["source"] == "design-preflight" and measurements[0]["piiRules"] == 1

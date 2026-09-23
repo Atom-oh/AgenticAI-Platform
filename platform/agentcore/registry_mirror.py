@@ -31,8 +31,10 @@ def _descriptor(record: dict) -> tuple[str, dict]:
         tools = payload.get("tools") or []
         return "MCP", {"mcp": {"tools": {"protocolVersion": "2025-06-18",
                                         "inlineContent": _bounded(json.dumps({"tools": tools}, ensure_ascii=False))}}}
-    if rt == "SKILL" and payload.get("skillMd"):
-        return "AGENT_SKILLS", {"agentSkills": {"skillMd": {"inlineContent": _bounded(str(payload["skillMd"]))}}}
+    if rt == "SKILL":
+        if not isinstance(payload.get("skillMd"), str) or not payload["skillMd"].strip():
+            raise ValueError("SKILL mirroring requires explicit reviewed inline Skill content")
+        return "AGENT_SKILLS", {"agentSkills": {"skillMd": {"inlineContent": _bounded(payload["skillMd"])}}}
     if rt == "AGENT":
         body = {key: record.get(key) for key in ("name", "recordVersion", "recordType", "subtype", "description")}
     else:

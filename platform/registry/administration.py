@@ -2,11 +2,22 @@
 import hashlib
 import json
 import re
+import uuid
 
 from registry import api
 from registry.model import ConflictError, NotFoundError, ValidationError
 
 DECISIONS = frozenset({"APPROVED", "REJECTED", "DEPRECATED"})
+
+
+def invocation_actor(context):
+    """Use trusted Lambda execution identity, never a caller-supplied IAM ARN."""
+    request_id = getattr(context, "aws_request_id", "")
+    try:
+        request_id = str(uuid.UUID(request_id))
+    except (ValueError, TypeError, AttributeError):
+        raise ValidationError("A trusted Lambda invocation reference is required") from None
+    return "iam-invoke:" + request_id
 
 
 def fingerprint(record):
@@ -26,7 +37,7 @@ def inspect(name, version):
     return {"record": record, "expectedHash": fingerprint(record)}
 
 
-def transition(name, version, target, expected_hash, reason=""):
+def transition(name, version, target, expected_hash, reason="", *, actor_ref):
     if target not in DECISIONS:
         raise ValidationError("Unsupported Registry administration decision")
     if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
@@ -34,6 +45,8 @@ def transition(name, version, target, expected_hash, reason=""):
     current = inspect(name, version)
     if current["expectedHash"] != expected_hash:
         raise ConflictError("Registry content changed after inspection")
-    record, audit = api.transition(name, version, target, actor="iam-admin", reason=reason,
+    if not isinstance(actor_ref, str) or not re.fullmatch(r"iam-invoke:[0-9a-f-]{36}", actor_ref):
+        raise ValidationError("A trusted administrative invocation reference is required")
+    record, audit = api.transition(name, version, target, actor=actor_ref, reason=reason,
                                    expected_record=current["record"])
     return {"record": record, "audit": audit}

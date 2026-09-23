@@ -7,6 +7,8 @@ cd "$(dirname "$0")"
 rm -rf _ctx && mkdir -p _ctx/skills
 cp ../agentcore/agent_specs.py _ctx/agent_specs.py
 cp ../engine/model_catalog.py _ctx/model_catalog.py
+mkdir -p _ctx/common
+cp ../api/common/__init__.py ../api/common/pii.py ../api/common/log.py _ctx/common/
 cp ../skills/*.md _ctx/skills/
 cp -r ../design_loop _ctx/design_loop && rm -rf _ctx/design_loop/__pycache__
 echo "agents/_ctx prepared: agent_specs.py + model_catalog.py + design_loop + $(ls _ctx/skills | wc -l | tr -d ' ') skills"

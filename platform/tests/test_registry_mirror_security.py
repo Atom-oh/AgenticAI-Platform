@@ -87,3 +87,10 @@ def test_oversized_descriptor_is_rejected_without_truncation(monkeypatch):
     with pytest.raises(ValueError):
         mirror.mirror({'name': 'synthetic', 'recordVersion': 'v1', 'recordType': 'SKILL',
                        'payload': {'skillMd': 'a' * 60001}})
+
+
+def test_path_only_skill_does_not_silently_become_custom(monkeypatch):
+    monkeypatch.setattr(mirror, 'ctl', lambda: pytest.fail('unsupported Skill reached Registry'))
+    with pytest.raises(ValueError):
+        mirror.mirror({'name': 'synthetic', 'recordVersion': 'v1', 'recordType': 'SKILL',
+                       'payload': {'path': 'skills/synthetic.md'}})

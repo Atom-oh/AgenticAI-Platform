@@ -511,8 +511,9 @@ def test_handler_routes_end_to_end():
         h.registry_transition(ctx, {"name": "Button", "version": version, "to": target, "reason": "S3 review"})
         assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 403
         reviewed = administration.inspect("Button", version)
-        result = administration.transition("Button", version, target, reviewed["expectedHash"], "S3 review")
-        assert result["record"]["status"] == target and result["audit"]["actor"] == "iam-admin"
+        result = administration.transition("Button", version, target, reviewed["expectedHash"], "S3 review",
+                                             actor_ref="iam-invoke:11111111-1111-4111-8111-111111111111")
+        assert result["record"]["status"] == target and result["audit"]["actor"].startswith("iam-invoke:")
     h.registry_consumer(ctx, {"subtype": "COMPONENT"})
     keys = {(r["name"], r["recordVersion"]) for r in gw.posted[-1]["records"]}
     assert ("Button", "v3") in keys and ("Button", "v2") not in keys

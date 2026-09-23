@@ -40,6 +40,9 @@ model token usage. `GateRefused` blocks the affected model call and removes the
 session history; earlier successful calls in the same run can already have usage.
 An initial gate refusal can report zero usage and `stopReason="gate_refused"`.
 
+The container packages the common PII verifier and logger; admitted model calls
+require full independent Guardrail coverage of collected system/message/tool text.
+
 Environment: `AWS_REGION` (default `ap-northeast-2`), `GATEWAY_URL`, `GATEWAY_ARN`,
 `GUARDRAIL_ID` (required), `GUARDRAIL_VERSION`, and optional `LOG_LEVEL`, `MAX_TOKENS`,
 `MAX_PROMPT_CHARS`, `SKILLS_DIR`, `TEMPERATURE`. Model selection uses the exact

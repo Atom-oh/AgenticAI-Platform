@@ -55,7 +55,7 @@ def request_transition(name, version, target, actor, reason):
             "agentcoreRegistry": {"status": "PENDING_ADMIN"}, "message": "관리자 처리 요청을 기록했습니다."}
 
 
-def apply_request(name, version="v1", *, reconcile_hash=None):
+def apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin"):
     """Called only by admin_handler; this function is not a WebSocket route."""
     from agentcore import harness, registry_mirror
     request = api.get_record(name, version, include_internal=True)
@@ -132,7 +132,7 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
         from agentcore.skill_binding import resolve
         resolve(record["payload"].get("skillBindings", []), record["payload"].get("skills", []))
     updated, audit = ((record, None) if applied else
-        api.transition(record["name"], record["recordVersion"], body["to"], "admin", body["reason"], expected_record=record))
+        api.transition(record["name"], record["recordVersion"], body["to"], actor_ref, body["reason"], expected_record=record))
     # User prompts, identities and private request reasons are not discovery metadata.
     try:
         mirrored = registry_mirror.mirror({
@@ -146,7 +146,7 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
         return {"record": updated, "request": request, "audit": audit,
                 "agentcoreRegistry": mirrored, "applied": True, "completed": False}
     if request["status"] == "DRAFT":
-        api.transition(name, version, "PENDING_APPROVAL", "admin", "IAM administration accepted request")
-    saved, _ = api.transition(name, version, "APPROVED", "admin", "Agent transition applied")
+        api.transition(name, version, "PENDING_APPROVAL", actor_ref, "IAM administration accepted request")
+    saved, _ = api.transition(name, version, "APPROVED", actor_ref, "Agent transition applied")
     return {"record": updated, "request": saved, "audit": audit, "agentcoreRegistry": mirrored,
             "applied": True, "completed": True}

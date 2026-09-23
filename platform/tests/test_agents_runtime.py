@@ -224,7 +224,8 @@ def test_boundary_gate_rules_match_api_pii_rules():
     assert ours == theirs
 
 
-def test_boundary_gate_refuses_identifier_and_passes_masked_payload():
+def test_boundary_gate_refuses_identifier_and_passes_masked_payload(monkeypatch):
+    monkeypatch.setattr(boundary_gate, "verify_independent", lambda text: {"count": 0, "hits": [], "detectors": ["rules", "guardrail"]})
     hook = boundary_gate.BoundaryGateHook()
     masked = [{"role": "user", "content": [{"text": "우대금리 얼마나 받아요?"}]},
               {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "lookup_customer_profile", "input": {"question": "우대금리"}}}]},

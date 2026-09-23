@@ -147,7 +147,7 @@ blocks Harness approval/invocation. The Admin Lambda has the same exact Guardrai
 and APAC-profile grants needed to inspect system/Skill text. The bank
 Gateway Lambda independently measures and scans every outgoing tool result,
 blocks residual identifiers or failed inspection, and returns bounded errors.
-Every admitted payload requires both rules and the configured Guardrail's
+Every admitted Gateway payload requires both rules and the configured Guardrail's
 independent sensitive-information check, with complete coverage. A rules hit
 blocks locally without sending the identified content to Guardrails; it records
 rules-only rejection evidence, never a completed Guardrail check. Missing
@@ -157,6 +157,16 @@ sends the complete serialized payload in one request; it never truncates or
 splits context. The shared S2 verifier retains its separate 4,000-character bound.
 The Tools Lambda can apply only that Guardrail and its existing APAC profile
 in the six documented destination Regions from Seoul.
+The Runtime pre-model hook independently verifies the complete collected text,
+including system content, message history and tool specifications, before each
+model call. Its explicit 100,000-character verification bound never truncates;
+opaque media requires a separate boundary and is rejected. The Gateway/Harness
+retain 20,000-character bounds and the shared default remains 4,000. Missing,
+failed or incomplete independent verification blocks the call.
+Gateway/Harness refuse all identifier classes, including EMAIL and KR_PASSPORT;
+raw email customer references are not admitted through this Tier 0/1 path.
+The existing sample lookup uses its configured synthetic default. Authenticated
+customer MyData intake remains the separate S2 privacy workflow.
 The design-flow compatibility adapter emits measured boundary events for successful
 model attempts and local privacy refusals, retaining the refusal classification.
 It also inspects arguments before executing a tool, including nested model
