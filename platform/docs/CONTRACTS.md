@@ -118,6 +118,13 @@ Record example (illustrative values, not a fixed approved version):
 - Transitions: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` and
   `PENDING_APPROVAL → REJECTED → DRAFT`. Other transitions fail with code `400`.
   `REJECTED` and `DEPRECATED` require a reason.
+- Generic MCP/SKILL/CUSTOM creation and draft submission are available to invited
+  users. Approval, rejection and deprecation are IAM-only Admin decisions:
+  `inspect_registry_record` returns the current record and `expectedHash`;
+  `transition_registry_record` requires that exact hash and conditionally commits
+  the decision and audit. Generic Admin decisions cannot target AGENT/internal
+  request records. User attempts return `403`. Public `allowedTargets` excludes
+  these decisions and `adminRequiredTargets` identifies them for the UI.
 - After creation submits the initial draft, user AGENT transitions return
   pending `AGENT_ADMIN_REQUEST` receipts; only
   IAM administration applies them. Generic creation of AGENT records or the
@@ -135,7 +142,9 @@ Record example (illustrative values, not a fixed approved version):
   Agent audit responses expose identity/reason hashes rather than private text.
 - `REGISTRY_TABLE` uses `pk`, `sk`, and GSI `byStatus(status, updatedAt)`.
   No table configuration selects the in-memory test store.
-- Consumer queries return only `APPROVED` records. Administrative hybrid search
+- Consumer queries re-read GSI candidates with strongly consistent base-table
+  reads and return only current `APPROVED` records. New approvals can wait for
+  index propagation; deprecated/removed candidates are rejected immediately.  Administrative hybrid search
   is separate: `search` returns scored hit objects containing `record`.
   Embeddings can be disabled or unavailable; `search_detailed` reports
   keyword-only operation rather than claiming dense retrieval.

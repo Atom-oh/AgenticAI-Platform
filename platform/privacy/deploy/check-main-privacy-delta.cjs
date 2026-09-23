@@ -40,4 +40,11 @@ function assertMainPrivacyDelta(baseline, enabled, arn) {
   return changed;
 }
 
-module.exports = { assertMainPrivacyDelta };
+function assertReviewedMainChanges(base, changes, manifest) {
+  if (!changes.length) return;
+  assert.equal(manifest.base, base, 'Main-stack changes require a review manifest for this exact PR base');
+  assert.deepEqual([...changes].sort(), [...manifest.resources].sort(),
+    'Main-stack changes differ from the committed review manifest');
+}
+
+module.exports = { assertMainPrivacyDelta, assertReviewedMainChanges };

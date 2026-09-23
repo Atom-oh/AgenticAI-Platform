@@ -34,7 +34,9 @@ logs or review artifacts.
   release the session claim after cleanup.
   Design cancellation stops further generation/judging calls and joins the
   admitted worker before release. Failed Gateway cleanup quarantines the
-  affected session; a new conversation is required.
+  affected session; a new conversation is required. Active claims are released
+  even on cleanup failure. Quarantine retains at most 20 IDs; overflow refuses
+  further work until the Runtime process is recycled.
 - `agentcore/runtime.py` sends `runtimeSessionId` in the API request and no
   payload `sessionId`, including through additional payload fields.
 - `api/ws_handler.py` retains the Cognito-verified `sub`; it verifies the
@@ -56,7 +58,8 @@ prefix, plus the existing exact bank Runtime invocation grant needed by Strands.
 AgentCore create/update/delete/approval actions and Harness
 `iam:PassRole` belong to AdminFn. Remove the three unused workload-token
 permissions from the bank Runtime role.
-Remove the Harness role's wildcard Memory data permissions too. New Harness
+Remove the Harness role's wildcard Memory data permissions and its obsolete
+S3 Skill-prefix grant. Historical Skill bucket objects remain retained. New Harness
 configurations explicitly set `memory.disabled`; omission does not prove the
 service has disabled managed Memory. The deployed legacy Harness's Registry
 version is deprecated; retain its historical Memory without execution-role
@@ -65,6 +68,17 @@ The user's explicit AdminFn allocation includes CreateMemory, GetMemory and
 CreateWorkloadIdentity. These are administrative creation capabilities, not a
 claim that bank Runtime Memory or outbound Identity is active. Runtime use and
 dedicated resource grants still require WP5 and its independent live evidence.
+
+Generic MCP/SKILL/CUSTOM drafts can be created and submitted by invited users.
+Approval, rejection and deprecation require the IAM Admin operations
+`inspect_registry_record` and `transition_registry_record`, with the exact
+`expectedHash` returned by inspection. The generic Admin operation rejects AGENT
+and internal-request records. The user UI displays administrator-required states
+and cannot perform the former one-click approval/deprecation demo.
+Consumer discovery re-reads GSI candidates from the authoritative table; a stale
+APPROVED index image cannot return a deprecated or removed record. New approvals
+can still await GSI propagation, which is a completeness delay, not permission
+to reuse revoked content.
 
 User agent creation saves a local pending specification. Agent transitions
 save `AGENT_ADMIN_REQUEST` records. The generic Registry route cannot bypass
@@ -87,7 +101,12 @@ by these requests without its separate privacy/extraction review.
 Custom Harness Skill selections must be APPROVED; server-derived bindings fix
 the Registry revision and bundled Markdown hash. Approval rechecks those
 bindings and embeds the exact inspected text into the Harness system prompt,
-without a mutable S3 Skill prefix. Invocation rechecks the approval bindings.
+without a mutable S3 Skill prefix. All Harness creation paths, including IAM
+seeding, require explicit bindings; even an empty selection uses `[]`. Invocation
+rechecks the approval bindings. Creation explicitly selects `converse_stream` to
+match the managed service protocol returned by GetHarness. Existing Agent mirror
+descriptors are replaced with metadata and verified before status synchronization;
+completion is verified again afterward.
 Every Harness invocation, including legacy approved custom records, also checks
 the actual READY service configuration against the reviewed fields. A missing
 binding, wildcard tool, changed limit, or enabled Memory blocks invocation until
@@ -112,7 +131,7 @@ unexpected grant cannot delete a real resource.
 ### WP3: closed tool access and bounded errors
 
 Remove production Gateway DEBUG exception output. Empty or wildcard
-`allowedTools` do not grant all tools. In the Strands Runtime, missing configured tools produce
+`allowedTools` do not grant all tools. In the Strands Runtime, ambiguous bare names fail closed and missing configured tools produce
 `toolsMissing`, a failure before model invocation, and a visible UI badge.
 Harness creation requires a configured Gateway and explicit tools; its managed
 execution reports bounded service failures and does not provide the Runtime's
@@ -135,7 +154,9 @@ It also inspects arguments before executing a tool, including nested model
 adapter calls inside tools.
 Gate and document results are projected from their expected response schemas;
 nested upstream diagnostic bodies are not returned. Gate failure verdicts,
-counts, rule identifiers and compiler codes remain available.
+counts, rule identifiers and compiler codes remain available. Accessibility
+incomplete checks remain visible and prevent aggregate success; failed Registry
+component approval also makes the aggregate false.
 The managed Harness loop does not run the Strands pre-model hook; its input
 trace must not be presented as inspection of the complete managed history.
 

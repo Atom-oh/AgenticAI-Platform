@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { assertMainPrivacyDelta } = require('./check-main-privacy-delta.cjs');
+const { assertMainPrivacyDelta, assertReviewedMainChanges } = require('./check-main-privacy-delta.cjs');
 const { loadBaselineModule } = require('./load-baseline.cjs');
 const root = path.resolve(__dirname, '../..');
 const infra = path.join(root, 'infra');
@@ -199,12 +199,15 @@ const changed = assertMainPrivacyDelta(disabled, enabled, arn);
 const mainIds = new Set([...Object.keys(baseline.Resources), ...Object.keys(disabled.Resources)]);
 const reviewedMainChanges = [...mainIds].filter(id =>
   JSON.stringify(baseline.Resources[id]) !== JSON.stringify(disabled.Resources[id]));
+const reviewedDelta = JSON.parse(fs.readFileSync(path.join(__dirname, 'reviewed-main-delta.json'), 'utf8'));
+assertReviewedMainChanges(baselineHead, reviewedMainChanges, reviewedDelta);
 console.log('Main-stack resources changed between revisions (review separately):', reviewedMainChanges.join(', '));
 fs.writeFileSync(path.join(out, 'verified.json'), JSON.stringify({
   privacyResources: Object.keys(json.Resources).length,
   existingMainResources: Object.keys(disabled.Resources).length,
   baselinePrivacyDeltaVerified: true, currentPrivacyDeltaVerified: true,
   baselineHead, baselineSourceHashes: sourceHashes,
+  reviewedDeltaManifestHash: createHash('sha256').update(JSON.stringify(reviewedDelta)).digest('hex'),
   assetFixture: 'shared current-checkout assets; source modules loaded from their named revision',
   separatelyReviewedMainChangedResources: reviewedMainChanges,
   enabledMainChangedResources: changed,

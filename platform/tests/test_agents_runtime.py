@@ -283,6 +283,8 @@ def test_mcp_gateway_name_filtering_without_strands():
     assert mg.filter_tool_names(discovered, ["list_regulations", "platform___analyze_regulation_impact"]) == discovered[:2]
     assert mg.filter_tool_names(discovered, []) == []
     assert mg.filter_tool_names(["trusted___tool", "other___tool"], ["trusted___tool"]) == ["trusted___tool"]
+    assert mg.filter_tool_names(["trusted___tool", "other___tool"], ["tool"]) == []
+    assert mg.missing_tool_names(["trusted___tool", "other___tool"], ["tool"]) == ["tool"]
     assert mg.missing_tool_names(["trusted___tool"], ["trusted___tool", "other___tool"]) == ["other___tool"]
     assert mg.bare_name("platform___run_screen_gates") == "run_screen_gates" and mg.bare_name("resolve_metric") == "resolve_metric"
     assert mg.SERVICE_NAME == "bedrock-agentcore"
@@ -614,3 +616,52 @@ def test_cancelled_session_constructor_is_joined_and_closed_before_retry(runtime
         asyncio.run(exercise())
     finally:
         release.set()
+
+
+def test_cleanup_quarantine_capacity_blocks_further_admission(runtime_app):
+    app, _ = runtime_app
+    for index in range(app.MAX_SESSIONS + 10):
+        app._quarantine(f"failed-{index}-" + "s" * 40)
+    assert len(app._quarantined_sessions) == app.MAX_SESSIONS
+    assert app._quarantine_exhausted
+
+    async def exercise():
+        return [event async for event in app.run(
+            {"agent": "regulation_impact_agent", "prompt": "safe"}, "new-session-" + "s" * 40)]
+
+    result = asyncio.run(exercise())
+    assert result[0]["code"] == 503
+    assert not app._active_sessions
+
+
+def test_cleanup_failure_quarantines_but_releases_active_claim(runtime_app, monkeypatch):
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    sid = "cleanup-failure-" + "s" * 40
+    constructed = []
+
+    def close():
+        app._quarantine(sid)
+        raise app._SessionCleanupFailed()
+
+    async def stream(prompt):
+        yield {"data": "completed"}
+
+    def session(*args):
+        constructed.append(True)
+        return SimpleNamespace(tools=[], discovered=[], skills_loaded=[], skills_missing=[], close=close,
+            gate=SimpleNamespace(drain=lambda: [], summary=lambda: {}),
+            agent=SimpleNamespace(messages=[], stream_async=stream))
+
+    monkeypatch.setattr(app, "_Session", session)
+    monkeypatch.setattr(app.mcp_gateway, "missing_tool_names", lambda *args: [], raising=False)
+
+    async def exercise():
+        payload = {"agent": "regulation_impact_agent", "prompt": "safe"}
+        result = [event async for event in app.run(payload, sid)]
+        assert result[-1]["stopReason"] == "cleanup_failed"
+        assert sid not in app._active_sessions and sid in app._quarantined_sessions
+        retry = [event async for event in app.run(payload, sid)]
+        assert retry[0]["code"] == 503 and constructed == [True]
+
+    asyncio.run(exercise())

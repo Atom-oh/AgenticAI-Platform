@@ -113,6 +113,11 @@ def public_record(rec: dict) -> dict:
     out = dict(rec)
     out["payload"] = {key: value for key, value in (out.get("payload") or {}).items()
                       if key not in {"systemPrompt", "skillMd"}}
+    if out.get("recordType") != "AGENT":
+        from registry.administration import DECISIONS
+        targets = allowed_targets(out.get("status", ""))
+        out["allowedTargets"] = [target for target in targets if target not in DECISIONS]
+        out["adminRequiredTargets"] = [target for target in targets if target in DECISIONS]
     return out
 
 
@@ -147,8 +152,10 @@ def counts() -> dict:
 
 
 def list_approved(record_type: Optional[str] = None, subtype: Optional[str] = None) -> List[dict]:
-    """★ Consumer API. GSI byStatus 를 APPROVED 로만 질의한다 — 다른 상태를 읽는 코드 경로 자체가 없다."""
-    recs = get_store().by_status("APPROVED")
+    """Revalidate GSI candidates with strongly consistent authoritative reads."""
+    store = get_store()
+    keys = {(r["name"], r["recordVersion"]) for r in store.by_status("APPROVED")}
+    recs = [record for name, version in keys if (record := store.get(name, version)) is not None]
     if record_type:
         recs = [r for r in recs if r.get("recordType") == record_type.upper()]
     if subtype:

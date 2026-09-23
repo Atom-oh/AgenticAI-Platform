@@ -435,12 +435,11 @@ def _ctx():
 
 
 @pytest.mark.parametrize("timing", ["missing", "after_authorization", "before_commit"])
-def test_generic_transition_cannot_approve_a_concurrently_created_or_retyped_agent(monkeypatch, timing):
+def test_generic_transition_cannot_transition_a_concurrently_created_or_retyped_agent(monkeypatch, timing):
     store = api.get_store()
     handler = _handler_module()
     if timing != "missing":
         api.create_record(_rec(rtype="CUSTOM", subtype="COMPONENT"), ACTOR, embed=False)
-        api.transition("widget_x", "v1", "PENDING_APPROVAL", ACTOR)
     before_audits = store.audit("widget_x", "v1")
     original_get = api.get_record
     original_write = store._write_with_audit
@@ -451,7 +450,7 @@ def test_generic_transition_cannot_approve_a_concurrently_created_or_retyped_age
     def get_record(*args, **kwargs):
         record = original_get(*args, **kwargs)
         if timing == "missing":
-            api.create_record(_rec(subtype="HARNESS"), "iam-admin", status="PENDING_APPROVAL", embed=False)
+            api.create_record(_rec(subtype="HARNESS"), "iam-admin", status="DRAFT", embed=False)
         elif timing == "after_authorization":
             retype()
         return record
@@ -465,10 +464,10 @@ def test_generic_transition_cannot_approve_a_concurrently_created_or_retyped_age
     else:
         monkeypatch.setattr(api, "get_record", get_record)
     ctx, gw = _ctx()
-    handler.registry_transition(ctx, {"name": "widget_x", "version": "v1", "to": "APPROVED"})
+    handler.registry_transition(ctx, {"name": "widget_x", "version": "v1", "to": "PENDING_APPROVAL"})
     assert gw.posted[-1]["ok"] is False
     assert gw.posted[-1]["code"] == (404 if timing == "missing" else 409)
-    assert store.get("widget_x", "v1")["status"] == "PENDING_APPROVAL"
+    assert store.get("widget_x", "v1")["status"] == "DRAFT"
     audits = store.audit("widget_x", "v1")
     assert not any(event["to"] == "APPROVED" for event in audits)
     if timing != "missing":
@@ -496,7 +495,8 @@ def test_handler_routes_end_to_end():
     # get: record + audit + versionChain
     h.registry_get(ctx, {"name": "Button", "version": "v2"})
     ev = gw.posted[-1]
-    assert ev["ok"] and ev["record"]["status"] == "APPROVED" and ev["record"]["allowedTargets"] == ["DEPRECATED"]
+    assert ev["ok"] and ev["record"]["status"] == "APPROVED" and ev["record"]["allowedTargets"] == []
+    assert ev["record"]["adminRequiredTargets"] == ["DEPRECATED"]
     assert [c["recordVersion"] for c in ev["versionChain"]] == ["v1", "v2", "v3"] and ev["audit"]
     h.registry_get(ctx, {"name": "Nope", "version": "v1"})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 404
@@ -505,18 +505,14 @@ def test_handler_routes_end_to_end():
     ev = gw.posted[-1]
     assert ev["count"] == len(ev["records"]) > 0 and all(r["status"] == "APPROVED" for r in ev["records"])
     assert ("Button", "v3") not in {(r["name"], r["recordVersion"]) for r in ev["records"]}
-    # transition: 잘못된 전이는 400 계열 이벤트(예외 아님)
-    h.registry_transition(ctx, {"name": "Button", "version": "v3", "to": "DEPRECATED", "reason": "x"})
-    ev = gw.posted[-1]
-    assert ev["type"] == "registry_transition" and ev["ok"] is False and ev["code"] == 400 and "허용되지 않은 전이" in ev["error"]
-    h.registry_transition(ctx, {"name": "Button", "version": "v2", "to": "DEPRECATED", "reason": ""})
-    assert gw.posted[-1]["ok"] is False and gw.posted[-1]["errorType"] == "ValidationError"
-    h.registry_transition(ctx, {"name": "Button", "version": "v2", "to": "DEPRECATED", "reason": "v3 승인"})
-    ev = gw.posted[-1]
-    assert ev["ok"] and ev["record"]["status"] == "DEPRECATED" and ev["audit"]["actor"] == ACTOR and ev["transition"] == "deprecate"
-    assert ev["auditTrail"][0]["reason"] == "v3 승인"
-    h.registry_transition(ctx, {"name": "Button", "version": "v3", "to": "APPROVED"})
-    assert gw.posted[-1]["ok"] and gw.posted[-1]["record"]["status"] == "APPROVED"
+    # User routes can submit drafts; privileged decisions require IAM administration.
+    from registry import administration
+    for version, target in [("v2", "DEPRECATED"), ("v3", "APPROVED")]:
+        h.registry_transition(ctx, {"name": "Button", "version": version, "to": target, "reason": "S3 review"})
+        assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 403
+        reviewed = administration.inspect("Button", version)
+        result = administration.transition("Button", version, target, reviewed["expectedHash"], "S3 review")
+        assert result["record"]["status"] == target and result["audit"]["actor"] == "iam-admin"
     h.registry_consumer(ctx, {"subtype": "COMPONENT"})
     keys = {(r["name"], r["recordVersion"]) for r in gw.posted[-1]["records"]}
     assert ("Button", "v3") in keys and ("Button", "v2") not in keys
@@ -545,9 +541,9 @@ def test_handler_does_not_log_reason_or_description_text(capsys):
     secret_reason = "고객 홍길동 관련 사유 XYZ123"
     h.registry_transition(ctx, {"name": "Button", "version": "v2", "to": "DEPRECATED", "reason": secret_reason})
     out = capsys.readouterr().out
-    assert "registry.transition" in out and secret_reason not in out and "XYZ123" not in out
+    assert secret_reason not in out and "XYZ123" not in out
     assert ACTOR not in out  # 이메일은 해시로만
-    assert gw.posted[-1]["ok"]
+    assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 403
 
 
 def test_store_write_sanitizes_floats_for_dynamodb():

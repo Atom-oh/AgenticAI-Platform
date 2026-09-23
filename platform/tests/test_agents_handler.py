@@ -1,6 +1,6 @@
 """에이전트 빌더 핸들러 테스트 — 오프라인 (AgentCore Harness/Registry 는 페이크, Registry 는 인메모리).
 
-검증: 생성 → PENDING_APPROVAL + 미러 호출 · 미승인 호출 거부(Harness 미호출) · 승인 후 스트리밍/usage ·
+검증: 생성 → PENDING_APPROVAL (관리자 처리 전 미러 없음) · 미승인 호출 거부(Harness 미호출) · 승인 후 스트리밍/usage ·
 잘못된 도구/이름/스킬 거부 · 카탈로그 조인 · 오류 내성 · executionRoleArn 비노출 · 로그에 프롬프트 원문 없음.
 실행: cd platform && python3 -m pytest tests/test_agents_handler.py -q
 """
@@ -323,7 +323,9 @@ def test_iam_reconciliation_updates_an_unapproved_orphan_with_an_exact_hash(fake
     from types import SimpleNamespace
     from agentcore.administration import apply_request, harness_fingerprint
     fh, _ = fakes
-    existing = fh.ensure_harness(_create_body(systemPrompt="Old synthetic specification"))
+    from agentcore import skill_binding
+    original = _create_body(systemPrompt="Old synthetic specification")
+    existing = fh.ensure_harness({**original, "skillBindings": skill_binding.capture(original["skills"])})
     existing.update(maxIterations=999, maxTokens=999999, timeoutSeconds=999)
     existing["model"]["bedrockModelConfig"]["maxTokens"] = 999999
     h = _handler()
@@ -347,6 +349,7 @@ def test_iam_reconciliation_updates_an_unapproved_orphan_with_an_exact_hash(fake
     assert SECRET_PROMPT_MARK in existing["systemPrompt"][0]["text"]
     assert (existing["maxIterations"], existing["maxTokens"], existing["timeoutSeconds"]) == (12, 8192, 120)
     assert existing["model"]["bedrockModelConfig"]["maxTokens"] == 2048
+    assert existing["model"]["bedrockModelConfig"]["apiFormat"] == "converse_stream"
 
 
 def test_agent_invocation_requires_the_verified_subject(fakes):
@@ -355,6 +358,19 @@ def test_agent_invocation_requires_the_verified_subject(fakes):
     _handler().agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hello", "userSub": "forged"})
     assert gw.posted[-1]["code"] == 401
     assert not fh.calls
+
+
+def test_admin_rejects_legacy_empty_skill_records_without_explicit_bindings(fakes):
+    from registry.model import ValidationError
+    h = _handler()
+    item = _create(h, skills=[])["record"]
+    payload = dict(item["payload"])
+    payload.pop("skillBindings")
+    api.get_store().rewrite(item["name"], "v1", {"payload": payload}, "iam-admin")
+    with pytest.raises(ValidationError):
+        _approve(h)
+    assert api.get_record(item["name"], "v1")["status"] == "PENDING_APPROVAL"
+    assert not fakes[0].calls and not fakes[1].calls
 
 
 def test_user_cannot_mark_an_administrative_request_as_applied(fakes):
@@ -503,7 +519,9 @@ def test_all_approved_harness_versions_require_the_reviewed_configuration(fakes,
 
 def test_harness_memory_is_explicitly_disabled_and_generated_ids_do_not_change_approval(fakes):
     from agentcore.administration import harness_settings
-    expected = harness_mod.build_config(_create_body())
+    from agentcore import skill_binding
+    spec = _create_body()
+    expected = harness_mod.build_config({**spec, "skillBindings": skill_binding.capture(spec["skills"])})
     assert expected["memory"] == {"disabled": {}}
     actual = json.loads(json.dumps(expected))
     actual["environment"]["agentCoreRuntimeEnvironment"].update(

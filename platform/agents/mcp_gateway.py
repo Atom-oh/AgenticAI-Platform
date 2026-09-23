@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from collections import Counter
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 import httpx
@@ -115,16 +116,19 @@ def filter_tool_names(discovered: Iterable[str], allowed: Optional[Sequence[str]
     """Select explicitly allowed tools; an empty list grants no tools."""
     allowed_set = {a for a in (allowed or [])}
     allowed_bare = {a for a in allowed_set if TOOL_NAME_SEP not in a}
+    names = list(dict.fromkeys(discovered))
+    counts = Counter(map(bare_name, names))
     out = []
-    for name in discovered:
-        if allowed_set and (name in allowed_set or bare_name(name) in allowed_bare):
+    for name in names:
+        if name in allowed_set or (bare_name(name) in allowed_bare and counts[bare_name(name)] == 1):
             out.append(name)
     return out
 
 
 def missing_tool_names(discovered: Iterable[str], allowed: Optional[Sequence[str]]) -> List[str]:
     names = set(discovered)
-    bare = {bare_name(name) for name in names}
+    counts = Counter(map(bare_name, names))
+    bare = {name for name, count in counts.items() if count == 1}
     return sorted(name for name in (allowed or []) if
                   (name not in names if TOOL_NAME_SEP in name else name not in bare))
 
@@ -154,7 +158,7 @@ def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any]
     tools = [MCPAgentTool(t.mcp_tool, client,
              name_override=t.tool_name if counts[bare_name(t.tool_name)] > 1 else bare_name(t.tool_name))
              for t in raw if t.tool_name in keep]
-    missing = missing_tool_names(keep, allowed)
+    missing = missing_tool_names(discovered, allowed)
     if missing:
         log.warning("gateway tools missing for spec: %s (discovered=%d)", missing, len(discovered))
     return tools, discovered

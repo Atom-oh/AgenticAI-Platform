@@ -65,6 +65,18 @@ _sessions: "OrderedDict[str, list]" = OrderedDict()
 _sessions_lock = threading.Lock()
 _active_sessions: set[str] = set()
 _quarantined_sessions: set[str] = set()
+_quarantine_exhausted = False
+
+
+def _quarantine(sid):
+    global _quarantine_exhausted
+    with _sessions_lock:
+        if sid in _quarantined_sessions:
+            return
+        if len(_quarantined_sessions) >= MAX_SESSIONS:
+            _quarantine_exhausted = True
+        else:
+            _quarantined_sessions.add(sid)
 
 
 class _SessionCleanupFailed(RuntimeError):
@@ -168,8 +180,7 @@ class _Session:
         try:
             self.client, self.tools, self.discovered = mcp_gateway.open_tools(spec.get("allowedTools") or [])
         except mcp_gateway.GatewayCleanupFailed:
-            with _sessions_lock:
-                _quarantined_sessions.add(sid)
+            _quarantine(sid)
             raise _SessionCleanupFailed("Gateway setup cleanup failed") from None
         try:
             self.agent = Agent(model=build_model(model_id), system_prompt=self.system_prompt, tools=self.tools,
@@ -184,8 +195,7 @@ class _Session:
             self.client.stop(None, None, None)
         except Exception as e:  # noqa: BLE001
             log.warning("mcp client stop failed: %s", _err(e))
-            with _sessions_lock:
-                _quarantined_sessions.add(self.sid)
+            _quarantine(self.sid)
             raise _SessionCleanupFailed("Gateway cleanup failed") from None
 
 
@@ -212,7 +222,7 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
     claimed = False
     if 33 <= len(sid) <= 256:
         with _sessions_lock:
-            quarantined = sid in _quarantined_sessions
+            quarantined = _quarantine_exhausted or sid in _quarantined_sessions
             if not quarantined and sid not in _active_sessions:
                 _active_sessions.add(sid)
                 claimed = True
@@ -234,8 +244,7 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
     finally:
         if claimed:
             with _sessions_lock:
-                if sid not in _quarantined_sessions:
-                    _active_sessions.discard(sid)
+                _active_sessions.discard(sid)
 
 
 async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIterator[dict]:

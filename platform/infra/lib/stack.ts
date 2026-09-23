@@ -338,7 +338,6 @@ export class BankPlatformStack extends cdk.Stack {
         'xray:PutTraceSegments', 'xray:PutTelemetryRecords', 'cloudwatch:PutMetricData'],
       resources: ['*'],
     }));
-    skillsBucket.grantRead(harnessRole);
     const agentcoreRead = new iam.PolicyStatement({
       actions: ['bedrock-agentcore:GetHarness', 'bedrock-agentcore:ListHarnesses',
         'bedrock-agentcore:GetGateway', 'bedrock-agentcore:ListGatewayTargets', 'bedrock-agentcore:GetGatewayTarget',
@@ -445,7 +444,6 @@ export class BankPlatformStack extends cdk.Stack {
         HARNESS_ROLE_ARN: harnessRole.roleArn,
         GATEWAY_ARN: gateway.attrGatewayArn,
         GATEWAY_URL: gateway.attrGatewayUrl,
-        SKILLS_S3_URI: `s3://${skillsBucket.bucketName}/skills/`,
         AGENTCORE_REGISTRY_REGION: 'us-east-1',
         AGENTS_RUNTIME_ARN: agentsRuntime ? agentsRuntime.attrAgentRuntimeArn : '',
         WEB_BUCKET: webBucket.bucketName,   // 디자인 스튜디오 산출물 design-runs/* (CloudFront 로 서빙)
@@ -502,7 +500,6 @@ export class BankPlatformStack extends cdk.Stack {
         BRIDGE_FN: bridgeFnName,
         HARNESS_ROLE_ARN: harnessRole.roleArn,
         GATEWAY_ARN: gateway.attrGatewayArn,
-        SKILLS_S3_URI: `s3://${skillsBucket.bucketName}/skills/`,
         AGENTCORE_REGISTRY_REGION: 'us-east-1',
         AGENTCORE_REGISTRY_ID: 'b2hOSZL4eOhDXAyk',
         AGENTS_RUNTIME_ARN: agentsRuntime ? agentsRuntime.attrAgentRuntimeArn : '',

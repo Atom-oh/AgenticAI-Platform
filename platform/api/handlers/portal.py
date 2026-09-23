@@ -584,7 +584,7 @@ def portal_publish(ctx: Ctx, body: dict) -> None:
     record = existing
     if existing is None:
         try:
-            record = reg.create_record(rec_in, actor=ctx.email)  # DRAFT 로 시작 — 승인은 Registry 화면에서
+            record = reg.create_record(rec_in, actor=ctx.email)  # DRAFT; final decisions require IAM administration.
             action = "created"
         except RegistryError as e:
             if getattr(e, "code", 400) == 409:  # 동시 발행 경합 — 기존 레코드를 돌려준다

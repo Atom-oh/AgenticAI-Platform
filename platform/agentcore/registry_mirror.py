@@ -33,7 +33,10 @@ def _descriptor(record: dict) -> tuple[str, dict]:
                                         "inlineContent": json.dumps({"tools": tools}, ensure_ascii=False)}}}
     if rt == "SKILL" and payload.get("skillMd"):
         return "AGENT_SKILLS", {"agentSkills": {"skillMd": {"inlineContent": str(payload["skillMd"])[:60000]}}}
-    body = {k: v for k, v in record.items() if k not in ("embedding",)}
+    if rt == "AGENT":
+        body = {key: record.get(key) for key in ("name", "recordVersion", "recordType", "subtype", "description")}
+    else:
+        body = {k: v for k, v in record.items() if k not in ("embedding",)}
     return "CUSTOM", {"custom": {"inlineContent": json.dumps(body, ensure_ascii=False, default=str)[:60000]}}
 
 
@@ -82,8 +85,29 @@ def mirror(record: dict) -> dict:
     else:
         rec_id = existing.get("recordId") or str(existing.get("recordArn", "")).rsplit("/", 1)[-1]
         action = "exists"
+        if record.get("recordType") == "AGENT":
+            # Old CUSTOM mirrors can contain prompts. Refresh and verify their
+            # descriptor before any approval/status synchronization.
+            current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
+            if current.get("name") != _mirror_name(name) or str(current.get("recordVersion")) != version:
+                raise RuntimeError("Agent mirror identity changed before synchronization")
+            if current.get("descriptorType") != dtype or current.get("descriptors") != descriptors:
+                ctl().update_registry_record(registryId=REGISTRY_ID, recordId=rec_id,
+                    descriptorType=dtype, descriptors=descriptors,
+                    description=(record.get("description") or name)[:1000])
+                current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
+                if current.get("descriptorType") != dtype or current.get("descriptors") != descriptors:
+                    raise RuntimeError("Agent mirror metadata replacement was not confirmed")
+                action = "updated"
+            existing = {**existing, "status": current.get("status")}
     status = sync_status(rec_id, record.get("status", "DRAFT"), existing.get("status") if existing else "DRAFT",
                          reason=record.get("statusReason") or "platform registry sync")
+    if record.get("recordType") == "AGENT":
+        current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rec_id)
+        if (current.get("name") != _mirror_name(name) or str(current.get("recordVersion")) != version
+                or current.get("descriptorType") != dtype or current.get("descriptors") != descriptors
+                or current.get("status") != record.get("status", "DRAFT")):
+            raise RuntimeError("Agent mirror completion was not confirmed")
     return {"recordId": rec_id, "status": status, "action": action, "descriptorType": dtype}
 
 

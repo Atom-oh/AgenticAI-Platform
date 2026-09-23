@@ -83,7 +83,7 @@ def apply_request(name, version="v1", *, reconcile_hash=None):
     if body["to"] == "APPROVED":
         if record.get("payload", {}).get("runtime") != "AgentCore Harness":
             raise ValidationError("Built-in Runtime approvals use the IAM seed_agents operation")
-        if record["payload"].get("skills") and "skillBindings" not in record["payload"]:
+        if "skillBindings" not in record["payload"]:
             raise ValidationError("SKILL approval bindings are missing; submit a new agent specification")
         from handlers.agents import _validate_create
         spec, error = _validate_create({**record["payload"], "name": record["name"],

@@ -1,0 +1,18 @@
+{
+  "base": "8b9268be34546f67fd762cb9a39f7e7ab5f63c53",
+  "purpose": "Bank WP1-WP3 security: IAM separation/trust, closed Gateway verification and obsolete Skill-prefix removal",
+  "resources": [
+    "PlatformToolsFnServiceRoleDefaultPolicy9D39F01B",
+    "PlatformToolsFnE72749A7",
+    "GatewayExecRole3664B310",
+    "ToolsGateway",
+    "HarnessExecRole83FE6EE4",
+    "HarnessExecRoleDefaultPolicy5F0251AD",
+    "AgentsRuntimeRole24FB92B6",
+    "AgentsRuntimeRoleDefaultPolicy0B63AE48",
+    "WsFnServiceRoleDefaultPolicyFE1904B7",
+    "WsFnFE5E930E",
+    "AdminFnServiceRoleDefaultPolicyA64AB9FE",
+    "AdminFn81E922BC"
+  ]
+}

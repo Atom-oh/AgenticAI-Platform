@@ -18,10 +18,10 @@ errors estTokens fields gateRefused harnessListed harnessReused hits imageBytes 
 limit maxRounds memory ms ocrChars ok pii piiCount promptLen queryLen reasonLen replay screens sent skills
 textLen tokensIn tokensOut toolCalls tools inputTokens outputTokens totalTokens elapsedMs durationMs costUsd
 usd bytes piiOutbound boundaryFields boundaryChars boundaryEstTokens deniedAttempts injectionDetected
-internalDocs semanticMismatch semanticStated gateRejected""".split())
-_TAGS = set("""action agent agentcoreRegistry backend category code decision delivery errorCode errorType fromStatus
+internalDocs semanticMismatch semanticStated gateRejected agentcoreRegistry""".split())
+_TAGS = set("""action agent backend category code decision delivery errorCode errorType fromStatus
 harnessStatus label mode model modelId op purpose recordType region route runner scenario semanticLayer
-stage status stopReason subtype tier to toStatus transition version plane guardrailOut blockedBy privacyStatus readerRole""".split())
+stage status stopReason tier to toStatus transition version plane guardrailOut blockedBy privacyStatus readerRole""".split())
 _TAG = re.compile(r"[A-Za-z0-9_.:/-]{1,256}\Z")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?\Z")
 _HASH = re.compile(r"(?:[a-f0-9]{8}|[a-f0-9]{64})\Z")

@@ -110,6 +110,12 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
       'bedrock-agentcore:InvokeGateway', 'bedrock-agentcore:ListGatewayTargets'].sort(),
       'Execution roles have no unused Memory/Identity grants or wildcard AgentCore actions');
   }
+  assert(!actions(statements('HarnessExecRole')).some(action => action.startsWith('s3:')));
+  for (const resource of Object.values(resources)) {
+    if (resource.Type === 'AWS::Lambda::Function') {
+      assert.equal(resource.Properties.Environment?.Variables?.SKILLS_S3_URI, undefined);
+    }
+  }
   const gateway = Object.values(resources).find(resource => resource.Type === 'AWS::BedrockAgentCore::Gateway');
   const [guardrailId] = Object.entries(resources).find(([, resource]) => resource.Type === 'AWS::Bedrock::Guardrail');
   const tools = Object.values(resources).find(resource =>

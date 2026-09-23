@@ -63,6 +63,11 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
             ctx.post({"type": "registry_transition", "ok": True,
                       **request_transition(name, version, to, ctx.email, reason)})
             return
+        from registry.administration import DECISIONS
+        if to in DECISIONS:
+            ctx.post({"type": "registry_transition", "ok": False, "code": 403,
+                      "error": "승인·반려·폐기는 관리자 검토 후 처리됩니다."})
+            return
         rec, ev = api.transition(name, version, to, actor=ctx.email, reason=reason, expected_record=record)
     except RegistryError as e:
         log_event("registry.transition_rejected", ctx.trace_id, name=name, version=version, to=to if to in STATUSES else "invalid",
@@ -89,7 +94,7 @@ def registry_consumer(ctx: Ctx, body: dict) -> None:
     recs = [api.public_record(r) for r in api.list_approved(body.get("type"), body.get("subtype"))]
     ctx.post({"type": "registry_consumer", "records": recs, "count": len(recs),
               "subtype": body.get("subtype"), "recordType": body.get("type"),
-              "note": "Consumer API(registry.api.list_approved) — GSI byStatus 를 APPROVED 로만 질의. 다른 상태는 읽는 경로가 없다."})
+              "note": "Consumer API(registry.api.list_approved) — 승인 색인의 후보를 원본 레코드와 재확인합니다."})
 
 
 def registry_create(ctx: Ctx, body: dict) -> None:

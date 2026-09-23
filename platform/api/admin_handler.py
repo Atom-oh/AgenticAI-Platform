@@ -41,6 +41,18 @@ def handler(event, context):
     if op == "reset_demo":
         from registry.seed import reset_demo_state
         return reset_demo_state(actor="admin")
+    if op in {"inspect_registry_record", "transition_registry_record"}:
+        from registry import administration
+        try:
+            if op == "inspect_registry_record":
+                return {"ok": True, **administration.inspect(event["name"], event["version"])}
+            return {"ok": True, **administration.transition(
+                event["name"], event["version"], event["to"], event["expectedHash"],
+                str(event.get("reason", ""))[:500])}
+        except Exception as error:
+            log_event("admin.registry_decision_failed", errorType=type(error).__name__)
+            return {"ok": False, "error": "registry-administration-failed",
+                    "errorType": type(error).__name__, "code": getattr(error, "code", 500)}
     if op == "seed_agents":
         # 시나리오 에이전트 4종: 실행 = AgentCore Runtime(Strands 컨테이너, AGENTS_RUNTIME_ARN) 우선, 없으면 설정형 Harness.
         # 플랫폼 Registry + AgentCore Registry(미러)에 등록·승인한다 (멱등).
@@ -57,12 +69,17 @@ def handler(event, context):
                 row["runtime"] = "agentcore-runtime/strands"
             else:
                 try:
-                    from agentcore import harness
-                    h = harness.ensure_harness(spec)
-                    payload.update({"runtime": "AgentCore Harness", "harnessArn": h.get("arn"), "harnessId": h.get("harnessId")})
+                    from agentcore import harness, skill_binding
+                    bindings = skill_binding.capture(spec.get("skills", []))
+                    h = harness.ensure_harness({**spec, "skillBindings": bindings})
+                    payload.update({"runtime": "AgentCore Harness", "harnessArn": h.get("arn"),
+                                    "harnessId": h.get("harnessId"), "skillBindings": bindings,
+                                    "systemPrompt": spec["systemPrompt"]})
                     row["harnessArn"] = h.get("arn"); row["status"] = h.get("status")
                 except Exception as e:
-                    row["harnessError"] = f"{type(e).__name__}: {str(e)[:300]}"
+                    row["harnessError"] = type(e).__name__
+                    out.append(row)
+                    continue
             try:
                 from registry.api import create_record, get_record, transition
                 rec = get_record(spec["name"], "v1")

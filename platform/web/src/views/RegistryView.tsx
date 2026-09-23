@@ -6,7 +6,7 @@ import { sock, WsEvent } from '../lib';
 type Rec = {
   name: string; recordVersion: string; recordType: string; subtype?: string; status: string;
   description?: string; owner?: string; tags?: string[]; payload?: Record<string, any>;
-  createdAt?: number; updatedAt?: number; updatedBy?: string; allowedTargets?: string[]; hasEmbedding?: boolean;
+  createdAt?: number; updatedAt?: number; updatedBy?: string; allowedTargets?: string[]; adminRequiredTargets?: string[]; hasEmbedding?: boolean;
 };
 type Audit = { actor: string; from: string; to: string; reason: string; ts: number; transition?: string; forced?: boolean };
 type ChainItem = { recordVersion: string; status: string; supersededBy?: string | null; inChain: boolean; current: boolean };
@@ -42,15 +42,12 @@ function StatusChip({ s }: { s: string }) {
 }
 
 /* ---------------- S3 시연 패널 (상단 고정) ---------------- */
-function DemoPanel({ records, consumer, busy, onTransition, onRefresh }: {
-  records: Rec[]; consumer: Rec[] | null; busy: string;
-  onTransition: (name: string, version: string, to: string, reason: string) => Promise<void>;
+function DemoPanel({ records, consumer, onRefresh }: {
+  records: Rec[]; consumer: Rec[] | null;
   onRefresh: () => void;
 }) {
   const v2 = records.find(r => r.name === 'Button' && r.recordVersion === 'v2');
   const v3 = records.find(r => r.name === 'Button' && r.recordVersion === 'v3');
-  const canDeprecate = v2?.status === 'APPROVED';
-  const canApprove = v3?.status === 'PENDING_APPROVAL';
   const reversed = v2?.status === 'DEPRECATED' && v3?.status === 'APPROVED';
   return (
     <div className="panel p-4 mb-4" style={{ borderTop: '2px solid var(--cloud)' }}>
@@ -66,21 +63,12 @@ function DemoPanel({ records, consumer, busy, onTransition, onRefresh }: {
           <div className="text-sm flex items-center gap-2 mb-1"><span className="font-mono">Button v2</span>{v2 ? <StatusChip s={v2.status} /> : <span className="text-slate-400 text-xs">로딩…</span>}</div>
           <div className="text-sm flex items-center gap-2"><span className="font-mono">Button v3</span>{v3 ? <StatusChip s={v3.status} /> : <span className="text-slate-400 text-xs">로딩…</span>}</div>
           <div className="text-[11px] text-slate-500 mt-2">{reversed
-            ? <span className="text-emerald-600">반전 완료 — 에이전트는 이제 Button v3 만 본다</span>
-            : '기준선: v2 승인 · v3 승인 대기 (리셋 버튼으로 복원)'}</div>
+            ? <span className="text-emerald-600">반전 완료 — Button v2 제외 · v3 승인</span>
+            : '기준선: v2 승인 · v3 승인 대기 (복원은 관리자에게 요청)'}</div>
         </div>
         <div className="rounded-lg border border-slate-200 p-3 flex flex-col gap-2">
-          <div className="text-xs text-slate-500">원클릭 반전 (사유가 감사 이벤트에 남는다)</div>
-          <button disabled={!canDeprecate || !!busy}
-            onClick={() => onTransition('Button', 'v2', 'DEPRECATED', 'v3 승인')}
-            className="px-3 py-2 rounded-lg text-sm font-semibold bg-rose-500/90 hover:bg-rose-400 text-white disabled:opacity-30 text-left">
-            {busy === 'Button@v2' ? '전이 중…' : '① Button v2 → DEPRECATED'} <span className="font-normal text-xs">(사유: v3 승인)</span>
-          </button>
-          <button disabled={!canApprove || !!busy}
-            onClick={() => onTransition('Button', 'v3', 'APPROVED', 'S3 시연 — v2 대체')}
-            className="px-3 py-2 rounded-lg text-sm font-semibold bg-emerald-500/90 hover:bg-emerald-400 text-white disabled:opacity-30 text-left">
-            {busy === 'Button@v3' ? '전이 중…' : '② Button v3 → APPROVED'}
-          </button>
+          <div className="text-xs text-slate-500">관리자 승인·폐기</div>
+          <p className="text-sm">관리자가 Button v2 폐기와 v3 승인을 처리한 후 새로고침하세요.</p>
           <a href="#/screengen" className="chip justify-center hover:border-teal-500 text-teal-700 mt-auto">③ 재생성하러 가기 → 화면 생성</a>
         </div>
         <div className="rounded-lg border border-slate-200 p-3">
@@ -113,6 +101,7 @@ function Drawer({ detail, busy, err, onClose, onTransition, onOpenVersion }: {
   const [reason, setReason] = useState('');
   useEffect(() => { setReason(''); }, [r.name, r.recordVersion, r.status]);
   const allowed = r.allowedTargets || [];
+  const adminTargets = r.adminRequiredTargets || [];
   const targets = STATUSES.filter(s => s !== 'ALL' && s !== r.status);
   const payload = r.payload || {};
   const { propsSchema, ...restPayload } = payload;
@@ -134,7 +123,7 @@ function Drawer({ detail, busy, err, onClose, onTransition, onOpenVersion }: {
 
         {/* 상태 전이 */}
         <section className="rounded-lg border border-slate-200 p-3 mb-4">
-          <div className="text-xs text-slate-500 mb-2">상태 전이 — 현재 <b className={statusColor(r.status)}>{STATUS_KO[r.status]}</b>에서 가능한 전이만 활성화 (그 외는 서버가 400 으로 거부)</div>
+          <div className="text-xs text-slate-500 mb-2">상태 전이 — 현재 <b className={statusColor(r.status)}>{STATUS_KO[r.status]}</b> · 승인·반려·폐기는 관리자 검토 후 처리</div>
           <input className="w-full mb-2 px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm"
             placeholder="사유 (반려·폐기는 필수 — 감사 이벤트에 기록)" value={reason} onChange={e => setReason(e.target.value)} />
           <div className="flex flex-wrap gap-2">
@@ -143,14 +132,14 @@ function Drawer({ detail, busy, err, onClose, onTransition, onOpenVersion }: {
               const needReason = REASON_REQUIRED.includes(t) && !reason.trim();
               const disabled = !ok || needReason || !!busy;
               return (
-                <button key={t} disabled={disabled} title={!ok ? `${r.status} → ${t} 는 허용되지 않는 전이` : needReason ? '사유 필수' : ''}
+                <button key={t} disabled={disabled} title={adminTargets.includes(t) ? '관리자 검토가 필요합니다' : !ok ? `${r.status} → ${t} 는 허용되지 않는 전이` : needReason ? '사유 필수' : ''}
                   onClick={() => onTransition(r.name, r.recordVersion, t, reason)}
                   className={`chip text-xs ${ok ? `${statusColor(t)} ${statusBorder(t)} hover:brightness-125` : 'text-slate-400 line-through'} disabled:cursor-not-allowed`}>
-                  → {TRANSITION_KO[t]}{ok && needReason && <span className="text-[10px] text-amber-700 no-underline">(사유 필수)</span>}
+                  → {TRANSITION_KO[t]}{r.recordType === 'AGENT' && ['APPROVED', 'REJECTED', 'DEPRECATED'].includes(t) ? ' 요청' : ''}{ok && needReason && <span className="text-[10px] text-amber-700 no-underline">(사유 필수)</span>}
                 </button>
               );
             })}
-            {allowed.length === 0 && <span className="text-xs text-slate-500">종료 상태 — 더 이상 전이할 수 없습니다.</span>}
+            {allowed.length === 0 && <span className="text-xs text-slate-500">{adminTargets.length ? '관리자 검토가 필요합니다.' : '종료 상태 — 더 이상 전이할 수 없습니다.'}</span>}
           </div>
           {busy === recKey(r) && <div className="text-xs text-teal-700 mt-2">전이 중…</div>}
           {err && <div className="text-xs text-[#E90061] mt-2">{err}</div>}
@@ -298,7 +287,10 @@ export default function RegistryView() {
       const e = await sock.request('registry_transition', { name, version, to, reason });
       const er = errOf(e);
       if (er) { setDetailErr(`${e.code ? e.code + ' · ' : ''}${er}`); if (!detail) setToast(`전이 거부: ${er}`); }
-      else {
+      else if (e.request) {
+        setToast('관리자 검토 요청을 접수했습니다.');
+        await load(); loadConsumer();
+      } else {
         setToast(`${name} ${version}: ${STATUS_KO[e.audit.from]} → ${STATUS_KO[e.audit.to]} (감사 기록됨)`);
         if (detail && recKey(detail.record) === k) setDetail({ record: e.record, audit: e.auditTrail || [], versionChain: detail.versionChain.map(c => c.recordVersion === version ? { ...c, status: e.record.status } : c) });
         await load(); loadConsumer();
@@ -333,7 +325,7 @@ export default function RegistryView() {
         {meta.bootstrapped && <span className="text-amber-700 ml-2">· 빈 레지스트리에 기준선 {meta.bootstrapped.created}건을 시드했습니다</span>}
       </div>
 
-      <DemoPanel records={allRecords} consumer={consumer} busy={busy} onTransition={doTransition}
+      <DemoPanel records={allRecords} consumer={consumer}
         onRefresh={() => { load(); loadConsumer(); }} />
       {toast && <div className="mb-3 text-xs text-emerald-700">{toast}</div>}
 

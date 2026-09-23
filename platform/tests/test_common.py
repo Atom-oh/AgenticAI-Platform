@@ -57,6 +57,13 @@ def test_log_redacts_structured_sensitive_fields(capsys):
     assert "payloadHash" in out and "promptHash" in out and '"count": 2' in out
 
 
+def test_log_hashes_user_subtype_and_preserves_boolean_service_status(capsys):
+    clog.log_event("synthetic", subtype="010-1234-5678", agentcoreRegistry=True)
+    captured = capsys.readouterr()
+    assert "010-1234-5678" not in captured.out + captured.err
+    assert '"subtypeHash"' in captured.out and '"agentcoreRegistry": true' in captured.out
+
+
 def test_log_uses_a_safe_field_schema_for_unknown_values_and_error_text(capsys):
     clog.log_event("safe-fields", "t1", metadata={"prompt": "RAW-PROMPT-MARKER"},
         customerName="PRIVATE-NAME-MARKER", actor="person@example.invalid",

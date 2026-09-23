@@ -1,6 +1,6 @@
 """AgentCore Harness 래퍼 — 에이전트 생성(멱등)·조회·스트리밍 호출.
 
-환경변수: HARNESS_ROLE_ARN(실행 역할), GATEWAY_ARN(bank-platform-tools), SKILLS_S3_URI(s3://bucket/skills/), AWS_REGION.
+환경변수: HARNESS_ROLE_ARN(실행 역할), GATEWAY_ARN(bank-platform-tools), AWS_REGION.
 Harness API는 최신 boto3가 필요하다 — deploy.sh가 boto3를 배포 패키지에 동봉한다.
 """
 from __future__ import annotations
@@ -15,7 +15,6 @@ import boto3
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 HARNESS_ROLE_ARN = os.environ.get("HARNESS_ROLE_ARN", "")
 GATEWAY_ARN = os.environ.get("GATEWAY_ARN", "")
-SKILLS_S3_URI = os.environ.get("SKILLS_S3_URI", "")
 PLATFORM_TAG = {"platform": "bank-agentic-platform"}
 
 _ctl = None
@@ -70,27 +69,24 @@ def build_config(spec: dict) -> dict:
     if spec.get("memory"):
         raise ValueError("Long-term Harness Memory requires separate privacy review")
     system_prompt = str(spec.get("systemPrompt", ""))
-    if "skillBindings" in spec:
-        from agentcore.skill_binding import resolve
-        skill_text = resolve(spec["skillBindings"], spec.get("skills", []))
-        if skill_text:
-            system_prompt += "\n\n" + skill_text
+    from agentcore.skill_binding import resolve
+    skill_text = resolve(spec.get("skillBindings"), spec.get("skills", []))
+    if skill_text:
+        system_prompt += "\n\n" + skill_text
     _inspect(system_prompt, "agentcore.harness.system")
     tools = []
     if GATEWAY_ARN and spec.get("allowedTools"):
         tools.append({"type": "agentcore_gateway", "name": "bank_platform_tools",
                       "config": {"agentCoreGateway": {"gatewayArn": GATEWAY_ARN, "outboundAuth": {"awsIam": {}}}}})
-    skills = []
-    if "skillBindings" not in spec and SKILLS_S3_URI and spec.get("skills"):
-        skills = [{"s3": {"uri": f"{SKILLS_S3_URI.rstrip('/')}/{name}/"}} for name in spec["skills"]]
     cfg = {
         "harnessName": f"bank_{spec['name']}",
         "executionRoleArn": HARNESS_ROLE_ARN,
         "model": {"bedrockModelConfig": {"modelId": spec.get("model", "global.anthropic.claude-sonnet-5"),
+                                         "apiFormat": "converse_stream",
                                          "maxTokens": int(spec.get("maxTokens", 2048))}},  # Claude 5: temperature 미지원
         "systemPrompt": [{"text": system_prompt}],
         "tools": tools,
-        "skills": skills,
+        "skills": [],
         "allowedTools": [f"bank_platform_tools___{t}" for t in allowed],
         "maxIterations": int(spec.get("maxIterations", 12)),
         "maxTokens": 8192,

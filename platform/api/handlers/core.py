@@ -213,16 +213,9 @@ def explore(ctx: Ctx, body: dict) -> None:
 
 
 def reset(ctx: Ctx, body: dict) -> None:
-    """시연 리셋 (SPEC §6.3): Registry 시연 상태를 기준선으로 되돌린다. 대화 이력은 클라이언트가 비운다.
-    인프라·데이터를 파괴하지 않는다 (Neptune 재적재 등 관리 작업은 admin_handler 전용)."""
-    out = {"registry": None}
-    try:
-        from registry.seed import reset_demo_state
-        out["registry"] = reset_demo_state(actor=ctx.email)
-    except Exception as e:
-        out["registry"] = {"error": str(e)[:200]}
-    log_event("demo.reset", ctx.trace_id, actor=ctx.email)
-    ctx.post({"type": "reset", **out})
+    """Keep the retired helper fail-closed as well as removing its route."""
+    ctx.post({"type": "reset", "ok": False, "code": 403,
+              "error": "Shared resets require IAM administration."})
 
 
 ROUTES = {

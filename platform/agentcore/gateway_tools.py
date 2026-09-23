@@ -156,6 +156,7 @@ def tool_run_screen_gates(args: dict) -> dict:
     approved = {(c["name"], c["version"]) for c in comps}
     body["registry"] = {"ok": all((n, v) in approved for n, v in used) and bool(used),
                         "used": [f"{n}@{v}" for n, v in used], "unapproved": [f"{n}@{v}" for n, v in used if (n, v) not in approved]}
+    body["ok"] = body["ok"] and body["registry"]["ok"]
     return body
 
 
@@ -203,7 +204,7 @@ def _gate_summary(body):
         if not isinstance(section, dict) or type(section.get("ok")) is not bool:
             raise ValueError("Missing gate verdict")
         safe = {"ok": section["ok"]}
-        for field in ("errors", "warnings", "violations"):
+        for field in ("errors", "warnings", "violations", "incomplete"):
             if field not in section:
                 continue
             if not isinstance(section[field], list):
@@ -225,9 +226,12 @@ def _gate_summary(body):
                     metadata["impact"] = diagnostic["impact"]
                 safe[field].append(metadata)
             safe[field + "Count"] = len(section[field])
+        if name == "a11y" and safe.get("incompleteCount", 0):
+            safe["ok"] = False
         if name == "visual":
             safe["changed"] = section.get("changed") if type(section.get("changed")) is bool else None
         result[name] = safe
+    result["ok"] = result["ok"] and all(result[name]["ok"] for name in ("build", "types", "lint", "a11y", "visual"))
     return result
 
 

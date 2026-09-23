@@ -64,7 +64,8 @@ Only the IAM Admin Lambda may provision Harnesses or mirror approval changes.
 An administrator processes a recorded request using
 `{"op":"apply_agent_request","name":"agent-request-…","version":"v1"}`.
 User routes cannot invoke AdminFn or call AgentCore administrative mutations.
-Custom Harness Skill bindings fix approved Registry versions and local file
+All Harness creation, including IAM seeding, requires explicit Skill bindings.
+An empty Skill selection uses an empty binding list. Custom bindings fix approved Registry versions and local file
 hashes; approval embeds their inspected content into the system prompt and
 invocation rechecks the bindings. Missing Runtime Skills block model execution.
 All Harness versions also require the service configuration to match the

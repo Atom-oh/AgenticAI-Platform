@@ -190,7 +190,8 @@ class RegistryStore:
         values = {":to": to_status, ":from": cur["status"], ":ts": ts, ":by": actor}
         condition += " AND " + _revision_condition(cur, names, values)
         if expected_record is not None:
-            for index, field in enumerate(("status", "stateRevision", "payload", "description", "recordType", "subtype")):
+            for index, field in enumerate(("status", "stateRevision", "payload", "description", "recordType", "subtype",
+                                          "owner", "tags")):
                 if cur.get(field) != expected_record.get(field):
                     raise ConflictError("The requested record changed before administrative approval")
                 key = f"#expected{index}"

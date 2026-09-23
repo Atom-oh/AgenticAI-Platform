@@ -13,6 +13,9 @@ def verified_guardrail(monkeypatch):
     from common import pii
 
     def apply_guardrail(**request):
+        assert request["guardrailIdentifier"] == "synthetic-guardrail"
+        assert request["guardrailVersion"] == "7" and request["source"] == "INPUT"
+        assert len(request["content"]) == 1
         text = request["content"][0]["text"]["text"]
         return {"action": "NONE", "assessments": [],
                 "usage": {"sensitiveInformationPolicyUnits": 1},
@@ -20,12 +23,17 @@ def verified_guardrail(monkeypatch):
 
     client = SimpleNamespace(apply_guardrail=apply_guardrail)
     monkeypatch.setattr(pii, "GUARDRAIL_ID", "synthetic-guardrail")
+    monkeypatch.setattr(pii, "GUARDRAIL_VER", "7")
     monkeypatch.setattr(pii.boto3, "client", lambda *args, **kwargs: client)
     return client
 
 
 def context():
     return SimpleNamespace(client_context=SimpleNamespace(custom={"bedrockAgentCoreToolName": "platform___synthetic"}))
+
+def captured_text(capsys):
+    captured = capsys.readouterr()
+    return captured.out + captured.err
 
 
 @pytest.mark.parametrize("output", [
@@ -41,7 +49,7 @@ def test_gateway_outgoing_payload_is_independently_checked(monkeypatch, capsys, 
     result = gateway_tools.handler({}, context())
     expected = "BOUNDARY_REFUSED" if "nested" in output or "items" in output else "TOOL_REJECTED"
     assert result["code"] == expected
-    serialized = json.dumps(result) + capsys.readouterr().out
+    serialized = json.dumps(result) + captured_text(capsys)
     for original in ["CUST-0042", "person@example.invalid", "UPSTREAM_BODY_SENTINEL", "lambda.py"]:
         assert original not in serialized
 
@@ -52,7 +60,7 @@ def test_gateway_exception_body_is_never_returned_or_logged(monkeypatch, capsys)
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", fail)
     result = gateway_tools.handler({}, context())
     assert result["code"] == "TOOL_FAILED"
-    assert "UPSTREAM_BODY_SENTINEL" not in json.dumps(result) + capsys.readouterr().out
+    assert "UPSTREAM_BODY_SENTINEL" not in json.dumps(result) + captured_text(capsys)
 
 
 def test_gateway_boundary_preserves_exact_financial_values(monkeypatch, capsys):
@@ -102,15 +110,16 @@ def test_gateway_guardrails_only_identifier_blocks_boundary(monkeypatch, verifie
     result = gateway_tools.handler({"name": marker} if side == "input" else {}, context())
     assert result["code"] == "BOUNDARY_REFUSED"
     assert len(calls) == (0 if side == "input" else 1)
-    logs = capsys.readouterr().out
-    assert marker not in json.dumps(result) + logs
+    captured = capsys.readouterr()
+    logs = captured.out
+    assert marker not in json.dumps(result) + logs + captured.err
     boundary = [json.loads(line) for line in logs.splitlines()][-1]
     assert boundary["piiDetectors"] == ["rules", "guardrail"] and boundary["blocked"]
 
 
 @pytest.mark.parametrize("failure", ["missing", "coverage", "service", "length"])
 @pytest.mark.parametrize("side", ["input", "output"])
-def test_gateway_strict_verification_failure_blocks_input_and_result(monkeypatch, verified_guardrail, failure, side):
+def test_gateway_strict_verification_failure_blocks_input_and_result(monkeypatch, verified_guardrail, failure, side, capsys):
     calls, requests = [], []
     normal = verified_guardrail.apply_guardrail
 
@@ -135,7 +144,7 @@ def test_gateway_strict_verification_failure_blocks_input_and_result(monkeypatch
     args = {"question": "safe" * 5100} if failure == "length" and side == "input" else {}
     result = gateway_tools.handler(args, context())
     assert calls == ([{}] if side == "output" else []) and result["code"] == "TOOL_FAILED"
-    assert "PRIVATE_UPSTREAM_MARKER" not in json.dumps(result)
+    assert "PRIVATE_UPSTREAM_MARKER" not in json.dumps(result) + captured_text(capsys)
     assert len(requests) == (1 if side == "input" else 2) - (1 if failure == "length" else 0)
 
 
@@ -187,11 +196,11 @@ def test_gateway_checks_complete_seed_sized_impact_and_large_source(monkeypatch,
     ctx = SimpleNamespace(client_context=SimpleNamespace(custom={
         "bedrockAgentCoreToolName": "platform___analyze_regulation_impact"}))
     assert gateway_tools.handler({"reg_code": "REG-LN-001"}, ctx) == expected
-    assert requests[-1] == serialized
+    assert requests == ['{"reg_code":"REG-LN-001"}', serialized]
     large_source = {"code": "const x = 'synthetic';\\n" * 300}
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: {"ok": True})
     assert gateway_tools.handler(large_source, context()) == {"ok": True}
-    assert json.dumps(large_source, ensure_ascii=False, separators=(",", ":")) in requests
+    assert requests[2:] == [json.dumps(large_source, ensure_ascii=False, separators=(",", ":")), '{"ok":true}']
 
 
 def test_shared_verifier_keeps_the_existing_default_bound(verified_guardrail):
@@ -217,3 +226,27 @@ def test_gate_summary_keeps_verdicts_without_backend_diagnostic_bodies():
         {"code": "TS2322"}, {"code": "MODULE_NOT_FOUND"}, {}]
     with pytest.raises(ValueError):
         gateway_tools._gate_summary({"statusCode": 500, "body": {"stackTrace": ["private"]}})
+
+
+def test_gate_summary_keeps_indeterminate_accessibility_and_blocks_success():
+    body = {"ok": True, **{name: {"ok": True} for name in ("build", "types", "lint", "a11y", "visual")}}
+    body["a11y"]["incomplete"] = [{"id": "color-contrast", "help": "PRIVATE_HELP_MARKER"}]
+    result = gateway_tools._gate_summary(body)
+    assert result["ok"] is False and result["a11y"]["ok"] is False
+    assert result["a11y"]["incompleteCount"] == 1
+    assert result["a11y"]["incomplete"] == [{"id": "color-contrast"}]
+    assert "PRIVATE_HELP_MARKER" not in json.dumps(result)
+
+
+def test_screen_gate_aggregate_rejects_unapproved_component_evidence(monkeypatch):
+    import io
+    import boto3
+    from registry import api
+    body = {"ok": True, **{name: {"ok": True} for name in ("build", "types", "lint", "a11y", "visual")}}
+    monkeypatch.setenv("GATES_FN", "synthetic-gates")
+    monkeypatch.setattr(api, "list_approved", lambda **kwargs: [
+        {"name": "Button", "recordVersion": "v2", "payload": {}}])
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: SimpleNamespace(
+        invoke=lambda **request: {"Payload": io.BytesIO(json.dumps(body).encode())}))
+    result = gateway_tools.tool_run_screen_gates({"code": "// Button@v3\nexport default function Screen() {}"})
+    assert result["registry"]["ok"] is False and result["ok"] is False

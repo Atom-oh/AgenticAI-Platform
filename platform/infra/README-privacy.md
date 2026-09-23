@@ -103,9 +103,11 @@ TypeScript dependencies such as `workspace.ts`; stdin must match that revision.
 The installed package/compiler configuration must have identical baseline locks,
 otherwise the check fails and requires an independent dependency installation.
 Both synths use the same explicitly recorded asset fixture; they do not certify
-runtime code or deployed artifacts. Other main-stack changes between revisions are
-reported for separate review and validation, including the bank IAM isolation
-test; they are not privacy-toggle effects. Results are in
+runtime code or deployed artifacts. Other main-stack changes must exactly match
+the base and resource inventory in `privacy/deploy/reviewed-main-delta.json`.
+An unlisted resource, omitted expected change or different base fails the check.
+The manifest and each resource's complete diff still require current AI review
+and the bank IAM isolation test; they are not privacy-toggle effects. Results are in
 `platform/infra/cdk.out/privacy-check/verified.json`. Existing main-stack runtime
 and CDK deprecation warnings are outside this change.
 
