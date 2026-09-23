@@ -915,3 +915,25 @@ def test_each_runtime_model_call_needs_its_own_boundary(fakes, monkeypatch, seco
     h.agent_invoke(ctx,{'name':'runtime_sequence_probe','message':'safe'})
     assert ('SECOND_OUTPUT' in json.dumps(gw.posted)) is second_boundary
     assert bool(gw.posted[-1].get('error')) is not second_boundary
+
+
+@pytest.mark.parametrize('policy_only', [False, True])
+def test_runtime_refusal_survives_missing_terminal_metadata(fakes, monkeypatch, capsys, policy_only):
+    from agentcore import invoke, runtime
+    h = _handler()
+    api.create_record({'name':'runtime_refusal_probe','recordVersion':'v1','recordType':'AGENT',
+        'payload':{'runtime':'agentcore-runtime/strands','runtimeArn':'synthetic','runtimeSourceHash':'a'*64}},
+        'admin',status='APPROVED',embed=False)
+    raw = [{'type':'boundary','seq':1,'chars':12,'estTokens':4,'piiRules':0 if policy_only else 1,
+            'piiCount':0 if policy_only else 1,'piiDetectors':['rules','guardrail'] if policy_only else ['rules'],
+            'refusedTypes':[] if policy_only else ['EMAIL'],'blocked':True},
+           {'type':'error','gate':'refused','code':422,'types':[] if policy_only else ['EMAIL'],'message':'PRIVATE_DETAIL'}]
+    monkeypatch.setattr(invoke,'stream',lambda *args,**kwargs:runtime.to_tuples(raw,'s'*64))
+    capsys.readouterr()
+    ctx,gw = _ctx()
+    h.agent_invoke(ctx,{'name':'runtime_refusal_probe','message':'safe'})
+    done=gw.posted[-1]
+    assert done['blocked'] and done['code']==422 and done['stopReason']=='gate_refused'
+    assert 'PRIVATE_DETAIL' not in json.dumps(gw.posted)
+    trace=next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace['blocked'] and trace['piiOutbound']==(0 if policy_only else 1)

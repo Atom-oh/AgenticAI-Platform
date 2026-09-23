@@ -439,6 +439,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
     blocked, pii_outbound = False, None
     started = time.time()
     runtime_kind = kind
+    refusal_seen = False
     text_sequence, boundary_sequence, minimum_sequence = None, 0, 1
     try:
         for kind_ev, data in _invoke.stream(rec, message, session_id):
@@ -495,6 +496,9 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 error_message = "에이전트 실행을 완료하지 못했습니다."
                 errors.append(error_message)
                 ctx.stage("agent", "error", message=error_message)
+            elif kind_ev == "failure":
+                if isinstance(data, dict):
+                    refusal_seen = refusal_seen or data.get("blocked") is True
             elif kind_ev == "meta":
                 usage = (data or {}).get("usage") or {}
                 tools_missing = [str(name) for name in (data or {}).get("toolsMissing", [])]
@@ -506,7 +510,9 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                     (data or {}).get("newSessionRequired") or (data or {}).get("cleanupFailed")
                     or stop_reason == "cleanup_failed")
         meta_model = None
-        blocked = stop_reason == "gate_refused"
+        blocked = refusal_seen or stop_reason == "gate_refused"
+        if blocked:
+            stop_reason = "gate_refused"
         if not errors and not blocked and not boundary_events:
             raise ValueError("Completed execution has no boundary evidence")
         pii_outbound = sum(int(event.get("piiCount", event.get("piiRules", 0)) or 0)

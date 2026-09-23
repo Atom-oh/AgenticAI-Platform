@@ -221,6 +221,8 @@ model attempts and local privacy refusals, retaining the refusal classification.
 It uses the approved Runtime whenever that Runtime is configured. Bounded failure
 metadata retains `blocked`, `stopReason=gate_refused`, and code `422`, including
 policy denials with zero detected PII.
+Generation fails with configuration status `503` when no Runtime is configured;
+offline catalogue and PRD preview remain available without model calls.
 Each text frame identifies its model-call sequence. Runtime/design relays require
 the matching accepted boundary, and a tool result invalidates the previous call's
 evidence. Design measurements are queued before that call's text and final result.

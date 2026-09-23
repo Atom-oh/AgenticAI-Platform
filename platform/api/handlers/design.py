@@ -11,7 +11,7 @@
     design.stage(gate | prd | checklist | generate | review | test | regenerate | report | error) · design.token · design.done
 
 실행 위치: AGENTS_RUNTIME_ARN 이 있으면 AgentCore Runtime 의 design_flow_agent(Strands 컨테이너, 같은 design_loop)를 호출하고
-이벤트를 중계한다. 없으면 이 Lambda 안에서 같은 루프를 직접 돈다(배지 'lambda-local' 로 표기 — §11).
+이벤트를 중계한다. Runtime 미구성 상태에서는 생성 요청을 차단한다.
 정본 자산은 Registry(APPROVED)이며, 비어 있으면 시드 파일로 폴백하고 source='seed-fallback' 을 표기한다.
 산출물: S3(WEB_BUCKET) design-runs/<runId>/<step>.html + <runId>.json + index.json → CloudFront(WEB_URL) 로 서빙.
 로그·트레이스에 프롬프트·HTML 원문은 남기지 않는다 (§12.5).
@@ -42,7 +42,7 @@ PREFIX = "design-runs"
 INDEX_KEY = f"{PREFIX}/index.json"
 MAX_INDEX = 60
 BADGE_RUNTIME = "AgentCore Runtime · Strands 컨테이너 · design_loop 공유 엔진"
-BADGE_LOCAL = "데모 대체: Lambda 내 실행 (AgentCore Runtime 미배포) · 같은 design_loop"
+BADGE_UNAVAILABLE = "AgentCore Runtime 미구성 — 생성 비활성화"
 BADGE_TEST = "테스트 에이전트: 결정론 rule 판정(플로우 맵·DOM·KWCAG 기본) — axe 브라우저 렌더링 미연동"
 
 _s3 = None
@@ -116,8 +116,8 @@ def catalog(ctx: Ctx, body: dict) -> None:
                             "templates": [t.get("id") for t in m.get("templates") or []]} for m in a["smModels"]],
               "checklists": [{"id": c.get("id"), "title": c.get("title"), "appliesTo": c.get("appliesTo") or {},
                               "items": len(c.get("items") or []), "record": c.get("_record")} for c in a["checklists"]],
-              "runtime": "agentcore-runtime/strands" if use_runtime else "lambda-local",
-              "runtimeBadge": BADGE_RUNTIME if use_runtime else BADGE_LOCAL, "testBadge": BADGE_TEST})
+              "runtime": "agentcore-runtime/strands" if use_runtime else "unconfigured",
+              "runtimeBadge": BADGE_RUNTIME if use_runtime else BADGE_UNAVAILABLE, "testBadge": BADGE_TEST})
 
 
 def _resolve(body: dict):
@@ -317,28 +317,6 @@ def _relay_runtime(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
     return result, meta, errors
 
 
-def _run_local(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
-    from design_loop import run as loop_run
-    from engine import gate
-    # 게이트가 모델로 나가는 유일한 통과 지점 — 생성·판정 모두 경계 계측·PII 스캔을 지난다 (§3-2, §12.1)
-    from engine import model_catalog
-    model = model_catalog.resolve(model)
-    deps = gate.design_deps(route="bedrock", trace_id=ctx.trace_id, model_id=model)
-
-    def emit(ev: dict) -> None:
-        if ev.get("type") == "stage":
-            d = dict(ev)
-            d.pop("type", None)
-            step = str(d.pop("step", "") or "stage")
-            ctx.stage(KIND, step, plane="cloud", **d)
-        elif ev.get("type") == "token":
-            ctx.token(KIND, ev.get("text", ""))
-
-    result = loop_run(design["productSpec"], design["smModel"], design["checklists"], deps, emit=emit,
-                      output_type=design.get("outputType") or "design")
-    return result, {"usage": deps["usage"](), "modelId": model or GEN_MODEL, "runtime": "lambda-local"}, []
-
-
 def _failed_trace(ctx, meta, runtime_label, model, started):
     try:
         tracing.record_trace({"traceId": ctx.trace_id, "scenario": "STUDIO", "email": ctx.email,
@@ -353,6 +331,10 @@ def _failed_trace(ctx, meta, runtime_label, model, started):
 
 def flow(ctx: Ctx, body: dict) -> None:
     started = time.time()
+    if not RUNTIME_ARN:
+        ctx.done(KIND, error="승인된 AgentCore Runtime을 구성해야 디자인을 생성할 수 있습니다.",
+                 code=503, runtime="unconfigured", runtimeBadge=BADGE_UNAVAILABLE)
+        return
     from engine import model_catalog
     try:
         model = model_catalog.resolve(body.get("model"))
@@ -366,18 +348,15 @@ def flow(ctx: Ctx, body: dict) -> None:
         return
     design = _design_payload(spec, sm, a["checklists"], output_type)
     use_runtime = bool(RUNTIME_ARN)
-    runtime_label = "agentcore-runtime/strands" if use_runtime else "lambda-local"
+    runtime_label = "agentcore-runtime/strands" if use_runtime else "unconfigured"
     ctx.stage(KIND, "gate", ok=True, productSpec=spec.get("id"), productName=spec.get("productName"), smModel=sm.get("id"),
               checklists=[c.get("id") for c in a["checklists"]], source=a["source"], runtime=runtime_label,
-              runtimeBadge=BADGE_RUNTIME if use_runtime else BADGE_LOCAL, testBadge=BADGE_TEST,
+              runtimeBadge=BADGE_RUNTIME if use_runtime else BADGE_UNAVAILABLE, testBadge=BADGE_TEST,
               maxRegenerations=1, plane="agentcore" if use_runtime else "cloud")
     try:
-        if use_runtime:
-            result, meta, errors = _relay_runtime(ctx, design, model)
-            if result is None and not errors:
-                errors.append("런타임이 결과(design_done)를 반환하지 않았습니다")
-        else:
-            result, meta, errors = _run_local(ctx, design, model)
+        result, meta, errors = _relay_runtime(ctx, design, model)
+        if result is None and not errors:
+            errors.append("런타임이 결과(design_done)를 반환하지 않았습니다")
     except Exception as e:  # noqa: BLE001
         log_event("design.flow_failed", ctx.trace_id, error=f"{type(e).__name__}: {str(e)[:200]}")
         from engine.gate import GateRefused
@@ -413,7 +392,7 @@ def flow(ctx: Ctx, body: dict) -> None:
     ctx.done(KIND, runId=run_id, ok=result.get("ok"), attempts=result.get("attempts"), regenerated=result.get("regenerated"),
              prd=result.get("prd"), report=rep, steps=full.get("steps"), status=full.get("status"),
              usage=meta_out["usage"], modelId=meta_out["modelId"], runtime=meta_out["runtime"],
-             runtimeBadge=BADGE_RUNTIME if use_runtime else BADGE_LOCAL, testBadge=BADGE_TEST, source=a["source"],
+             runtimeBadge=BADGE_RUNTIME if use_runtime else BADGE_UNAVAILABLE, testBadge=BADGE_TEST, source=a["source"],
              errors=errors or None, storeError=full.get("storeError"))
 
 
