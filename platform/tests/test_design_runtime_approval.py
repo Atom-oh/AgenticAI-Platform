@@ -25,7 +25,7 @@ def invocation(monkeypatch):
     seen, published = [], []
     events = [("boundary", {"chars": 10, "estTokens": 3, "piiRules": 0, "piiCount": 0,
                              "piiDetectors": ["rules", "guardrail"], "seq": 1}),
-              ("text_boundary", {"seq": 1}), ("text", "safe"), ("design_done", {"result": {"ok": True}}),
+              ("text_boundary", {"seq": 1}), ("text", "safe"), ("design_done", {"result": {"ok": True}, "modelCallSeq": 1}),
               ("meta", {"stopReason": "end_turn"})]
 
     def invoke(*args, **kwargs):
@@ -64,7 +64,7 @@ def test_design_blocks_missing_or_mismatched_approval(invocation, missing):
     assert not seen
 
 
-@pytest.mark.parametrize("event", [("text", "UNVERIFIED_" * 20), ("design_done", {"result": {"ok": True}})])
+@pytest.mark.parametrize("event", [("text", "UNVERIFIED_" * 20), ("design_done", {"result": {"ok": True}, "modelCallSeq": 1})])
 def test_design_output_requires_prior_independent_evidence(invocation, event):
     ctx, _, published, events = invocation
     events.insert(0, event)
@@ -78,3 +78,27 @@ def test_incomplete_design_response_is_not_a_publishable_result(invocation):
     events[-1] = ("meta", {"incomplete": True})
     result, _, errors = design._relay_runtime(ctx, {}, None)
     assert result is None and errors
+
+
+@pytest.mark.parametrize('policy', [False, True])
+def test_runtime_design_refusal_preserves_classification_without_private_text(invocation, monkeypatch, policy):
+    ctx, _, published, events = invocation
+    raw = [{'type': 'boundary', 'seq': 1, 'chars': 10, 'estTokens': 3, 'piiRules': 0 if policy else 1,
+            'piiCount': 0 if policy else 1, 'piiDetectors': ['rules','guardrail'] if policy else ['rules'],
+            'blocked': True, 'policyDenied': policy, 'refusedTypes': [] if policy else ['EMAIL']},
+           {'type':'error','code':422,'gate':'refused','types':[] if policy else ['EMAIL'],'message':'PRIVATE_DETAIL'},
+           {'type':'meta','stopReason':'gate_refused','usage':{}}]
+    events[:] = list(runtime.to_tuples(raw, 's'*64))
+    result, meta, errors = design._relay_runtime(ctx, {}, None)
+    assert result is None and meta['blocked'] and meta['code'] == 422 and meta['stopReason'] == 'gate_refused'
+    assert not published and 'PRIVATE_DETAIL' not in str(errors)
+
+
+def test_configured_runtime_is_selected_without_an_opt_in_flag(invocation, monkeypatch):
+    ctx, _, _, _ = invocation
+    responses = []
+    ctx.post = responses.append
+    monkeypatch.delenv('DESIGN_USE_RUNTIME', raising=False)
+    monkeypatch.setattr(design,'load_assets',lambda:{'productSpecs':[],'smModels':[],'checklists':[],'source':'synthetic'})
+    design.catalog(ctx,{})
+    assert responses[-1]['runtime'] == 'agentcore-runtime/strands'

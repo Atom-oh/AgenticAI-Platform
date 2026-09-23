@@ -240,3 +240,16 @@ def test_user_cannot_occupy_builtin_agent_names_at_any_version(name):
         'subtype': 'COMPONENT', 'system_seed': True, 'payload': {}}})
     assert messages[-1]['ok'] is False
     assert api.get_store().versions(name) == []
+
+
+def test_unverified_typed_legacy_reports_required_reconciliation_not_completion(monkeypatch):
+    from agentcore import registry_mirror
+    item = record('MCP', 'APPROVED')
+    def unresolved(current):
+        raise registry_mirror.LegacyMirrorUnresolved('Synthetic legacy identity needs inspection')
+    monkeypatch.setattr(registry_mirror, 'mirror', unresolved)
+    result = administration.transition(item['name'],'v1','DEPRECATED',administration.fingerprint(item),
+                                      'Synthetic retirement',actor_ref='iam-invoke:'+ADMIN_CONTEXT.aws_request_id)
+    assert result['applied'] and not result['completed']
+    assert result['agentcoreRegistry']['status'] == 'RECONCILIATION_REQUIRED'
+    assert result['agentcoreRegistry']['legacyUnresolved']

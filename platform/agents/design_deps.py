@@ -43,6 +43,8 @@ def make_deps(model_id: str) -> Dict[str, Any]:
         measurements.append({"type": "boundary", "chars": row["chars"], "estTokens": row["estTokens"],
                              "piiRules": row["piiRules"], "refusedTypes": row.get("hits", []),
                              "piiCount": row.get("piiCount", row["piiRules"]),
+                             "policyDenied": bool(row.get("policyDenied")),
+                             "blocked": bool(row.get("policyDenied") or row.get("piiCount", row["piiRules"])),
                              "messages": row.get("messages", 0), "source": source,
                              "seq": len(measurements) + 1, "piiDetectors": row.get("piiDetectors", ["rules"])})
 

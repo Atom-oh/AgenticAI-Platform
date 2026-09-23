@@ -88,13 +88,20 @@ share a per-agent lease before changing their shared Harness.
 Mirror creation and descriptor updates wait for the service's asynchronous work
 to finish. New approval/rejection decisions submit DRAFT records for manual review
 before applying the decision. AdminFn reads only the configured Registry's approval
-configuration; an unready or auto-approval Registry is unsupported for this flow.
+configuration; an unready Registry is retryable, while auto-approval is unsupported
+for this flow.
 The remote name binds the local name and immutable version. The service's
 `recordVersion` is a separate optimistic-lock revision, initialized to `1` and
 checked during updates. Legacy active mirrors are retired before clean replacements.
 Deprecated service records are immutable audit archives: their inactive status is
 verified and retained, with `archived=true` and an explicit `metadataCurrent` result.
 Archive retention does not claim that historical descriptor content was rewritten.
+The remote service permits deprecation from any state, including DRAFT; this is
+separate from the platform's local DRAFT-to-approval lifecycle.
+An active typed legacy record without a verifiable local identity blocks
+synchronization with `RECONCILIATION_REQUIRED`; a new mirror cannot hide that
+unresolved record or make the decision report completion. An IAM curator must
+inspect and retire the legacy record before retrying the exact local decision.
 Consumer discovery re-reads GSI candidates from the authoritative table; a stale
 APPROVED index image cannot return a deprecated or removed record. New approvals
 can still await GSI propagation, which is a completeness delay, not permission
@@ -211,6 +218,9 @@ The existing sample lookup uses its configured synthetic default. Authenticated
 customer MyData intake remains the separate S2 privacy workflow.
 The design-flow compatibility adapter emits measured boundary events for successful
 model attempts and local privacy refusals, retaining the refusal classification.
+It uses the approved Runtime whenever that Runtime is configured. Bounded failure
+metadata retains `blocked`, `stopReason=gate_refused`, and code `422`, including
+policy denials with zero detected PII.
 Each text frame identifies its model-call sequence. Runtime/design relays require
 the matching accepted boundary, and a tool result invalidates the previous call's
 evidence. Design measurements are queued before that call's text and final result.

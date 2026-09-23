@@ -21,6 +21,10 @@ class MirrorUnsupported(ValueError):
     pass
 
 
+class LegacyMirrorUnresolved(RuntimeError):
+    """A typed legacy entry needs IAM identity verification before retirement."""
+
+
 def ctl():
     global _ctl
     if _ctl is None:
@@ -90,14 +94,16 @@ def find_record(name: str, version: str) -> dict | None:
             break
     if len(matches) > 1 or None in matches:
         raise RuntimeError("Ambiguous Registry mirror identity")
-    if matches:
-        return next(iter(matches.values()))
     verified_legacy = []
     for record in legacy:
         rid = record.get("recordId") or str(record.get("recordArn", "")).rsplit("/", 1)[-1]
         current = ctl().get_registry_record(registryId=REGISTRY_ID, recordId=rid)
         if _legacy_identity(current, name, str(version)):
             verified_legacy.append(current)
+        elif current.get("descriptorType") in {"MCP", "AGENT_SKILLS", "A2A"} and current.get("status") != "DEPRECATED":
+            raise LegacyMirrorUnresolved("Active typed legacy mirror requires IAM reconciliation")
+    if matches:
+        return next(iter(matches.values()))
     if len(verified_legacy) > 1:
         raise RuntimeError("Ambiguous legacy Registry mirror identity")
     return verified_legacy[0] if verified_legacy else None
@@ -127,8 +133,10 @@ def _ready_record(record_id):
 
 def _manual_registry():
     config = ctl().get_registry(registryId=REGISTRY_ID)
-    if config.get("status") != "READY" or config.get("approvalConfiguration", {}).get("autoApproval") is not False:
-        raise MirrorUnsupported("Platform decisions require a ready Registry with manual approval")
+    if config.get("status") != "READY":
+        raise RuntimeError("Registry is not ready; retry synchronization")
+    if config.get("approvalConfiguration", {}).get("autoApproval") is not False:
+        raise MirrorUnsupported("Platform decisions require a Registry with manual approval")
 
 
 def _update_descriptors(descriptors):

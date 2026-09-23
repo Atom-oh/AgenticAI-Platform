@@ -20,13 +20,16 @@ def load(name, path):
     return module
 
 
-@pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.parametrize("blocked", [False, True, "policy"])
 def test_design_reports_boundary_events_and_refusal_without_originals(runtime_app, monkeypatch, blocked):
     boundary = load("design_boundary", ROOT / "agents/boundary_gate.py")
     monkeypatch.setitem(sys.modules, "boundary_gate", boundary)
     verified = []
     def verify(text):
         verified.append(text)
+        if blocked == "policy":
+            from common.pii import GuardrailPolicyDenied
+            raise GuardrailPolicyDenied("Synthetic denied policy")
         return {"count": 0, "hits": [], "detectors": ["rules", "guardrail"]}
     monkeypatch.setattr(boundary, "verify_independent", verify)
     calls = []
@@ -60,7 +63,7 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
 
     monkeypatch.setattr(design_loop, "run", run)
     app = load("design_app_evidence", ROOT / "agents/app.py")
-    text = "CUST-0042" if blocked else "Synthetic public content"
+    text = "CUST-0042" if blocked is True else "Synthetic public content"
 
     async def exercise():
         payload = {"agent": "design_flow_agent",
@@ -70,10 +73,13 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
     events = asyncio.run(exercise())
     measurements = [event for event in events if event["type"] == "boundary"]
     assert len(measurements) == (1 if blocked else 2) and measurements[0]["chars"] > 0
-    assert measurements[0]["piiDetectors"] == (["rules"] if blocked else ["rules", "guardrail"])
+    assert measurements[0]["piiDetectors"] == (["rules"] if blocked is True else ["rules", "guardrail"])
     if blocked:
         assert not calls
-        assert measurements[0]["source"] == "design-preflight" and measurements[0]["piiRules"] == 1
+        assert measurements[0]["source"] == ("design-preflight" if blocked is True else "design-model")
+        assert measurements[0]["piiRules"] == (1 if blocked is True else 0)
+        assert measurements[0]["blocked"] is True
+        assert measurements[0]["policyDenied"] is (blocked == "policy")
         assert events[-1]["stopReason"] == "gate_refused" and events[-1]["usage"]["inputTokens"] == 0
         assert any(event.get("code") == 422 for event in events)
         assert "CUST-0042" not in json.dumps(events)
@@ -88,16 +94,20 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
         assert first_boundary < first_text < done_index
         assert events[first_text]["modelCallSeq"] == measurements[0]["seq"] == 1
         assert max(i for i, event in enumerate(events) if event["type"] == "boundary") < done_index
-        from agentcore import runtime
-        from handlers import design
-        from registry import api
-        approved = {"name": "design_flow_agent", "recordVersion": "v1",
-                    "payload": {"runtimeArn": "synthetic", "runtimeSourceHash": "a" * 64}}
-        monkeypatch.setattr(api, "list_approved", lambda *args: [approved])
-        monkeypatch.setattr(design, "RUNTIME_ARN", "synthetic")
-        monkeypatch.setattr(runtime, "invoke_stream", lambda *args, **kwargs: runtime.to_tuples(events, "s" * 64))
-        output = []
-        ctx = SimpleNamespace(user_sub="synthetic-actor", token=lambda *args: output.append(args),
-                              stage=lambda *args, **kwargs: None)
-        result, _, errors = design._relay_runtime(ctx, {}, None)
+    from agentcore import runtime
+    from handlers import design
+    from registry import api
+    approved = {"name": "design_flow_agent", "recordVersion": "v1",
+                "payload": {"runtimeArn": "synthetic", "runtimeSourceHash": "a" * 64}}
+    monkeypatch.setattr(api, "list_approved", lambda *args: [approved])
+    monkeypatch.setattr(design, "RUNTIME_ARN", "synthetic")
+    monkeypatch.setattr(runtime, "invoke_stream", lambda *args, **kwargs: runtime.to_tuples(events, "s" * 64))
+    output = []
+    ctx = SimpleNamespace(user_sub="synthetic-actor", token=lambda *args: output.append(args),
+                          stage=lambda *args, **kwargs: None)
+    result, meta, errors = design._relay_runtime(ctx, {}, None)
+    if blocked:
+        assert result is None and meta["blocked"] and meta["code"] == 422 and meta["stopReason"] == "gate_refused"
+        assert not output
+    else:
         assert result == {"ok": True} and output and not errors

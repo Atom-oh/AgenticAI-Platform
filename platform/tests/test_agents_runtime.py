@@ -75,7 +75,7 @@ SSE_LINES = [
 def test_parse_sse_yields_harness_tuple_protocol():
     out = list(runtime.to_tuples(runtime.parse_events(FakeBody(SSE_LINES)), "fallback-sid"))
     kinds = [k for k, _ in out]
-    assert kinds == ["boundary", "text_boundary", "text", "tool_start", "tool_input", "tool_result", "text_boundary", "text", "error", "meta"]
+    assert kinds == ["boundary", "text_boundary", "text", "tool_start", "tool_input", "tool_result", "text_boundary", "text", "failure", "error", "meta"]
     assert "".join(d for k, d in out if k == "text") == "규정 영향 분석 결과"
     tool_start = next(d for k, d in out if k == "tool_start")
     assert tool_start == {"name": "analyze_regulation_impact", "toolUseId": "tu-1"}

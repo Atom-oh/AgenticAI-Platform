@@ -107,7 +107,7 @@ def _spec_summary(s: dict) -> dict:
 
 def catalog(ctx: Ctx, body: dict) -> None:
     a = load_assets()
-    use_runtime = bool(RUNTIME_ARN) and os.environ.get("DESIGN_USE_RUNTIME", "").strip() == "1"
+    use_runtime = bool(RUNTIME_ARN)
     ctx.post({"type": "design_catalog", "source": a["source"],
               "badge": "정본: Registry APPROVED 자산" if a["source"] == "registry" else "데모 대체: 시드 파일 (Registry 미시드)",
               "productSpecs": [_spec_summary(s) for s in a["productSpecs"]],
@@ -266,6 +266,7 @@ def _relay_runtime(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
                                     record["recordVersion"], uuid.uuid4().hex]).encode()).hexdigest()
     result, meta, errors = None, {}, []
     inspected = False
+    refusal = False
     boundary_sequence, text_sequence = 0, None
     for kind, data in runtime.invoke_stream(RUNTIME_ARN, AGENT_NAME, "", session_id=sid, model=model,
             extra={"design": design, "approvedSourceHash": payload["runtimeSourceHash"]}):
@@ -274,6 +275,8 @@ def _relay_runtime(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
             step = str(d.pop("step", "") or "stage")
             ctx.stage(KIND, step, plane="agentcore", **d)
         elif kind == "text":
+            if refusal:
+                continue
             if not inspected or type(text_sequence) is not int or text_sequence != boundary_sequence:
                 raise ValueError("Design output preceded independent boundary evidence")
             text_sequence = None
@@ -288,17 +291,27 @@ def _relay_runtime(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
             if type(data.get("seq")) is not int or data["seq"] != boundary_sequence + 1:
                 raise ValueError("Incomplete design model-call sequence")
             boundary_sequence = data["seq"]
-            inspected = data["piiCount"] == 0 and data["piiDetectors"] == ["rules", "guardrail"]
+            refused = bool(data.get("blocked") or data.get("policyDenied") or data["piiCount"])
+            refusal = refusal or refused
+            inspected = not refused and data["piiDetectors"] == ["rules", "guardrail"]
             ctx.stage(KIND, "boundary", plane="boundary", **data)
         elif kind == "design_done":
-            if not inspected:
+            if refusal:
+                continue
+            if not inspected or type(data.get("modelCallSeq")) is not int or data["modelCallSeq"] != boundary_sequence:
                 raise ValueError("Design result preceded independent boundary evidence")
             result = (data or {}).get("result")
         elif kind == "error":
             errors.append("Design Runtime execution failed")
             ctx.stage(KIND, "error", message="Design Runtime execution failed")
+        elif kind == "failure":
+            refusal = refusal or bool(data.get("blocked"))
         elif kind == "meta":
             meta = data or {}
+    refusal = refusal or meta.get("stopReason") == "gate_refused"
+    if refusal:
+        meta.update(blocked=True, stopReason="gate_refused", code=422)
+        return None, meta, ["안전 정책에 따라 요청이 차단됐습니다."]
     if errors or meta.get("incomplete"):
         return None, meta, errors or ["Design Runtime response was incomplete"]
     return result, meta, errors
@@ -326,6 +339,18 @@ def _run_local(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
     return result, {"usage": deps["usage"](), "modelId": model or GEN_MODEL, "runtime": "lambda-local"}, []
 
 
+def _failed_trace(ctx, meta, runtime_label, model, started):
+    try:
+        tracing.record_trace({"traceId": ctx.trace_id, "scenario": "STUDIO", "email": ctx.email,
+                              "ok": False, "blocked": bool(meta.get("blocked")),
+                              "blockedBy": "gate" if meta.get("blocked") else "execution",
+                              "stopReason": meta.get("stopReason", "error"), "errors": 1,
+                              "usage": meta.get("usage", {}), "modelId": model or GEN_MODEL,
+                              "runtime": runtime_label, "elapsedMs": int((time.time() - started) * 1000)})
+    except Exception as error:
+        log_event("design.failure_trace_unavailable", ctx.trace_id, errorType=type(error).__name__)
+
+
 def flow(ctx: Ctx, body: dict) -> None:
     started = time.time()
     from engine import model_catalog
@@ -340,7 +365,7 @@ def flow(ctx: Ctx, body: dict) -> None:
         ctx.done(KIND, error="상품명세서 또는 SM 모델을 찾을 수 없습니다", source=a["source"])
         return
     design = _design_payload(spec, sm, a["checklists"], output_type)
-    use_runtime = bool(RUNTIME_ARN) and os.environ.get("DESIGN_USE_RUNTIME", "").strip() == "1"
+    use_runtime = bool(RUNTIME_ARN)
     runtime_label = "agentcore-runtime/strands" if use_runtime else "lambda-local"
     ctx.stage(KIND, "gate", ok=True, productSpec=spec.get("id"), productName=spec.get("productName"), smModel=sm.get("id"),
               checklists=[c.get("id") for c in a["checklists"]], source=a["source"], runtime=runtime_label,
@@ -355,11 +380,19 @@ def flow(ctx: Ctx, body: dict) -> None:
             result, meta, errors = _run_local(ctx, design, model)
     except Exception as e:  # noqa: BLE001
         log_event("design.flow_failed", ctx.trace_id, error=f"{type(e).__name__}: {str(e)[:200]}")
-        ctx.done(KIND, error=f"실행 실패 — {type(e).__name__}", runtime=runtime_label)
+        from engine.gate import GateRefused
+        blocked = isinstance(e, GateRefused)
+        failure = {"blocked": blocked, "stopReason": "gate_refused" if blocked else "error"}
+        _failed_trace(ctx, failure, runtime_label, model, started)
+        ctx.done(KIND, error=f"실행 실패 — {type(e).__name__}", runtime=runtime_label,
+                 code=422 if blocked else 502, **failure)
         return
     if not result or result.get("error"):
-        ctx.done(KIND, error=(result or {}).get("error") or "; ".join(errors) or "실패", code=(result or {}).get("code"),
-                 missing=(result or {}).get("missing"), runtime=runtime_label, attempts=(result or {}).get("attempts"))
+        _failed_trace(ctx, meta, runtime_label, model, started)
+        ctx.done(KIND, error=(result or {}).get("error") or "; ".join(errors) or "실패",
+                 code=meta.get("code") or (result or {}).get("code"), blocked=bool(meta.get("blocked")),
+                 stopReason=meta.get("stopReason"), missing=(result or {}).get("missing"),
+                 runtime=runtime_label, attempts=(result or {}).get("attempts"))
         return
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     meta_out = {"productSpecId": spec.get("id"), "productName": spec.get("productName"), "shape": spec.get("shape"),

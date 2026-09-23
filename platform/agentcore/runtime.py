@@ -107,6 +107,14 @@ def to_tuples(events: Iterable[dict], session_id: str) -> Iterator[Tuple[str, An
         elif t in ("tool_start", "tool_input", "tool_result", "boundary", "stage", "design_done"):
             yield (t, {k: v for k, v in ev.items() if k != "type"})
         elif t == "error":
+            code = ev.get("code")
+            blocked = ev.get("gate") == "refused"
+            types = ev.get("types")
+            types = types if isinstance(types, list) else []
+            yield ("failure", {"code": code if type(code) is int and 400 <= code <= 599 else 500,
+                               "blocked": blocked, "stopReason": "gate_refused" if blocked else "error",
+                               "types": [value for value in types[:20] if isinstance(value, str)
+                                         and re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", value)]})
             msg = str(ev.get("message", ""))
             if ev.get("gate") == "refused":
                 yield ("error", msg)

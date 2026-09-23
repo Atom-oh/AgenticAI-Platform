@@ -71,6 +71,9 @@ def _transition(name, version, target, expected_hash, reason="", *, actor_ref):
             raise ValueError("Invalid Registry mirror result")
     except registry_mirror.MirrorUnsupported:
         mirrored = {"status": "UNSUPPORTED", "retryable": False, "errorType": "MirrorUnsupported"}
+    except registry_mirror.LegacyMirrorUnresolved:
+        mirrored = {"status": "RECONCILIATION_REQUIRED", "retryable": False, "legacyUnresolved": True,
+                    "errorType": "LegacyMirrorUnresolved"}
     except Exception as error:
         mirrored = {"status": "SYNC_PENDING", "errorType": type(error).__name__}
     try:

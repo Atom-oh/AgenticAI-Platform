@@ -119,3 +119,9 @@ def test_gemma_badge_describes_explanation_adapter_without_privacy_topology_clai
     badge = gate.route_info("gemma")["badge"]
     assert badge["title"] == "설명 생성 경로" and badge["substituted"] is False
     assert not any(term in str(badge) for term in ("Tier 2", "IDC", "Hybrid", "GPU"))
+
+
+def test_explanation_route_tier_matches_the_authoritative_adapter():
+    from engine import llm
+    for route, adapter in [('gemma', llm.GemmaAdapter), ('idc_vllm', llm.VllmAdapter)]:
+        assert gate.route_info(route)['tier'] == gate.tier_of(route) == adapter.tier == '0/1'

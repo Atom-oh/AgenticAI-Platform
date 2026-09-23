@@ -146,3 +146,20 @@ def test_design_seed_records_are_valid_registry_records():
     assert len(reg.list_approved("CUSTOM", "PRODUCT_SPEC")) == 3
     assert len(reg.list_approved("SKILL", "CHECKLIST")) == 2
     assert reg.list_approved("CUSTOM", "SM_MODEL")[0]["payload"]["kind"] == "sm-model"
+
+
+def test_configured_runtime_refusal_reaches_terminal_design_response(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(design.tracing, 'record_trace', recorded.append)
+    monkeypatch.setattr(design, 'RUNTIME_ARN', 'synthetic-runtime')
+    monkeypatch.setenv('DESIGN_USE_RUNTIME', '0')
+    monkeypatch.setattr(design, '_run_local', lambda *args: pytest.fail('configured Runtime was bypassed'))
+    monkeypatch.setattr(design, '_relay_runtime', lambda *args: (
+        None, {'blocked': True, 'stopReason': 'gate_refused', 'code': 422}, ['Synthetic policy refusal']))
+    a, ctx = _ctx()
+    design.flow(ctx, {'productSpecId': 'ps-soccer-club-savings'})
+    done = a.sent[-1]
+    assert done['type'] == 'design.done' and done['blocked'] and done['code'] == 422
+    assert done['stopReason'] == 'gate_refused' and done['runtime'] == 'agentcore-runtime/strands'
+    assert recorded[-1]['blocked'] and recorded[-1]['stopReason'] == 'gate_refused'
+    assert 'query' not in recorded[-1] and 'payload' not in recorded[-1]

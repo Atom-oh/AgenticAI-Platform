@@ -80,7 +80,7 @@ def fakes(monkeypatch):
     monkeypatch.delenv("LLM_ROUTE", raising=False)
     monkeypatch.delenv("GATE_REFUSE_TYPES", raising=False)
     c = FakeAdapter("claude", "0/1", "global.anthropic.claude-sonnet-5", "bedrock-runtime", "ap-northeast-2")
-    g = FakeAdapter("gemma", "2", "google.gemma-4-31b", "bedrock-mantle", "us-west-2")
+    g = FakeAdapter("gemma", "0/1", "google.gemma-4-31b", "bedrock-mantle", "us-west-2")
     gate.set_adapter("claude", c)
     gate.set_adapter("gemma", g)
     yield {"claude": c, "gemma": g}
@@ -162,7 +162,7 @@ def test_route_selection_env_override_and_aliases(fakes, monkeypatch):
     assert gate.current_route() == "claude"
     monkeypatch.setenv("LLM_ROUTE", "gemma")
     st = gate.stream("s", "u", purpose="s2")
-    assert st.route == "gemma" and st.tier == "2" and st.model_id == "google.gemma-4-31b" and st.endpoint == "bedrock-mantle"
+    assert st.route == "gemma" and st.tier == "0/1" and st.model_id == "google.gemma-4-31b" and st.endpoint == "bedrock-mantle"
     list(st)
     assert fakes["gemma"].calls and not fakes["claude"].calls
     text, usage, info = gate.generate("s", "u", route="claude", purpose="x")   # 호출별 override

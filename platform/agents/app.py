@@ -508,6 +508,8 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
             loop.call_soon_threadsafe(q.put_nowait, {"type": "text", "t": ev.get("text", ""),
                                                     "modelCallSeq": boundary_seq})
         else:
+            if ev.get("type") == "design_done":
+                ev = {**ev, "modelCallSeq": boundary_seq}
             loop.call_soon_threadsafe(q.put_nowait, ev)
 
     def work() -> None:

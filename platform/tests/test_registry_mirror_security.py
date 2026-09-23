@@ -248,3 +248,21 @@ def test_retiring_legacy_mirror_does_not_create_a_replacement_archive(monkeypatc
         get_registry_record=lambda **kwargs: copy.deepcopy(old), update_registry_record_status=status))
     result = mirror.mirror(record)
     assert result['archived'] and result['recordId'] == 'old' and old['status'] == 'DEPRECATED'
+
+
+@pytest.mark.parametrize('kind', ['MCP', 'AGENT_SKILLS'])
+@pytest.mark.parametrize('has_current', [False, True])
+def test_active_unmapped_typed_legacy_never_reports_completed_sync(monkeypatch, kind, has_current):
+    name, version = 'typed_probe', 'v1'
+    legacy = {'recordId': 'old', 'name': mirror._old_hash_name(name), 'recordVersion': version,
+              'status': 'APPROVED', 'descriptorType': kind, 'descriptors': {}}
+    rows = [legacy]
+    if has_current:
+        rows.append({'recordId': 'new', 'name': mirror._mirror_name(name, version), 'status': 'DEPRECATED'})
+    monkeypatch.setattr(mirror, 'ctl', lambda: SimpleNamespace(
+        list_registry_records=lambda **kwargs: {'registryRecords': rows},
+        get_registry_record=lambda **kwargs: legacy))
+    with pytest.raises(mirror.LegacyMirrorUnresolved):
+        mirror.find_record(name, version)
+    legacy['status'] = 'DEPRECATED'
+    assert (mirror.find_record(name, version) is not None) is has_current
