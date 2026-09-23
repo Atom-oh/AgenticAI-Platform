@@ -11,7 +11,9 @@ import CanvasRequest from './CanvasRequest';
 import type { PreviewSelection } from './previewSelection';
 import type { Asset, Batch, Contract, GuideRef, Job, Product, Round, Run, Selection, WorkspaceConfig } from './types';
 
-type Attempt = { id: string; label: string; payload: Record<string, unknown>; job?: Job; run?: Run; error?: string };
+type RevisionDraft = { instruction: string; selection?: PreviewSelection };
+type Attempt = { id: string; label: string; payload: Record<string, unknown>; job?: Job; run?: Run; error?: string;
+  draftKey?: string; draft?: RevisionDraft };
 const VARIANTS = { balanced: '기본 구성', baseline: '엄격 기준안', layout: '배치 변형', dense: '정보를 한눈에',
   emphasis: '핵심 강조', flow: '진행 흐름 강조', information: '정보 순서 변형' } as const;
 
@@ -67,13 +69,13 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   const [roundNumber, setRoundNumber] = useState(initialRound || 0);
   const [pageId, setPageId] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
-  const [instruction, setInstruction] = useState('');
+  const [revisionDrafts, setRevisionDrafts] = useState<Record<string, RevisionDraft>>({});
   const [composing, setComposing] = useState(false);
   const requestDirty = useCallback((dirty: boolean) => setComposing(dirty), []);
   const [selectMode, setSelectMode] = useState(false);
-  const [picked, setPicked] = useState<{ key: string; value: PreviewSelection } | null>(null);
   const [wide, setWide] = useState(false);
-  useEffect(() => { onComposeDirty?.(composing || !!instruction.trim()); }, [composing, instruction, onComposeDirty]);
+  useEffect(() => { onComposeDirty?.(composing || Object.values(revisionDrafts).some(draft => !!draft.instruction.trim())); },
+    [composing, revisionDrafts, onComposeDirty]);
   const instructionId = useId();
   const [approvedCheck, setApprovedCheck] = useState(false);
   const [variationConsent, setVariationConsent] = useState('');
@@ -94,12 +96,12 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       roundIntent.current = { runId: initialRunId, round: initialRound || 0 };
       setRunId(initialRunId); setRoundNumber(previous => initialRound || (different ? 0 : previous));
       if (different) {
-        setBatchId(''); setBatch(null); setBatchRuns([]); setRun(null); setPageId(''); setInstruction('');
+        setBatchId(''); setBatch(null); setBatchRuns([]); setRun(null); setPageId('');
       }
     } else if (previous) {
       roundIntent.current = { runId: '', round: 0 };
       setRunId(''); setRun(null); setRoundNumber(0); setBatchId(''); setBatch(null); setBatchRuns([]);
-      setPageId(''); setInstruction(''); setEvidence(null);
+      setPageId(''); setEvidence(null);
     }
   }, [requestKey]);
   useEffect(() => {
@@ -154,9 +156,15 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
   useEffect(() => { onSelection?.(run?.id === runId ? { run, round: selectedRound, pageId: selectedPage } : null); },
     [onSelection, run, runId, selectedRound, selectedPage]);
   const evidenceKey = `${runId}:${roundNumber}:${selectedRound?.artifactSha256 || ''}:${selectedRound?.sourceHash || ''}:${selectedRound?.bundleHash || ''}`;
-  const selectedElement = picked?.key === evidenceKey ? picked.value : null;
-  const selectElement = useCallback((value: PreviewSelection) => setPicked({ key: evidenceKey, value }), [evidenceKey]);
-  useEffect(() => { setPicked(null); setSelectMode(false); }, [evidenceKey]);
+  const instruction = revisionDrafts[evidenceKey]?.instruction || '';
+  const selectedElement = revisionDrafts[evidenceKey]?.selection || null;
+  const setInstruction = (text: string) => setRevisionDrafts(previous => ({
+    ...previous, [evidenceKey]: { ...previous[evidenceKey], instruction: text },
+  }));
+  const selectElement = useCallback((selection?: PreviewSelection) => setRevisionDrafts(previous => ({
+    ...previous, [evidenceKey]: { instruction: previous[evidenceKey]?.instruction || '', selection },
+  })), [evidenceKey]);
+  useEffect(() => { setSelectMode(false); }, [evidenceKey]);
   const currentEvidence = evidence?.key === evidenceKey ? evidence.report : undefined;
   const verification = deriveVerificationLoop({ run: run?.id === runId ? run : null, round: selectedRound, evidence: currentEvidence });
   const approvalReady = !!selectedRound && roundApprovable(selectedRound) && (run?.outputType !== 'react' ||
@@ -181,7 +189,14 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       try {
         const result = await workspaceClient.post<{ job: Job; run: Run }>('/runs', entry.payload, controller.signal);
         if (controller.signal.aborted) break;
+        if (typeof result.run?.id !== 'string' || !result.run.id) throw new Error('접수된 시안 기록을 확인하지 못했습니다. 같은 요청으로 다시 시도하세요.');
         patchAttempt(entry.id, { job: result.job, run: result.run });
+        if (entry.draftKey) setRevisionDrafts(previous => {
+          // An accepted request clears only the submitted draft, never edits
+          // typed while the request was in flight or another round's draft.
+          if (JSON.stringify(previous[entry.draftKey!]) !== JSON.stringify(entry.draft)) return previous;
+          const next = { ...previous }; delete next[entry.draftKey!]; return next;
+        });
         setRunId(previous => previous || result.run.id); refresh();
       } catch (reason) { if (!controller.signal.aborted) patchAttempt(entry.id, { error: messageOf(reason) }); }
     }
@@ -206,7 +221,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       pendingBatch.current = { fingerprint, payload, batchId: value.batch.id };
       const firstRun = value.batch.baselineRunId || value.batch.runIds[0] || '';
       roundIntent.current = { runId: firstRun, round: 0 };
-      setBatch(value.batch); setBatchId(value.batch.id); setRunId(firstRun); setRoundNumber(0); setInstruction('');
+      setBatch(value.batch); setBatchId(value.batch.id); setRunId(firstRun); setRoundNumber(0);
       // Each job keeps its own failure state. One failed variant never cancels the others.
       const results = await Promise.allSettled(value.batch.runIds.map(async id => {
         const item = value.runs?.find(item => item.id === id) ||
@@ -236,12 +251,13 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       requestId: id, mode: 'verify', sourceAssetId: selectedHtmlId, contractId: contract.id, contractVersion: contract.version, maxRounds: 1,
       ...(reference ? { referenceAssetId: reference, referencePage, visualTolerance: tolerance } : {}),
     } };
-    setAttempts(previous => [entry, ...previous]); setRunId(''); setRoundNumber(0); setInstruction(''); void submit([entry]);
+    setAttempts(previous => [entry, ...previous]); setRunId(''); setRoundNumber(0); void submit([entry]);
   };
   const revise = () => {
     if (!mayGenerate || !run || !selectedRound?.hasHtml || !instruction.trim() || sendingRef.current || !config.models.some(option => option.id === model)) return;
     const id = crypto.randomUUID();
-    const entry: Attempt = { id, label: `라운드 ${selectedRound.number} 수정`, payload: {
+    const entry: Attempt = { id, label: `라운드 ${selectedRound.number} 수정`, draftKey: evidenceKey,
+      draft: revisionDrafts[evidenceKey], payload: {
       requestId: id, contractId: run.contractId, contractVersion: run.contractVersion, mode: 'generate', outputType: 'react', model, maxRounds: rounds,
       variant: run.variant && Object.hasOwn(VARIANTS, run.variant) ? run.variant : 'balanced',
       generationMode: run.generationMode || 'creative',
@@ -274,7 +290,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
     const item = runs.find(item => item.id === id) || batchRuns.find(item => item.id === id) || attempts.find(item => item.run?.id === id)?.run;
     if (item?.batchId) setBatchId(item.batchId);
     else if (!batch?.runIds.includes(id)) setBatchId('');
-    setRunId(id); setRoundNumber(0); setInstruction(''); setApprovedCheck(false);
+    setRunId(id); setRoundNumber(0); setApprovedCheck(false);
   };
   const imageReferences = assets.filter(asset => contract?.assetIds.includes(asset.id) && asset.uploadStatus === 'stored' &&
     asset.previews?.some(preview => preview.mime === 'image/png'));
@@ -317,7 +333,10 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
       {contract && <p className="ws-muted">고정할 규칙: {contract.title} · 버전 {contract.version} · {contract.rules.length}개 · {contract.viewport.width}×{contract.viewport.height}</p>}
       {product && contract && !currentGuideline(product, contract) &&
         <Notice error>선택한 규칙은 최신 게시 지침과 연결되지 않았습니다. 최신 상품 지침으로 새 규칙을 만들고 승인하세요.</Notice>}
-      {!canUseContract && <p className="ws-muted">요청을 입력하거나 승인한 확인 기준을 선택하세요.</p>}
+      {!canUseContract && <p className="ws-muted">{contract
+        ? '확인 기준의 미해결 내용과 미저장 변경을 정리한 뒤 저장·승인하세요.'
+        : '요청을 입력하거나 승인한 확인 기준을 선택하세요.'}</p>}
+      {composing && <p className="ws-muted">새 요청은 ‘이 요청으로 시작하기’로 확인 기준을 준비하세요. 기존 기준으로 만들려면 요청 입력을 비우세요.</p>}
       {htmlSources.length > 0 && <div className="ws-original-source">
         <div className="ws-field"><label htmlFor={sourceSelectId}>검사할 반입 HTML</label><select id={sourceSelectId} value={selectedHtmlId}
           disabled={sending || approving} onChange={event => setSourceAssetId(event.target.value)}>
@@ -330,7 +349,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
         {htmlSources.length > 0 && <button onClick={verifyOriginal} disabled={!mayGenerate || !canUseContract || !selectedHtmlId || sending || approving}>반입 HTML 검사</button>}</div>
       <label className="ws-field">저장된 시안 비교<select aria-label="저장된 시안 비교" value={batchId} onChange={event => {
         roundIntent.current = { runId: '', round: 0 };
-        setBatchId(event.target.value); setRunId(''); setRoundNumber(0); setInstruction('');
+        setBatchId(event.target.value); setRunId(''); setRoundNumber(0);
       }}><option value="">비교 묶음 선택</option>
         {[...(batch && !batches.some(item => item.id === batch.id) ? [batch] : []), ...batches]
           .filter(item => !product || contracts.some(contract => contract.id === item.contractId))
@@ -383,7 +402,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
           <div className="ws-rounds" aria-label="시안 라운드">{(run.rounds || []).map(round => <button key={round.number}
             className={roundNumber === round.number ? 'is-selected' : ''} onClick={() => {
               roundIntent.current = { runId, round: round.number };
-              setRoundNumber(round.number); setInstruction(''); setApprovedCheck(false); }}>
+              setRoundNumber(round.number); setApprovedCheck(false); }}>
             라운드 {round.number} · {round.passed && (run.outputType !== 'react' || buildPassed(round, run.catalogHash)) ? '필수 검사 통과' : '확인 필요'}{round.number === run.bestRound ? ' · 최종 선택' : ''}</button>)}</div>
           {selectedRound ? <>
             {!!selectedRound.pageSources?.length && <label className="ws-field">협업할 화면<select aria-label="협업할 화면" value={selectedPage || ''} onChange={event => setPageId(event.target.value)}>
@@ -395,8 +414,8 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               <div><strong>사람의 승인</strong><span>{hasExactApproval(run, selectedRound) ? '이 라운드 승인됨' : '미승인'}</span></div>
             </div>
             <div className="ws-canvas-toolbar" role="group" aria-label="미리보기 도구">
-              <span>라운드 {selectedRound.number}</span>
-              <button aria-pressed={wide} onClick={() => setWide(value => !value)}>{wide ? '전체 폭' : '모바일 폭'}</button>
+              <span>라운드 {selectedRound.number} · 검증 기준 {run.contract?.viewport.width || 390}px</span>
+              <button aria-pressed={wide} onClick={() => setWide(value => !value)}>전체 폭 보기</button>
               <button aria-pressed={selectMode} disabled={!selectedRound.hasHtml} onClick={() => setSelectMode(value => !value)}>
                 {selectMode ? '요소 선택 중' : '요소 선택'}</button>
             </div>
@@ -407,7 +426,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
               selectMode={selectMode} onSelect={selectElement} /> : <Notice>이 라운드에는 조회할 HTML 시안이 없습니다.</Notice>}</div>
             <div className="ws-canvas-composer">
               <div className="ws-canvas-selection" aria-live="polite"><span>{selectedElement ? selectedElement.label : '전체 화면 수정'}</span>
-                {selectedElement && <button onClick={() => { setPicked(null); setSelectMode(false); }}>선택 해제</button>}</div>
+                {selectedElement && <button onClick={() => { selectElement(); setSelectMode(false); }}>선택 해제</button>}</div>
               <div className="ws-field"><label className="ws-sr" htmlFor={instructionId}>라운드 {selectedRound.number} 수정 지시</label>
                 <textarea id={instructionId} rows={2} maxLength={3500} value={instruction}
                   placeholder="수정할 내용을 적어 주세요. 예: 이 버튼을 더 크게, 문구는 ‘지금 환전하기’로"

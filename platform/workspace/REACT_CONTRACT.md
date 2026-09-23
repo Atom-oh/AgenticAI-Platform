@@ -211,7 +211,10 @@ disclosure below the canvas.
 Element selection uses bounded advisory messages through the two opaque preview
 frames. It does not relax sandbox/CSP restrictions, run selectors in the host,
 or change approval evidence. The selected hint is bound to the viewed round and
-artifact hashes; changing rounds clears it. Changing preview width does not
+artifact hashes. Unsent revision text and its hint remain private in-memory
+drafts for that exact evidence key; switching runs/rounds cannot discard them or
+apply them to a different artifact. An accepted request clears its submitted
+draft only when the user has not edited it in flight. Changing preview width does not
 change the frozen verification viewport or reload the simulated state.
 Explicitly opening a gallery draft starts a fresh Playground session for that
 selection, including a repeated selection, so another draft's score cannot carry over.

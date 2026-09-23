@@ -39,10 +39,15 @@ test('canvas selection preserves simulated state, binds refinement to the viewed
   const run = { id: 'draft', status: 'needs_changes', version: 1, contractId: contract.id, contractVersion: contract.version,
     outputType: 'react', model: 'fable', bestRound: 2, contract, rounds };
   const submitted = [];
+  let releaseRevision, receivedRevision;
+  const received = new Promise(resolve => { receivedRevision = resolve; });
+  const release = new Promise(resolve => { releaseRevision = resolve; });
   const html = Buffer.from(`<html lang="ko"><head><style>body{font-family:Arial,sans-serif;padding:24px;color:#173b36;background:white}h1{font-size:25px}input{padding:14px;width:85%;border:1px solid #bdd4cc;border-radius:8px}button{background:#008485;color:white;border:0;border-radius:10px;padding:16px;width:100%;margin-top:24px}.card{background:#f2f7f5;padding:20px;margin:24px 0;border-radius:12px}</style></head><body>
+    <img id="asset" alt="반입 이미지" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=">
     <h1>환전 신청</h1><p>받을 금액을 먼저 확인하세요.</p><div class="card"><label>환전 금액<input id="amount" value="1000"></label><p>환율 우대 90%</p></div>
-    <button id="next" onclick="document.querySelector('#result').textContent=document.querySelector('input').value">지금 환전하기</button><p id="result"></p>
-    <script>try{parent.document.body.dataset.escaped='yes'}catch{}</script></body></html>`);
+    <button id="next" data-studio-outline="application-owned" onpointerdown="document.querySelector('#result').textContent='pointer activated'"
+      onclick="document.querySelector('#result').textContent=document.querySelector('input').value"><svg width="18" height="18" viewBox="0 0 18 18"><path id="icon" d="M1 1h16v16H1z" fill="white"/></svg>지금 환전하기</button><p id="result"></p>
+    <script>try{top.document.body.dataset.escaped='yes'}catch{}</script></body></html>`);
   const page = await mount(t, `import React from 'react';import {createRoot} from 'react-dom/client';import RunsPanel from './src/workspace/RunsPanel';
     const contract=${JSON.stringify(contract)},run=${JSON.stringify(run)};
     createRoot(document.getElementById('root')).render(<div className="designer-workspace"><RunsPanel
@@ -58,23 +63,35 @@ test('canvas selection preserves simulated state, binds refinement to the viewed
       'X-SHA256': createHash('sha256').update(html).digest('hex'),
     } });
     if (target === '/runs' && route.request().method() === 'POST') {
-      submitted.push(route.request().postDataJSON());
-      return json({ run: { ...run, id: 'revision' } });
+      submitted.push(route.request().postDataJSON()); receivedRevision();
+      return release.then(() => json({ run: { ...run, id: 'revision' } }));
     }
     throw new Error('Unexpected path ' + target);
   });
   const content = () => page.frameLocator('iframe[title="생성 시안 라운드 2"]').frameLocator('[data-workspace-preview-content]');
   await content().getByLabel('환전 금액').fill('2500');
+  assert.equal(await content().locator('#asset').evaluate(image => image.complete && image.naturalWidth), 1,
+    'The wrapper CSP must preserve allowed data images in the inner srcdoc');
   await page.getByRole('button', { name: '요소 선택', exact: true }).click();
-  await content().getByRole('button', { name: '지금 환전하기', exact: true }).click();
+  await content().locator('#icon').click();
   await page.locator('.ws-canvas-selection').getByText('button · 지금 환전하기', { exact: true }).waitFor();
   assert.equal(await content().locator('#result').innerText(), '', 'Selection does not activate the simulated button');
+  assert.equal(await content().locator('#next').getAttribute('data-studio-outline'), 'application-owned');
+  await content().locator('#next').focus();
+  await content().locator('#next').press('Enter');
+  assert.equal(await content().locator('#result').innerText(), '', 'Keyboard selection does not submit the simulated form');
   assert.equal(await content().getByLabel('환전 금액').inputValue(), '2500');
-  await page.getByRole('button', { name: '모바일 폭', exact: true }).click();
+  await page.getByRole('button', { name: '전체 폭 보기', exact: true }).click();
   assert.equal(await content().getByLabel('환전 금액').inputValue(), '2500', 'Width changes do not reload the preview');
-  await page.getByRole('button', { name: '전체 폭', exact: true }).click();
+  await page.getByRole('button', { name: '전체 폭 보기', exact: true }).click();
   const instruction = page.getByLabel('라운드 2 수정 지시', { exact: true });
   await instruction.fill('버튼의 여백을 넓혀 주세요.');
+  await page.getByRole('button', { name: '라운드 1 · 확인 필요', exact: true }).click();
+  await page.locator('.ws-canvas-selection').getByText('전체 화면 수정', { exact: true }).waitFor();
+  await page.getByLabel('라운드 1 수정 지시', { exact: true }).fill('첫 라운드의 제목을 확인해 주세요.');
+  await page.getByRole('button', { name: '라운드 2 · 확인 필요 · 최종 선택', exact: true }).click();
+  assert.equal(await instruction.inputValue(), '버튼의 여백을 넓혀 주세요.', 'Returning to a round restores its unsent revision');
+  await page.locator('.ws-canvas-selection').getByText('button · 지금 환전하기', { exact: true }).waitFor();
   assert.equal(await page.locator('iframe[title="생성 시안 라운드 2"]').getAttribute('sandbox'), 'allow-scripts');
   assert.equal(await page.evaluate(() => document.body.dataset.escaped), undefined);
   // Neither the host nor another frame is the trusted relay for selection hints.
@@ -85,7 +102,11 @@ test('canvas selection preserves simulated state, binds refinement to the viewed
     await page.screenshot({ path: path.join(process.env.WORKSPACE_QA_DIR, 'canvas-desktop.png'), fullPage: true });
   }
   await page.getByRole('button', { name: '보고 있는 라운드 2 수정·재검수', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('.ws-attempts')?.textContent.includes('라운드 2 수정'));
+  await received;
+  await instruction.fill('접수 중 새로 작성한 수정 지시를 유지해 주세요.');
+  releaseRevision();
+  await page.getByRole('button', { name: '라운드 2 수정 결과 보기', exact: true }).waitFor();
+  assert.equal(await instruction.inputValue(), '접수 중 새로 작성한 수정 지시를 유지해 주세요.', 'Acceptance must not erase newer typing');
   assert.equal(submitted.length, 1);
   assert.equal(submitted[0].baseRunId, 'draft'); assert.equal(submitted[0].baseRound, 2);
   assert.equal(submitted[0].contractVersion, 2); assert.equal(submitted[0].model, 'fable');
@@ -93,7 +114,7 @@ test('canvas selection preserves simulated state, binds refinement to the viewed
   assert.match(submitted[0].instruction, /버튼의 여백을 넓혀 주세요/);
   await page.getByRole('button', { name: '라운드 1 · 확인 필요', exact: true }).click();
   await page.locator('.ws-canvas-selection').getByText('전체 화면 수정', { exact: true }).waitFor();
-  assert.equal(await page.getByLabel('라운드 1 수정 지시', { exact: true }).inputValue(), '');
+  assert.equal(await page.getByLabel('라운드 1 수정 지시', { exact: true }).inputValue(), '첫 라운드의 제목을 확인해 주세요.');
   await page.getByText('검수 근거·승인', { exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '라운드 1 시안 승인' }).isDisabled(), true);
   await page.getByText('검수 근거·승인', { exact: true }).click();

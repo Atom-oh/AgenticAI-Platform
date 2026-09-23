@@ -165,6 +165,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [requestedRun, setRequestedRun] = useState({ id: route.runId, round: route.round });
+  const [criteriaOverride, setCriteriaOverride] = useState<{ route: typeof route; id: string } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const activeStage = useRef(step); activeStage.current = step;
   const activeProduct = useRef(productId); activeProduct.current = productId;
@@ -236,15 +237,16 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const product = products.find(item => item.id === productId);
   const scopedContracts = contracts.filter(item => !productId || !item.productId || item.productId === productId);
   const scopedRuns = runs.filter(item => !productId || item.productId === productId);
-  const navigate = (next: WorkflowStep, runId?: string, round?: number) => {
+  const navigate = (next: WorkflowStep, runId?: string, round?: number, criteriaId?: string) => {
     if (criteriaPending) { setError('기준 시안 조회가 끝나면 다음 단계로 이동할 수 있습니다.'); return; }
     setStep(next);
+    if (criteriaId !== undefined) setCriteriaOverride({ route, id: criteriaId });
     const target = runId ? { id: runId, round } : {
       id: selection?.run.id || requestedRun.id, round: selection?.round?.number || requestedRun.round,
     };
     if (target.id && (next === 'review' || next === 'handoff')) setRequestedRun(target);
     const hash = workflowHash(location.hash, { projectId: project?.id || '', productId, step: next,
-      contractId: editing.id || undefined,
+      contractId: criteriaId ?? (editing.id || undefined),
       ...(next === 'review' || next === 'handoff' ? { runId: target.id, round: target.round } : {}) });
     if (hash !== location.hash) history.pushState(null, '', hash);
     onLocation(hash);
@@ -283,10 +285,11 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       <p>{product?.publishedGuidelineId ? `게시 ${product.publishedRevision}차 기준으로 함께 설계합니다.` : '업무 정의에서 상품 조건과 진행 절차를 먼저 확정하세요.'}</p></div>}
     <nav className="ws-workflow-nav ws-canvas-nav" aria-label="UX 설계 단계">{[3, 1, 0, 2, 4].map(index => {
       const item = WORKFLOW_STEPS[index];
+      const label = item.id === 'review' ? '화면 만들기' : item.label;
       return (
-      <button key={item.id} data-workflow-step={item.id} aria-label={`${index + 1} ${item.label}`}
+      <button key={item.id} data-workflow-step={item.id} aria-label={label}
         aria-current={step === item.id ? 'step' : undefined} disabled={criteriaPending} onClick={() => navigate(item.id)}>
-        <strong>{item.id === 'review' ? '화면 만들기' : item.label}</strong>
+        <strong>{label}</strong>
       </button>); })}</nav>
     <div className="ws-stage-heading"><div><h2 ref={heading} tabIndex={-1}>{current.label}</h2><p>{current.purpose}</p></div>
       <button onClick={() => void refresh()} disabled={loading}>{loading ? '조회 중…' : '내 작업 새로 조회'}</button></div>
@@ -301,7 +304,8 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       <div hidden={step !== 'define' && step !== 'design'}><RulesPanel key={productId || 'unbound'} config={config} assets={assets} selected={selected}
         runs={scopedRuns}
         onPending={setCriteriaPending}
-        guideRefs={guideRefs} stage={step === 'define' ? 'define' : 'design'} initialContractId={route.contractId}
+        guideRefs={guideRefs} stage={step === 'define' ? 'define' : 'design'}
+        initialContractId={criteriaOverride?.route === route ? criteriaOverride.id : route.contractId}
         contracts={scopedContracts} product={product} onContinue={() => navigate(step === 'define' ? 'assets' : 'review')}
         refresh={() => void refresh()} onApproved={onApproved} onEditing={onEditing} /></div>
       <div hidden={step !== 'assets'}>
@@ -328,10 +332,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
         onCriteria={id => {
           if (id && id !== editingNow.current.id && editingNow.current.dirty &&
               !confirm('저장하지 않은 기준 변경을 닫고 선택한 확인 기준을 열까요?')) return;
-          const hash = workflowHash(location.hash, { projectId: project?.id || '', productId, step: 'design',
-            contractId: id || editing.id || undefined, runId: selection?.run.id || requestedRun.id,
-            round: selection?.round?.number || requestedRun.round });
-          history.pushState(null, '', hash); onRoute(hash);
+          navigate('design', undefined, undefined, id || editing.id);
         }}
         onHandoff={(runId, round) => navigate('handoff', runId, round)} /></div>
       {step === 'handoff' && <HandoffPanel key={productId || 'unbound'} runs={scopedRuns} contracts={scopedContracts} selection={selection}

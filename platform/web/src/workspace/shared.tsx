@@ -51,7 +51,7 @@ export function previewFrameDocument(html: string, executable: boolean, channel?
   const shell = document.implementation.createHTMLDocument('비공개 미리보기');
   const policy = shell.createElement('meta');
   policy.httpEquiv = 'Content-Security-Policy';
-  policy.content = "default-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'";
+  policy.content = "default-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:";
   shell.head.prepend(policy);
   const style = shell.createElement('style');
   style.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}';
