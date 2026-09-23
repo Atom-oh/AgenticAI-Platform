@@ -63,8 +63,15 @@ def apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin")
     request = api.get_record(name, version, include_internal=True)
     if not request or not isinstance(request.get("payload"), dict):
         raise NotFoundError("Agent administration request not found")
-    with api.get_store().administration_lease(request["payload"].get("name", name), "agent"):
-        return _apply_request(name, version, reconcile_hash=reconcile_hash, actor_ref=actor_ref)
+    result = None
+    try:
+        with api.get_store().administration_lease(request["payload"].get("name", name), "agent"):
+            result = _apply_request(name, version, reconcile_hash=reconcile_hash, actor_ref=actor_ref)
+    except Exception as error:
+        if result is None:
+            raise
+        result.update(completed=False, cleanupFailed=True, errorType=type(error).__name__)
+    return result
 
 
 def _apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin"):
@@ -152,21 +159,34 @@ def _apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin"
             "name": updated["name"], "recordVersion": updated["recordVersion"], "recordType": "AGENT",
             "status": updated["status"], "description": "Bank Tier 0/1 agent metadata",
         })
+        if not isinstance(mirrored, dict) or not isinstance(mirrored.get("status"), str):
+            raise ValueError("Invalid Agent mirror result")
     except Exception as e:
         mirrored = {"status": "SYNC_PENDING", "errorType": type(e).__name__}
     if mirrored.get("status") != updated["status"]:
         # Local approval is already committed; a retry finishes the metadata mirror.
         return {"record": updated, "request": request, "audit": audit,
                 "agentcoreRegistry": mirrored, "applied": True, "completed": False}
-    latest = api.get_record(updated["name"], updated["recordVersion"])
+    try:
+        latest = api.get_record(updated["name"], updated["recordVersion"])
+    except Exception as error:
+        return {"record": updated, "recordVerified": False, "request": request, "audit": audit,
+                "agentcoreRegistry": mirrored, "applied": True, "completed": False, "errorType": type(error).__name__}
+    if latest is None:
+        return {"record": None, "request": request, "audit": audit, "agentcoreRegistry": mirrored,
+                "applied": True, "completed": False, "sourceChanged": True}
     if fingerprint(latest) != fingerprint(updated):
         return {"record": latest, "request": request, "audit": audit, "agentcoreRegistry": mirrored,
                 "applied": True, "completed": False, "sourceChanged": True}
     if request["status"] == "APPROVED":
         return {"record": updated, "request": request, "replayed": True, "agentcoreRegistry": mirrored,
                 "applied": True, "completed": True}
-    if request["status"] == "DRAFT":
-        api.transition(name, version, "PENDING_APPROVAL", actor_ref, "IAM administration accepted request")
-    saved, _ = api.transition(name, version, "APPROVED", actor_ref, "Agent transition applied")
+    try:
+        if request["status"] == "DRAFT":
+            api.transition(name, version, "PENDING_APPROVAL", actor_ref, "IAM administration accepted request")
+        saved, _ = api.transition(name, version, "APPROVED", actor_ref, "Agent transition applied")
+    except Exception as error:
+        return {"record": updated, "request": request, "audit": audit, "agentcoreRegistry": mirrored,
+                "applied": True, "completed": False, "errorType": type(error).__name__}
     return {"record": updated, "request": saved, "audit": audit, "agentcoreRegistry": mirrored,
             "applied": True, "completed": True}

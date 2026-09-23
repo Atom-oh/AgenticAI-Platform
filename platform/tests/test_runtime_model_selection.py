@@ -26,6 +26,14 @@ def _no_live_dependency(*args, **kwargs):
     raise AssertionError("Live runtime dependencies must not be used")
 
 
+def approved_run(app, payload, runtime_session_id=None):
+    """Existing execution fixtures explicitly carry approval for their synthetic source."""
+    spec = app.agent_specs.spec_by_name(payload.get("agent"))
+    if spec:
+        payload.setdefault("approvedSourceHash", app.agent_specs.source_hash(spec, app.SKILLS_DIR))
+    return app.run(payload, runtime_session_id)
+
+
 @pytest.fixture
 def runtime_app(monkeypatch):
     # app.py can add its generated _ctx directory to sys.path.
@@ -75,7 +83,7 @@ def runtime_app(monkeypatch):
 
 def _events(app, payload):
     async def collect():
-        return [event async for event in app.run(payload, "verified-runtime-session-" + "a" * 32)]
+        return [event async for event in approved_run(app, payload, "verified-runtime-session-" + "a" * 32)]
 
     return asyncio.run(collect())
 
@@ -150,3 +158,12 @@ def test_runtime_rejects_approval_from_different_source(runtime_app):
     app, calls = runtime_app
     events = _events(app, {"agent": "design_flow_agent", "approvedSourceHash": "0" * 64})
     assert events[0]["code"] == 409 and not calls and not app._active_sessions
+
+
+
+def test_runtime_requires_explicit_source_approval(runtime_app):
+    app, calls = runtime_app
+    async def collect():
+        return [event async for event in app.run({"agent": "design_flow_agent"}, "s" * 64)]
+    events = asyncio.run(collect())
+    assert events[0]["code"] == 409 and not calls

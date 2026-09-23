@@ -26,7 +26,7 @@ Normal input is `{agent, prompt, model?}`. Design-flow input adds
 | `mcp_gateway.py` | Load Gateway tools over SigV4-signed MCP HTTP; filter `allowedTools` by bare or `<target>___<tool>` name |
 | `boundary_gate.py` | Scan outgoing message content before model calls; refuse identifier-rule hits and measure boundary size |
 | `design_deps.py` | Model and boundary adapter for the shared process-generation loop |
-| `prepare_context.sh` | Copy canonical specs, `engine/model_catalog.py`, all six skills, and `design_loop/` into `_ctx/` |
+| `prepare_context.sh` | Copy canonical specs, model catalog, Skills, design loop, and independent `common/pii.py`/logger into `_ctx/` |
 | `Dockerfile` | Python 3.12, ARM64 build, UID 10001, port 8080, `python app.py`; dependencies pinned in `requirements.txt` |
 
 SSE event types for chat are `text`, `tool_start`, `tool_input`, `tool_result`,
@@ -53,6 +53,9 @@ values do not extend the allowlist. `TEMPERATURE` is omitted unless explicitly s
 The process retains at most 20 session histories in memory, keyed only by the
 SDK Runtime context session ID. A payload `sessionId` is ignored and reported
 only as `meta.ignoredPayloadSessionId=true`. Missing Runtime context fails.
+Every scenario request also requires `approvedSourceHash` from its IAM-approved
+Registry version. Missing or different hashes fail before execution, including
+the design compatibility entry point.
 The WebSocket handler derives the Runtime ID from the verified Cognito subject,
 agent/version and client conversation ID. It returns the original client ID
 for subsequent turns. Pool, client and connection expiry are checked.
@@ -85,6 +88,8 @@ returns the current Harness fingerprint needed for explicit reconciliation.
 
 Run from `platform/` with Docker, temporary AWS credentials, and configured
 Gateway/Guardrail values. These commands build and call real services:
+Set `APPROVED_SOURCE_HASH` to the IAM-approved Registry record's
+`payload.runtimeSourceHash`; local image contents must match that approval.
 
 ```bash
 bash agents/prepare_context.sh
@@ -99,7 +104,7 @@ docker run --rm -d --name bank-agents -p 127.0.0.1:8080:8080 \
 curl -s localhost:8080/ping
 curl -sN -X POST localhost:8080/invocations -H 'Content-Type: application/json' \
   -H 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: local-synthetic-session-00000000000000000000' \
-  -d '{"agent":"regulation_impact_agent","prompt":"REG-LN-001 규정 개정 영향은?"}'
+  -d "{\"agent\":\"regulation_impact_agent\",\"prompt\":\"REG-LN-001 규정 개정 영향은?\",\"approvedSourceHash\":\"${APPROVED_SOURCE_HASH:?Set the approved Registry source hash}\"}"
 docker logs bank-agents
 docker stop bank-agents
 ```

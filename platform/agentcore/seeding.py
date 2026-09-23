@@ -22,7 +22,7 @@ def _stage(spec, payload, actor):
             "description": spec["description"], "owner": "AI플랫폼팀",
             "tags": [spec.get("scenario", "custom"), payload["runtime"]],
             "payload": {**payload, **({"supersedes": latest["recordVersion"]} if latest else {})},
-        }, actor=actor, embed=False)
+        }, actor=actor, embed=False, system_seed=True)
     if record["status"] == "DRAFT":
         record, _ = api.transition(record["name"], record["recordVersion"], "PENDING_APPROVAL",
                                    actor, "IAM seed specification staged", expected_record=record)
@@ -31,7 +31,10 @@ def _stage(spec, payload, actor):
 
 def _mirror(record):
     try:
-        return registry_mirror.mirror(record)
+        result = registry_mirror.mirror(record)
+        if not isinstance(result, dict) or not isinstance(result.get("status"), str):
+            raise ValueError("Invalid Registry mirror result")
+        return result
     except Exception as error:
         return {"status": "SYNC_PENDING", "errorType": type(error).__name__}
 

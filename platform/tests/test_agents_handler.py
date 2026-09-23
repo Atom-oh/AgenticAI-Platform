@@ -23,6 +23,7 @@ os.environ["REGISTRY_EMBED"] = "0"
 os.environ.setdefault("AWS_DEFAULT_REGION", "ap-northeast-2")
 
 from agentcore import harness as harness_mod  # noqa: E402
+REAL_HARNESS_INVOKE = harness_mod.invoke_stream
 from agentcore import registry_mirror as mirror_mod  # noqa: E402
 from common.ctx import Ctx  # noqa: E402
 from registry import api  # noqa: E402
@@ -859,3 +860,38 @@ def test_invalid_client_session_ids_are_rejected_before_lookup(fakes, session_id
     h.agent_invoke(ctx, {"name": "synthetic", "message": "safe", "sessionId": session_id})
     assert gw.posted[-1]["code"] == 400
     assert not fakes[0].calls
+
+
+@pytest.mark.parametrize("late_boundary", [False, True])
+def test_text_before_valid_boundary_never_reaches_socket(fakes, monkeypatch, late_boundary):
+    from agentcore import invoke
+    h = _handler()
+    _create(h)
+    _approve(h)
+    events = [("text", "UNVERIFIED_OUTPUT" * 20)]
+    if late_boundary:
+        events.append(("boundary", {"chars": 20, "piiRules": 0}))
+    events.append(("meta", {"stopReason": "end_turn", "usage": {}}))
+    monkeypatch.setattr(invoke, "stream", lambda *args, **kwargs: iter(events))
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "safe"})
+    assert gw.posted[-1]["error"] and "UNVERIFIED_OUTPUT" not in json.dumps(gw.posted)
+    assert not any(event["type"] == "agent.token" for event in gw.posted)
+
+
+def test_handler_returns_measured_rules_only_harness_refusal(fakes, monkeypatch, capsys):
+    h = _handler()
+    _create(h)
+    _approve(h)
+    monkeypatch.setattr(harness_mod, "invoke_stream", REAL_HARNESS_INVOKE)
+    monkeypatch.setattr(harness_mod, "data", lambda: pytest.fail("raw identifier reached Harness transport"))
+    capsys.readouterr()
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "person@example.invalid"})
+    done = gw.posted[-1]
+    assert done["blocked"] and done["code"] == 422 and done["stopReason"] == "gate_refused"
+    evidence = done["boundary"]
+    assert evidence["chars"] > 0 and evidence["estTokens"] > 0 and evidence["piiCount"] > 0
+    assert evidence["piiDetectors"] == ["rules"] and evidence["refusedTypes"] == ["EMAIL"]
+    trace = next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace["blocked"] and trace["piiOutbound"] > 0 and trace["piiDetectors"] == ["rules(harness-input)"]

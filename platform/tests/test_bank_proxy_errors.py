@@ -32,3 +32,17 @@ def test_control_room_chat_rejects_local_identifiers_and_overflow_before_proxy(m
     core.chat(SimpleNamespace(post=events.append), {"message": message, "idToken": "synthetic-token"})
     assert events[-1]["code"] == (422 if "@" in message else 400)
     assert message not in str(events)
+
+
+@pytest.mark.parametrize('path', ['/api/agents', '/api/chat'])
+@pytest.mark.parametrize('body', [
+    {'error': {'message': 'PRIVATE_UPSTREAM Traceback'}, 'reply': 'PRIVATE_REPLY'},
+    {'statusCode': 500, 'body': 'PRIVATE_UPSTREAM', 'reply': 'PRIVATE_REPLY'},
+    {'errorMessage': 'PRIVATE_UPSTREAM', 'reply': 'PRIVATE_REPLY'},
+])
+def test_successful_http_envelope_does_not_expose_application_errors(monkeypatch, path, body):
+    import json
+    monkeypatch.setattr(core.urllib.request, 'urlopen', lambda *args, **kwargs: io.BytesIO(json.dumps(body).encode()))
+    result = core._control_room('GET' if path.endswith('agents') else 'POST', path, 'synthetic-token')
+    assert result == {'error': 'Control-room request failed', 'code': 502}
+    assert 'PRIVATE_' not in str(result)

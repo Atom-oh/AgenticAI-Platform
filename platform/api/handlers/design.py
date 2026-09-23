@@ -251,21 +251,49 @@ def _design_payload(spec: dict, sm: dict, checklists: list, output_type: str) ->
 def _relay_runtime(ctx: Ctx, design: dict, model: Optional[str]) -> tuple:
     """AgentCore Runtime 의 design_flow_agent 호출 → 이벤트 중계. returns (result, meta, errors)."""
     from agentcore import runtime
+    from registry import api
+    import hashlib
+    if not ctx.user_sub:
+        raise ValueError("A verified actor is required")
+    records = [record for record in api.list_approved("AGENT") if record["name"] == AGENT_NAME]
+    if not records:
+        raise ValueError("The design Runtime source requires IAM approval")
+    record = max(records, key=lambda row: int(row["recordVersion"][1:]))
+    payload = record["payload"]
+    if payload.get("runtimeArn") != RUNTIME_ARN or not payload.get("runtimeSourceHash"):
+        raise ValueError("The design Runtime approval does not match its deployment")
+    sid = hashlib.sha256(json.dumps(["bank-design-session-v1", ctx.user_sub, AGENT_NAME,
+                                    record["recordVersion"], uuid.uuid4().hex]).encode()).hexdigest()
     result, meta, errors = None, {}, []
-    for kind, data in runtime.invoke_stream(RUNTIME_ARN, AGENT_NAME, "", model=model, extra={"design": design}):
+    inspected = False
+    for kind, data in runtime.invoke_stream(RUNTIME_ARN, AGENT_NAME, "", session_id=sid, model=model,
+            extra={"design": design, "approvedSourceHash": payload["runtimeSourceHash"]}):
         if kind == "stage":
             d = dict(data)
             step = str(d.pop("step", "") or "stage")
             ctx.stage(KIND, step, plane="agentcore", **d)
         elif kind == "text":
+            if not inspected:
+                raise ValueError("Design output preceded independent boundary evidence")
             ctx.token(KIND, data)
+        elif kind == "boundary":
+            if (any(type(data.get(key)) is not int or data[key] < 0
+                    for key in ("chars", "estTokens", "piiRules", "piiCount"))
+                    or data.get("piiDetectors") not in (["rules"], ["rules", "guardrail"])):
+                raise ValueError("Incomplete design boundary evidence")
+            inspected = data["piiCount"] == 0 and data["piiDetectors"] == ["rules", "guardrail"]
+            ctx.stage(KIND, "boundary", plane="boundary", **data)
         elif kind == "design_done":
+            if not inspected:
+                raise ValueError("Design result preceded independent boundary evidence")
             result = (data or {}).get("result")
         elif kind == "error":
-            errors.append(str(data)[:400])
-            ctx.stage(KIND, "error", message=str(data)[:400])
+            errors.append("Design Runtime execution failed")
+            ctx.stage(KIND, "error", message="Design Runtime execution failed")
         elif kind == "meta":
             meta = data or {}
+    if errors or meta.get("incomplete"):
+        return None, meta, errors or ["Design Runtime response was incomplete"]
     return result, meta, errors
 
 
@@ -320,7 +348,7 @@ def flow(ctx: Ctx, body: dict) -> None:
             result, meta, errors = _run_local(ctx, design, model)
     except Exception as e:  # noqa: BLE001
         log_event("design.flow_failed", ctx.trace_id, error=f"{type(e).__name__}: {str(e)[:200]}")
-        ctx.done(KIND, error=f"실행 실패 — {type(e).__name__}: {str(e)[:200]}", runtime=runtime_label)
+        ctx.done(KIND, error=f"실행 실패 — {type(e).__name__}", runtime=runtime_label)
         return
     if not result or result.get("error"):
         ctx.done(KIND, error=(result or {}).get("error") or "; ".join(errors) or "실패", code=(result or {}).get("code"),

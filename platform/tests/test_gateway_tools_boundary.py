@@ -382,3 +382,56 @@ def test_harness_requires_terminal_event(monkeypatch, terminal):
     result = list(harness.invoke_stream("synthetic", "Synthetic content"))
     assert result[-1][1]["incomplete"] is not terminal
     assert any(kind == "error" for kind, _ in result) is not terminal
+
+
+@pytest.mark.parametrize("outcome", ["incomplete", "transport_error", "close", "complete"])
+def test_harness_session_reuse_requires_known_terminal_history(monkeypatch, outcome):
+    from agentcore import harness
+    from agentcore.session_store import HarnessSessionUnavailable
+    from registry import api
+    from registry.store import RegistryStore
+    store = api.reset_for_tests()
+    calls = []
+    def transport(**kwargs):
+        calls.append(kwargs["runtimeSessionId"])
+        if outcome == "transport_error":
+            raise RuntimeError("Synthetic transport failure")
+        events = [{"contentBlockDelta": {"delta": {"text": "partial"}}}]
+        if outcome == "complete":
+            events.append({"messageStop": {"stopReason": "end_turn"}})
+        return {"stream": events}
+    monkeypatch.setattr(harness, "data", lambda: SimpleNamespace(invoke_harness=transport))
+    sid = "opaque-harness-session-" + "a" * 40
+    stream = harness.invoke_stream("synthetic", "Synthetic content", sid)
+    if outcome == "close":
+        assert next(stream)[0] == "boundary"
+        assert next(stream)[0] == "text"
+        stream.close()
+    elif outcome == "transport_error":
+        with pytest.raises(RuntimeError):
+            list(stream)
+    else:
+        list(stream)
+    # A distinct store instance uses the same durable table, as another WsFn would.
+    monkeypatch.setattr(api, "get_store", lambda: RegistryStore(table=store.table()))
+    if outcome == "complete":
+        list(harness.invoke_stream("synthetic", "Next safe turn", sid))
+        assert calls == [sid, sid]
+    else:
+        with pytest.raises(HarnessSessionUnavailable):
+            list(harness.invoke_stream("synthetic", "Next safe turn", sid))
+        assert calls == [sid]
+    assert not store.all_records(), "Internal session state must not enter Registry discovery"
+
+
+def test_harness_rule_refusal_exposes_measured_rules_only_evidence(monkeypatch):
+    from agentcore import harness
+    from engine.gate import GateRefused
+    monkeypatch.setattr(harness, "data", lambda: pytest.fail("rule-positive input reached service"))
+    stream = harness.invoke_stream("synthetic", "person@example.invalid")
+    kind, boundary = next(stream)
+    assert kind == "boundary" and boundary["chars"] > 0 and boundary["estTokens"] > 0
+    assert boundary["piiCount"] > 0 and boundary["refusedTypes"] == ["EMAIL"]
+    assert boundary["piiDetectors"] == ["rules"]
+    with pytest.raises(GateRefused):
+        next(stream)

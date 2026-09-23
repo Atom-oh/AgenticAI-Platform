@@ -85,6 +85,16 @@ retry will synchronize them. Their local lifecycle decision remains explicit.
 Generic decisions serialize status changes and mirroring with a DynamoDB lease;
 completion rechecks the authoritative revision. Agent requests and IAM seeding
 share a per-agent lease before changing their shared Harness.
+Mirror creation and descriptor updates wait for the service's asynchronous work
+to finish. New approval/rejection decisions submit DRAFT records for manual review
+before applying the decision. AdminFn reads only the configured Registry's approval
+configuration; an unready or auto-approval Registry is unsupported for this flow.
+The remote name binds the local name and immutable version. The service's
+`recordVersion` is a separate optimistic-lock revision, initialized to `1` and
+checked during updates. Legacy active mirrors are retired before clean replacements.
+Deprecated service records are immutable audit archives: their inactive status is
+verified and retained, with `archived=true` and an explicit `metadataCurrent` result.
+Archive retention does not claim that historical descriptor content was rewritten.
 Consumer discovery re-reads GSI candidates from the authoritative table; a stale
 APPROVED index image cannot return a deprecated or removed record. New approvals
 can still await GSI propagation, which is a completeness delay, not permission
@@ -162,6 +172,10 @@ Runtime/Harness upstream exception bodies are not returned to the user. Streamed
 tool arguments expose size and identity metadata only. Requests exceeding the
 handler/container message limits are rejected rather than truncated, and a stream
 without its terminal result is incomplete and cannot replace session history.
+Managed Harness turns record only opaque session/turn identifiers and phase in
+the existing Registry table, outside discovery indexes. An unfinished or failed
+turn stays non-reusable across WsFn instances; the response requests a new client
+conversation. No prompt, response or managed history is stored in that record.
 Unknown Harness execution fields are rejected; only explicit service metadata is
 excluded from configuration comparisons.
 Harness input/system text is inspected with rules and strict, coverage-verified
@@ -267,6 +281,10 @@ If another region remains necessary, record the named residency approver and
 decision before enabling that path. Restrict mirror payloads to reviewed
 metadata rather than full CUSTOM records. The residency approver and any new
 cross-region authorization remain undecided.
+AWS also documents migration from the legacy `bedrock-agentcore` Registry APIs
+to `agent-registry`, with a 2026-09-17 support cutoff for the old namespace.
+WP7 must migrate SDK calls, IAM actions and resource ARNs. A successful compatibility
+probe of the old namespace is dated evidence, not a claim of continued support.
 
 ### WP8: current documentation
 

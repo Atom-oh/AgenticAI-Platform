@@ -38,8 +38,15 @@ def inspect(name, version):
 
 
 def transition(name, version, target, expected_hash, reason="", *, actor_ref):
-    with api.get_store().administration_lease(name, version):
-        return _transition(name, version, target, expected_hash, reason, actor_ref=actor_ref)
+    result = None
+    try:
+        with api.get_store().administration_lease(name, version):
+            result = _transition(name, version, target, expected_hash, reason, actor_ref=actor_ref)
+    except Exception as error:
+        if result is None:
+            raise
+        result.update(completed=False, cleanupFailed=True, errorType=type(error).__name__)
+    return result
 
 
 def _transition(name, version, target, expected_hash, reason="", *, actor_ref):
@@ -52,19 +59,25 @@ def _transition(name, version, target, expected_hash, reason="", *, actor_ref):
         raise ConflictError("Registry content changed after inspection")
     if not isinstance(actor_ref, str) or not re.fullmatch(r"iam-invoke:[0-9a-f-]{36}", actor_ref):
         raise ValidationError("A trusted administrative invocation reference is required")
+    from agentcore import registry_mirror
     if current["record"]["status"] == target:
         record, audit = current["record"], None
     else:
         record, audit = api.transition(name, version, target, actor=actor_ref, reason=reason,
                                        expected_record=current["record"])
-    from agentcore import registry_mirror
     try:
         mirrored = registry_mirror.mirror(record)
+        if not isinstance(mirrored, dict) or not isinstance(mirrored.get("status"), str):
+            raise ValueError("Invalid Registry mirror result")
     except registry_mirror.MirrorUnsupported:
         mirrored = {"status": "UNSUPPORTED", "retryable": False, "errorType": "MirrorUnsupported"}
     except Exception as error:
         mirrored = {"status": "SYNC_PENDING", "errorType": type(error).__name__}
-    latest = inspect(name, version)
+    try:
+        latest = inspect(name, version)
+    except Exception as error:
+        return {"record": record, "recordVerified": False, "audit": audit, "applied": True, "completed": False,
+                "agentcoreRegistry": mirrored, "errorType": type(error).__name__}
     unchanged = latest["expectedHash"] == fingerprint(record)
     return {"record": latest["record"], "audit": audit, "applied": True,
             "completed": unchanged and mirrored.get("status") == target, "agentcoreRegistry": mirrored,

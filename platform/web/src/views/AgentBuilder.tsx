@@ -413,7 +413,8 @@ function Chat({ sel, onApprove, onRefresh }: {
           });
           else if (e.step === 'error') patchLast(m => ({ ...m, stageErrors: [...(m.stageErrors || []), e.message] }));
         } else if (e.type === 'agent.done') {
-          if (e.sessionId) setSessionId(e.sessionId);
+          if (e.newSessionRequired) setSessionId(null);
+          else if (e.sessionId) setSessionId(e.sessionId);
           patchLast(m => ({ ...m, done: e, error: e.error, status: e.status, gate: e.gate, running: false }));
         }
       });

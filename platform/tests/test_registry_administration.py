@@ -211,3 +211,32 @@ def test_expired_admin_lease_can_be_recovered_and_is_not_discoverable(store):
     with store.administration_lease("probe", "v1"):
         assert store.all_records() == []
         assert store.table().get_item(Key={"pk": "admin-sync#probe", "sk": "v1"})["Item"]["owner"] != "expired"
+
+
+@pytest.mark.parametrize("failure", ["reread", "shape", "lease_cleanup"])
+def test_post_commit_failures_keep_applied_receipt(store, monkeypatch, failure):
+    from agentcore import registry_mirror
+    item = record(status="PENDING_APPROVAL")
+    original_inspect = administration.inspect
+    def mirror(current):
+        if failure == "reread":
+            monkeypatch.setattr(administration, "inspect", lambda *args: (_ for _ in ()).throw(RuntimeError("Synthetic read failure")))
+        if failure == "shape":
+            return []
+        return {"status": current["status"]}
+    monkeypatch.setattr(registry_mirror, "mirror", mirror)
+    if failure == "lease_cleanup":
+        monkeypatch.setattr(store.table(), "delete_item", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("Synthetic cleanup failure")))
+    result = administration.transition(item["name"], "v1", "APPROVED", original_inspect(item["name"], "v1")["expectedHash"],
+                                      actor_ref="iam-invoke:" + ADMIN_CONTEXT.aws_request_id)
+    assert result["applied"] and not result["completed"] and result["record"]["status"] == "APPROVED"
+    assert store.get(item["name"], "v1")["status"] == "APPROVED"
+
+
+@pytest.mark.parametrize('name', ['mydata_advisor_agent', 'bank_mydata_advisor_agent'])
+def test_user_cannot_occupy_builtin_agent_names_at_any_version(name):
+    ctx, messages = context()
+    routes.registry_create(ctx, {'record': {'name': name, 'recordVersion': 'v9', 'recordType': 'CUSTOM',
+        'subtype': 'COMPONENT', 'system_seed': True, 'payload': {}}})
+    assert messages[-1]['ok'] is False
+    assert api.get_store().versions(name) == []

@@ -99,6 +99,11 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
     resource['Fn::Join'][1].map(part => part.Ref === 'AWS::Partition' ? 'aws' : part).join(resource['Fn::Join'][0]));
   assert.deepEqual(resolved, ['arn:aws:bedrock-agentcore:ap-northeast-2:111122223333:harness/bank_*']);
   const admin = actions(statements('AdminFn'));
+  const registryConfigRead = statements('AdminFn').find(row =>
+    [].concat(row.Action).includes('bedrock-agentcore:GetRegistry'));
+  assert.deepEqual(registryConfigRead.Resource,
+    'arn:aws:bedrock-agentcore:us-east-1:111122223333:registry/b2hOSZL4eOhDXAyk');
+  assert(!actions(user).includes('bedrock-agentcore:GetRegistry'));
   for (const action of ['iam:PassRole', 'bedrock-agentcore:DeleteHarness', 'bedrock-agentcore:UpdateRegistryRecordStatus'])
     assert(admin.includes(action));
   const runtime = statements('AgentsRuntimeRole');
@@ -123,6 +128,16 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
   assert(passport && passport.Action === 'BLOCK');
   for (const value of ['M12345678', 'm12345678', 'M 123A4567']) assert(new RegExp(passport.Pattern).test(value));
   assert(resources.GuardrailV && resources.GuardrailSecurityV, 'Retain the prior version and add a reviewed policy version');
+  let versionConsumers = 0;
+  for (const resource of Object.values(resources)) {
+    const props = resource.Properties || {};
+    const environment = props.Environment?.Variables || props.EnvironmentVariables || {};
+    if (environment.GUARDRAIL_VERSION) {
+      assert.deepEqual(environment.GUARDRAIL_VERSION, {'Fn::GetAtt': ['GuardrailSecurityV', 'Version']});
+      versionConsumers++;
+    }
+  }
+  assert(versionConsumers >= 6, 'Every bank consumer selects the new immutable policy version');
   const tools = Object.values(resources).find(resource =>
     resource.Type === 'AWS::Lambda::Function' && resource.Properties.Handler === 'agentcore.gateway_tools.handler');
   assert.deepEqual(tools.Properties.Environment.Variables.GUARDRAIL_ID, {

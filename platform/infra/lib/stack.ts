@@ -520,6 +520,10 @@ export class BankPlatformStack extends cdk.Stack {
     adminFn.addToRolePolicy(bedrockInvoke);
     adminFn.addToRolePolicy(agentcoreRead);
     adminFn.addToRolePolicy(agentcoreAdmin);
+    adminFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:GetRegistry'],
+      resources: [`arn:aws:bedrock-agentcore:us-east-1:${account}:registry/b2hOSZL4eOhDXAyk`],
+    }));
     adminFn.addToRolePolicy(passHarnessRole);
     if (props.planeDeployed) {
       adminFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [bridgeFnArn] }));

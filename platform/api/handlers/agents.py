@@ -435,12 +435,16 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
     boundary_events: list = []
     inspection_detectors = set()
     tools_missing: list = []
+    new_session_required = False
     blocked, pii_outbound = False, None
     started = time.time()
     runtime_kind = kind
     try:
         for kind_ev, data in _invoke.stream(rec, message, session_id):
             if kind_ev == "text":
+                if (not boundary_events or boundary_events[-1]["piiCount"]
+                        or boundary_events[-1].get("blocked")):
+                    raise ValueError("Model output preceded accepted boundary evidence")
                 text_len += len(data)
                 ctx.token("agent", data)
             elif kind_ev == "tool_start":
@@ -483,6 +487,9 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 out_sid = (data or {}).get("sessionId") or out_sid
                 if (data or {}).get("incomplete"):
                     errors.append("에이전트 응답이 완료되지 않았습니다.")
+                new_session_required = new_session_required or bool(
+                    (data or {}).get("newSessionRequired") or (data or {}).get("cleanupFailed")
+                    or stop_reason == "cleanup_failed")
         meta_model = None
         blocked = stop_reason == "gate_refused"
         if not errors and not blocked and not boundary_events:
@@ -491,6 +498,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                            for event in boundary_events) if boundary_events else None
         done_kw: Dict[str, Any] = {"usage": usage, "stopReason": stop_reason, "sessionId": client_session_id,
                                    "runtimeSessionId": session_id,
+                                   "newSessionRequired": new_session_required,
                                    "toolsMissing": tools_missing,
                                    "modelId": model_id, "runtime": runtime_label, "runtimeBadge": runtime_badge, "runtimeKind": runtime_kind, "name": name,
                                    "boundary": boundary_events[-1] if boundary_events else None,
@@ -502,6 +510,8 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
             done_kw.update(code=409, error="같은 세션의 이전 요청이 진행 중입니다. 완료 후 다시 보내세요.")
         if stop_reason == "cleanup_failed":
             done_kw.update(code=503, error="세션 정리를 완료하지 못했습니다. 새 대화를 시작하세요.")
+        if new_session_required and runtime_kind == "harness":
+            done_kw.update(code=502, error="관리형 대화가 완료되지 않았습니다. 새 대화를 시작하세요.")
         if blocked:
             done_kw.update(blocked=True, blockedBy="gate", code=422, error="안전 정책에 따라 요청이 차단됐습니다.")
         if errors and "error" not in done_kw:
@@ -512,10 +522,17 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
         if isinstance(e, GateRefused):
             blocked, pii_outbound, stop_reason = True, e.count, "gate_refused"
             inspection_detectors.update(e.boundary.get("verification", {}).get("detectors", ["rules"]))
+            if not boundary_events:
+                evidence = _harness()._boundary_event(e.boundary, e.types)
+                boundary_events.append(evidence)
+                ctx.stage("agent", "boundary", plane="boundary", **evidence)
         ctx.done("agent", error=f"에이전트 호출 실패 — {_err(e)}", name=name, version=rec.get("recordVersion"),
                  modelId=model_id, runtime=runtime_label, sessionId=client_session_id,
                  runtimeSessionId=session_id, usage=usage, toolCalls=tool_calls,
-                 blocked=blocked, stopReason=stop_reason)
+                 blocked=blocked, stopReason=stop_reason,
+                 code=422 if blocked else 502,
+                 boundary=boundary_events[-1] if boundary_events else None,
+                 newSessionRequired=runtime_kind == "harness" and not isinstance(e, GateRefused))
     finally:
         tokens_in, tokens_out = int(usage.get("inputTokens", 0) or 0), int(usage.get("outputTokens", 0) or 0)
         elapsed = int((time.time() - started) * 1000)

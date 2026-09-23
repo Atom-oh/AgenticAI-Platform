@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "api")]
-from tests.test_runtime_model_selection import runtime_app
+from tests.test_runtime_model_selection import runtime_app, approved_run
 
 
 def load(name, path):
@@ -65,7 +65,7 @@ def test_design_reports_boundary_events_and_refusal_without_originals(runtime_ap
     async def exercise():
         payload = {"agent": "design_flow_agent",
                    "design": {"productSpec": {"id": "synthetic", "text": text}, "smModel": {"id": "synthetic"}}}
-        return [event async for event in app.run(payload, "design-evidence-" + "s" * 40)]
+        return [event async for event in approved_run(app, payload, "design-evidence-" + "s" * 40)]
 
     events = asyncio.run(exercise())
     measurements = [event for event in events if event["type"] == "boundary"]

@@ -269,9 +269,9 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
     prompt = str(payload.get("prompt") or "").strip()
     sid = runtime_session_id if isinstance(runtime_session_id, str) else ""
     spec = agent_specs.spec_by_name(name) if name else None
-    if spec and "approvedSourceHash" in payload:
+    if spec:
         try:
-            matches = payload["approvedSourceHash"] == agent_specs.source_hash(spec, SKILLS_DIR)
+            matches = payload.get("approvedSourceHash") == agent_specs.source_hash(spec, SKILLS_DIR)
         except (OSError, ValueError):
             matches = False
         if not matches:
@@ -521,7 +521,7 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
             finally:
                 loop.call_soon_threadsafe(q.put_nowait, DONE)
 
-    log.info("design_loop start spec=%s model=%s", str(design["productSpec"].get("id")), model_id)
+    log.info("design_loop start model=%s", model_id)
     fut = loop.run_in_executor(None, work)
     stop = "end_turn"
     try:

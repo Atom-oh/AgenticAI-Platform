@@ -225,9 +225,14 @@ def audit_trail(name: str, version: str) -> List[dict]:
 
 # ---------- 변경 ----------
 def create_record(record: dict, actor: str, status: Optional[str] = None, reason: str = "",
-                  embed: bool = True) -> dict:
+                  embed: bool = True, *, system_seed: bool = False) -> dict:
     """신규 레코드 — 기본 DRAFT 로 시작. status 는 시드 전용 (기준선 상태로 직접 생성)."""
     rec = validate_record(record)
+    from agentcore.agent_specs import SCENARIO_AGENTS
+    reserved = {row["name"] for row in SCENARIO_AGENTS}
+    reserved |= {"bank_" + name for name in reserved}
+    if rec["name"] in reserved and not (system_seed is True and rec["recordType"] == "AGENT" and not rec["subtype"]):
+        raise ValidationError("Built-in Agent names are reserved for IAM seeding")
     rec["status"] = (status or "DRAFT").upper()
     if rec["status"] not in STATUSES:
         raise ValidationError(f"알 수 없는 상태: {rec['status']}")

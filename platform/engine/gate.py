@@ -515,10 +515,11 @@ def route_info(route: Optional[str] = None) -> dict:
                            "region": "추론 설정: us-west-2 직접 호출",
                            "substituted": False})
     else:
-        base.update(inferenceRouting="unconfigured", inferenceRoutingLabel="설명 어댑터 미구성",
-                    badge={"title": "설명 생성 경로 — 미구성",
-                           "prod": "idc_vllm 호환 어댑터 · 연결 미구성",
-                           "demo": "구성된 추론 서비스 없음",
+        base.update(endpoint="unimplemented-adapter", region=None, tier="0/1",
+                    inferenceRouting="unimplemented", inferenceRoutingLabel="설명 어댑터 미구현",
+                    badge={"title": "설명 생성 경로 — 미구현",
+                           "prod": "idc_vllm 호환 어댑터 · 호출 미구현",
+                           "demo": "설정값과 무관하게 추론 호출을 지원하지 않습니다",
                            "region": "미확인",
                            "substituted": True, "implemented": False})
     return base

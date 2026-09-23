@@ -106,3 +106,16 @@ test('a saved local specification is not displayed as a provisioned service', as
   await page.getByText('관리자 처리 대기 — 실행 환경과 Registry 미러가 아직 준비되지 않았습니다.', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('body').innerText(), /PENDING_ADMIN/);
 });
+
+test('an uncertain managed turn starts a fresh client conversation', async t => {
+  const page = await pageFor(t, 'APPROVED');
+  await page.evaluate(() => { window.completion = {newSessionRequired:true,toolsMissing:[],code:502,error:'Harness turn incomplete'}; });
+  for (const message of ['Synthetic first turn', 'Synthetic next turn']) {
+    await page.getByPlaceholder('메시지', { exact: true }).fill(message);
+    await page.getByRole('button', { name: '보내기', exact: true }).click();
+    await page.getByRole('button', { name: '보내기', exact: true }).waitFor({state:'visible'});
+  }
+  const calls = await page.evaluate(() => window.calls.filter(call => call.action === 'agent_invoke'));
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].payload.sessionId, undefined);
+});

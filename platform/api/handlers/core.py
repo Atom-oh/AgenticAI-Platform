@@ -47,7 +47,36 @@ def _control_room(method: str, path: str, id_token: str, body: dict | None = Non
         data=json.dumps(body).encode() if body else None,
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + id_token}, method=method)
     try:
-        return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read(262145)
+        if len(raw) > 262144:
+            raise ValueError("Control-room response exceeds the admitted size")
+        value = json.loads(raw.decode())
+        if (not isinstance(value, dict) or value.get("error")
+                or any(key in value for key in ("errorMessage", "stackTrace", "traceback"))
+                or type(value.get("statusCode")) is int and value["statusCode"] >= 400):
+            return {"error": "Control-room request failed", "code": 502}
+        if path == "/api/agents":
+            if not isinstance(value.get("agents"), list):
+                raise ValueError("Invalid agent catalog")
+            rows = []
+            for row in value["agents"][:40]:
+                if not isinstance(row, dict):
+                    raise ValueError("Invalid agent catalog row")
+                selected = {key: row.get(key) for key in ("id", "name", "description", "status", "riskTier", "team")}
+                if any(item is not None and (type(item) not in {str, int}
+                       or isinstance(item, str) and len(item) > 2000) for item in selected.values()):
+                    raise ValueError("Invalid agent catalog field")
+                rows.append(selected)
+            return {"agents": rows}
+        if path == "/api/chat":
+            if not isinstance(value.get("reply"), str) or len(value["reply"]) > 20000:
+                raise ValueError("Invalid chat response")
+            if value.get("sessionId") is not None and (not isinstance(value["sessionId"], str)
+                                                       or len(value["sessionId"]) > 256):
+                raise ValueError("Invalid chat session")
+            return {"reply": value["reply"], "sessionId": value.get("sessionId")}
+        raise ValueError("Unsupported Control-room response schema")
     except urllib.error.HTTPError as e:
         return {"error": "Control-room request failed", "code": e.code}
     except Exception as e:

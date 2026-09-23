@@ -26,7 +26,7 @@ os.environ.pop("AGENTS_RUNTIME_ARN", None)
 from agentcore import invoke, runtime  # noqa: E402
 from agentcore import agent_specs  # noqa: E402
 from common import pii  # noqa: E402
-from tests.test_runtime_model_selection import runtime_app
+from tests.test_runtime_model_selection import runtime_app, approved_run
 
 
 def _load_container_module(name: str):
@@ -353,7 +353,7 @@ def test_runtime_uses_only_the_authenticated_session_and_reports_missing_tools(r
     monkeypatch.setattr(app, "_Session", session)
 
     async def collect():
-        return [event async for event in app.run(
+        return [event async for event in approved_run(app,
             {"agent": "regulation_impact_agent", "prompt": "Synthetic hello", "sessionId": victim}, sid)]
 
     events = asyncio.run(collect())
@@ -372,7 +372,7 @@ def test_payload_session_cannot_replace_missing_authenticated_context(runtime_ap
     app, _ = runtime_app
 
     async def collect():
-        return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "hello", "sessionId": "x" * 64})]
+        return [event async for event in approved_run(app, {"agent": "regulation_impact_agent", "prompt": "hello", "sessionId": "x" * 64})]
 
     events = asyncio.run(collect())
     assert events[0]["code"] == 400
@@ -392,7 +392,7 @@ def test_missing_qualified_target_is_not_hidden_by_a_loaded_bare_name(runtime_ap
         skills_loaded=[], skills_missing=[], close=lambda: None))
 
     async def collect():
-        return [event async for event in app.run({"agent": spec["name"], "prompt": "hello"}, "s" * 64)]
+        return [event async for event in approved_run(app, {"agent": spec["name"], "prompt": "hello"}, "s" * 64)]
 
     events = asyncio.run(collect())
     assert events[-1]["toolsMissing"] == ["target_b___lookup"]
@@ -411,7 +411,7 @@ def test_missing_runtime_skill_blocks_before_streaming(runtime_app, monkeypatch)
         skills_loaded=[], skills_missing=["required-skill"], close=lambda: None))
 
     async def collect():
-        return [event async for event in app.run({"agent": spec["name"], "prompt": "hello"}, "s" * 64)]
+        return [event async for event in approved_run(app, {"agent": spec["name"], "prompt": "hello"}, "s" * 64)]
 
     events = asyncio.run(collect())
     assert events[-1]["stopReason"] == "skills_unavailable"
@@ -467,10 +467,10 @@ def test_same_session_turns_cannot_overwrite_history_and_release_after_exit(runt
         monkeypatch.setattr(app, "_Session", session)
 
         async def collect(prompt):
-            return [event async for event in app.run(
+            return [event async for event in approved_run(app,
                 {"agent": "regulation_impact_agent", "prompt": prompt}, sid)]
 
-        stream = app.run({"agent": "regulation_impact_agent", "prompt": "first"}, sid)
+        stream = approved_run(app, {"agent": "regulation_impact_agent", "prompt": "first"}, sid)
         assert (await anext(stream))["type"] == "text"
         rejected = await collect("overlap")
         assert rejected[0]["code"] == 409 and rejected[-1]["stopReason"] == "session_busy"
@@ -527,7 +527,7 @@ def test_design_cancellation_joins_worker_before_same_session_retry(runtime_app,
     sid = "d" * 64
 
     async def exercise():
-        stream = app.run(payload, sid)
+        stream = approved_run(app, payload, sid)
         assert (await anext(stream))["type"] == "stage"
         if finish == "close":
             closing = asyncio.create_task(stream.aclose())
@@ -537,7 +537,7 @@ def test_design_cancellation_joins_worker_before_same_session_retry(runtime_app,
             closing.cancel()
         await asyncio.sleep(0)
         assert not closing.done() and not finished.is_set()
-        rejected = [event async for event in app.run(payload, sid)]
+        rejected = [event async for event in approved_run(app, payload, sid)]
         assert rejected[0]["code"] == 409
         release.set()
         if finish == "cancel":
@@ -581,7 +581,7 @@ def test_session_constructor_closes_gateway_and_quarantines_failed_cleanup(runti
     assert (sid in app._quarantined_sessions) == (failure == "cleanup")
     if failure == "cleanup":
         async def rejected():
-            return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
+            return [event async for event in approved_run(app, {"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
         result = asyncio.run(rejected())
         assert result[0]["code"] == 503 and result[-1]["stopReason"] == "cleanup_failed"
         assert stopped == [True]
@@ -605,7 +605,7 @@ def test_cancelled_session_constructor_is_joined_and_closed_before_retry(runtime
 
     async def exercise():
         async def collect():
-            return [event async for event in app.run(payload, sid)]
+            return [event async for event in approved_run(app, payload, sid)]
         active = asyncio.create_task(collect())
         assert await asyncio.to_thread(entered.wait, 5)
         active.cancel()
@@ -632,7 +632,7 @@ def test_cleanup_quarantine_capacity_blocks_further_admission(runtime_app):
     assert app._quarantine_exhausted
 
     async def exercise():
-        return [event async for event in app.run(
+        return [event async for event in approved_run(app,
             {"agent": "regulation_impact_agent", "prompt": "safe"}, "new-session-" + "s" * 40)]
 
     result = asyncio.run(exercise())
@@ -664,10 +664,10 @@ def test_cleanup_failure_quarantines_but_releases_active_claim(runtime_app, monk
 
     async def exercise():
         payload = {"agent": "regulation_impact_agent", "prompt": "safe"}
-        result = [event async for event in app.run(payload, sid)]
+        result = [event async for event in approved_run(app, payload, sid)]
         assert result[-1]["stopReason"] == "cleanup_failed"
         assert sid not in app._active_sessions and sid in app._quarantined_sessions
-        retry = [event async for event in app.run(payload, sid)]
+        retry = [event async for event in approved_run(app, payload, sid)]
         assert retry[0]["code"] == 503 and constructed == [True]
 
     asyncio.run(exercise())
@@ -676,7 +676,7 @@ def test_cleanup_failure_quarantines_but_releases_active_claim(runtime_app, monk
 def test_runtime_rejects_oversized_input_before_constructing_an_agent(runtime_app):
     app, _ = runtime_app
     async def exercise():
-        return [event async for event in app.run(
+        return [event async for event in approved_run(app,
             {"agent": "regulation_impact_agent", "prompt": "x" * (app.MAX_PROMPT_CHARS + 1)}, "s" * 64)]
     events = asyncio.run(exercise())
     assert events[0]["code"] == 413
@@ -695,7 +695,7 @@ def test_runtime_missing_terminal_result_never_commits_partial_history(runtime_a
         gate=SimpleNamespace(drain=lambda: [], summary=lambda: {}),
         agent=SimpleNamespace(messages=[{"text": "partial"}], stream_async=stream)))
     async def exercise():
-        return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
+        return [event async for event in approved_run(app, {"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
     events = asyncio.run(exercise())
     assert events[-1]["incomplete"] is True and events[-1]["stopReason"] == "incomplete"
     assert any(event.get("code") == 502 for event in events)
@@ -732,7 +732,7 @@ def test_privacy_refusal_survives_cleanup_failure(runtime_app, monkeypatch):
         gate=SimpleNamespace(drain=lambda: [], summary=lambda: {}),
         agent=SimpleNamespace(messages=[], stream_async=stream)))
     async def collect():
-        return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
+        return [event async for event in approved_run(app, {"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
     result = asyncio.run(collect())
     assert result[-1]["stopReason"] == "gate_refused" and result[-1]["cleanupFailed"]
     assert sid not in app._active_sessions and sid in app._quarantined_sessions

@@ -132,16 +132,34 @@ def ensure_harness(spec: dict) -> dict:
 
 def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
     """invoke_harness 스트림을 (event_type, payload) 튜플로 정규화해 yield. 마지막에 usage/stop을 담은 'meta'."""
-    measured = _inspect(text, "agentcore.harness.input")
-    yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
-                        "piiRules": measured["piiRules"]["count"], "source": "harness-input",
-                        "piiCount": measured["verification"]["count"],
-                        "piiDetectors": measured["verification"]["detectors"]})
+    from engine.gate import GateRefused
+    from agentcore.session_store import turn
+    try:
+        measured = _inspect(text, "agentcore.harness.input")
+    except GateRefused as refusal:
+        yield ("boundary", _boundary_event(refusal.boundary, refusal.types))
+        raise
+    yield ("boundary", _boundary_event(measured))
     sid = session_id or (uuid.uuid4().hex + "-session")
+    with turn(sid) as state:
+        yield from _managed_stream(harness_arn, text, sid, state)
+
+
+def _boundary_event(measured, refused_types=None):
+    return {"chars": measured["chars"], "estTokens": measured["estTokens"],
+            "piiRules": measured["piiRules"]["count"], "source": "harness-input",
+            "piiCount": measured["verification"]["count"],
+            "piiDetectors": measured["verification"]["detectors"],
+            "blocked": bool(measured["verification"].get("policyDenied") or measured["verification"]["count"]),
+            "refusedTypes": refused_types or []}
+
+
+def _managed_stream(harness_arn, text, sid, state):
     r = data().invoke_harness(harnessArn=harness_arn, runtimeSessionId=sid,
                               messages=[{"role": "user", "content": [{"text": text}]}])
     usage, stop = {}, ""
     terminal = False
+    failed = False
     tool_name = None
     tool_buf: list[str] = []
     for ev in r["stream"]:
@@ -169,12 +187,14 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
         elif any(k in ev for k in ("validationException", "internalServerException", "runtimeClientError",
                                    "throttlingException", "accessDeniedException")):
             stop = "error"
+            failed = True
             yield ("error", "Harness transport failed; upstream details are withheld")
     if not terminal and stop != "error":
         stop = "incomplete"
         yield ("error", "Harness stream ended without a terminal result")
+    state["complete"] = terminal and not failed and stop != "error"
     yield ("meta", {"usage": usage, "stopReason": stop, "sessionId": sid,
-                    "incomplete": not terminal})
+                    "incomplete": not state["complete"], "newSessionRequired": not state["complete"]})
 
 
 def _inspect(text, purpose):
