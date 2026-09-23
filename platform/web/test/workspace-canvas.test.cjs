@@ -126,7 +126,7 @@ test('canvas selection preserves simulated state, binds refinement to the viewed
 });
 
 test('request-first entry preserves model and source context, retries idempotently, and opens criteria without approving or generating', { timeout: 30000 }, async t => {
-  const calls = []; let failed = false;
+  const calls = []; let failed = false, pollFailed = false;
   const page = await mount(t, `import React from 'react';import {createRoot} from 'react-dom/client';import CanvasRequest from './src/workspace/CanvasRequest';
     function App(){const [opened,setOpened]=React.useState('');return <div className="designer-workspace"><CanvasRequest model="fable" available
       assetIds={['private-guide']} guideRefs={[]} onDirty={value=>{window.requestDirty=value}} onReady={setOpened}/><output>{opened}</output></div>}
@@ -137,7 +137,10 @@ test('request-first entry preserves model and source context, retries idempotent
       if (!failed) { failed = true; return json({ error: '일시 오류입니다. 다시 시도하세요.' }, 503); }
       return json({ job: { id: 'prepare', task: 'propose', status: 'queued' } });
     }
-    if (target === '/jobs/prepare') return json({ job: { id: 'prepare', task: 'propose', status: 'completed', result: { contractId: 'new-criteria' } } });
+    if (target === '/jobs/prepare') {
+      if (!pollFailed) { pollFailed = true; return json({ error: '진행 조회 연결이 끊겼습니다.' }, 503); }
+      return json({ job: { id: 'prepare', task: 'propose', status: 'completed', result: { contractId: 'new-criteria' } } });
+    }
     throw new Error('Unexpected mutation or endpoint: ' + target);
   });
   await page.getByLabel('무엇을 만들까요?', { exact: true }).fill('환전 화면에서 우대 쿠폰을 강조해 주세요.');
@@ -145,8 +148,10 @@ test('request-first entry preserves model and source context, retries idempotent
   await page.getByRole('button', { name: '이 요청으로 시작하기' }).click();
   await page.getByText('일시 오류입니다. 다시 시도하세요.', { exact: true }).waitFor();
   await page.getByRole('button', { name: '이 요청으로 시작하기' }).click();
+  await page.getByText('진행 조회 연결이 끊겼습니다.', { exact: false }).waitFor();
+  await page.getByRole('button', { name: '이 요청으로 시작하기' }).click();
   await page.locator('output').getByText('new-criteria', { exact: true }).waitFor();
-  assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]);
+  assert.equal(calls.length, 3); assert.deepEqual(calls[0], calls[1]); assert.deepEqual(calls[1], calls[2]);
   assert.equal(calls[0].payload.model, 'fable'); assert.deepEqual(calls[0].payload.assetIds, ['private-guide']);
   assert.equal(await page.getByLabel('무엇을 만들까요?', { exact: true }).inputValue(), '');
   assert.equal(calls.some(call => call.target.includes('approve') || call.target === '/batches'), false);

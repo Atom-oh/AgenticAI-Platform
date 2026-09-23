@@ -203,7 +203,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   }, [client, project?.id]);
   useEffect(() => { void refresh(); return () => controller.current?.abort(); }, [refresh]);
   useEffect(() => { setGuideRefs(previous => previous.filter(ref => selected.includes(ref.assetId))); }, [selected]);
-  useEffect(() => { onDirty(editingNow.current.dirty || planningNow.current || composeNow.current); }, [editing.dirty, planningDirty, onDirty]);
+  useEffect(() => { onDirty(editingNow.current.dirty || planningNow.current || composeNow.current); }, [editing.dirty, planningDirty, onDirty, route]);
   useEffect(() => {
     if (activeProduct.current !== route.productId) {
       editingNow.current = { id: '', dirty: false }; planningNow.current = false; composeNow.current = false; onDirty(false);
@@ -332,7 +332,9 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
         onCriteria={id => {
           if (id && id !== editingNow.current.id && editingNow.current.dirty &&
               !confirm('저장하지 않은 기준 변경을 닫고 선택한 확인 기준을 열까요?')) return;
-          navigate('design', undefined, undefined, id || editing.id);
+          // No target means return to the current editor, including an unsaved
+          // new draft. Do not turn absence into an explicit empty selection.
+          navigate('design', undefined, undefined, id || undefined);
         }}
         onHandoff={(runId, round) => navigate('handoff', runId, round)} /></div>
       {step === 'handoff' && <HandoffPanel key={productId || 'unbound'} runs={scopedRuns} contracts={scopedContracts} selection={selection}

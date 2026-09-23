@@ -53,6 +53,11 @@ export default function CanvasRequest({ model, available, assetIds, guideRefs, p
       locked.current = false; setBusy(false); setJob(null); pending.current = null;
       if (!id) { setError('완료된 요청의 확인 기준을 찾지 못했습니다. 다시 시도하세요.'); return; }
       setBrief(''); onReady(id);
-    }} onFailure={() => { locked.current = false; setBusy(false); pending.current = null; }} />}
+    }} onFailure={last => {
+      locked.current = false; setBusy(false);
+      // A failed status lookup does not mean the accepted job failed.
+      // Reuse its request ID until a terminal failure is actually observed.
+      if (last.status === 'failed') pending.current = null;
+    }} />}
   </div>;
 }
