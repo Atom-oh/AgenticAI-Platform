@@ -652,7 +652,7 @@ def test_transition_then_invoke_streams(fakes, capsys):
     assert trace["route"] == "harness" and trace["plane"] == "agentcore" and trace["agent"] == "card_benefit_agent"
     assert trace["piiOutbound"] == 0 and trace["piiDetectors"] == ["rules(harness-input)"] and trace["blocked"] is False
     assert SECRET_MESSAGE_MARK not in out and ACTOR not in out and "queryHash" in trace
-    # 세션 유지: 클라이언트가 준 sessionId 가 Harness 로 전달되고 done 에 되돌아온다
+    # Client conversation ID is echoed; Harness receives the actor-bound Runtime ID.
     sid = "0123456789abcdef0123456789abcdef-session"
     ctx, gw = _ctx("r5")
     h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "다시", "sessionId": sid})

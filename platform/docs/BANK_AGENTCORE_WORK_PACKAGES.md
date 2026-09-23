@@ -29,6 +29,9 @@ logs or review artifacts.
 - `agents/app.py` uses only the SDK Runtime context session ID. Payload
   `sessionId` is ignored; only `meta.ignoredPayloadSessionId=true` reports it.
   The LRU key is the context ID.
+- Overlapping turns for one Runtime session fail with `409/session_busy`
+  before constructing another agent. Completion, cancellation and stream closure
+  release the session claim after cleanup.
 - `agentcore/runtime.py` sends `runtimeSessionId` in the API request and no
   payload `sessionId`, including through additional payload fields.
 - `api/ws_handler.py` retains the Cognito-verified `sub`; it verifies the
@@ -63,6 +66,9 @@ dedicated resource grants still require WP5 and its independent live evidence.
 User agent creation saves a local pending specification. Agent transitions
 save `AGENT_ADMIN_REQUEST` records. The generic Registry route cannot bypass
 this request path for Agent records. WsFn cannot invoke AdminFn.
+The generic transition transaction also binds the exact record type, subtype,
+payload and state revision inspected by its authorization check; a concurrent
+creation or reclassification cannot turn it into an Agent approval.
 
 Request records, payloads and audit entries are excluded from user Registry
 listing, get, search, version and consumer APIs. Their namespace is reserved.
@@ -112,6 +118,10 @@ Runtime/Harness upstream exception bodies are not returned to the user.
 Harness input/system text is inspected before managed execution. The bank
 Gateway Lambda independently measures and scans every outgoing tool result,
 blocks residual identifiers or failed inspection, and returns bounded errors.
+It requires the configured Guardrail's independent sensitive-information check
+in addition to rules, with complete coverage. Missing configuration, incomplete
+coverage, service errors and inputs/results above the verifier's 4,000-character
+limit block the tool boundary. The Tools Lambda can apply only that Guardrail.
 It also inspects arguments before executing a tool, including nested model
 adapter calls inside tools.
 Gate and document results are projected from their expected response schemas;

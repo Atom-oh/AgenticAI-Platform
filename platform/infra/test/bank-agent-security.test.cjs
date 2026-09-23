@@ -93,6 +93,32 @@ test('bank user path cannot administer AgentCore or pass its execution role', ()
       'Execution roles have no unused Memory/Identity grants or wildcard AgentCore actions');
   }
   const gateway = Object.values(resources).find(resource => resource.Type === 'AWS::BedrockAgentCore::Gateway');
+  const [guardrailId] = Object.entries(resources).find(([, resource]) => resource.Type === 'AWS::Bedrock::Guardrail');
+  const tools = Object.values(resources).find(resource =>
+    resource.Type === 'AWS::Lambda::Function' && resource.Properties.Handler === 'agentcore.gateway_tools.handler');
+  assert.deepEqual(tools.Properties.Environment.Variables.GUARDRAIL_ID, {
+    'Fn::GetAtt': [guardrailId, 'GuardrailId'],
+  });
+  assert(tools.Properties.Environment.Variables.GUARDRAIL_VERSION);
+  const verification = statements('PlatformToolsFn').filter(row =>
+    [].concat(row.Action).includes('bedrock:ApplyGuardrail'));
+  assert.equal(verification.length, 1);
+  assert.deepEqual([].concat(verification[0].Resource), [{'Fn::GetAtt': [guardrailId, 'GuardrailArn']}]);
+  for (const [prefix, sources] of [
+    ['GatewayExecRole', ['gateway/*']],
+    ['HarnessExecRole', ['harness/bank_*', 'runtime/harness_bank_*']],
+    ['AgentsRuntimeRole', ['runtime/bank_platform_agents-*']],
+  ]) {
+    const roles = Object.entries(resources).filter(([id, resource]) =>
+      id.startsWith(prefix) && resource.Type === 'AWS::IAM::Role');
+    assert.equal(roles.length, 1);
+    const trust = roles[0][1].Properties.AssumeRolePolicyDocument.Statement;
+    assert.equal(trust.length, 1);
+    assert.deepEqual(trust[0].Principal, { Service: 'bedrock-agentcore.amazonaws.com' });
+    assert.equal(trust[0].Condition.StringEquals['aws:SourceAccount'], '111122223333');
+    assert.deepEqual([].concat(trust[0].Condition.ArnLike['aws:SourceArn']),
+      sources.map(source => `arn:aws:bedrock-agentcore:ap-northeast-2:111122223333:${source}`));
+  }
   assert.equal(gateway.Properties.AuthorizerType, 'AWS_IAM');
   assert.equal(gateway.Properties.ExceptionLevel, undefined);
   for (const statement of [

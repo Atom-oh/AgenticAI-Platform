@@ -24,7 +24,9 @@ import os
 import sys
 import threading
 import time
+from asyncio import CancelledError
 from collections import OrderedDict
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
@@ -61,6 +63,7 @@ app = BedrockAgentCoreApp()
 # ---------------- 세션 이력 (sessionId → messages), LRU 20 ----------------
 _sessions: "OrderedDict[str, list]" = OrderedDict()
 _sessions_lock = threading.Lock()
+_active_sessions: set[str] = set()
 
 
 def _session_get(sid: str) -> list:
@@ -151,6 +154,32 @@ class _Session:
 
 
 async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIterator[dict]:
+    sid = runtime_session_id if isinstance(runtime_session_id, str) else ""
+    claimed = False
+    if 33 <= len(sid) <= 256:
+        with _sessions_lock:
+            if sid not in _active_sessions:
+                _active_sessions.add(sid)
+                claimed = True
+        if not claimed:
+            yield {"type": "error", "code": 409, "message": "Runtime session is busy; retry this turn"}
+            meta = {"type": "meta", "usage": {"inputTokens": 0, "outputTokens": 0},
+                    "stopReason": "session_busy", "sessionId": sid, "runtime": RUNTIME_LABEL}
+            if isinstance(payload, dict) and "sessionId" in payload:
+                meta["ignoredPayloadSessionId"] = True
+            yield meta
+            return
+    try:
+        async with aclosing(_run(payload, runtime_session_id)) as stream:
+            async for event in stream:
+                yield event
+    finally:
+        if claimed:
+            with _sessions_lock:
+                _active_sessions.discard(sid)
+
+
+async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIterator[dict]:
     started = time.time()
     payload = payload if isinstance(payload, dict) else {}
     name = str(payload.get("agent") or "").strip()
@@ -202,6 +231,7 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
 
     log.info("invoke agent=%s promptChars=%d sid=%s model=%s", name, len(prompt), sid[:12] + "…", model_id)
     session: Optional[_Session] = None
+    aborted = False
     try:
         try:
             session = await asyncio.to_thread(_Session, spec, model_id, sid)
@@ -302,13 +332,17 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
             _session_drop(sid)  # 식별자가 든 턴은 이력에 남기지 않는다
         else:
             _session_put(sid, agent.messages)
+    except (CancelledError, GeneratorExit):
+        aborted = True
+        raise
     finally:
         if session is not None:
             await asyncio.to_thread(session.close)
         meta["elapsedMs"] = int((time.time() - started) * 1000)
         log.info("done agent=%s stop=%s toolCalls=%d in=%s out=%s ms=%d", name, meta["stopReason"], meta["toolCalls"],
                  meta["usage"]["inputTokens"], meta["usage"]["outputTokens"], meta["elapsedMs"])
-        yield meta
+        if not aborted:
+            yield meta
 
 
 async def _run_design(payload: dict, model_id: str, meta: dict, started: float) -> AsyncIterator[dict]:
@@ -368,8 +402,9 @@ async def _run_design(payload: dict, model_id: str, meta: dict, started: float) 
 @app.entrypoint
 async def invoke(payload, context):
     """AgentCore Runtime 엔트리포인트 — async generator → SSE."""
-    async for ev in run(payload, getattr(context, "session_id", None)):
-        yield ev
+    async with aclosing(run(payload, getattr(context, "session_id", None))) as stream:
+        async for ev in stream:
+            yield ev
 
 
 if __name__ == "__main__":

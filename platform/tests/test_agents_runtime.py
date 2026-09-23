@@ -392,9 +392,73 @@ def test_harness_configuration_never_defaults_to_all_tools(tools):
         harness.build_config({"name": "synthetic", "systemPrompt": "safe", "allowedTools": tools})
 
 
-def test_harness_input_is_checked_before_any_model_transport(monkeypatch):
+@pytest.mark.parametrize("text", ["고객 CUST-0042", "person@example.invalid", "M12345678"])
+def test_harness_input_is_checked_before_any_model_transport(monkeypatch, text):
     from agentcore import harness
     from engine.gate import GateRefused
     monkeypatch.setattr(harness, "data", lambda: pytest.fail("raw identifiers reached AgentCore"))
     with pytest.raises(GateRefused):
-        list(harness.invoke_stream("synthetic-arn", "고객 CUST-0042", "x" * 64))
+        list(harness.invoke_stream("synthetic-arn", text, "x" * 64))
+
+
+@pytest.mark.parametrize("finish", ["complete", "cancel", "close"])
+def test_same_session_turns_cannot_overwrite_history_and_release_after_exit(runtime_app, monkeypatch, finish):
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    sid = "s" * 64
+    opened, closed = [], []
+    app._session_put(sid, [{"text": "prior"}])
+    monkeypatch.setattr(app.mcp_gateway, "missing_tool_names", lambda *args: [], raising=False)
+
+    async def exercise():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        def session(spec, model, actual_sid):
+            opened.append(actual_sid)
+            messages = app._session_get(actual_sid)
+
+            async def stream(prompt):
+                entered.set()
+                yield {"data": "started"}
+                await release.wait()
+                messages.append({"text": prompt})
+
+            return SimpleNamespace(
+                tools=[], discovered=[], skills_loaded=[], skills_missing=[],
+                close=lambda: closed.append(actual_sid),
+                gate=SimpleNamespace(drain=lambda: [], summary=lambda: {}),
+                agent=SimpleNamespace(messages=messages, stream_async=stream))
+
+        monkeypatch.setattr(app, "_Session", session)
+
+        async def collect(prompt):
+            return [event async for event in app.run(
+                {"agent": "regulation_impact_agent", "prompt": prompt}, sid)]
+
+        stream = app.run({"agent": "regulation_impact_agent", "prompt": "first"}, sid)
+        assert (await anext(stream))["type"] == "text"
+        rejected = await collect("overlap")
+        assert rejected[0]["code"] == 409 and rejected[-1]["stopReason"] == "session_busy"
+        assert opened == [sid] and app._session_get(sid) == [{"text": "prior"}]
+        if finish == "close":
+            await stream.aclose()
+        else:
+            task = asyncio.create_task(anext(stream))
+            if finish == "cancel":
+                await asyncio.sleep(0)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                release.set()
+                assert (await task)["type"] == "meta"
+            await stream.aclose()
+        assert closed == [sid] and sid not in app._active_sessions
+        expected = [{"text": "prior"}] + ([{"text": "first"}] if finish == "complete" else [])
+        assert app._session_get(sid) == expected
+        release.set()
+        await collect("next")
+        assert app._session_get(sid) == expected + [{"text": "next"}]
+        assert opened == [sid, sid] and closed == [sid, sid] and not app._active_sessions
+
+    asyncio.run(exercise())

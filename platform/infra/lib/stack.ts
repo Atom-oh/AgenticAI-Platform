@@ -256,17 +256,27 @@ export class BankPlatformStack extends cdk.Stack {
         ALLOW_LOCAL_PLANE: props.planeDeployed ? '0' : '1',
         GATES_FN: gatesFn ? gatesFn.functionName : '',
         GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+        GUARDRAIL_ID: guardrail.attrGuardrailId,
+        GUARDRAIL_VERSION: guardrailVersion.attrVersion,
       },
       description: 'bank-platform AgentCore Gateway target: platform tools (masked customer lookup, calc, ontology, registry consumer, gates)',
     });
     registryTable.grantReadData(toolsFn);
     toolsFn.addToRolePolicy(bedrockInvoke);
+    toolsFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:ApplyGuardrail'], resources: [guardrail.attrGuardrailArn],
+    }));
     if (gatesFn) gatesFn.grantInvoke(toolsFn);
     if (props.planeDeployed) {
       toolsFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [bridgeFnArn] }));
     }
     const gatewayRole = new iam.Role(this, 'GatewayExecRole', {
-      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': account },
+          ArnLike: { 'aws:SourceArn': `arn:aws:bedrock-agentcore:${region}:${account}:gateway/*` },
+        },
+      }),
       description: 'bank-platform-tools gateway execution role (invoke tool lambda)',
     });
     toolsFn.grantInvoke(gatewayRole);
@@ -301,7 +311,13 @@ export class BankPlatformStack extends cdk.Stack {
     }
     const harnessRole = new iam.Role(this, 'HarnessExecRole', {
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
-        conditions: { StringEquals: { 'aws:SourceAccount': account } },
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': account },
+          ArnLike: { 'aws:SourceArn': [
+            `arn:aws:bedrock-agentcore:${region}:${account}:harness/bank_*`,
+            `arn:aws:bedrock-agentcore:${region}:${account}:runtime/harness_bank_*`,
+          ] },
+        },
       }),
       description: 'bank-platform AgentCore Harness execution role',
     });
@@ -342,7 +358,10 @@ export class BankPlatformStack extends cdk.Stack {
       });
       const runtimeRole = new iam.Role(this, 'AgentsRuntimeRole', {
         assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
-          conditions: { StringEquals: { 'aws:SourceAccount': account } },
+          conditions: {
+            StringEquals: { 'aws:SourceAccount': account },
+            ArnLike: { 'aws:SourceArn': `arn:aws:bedrock-agentcore:${region}:${account}:runtime/bank_platform_agents-*` },
+          },
         }),
         description: 'bank-platform AgentCore Runtime execution role (Strands agents)',
       });

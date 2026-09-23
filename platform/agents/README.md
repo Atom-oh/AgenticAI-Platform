@@ -2,6 +2,7 @@
 
 Current code audit: 2026-09-13. See the [platform overview](../README.md) and
 [module contracts](../docs/CONTRACTS.md) for authority and shared interfaces.
+Security implementation amendment: 2026-09-23; live acceptance remains separate.
 
 `app.py` runs the five specs in `agentcore/agent_specs.py` using Strands on
 AgentCore Runtime. `design_flow_agent` instead runs the shared `design_loop`.
@@ -52,6 +53,9 @@ only as `meta.ignoredPayloadSessionId=true`. Missing Runtime context fails.
 The WebSocket handler derives the Runtime ID from the verified Cognito subject,
 agent/version and client conversation ID. It returns the original client ID
 for subsequent turns. Pool, client and connection expiry are checked.
+Overlapping turns for the same Runtime session return `409/session_busy` before
+another agent is built. Completion and cancellation release the claim after
+cleanup; the client can retry the same conversation ID.
 This is not durable managed memory. ADOT is not yet installed; WP5/WP6 in
 [the bank work packages](../docs/BANK_AGENTCORE_WORK_PACKAGES.md) track these gaps.
 

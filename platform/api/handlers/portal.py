@@ -249,7 +249,7 @@ def _registry_view(n) -> dict:
     try:
         rec = reg.get_record(name, ver)
     except Exception as e:  # noqa: BLE001
-        return {"available": True, "record": None, "tier": TIER_BADGE, "error": f"{type(e).__name__}: {str(e)[:120]}"}
+        return {"available": True, "record": None, "tier": TIER_BADGE, "error": f"Registry lookup failed: {type(e).__name__}"}
     return {"available": True, "record": reg.public_record(rec) if rec else None, "name": name, "recordVersion": ver, "tier": TIER_BADGE,
             "backend": reg.backend()}
 

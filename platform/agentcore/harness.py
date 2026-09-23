@@ -171,7 +171,7 @@ def _inspect(text, purpose):
     measured = gate.measure("", text)
     pii = measured["piiRules"]
     gate._log("agentcore.harness.boundary", purpose=purpose, chars=measured["chars"],
-              estTokens=measured["estTokens"], piiCount=pii["count"], piiTypes=pii["refuseTypes"])
-    if pii["refuseTypes"]:
-        raise gate.GateRefused(pii["refuseTypes"], pii["count"], measured, purpose)
+              estTokens=measured["estTokens"], piiCount=pii["count"], piiTypes=sorted(pii["byType"]))
+    if pii["count"]:
+        raise gate.GateRefused(sorted(pii["byType"]), pii["count"], measured, purpose)
     return measured

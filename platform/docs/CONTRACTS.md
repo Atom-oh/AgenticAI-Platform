@@ -2,6 +2,7 @@
 
 Current code audit: 2026-09-13. Read [root instructions](../../AGENTS.md),
 [review context](../../docs/REVIEW_CONTEXT.md), and [SPEC.md](../../SPEC.md) first.
+Security implementation amendment: 2026-09-23; separate live evidence is required.
 This document describes integration interfaces, not a permanent allocation of
 files to earlier implementation workers. Dated plans and guidebooks are not
 additional requirements unless the current task explicitly adopts them.
@@ -48,6 +49,9 @@ ROUTES = {"x": handle_x}
 - `agent.done.sessionId` is the client conversation ID; `runtimeSessionId`
   is the server-derived ID bound to the verified subject and agent version.
   `toolsMissing` lists configured unavailable Runtime tools and sets `code=502`.
+  Missing tools, terminal error codes and incomplete streams remain failures
+  even when some text was already emitted. A concurrent same-session Runtime
+  request returns `409` with `stopReason=session_busy`.
   Stream error events never forward upstream error bodies.
 - `common.tracing.record_trace` records scenario, identity/query hashes, model,
   token counts, timing, masking/block/cache evidence and plane labels.
@@ -114,13 +118,17 @@ Record example (illustrative values, not a fixed approved version):
 - Transitions: `DRAFT → PENDING_APPROVAL → APPROVED → DEPRECATED` and
   `PENDING_APPROVAL → REJECTED → DRAFT`. Other transitions fail with code `400`.
   `REJECTED` and `DEPRECATED` require a reason.
-- User AGENT transitions return pending `AGENT_ADMIN_REQUEST` receipts; only
+- After creation submits the initial draft, user AGENT transitions return
+  pending `AGENT_ADMIN_REQUEST` receipts; only
   IAM administration applies them. Generic creation of AGENT records or the
   administrative request namespace, and user transitions of requests, return
   `403`. Request payloads and audit entries are omitted from public get,
   list, search, version and consumer APIs. Trusted request collision checks and
   IAM processing opt into `get_record(..., include_internal=True)` internally;
   user request bodies cannot enable that option.
+- Generic transitions conditionally bind the authorized record type, subtype,
+  payload and revision in the same transaction as the status and audit writes.
+  Missing or concurrently reclassified records cannot bypass Agent administration.
 - `name` + `recordVersion` is unique. Conditional writes detect conflicts;
   record creation/status changes and their actor/from/to/reason/time audit
   insertions commit atomically. Agent discovery omits operational prompts;

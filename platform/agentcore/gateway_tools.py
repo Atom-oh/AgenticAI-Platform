@@ -213,6 +213,9 @@ def _gate_summary(body):
                     raise ValueError("Invalid gate diagnostic")
                 metadata = {key: diagnostic[key] for key in ("line", "column", "code")
                             if type(diagnostic.get(key)) is int and diagnostic[key] >= 0}
+                code = diagnostic.get("code")
+                if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", code):
+                    metadata["code"] = code
                 for key in ("ruleId", "id"):
                     value = diagnostic.get(key)
                     if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_/@-]{0,79}", value):
@@ -241,6 +244,19 @@ TOOLS = {
 }
 
 
+def _inspect(value, tool, event):
+    from common import pii
+    from engine import gate
+
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    measured = gate.measure("", text)
+    result = pii.scan_outbound(text, strict=True)
+    log_event(event, tool=tool, chars=measured["chars"], estTokens=measured["estTokens"],
+              piiCount=result["count"], piiTypes=sorted({hit["type"] for hit in result["hits"]}),
+              piiDetectors=result["detectors"], blocked=bool(result["count"]))
+    return result["count"] == 0
+
+
 def handler(event, context):
     name = ""
     cc = getattr(context, "client_context", None)
@@ -253,22 +269,13 @@ def handler(event, context):
         return {"error": "Unknown Gateway tool", "code": "UNKNOWN_TOOL"}
     log_event("tool.call", tool=name, argKeys=sorted(k for k in args.keys() if k != "code"))
     try:
-        from engine import gate
-        incoming = gate.measure("", json.dumps(args, ensure_ascii=False, separators=(",", ":")))
-        hits = incoming["piiRules"]
-        log_event("tool.input_boundary", tool=name, chars=incoming["chars"], estTokens=incoming["estTokens"],
-                  piiCount=hits["count"], piiTypes=sorted(hits["byType"]), blocked=bool(hits["count"]))
-        if hits["count"]:
+        if not _inspect(args, name, "tool.input_boundary"):
             return {"error": "Tool input blocked by privacy boundary", "code": "BOUNDARY_REFUSED"}
         out = fn(args)
         body = json.loads(json.dumps(out, ensure_ascii=False, default=str))
         if _contains_error(body):
             return {"error": "Tool request could not be completed", "code": "TOOL_REJECTED"}
-        measured = gate.measure("", json.dumps(body, ensure_ascii=False, separators=(",", ":")))
-        pii = measured["piiRules"]
-        log_event("tool.boundary", tool=name, chars=measured["chars"], estTokens=measured["estTokens"],
-                  piiCount=pii["count"], piiTypes=sorted(pii["byType"]), blocked=bool(pii["count"]))
-        if pii["count"]:
+        if not _inspect(body, name, "tool.boundary"):
             return {"error": "Tool output blocked by privacy boundary", "code": "BOUNDARY_REFUSED"}
         return body
     except Exception as e:

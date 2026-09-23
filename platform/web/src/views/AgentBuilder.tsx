@@ -330,6 +330,8 @@ function Bubble({ m }: { m: Msg }) {
   }
   const u = m.done?.usage || {};
   const isGate = m.gate === 'consumer' || m.done?.gate === 'consumer';
+  const failure = m.error || (m.done?.code >= 400 || m.done?.toolsMissing?.length
+    ? '에이전트 요청을 완료하지 못했습니다.' : '');
   return (
     <div className="flex justify-start">
       <div className="max-w-[88%] rounded-2xl rounded-bl-md px-3 py-2 text-sm" style={{ background: 'rgba(56,189,248,.06)', borderLeft: '3px solid var(--bedrock)' }}>
@@ -340,14 +342,14 @@ function Bubble({ m }: { m: Msg }) {
         {(m.stageErrors || []).map((s, i) => <div key={i} className="text-[11px] text-[#E90061] mt-1 font-mono break-all">스트림 오류: {s}</div>)}
         {Array.isArray(m.done?.toolsMissing) && m.done.toolsMissing.length > 0 &&
           <div className="chip text-amber-700 border-amber-400 mt-1">도구 연결 미완료 · {m.done.toolsMissing.join(', ')}</div>}
-        {m.error && (
+        {failure && (
           <div className={`rounded-lg p-2 mt-1 text-xs border ${isGate ? 'border-rose-300 bg-rose-950/40 text-[#E90061]' : 'border-rose-800 bg-rose-950/20 text-[#E90061]'}`}>
-            {isGate ? '⛔ 거버넌스 게이트 (Consumer): ' : '⚠ 호출 실패: '}{m.error}
+            {isGate ? '⛔ 거버넌스 게이트 (Consumer): ' : '⚠ 호출 실패: '}{failure}
             {m.status && <span className="ml-2"><RegChip s={m.status} /></span>}
             {isGate && <div className="text-[11px] text-rose-200/70 mt-1">APPROVED 가 아닌 레코드는 Harness 를 호출하는 코드 경로에 들어가지 않는다 — Registry 에서 승인한 뒤 다시 보낸다.</div>}
           </div>
         )}
-        {m.done && !m.error && (
+        {m.done && !failure && (
           <div className="text-[10px] text-slate-500 mt-1.5 flex gap-2 flex-wrap">
             <span>입력 {u.inputTokens ?? 0} · 출력 {u.outputTokens ?? 0} 토큰</span>
             <span>· <span className="font-mono">{m.done.modelId || '—'}</span></span>

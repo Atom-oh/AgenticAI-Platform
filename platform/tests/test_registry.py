@@ -168,6 +168,44 @@ def test_registry_transaction_uses_valid_dynamodb_wire_values():
     assert payload == {"rate": {"S": "3.250"}, "limit": {"N": "123456789"}, "ratio": {"N": "0.5"}}
     assert writes[1]["Put"]["Item"]["pk"]["S"].startswith("audit#")
     assert saved["stateRevision"] == 1
+    assert writes[0]["Put"]["ConditionExpression"] == "attribute_not_exists(pk)"
+
+
+@pytest.mark.parametrize("operation", ["create", "transition"])
+def test_registry_maps_real_transaction_cancellation_to_conflict(operation):
+    from types import SimpleNamespace
+    from botocore.exceptions import ClientError
+    from botocore.validate import validate_parameters
+    import botocore.session
+
+    model = botocore.session.get_session().get_service_model("dynamodb")
+    shape = model.operation_model("TransactWriteItems").input_shape
+    record = {**validate_record(_rec()), "pk": "rec#widget_x", "sk": "v1", "stateRevision": 1}
+    recorded = []
+
+    def transact(**request):
+        validate_parameters(request, shape)
+        recorded.append(request)
+        raise ClientError({"Error": {"Code": "TransactionCanceledException"},
+                           "CancellationReasons": [{"Code": "ConditionalCheckFailed"}, {"Code": "None"}]},
+                          "TransactWriteItems")
+
+    store = RegistryStore(table=SimpleNamespace(
+        name="synthetic-registry", get_item=lambda **kwargs: {"Item": record}))
+    store._transaction_client = SimpleNamespace(transact_write_items=transact)
+    with pytest.raises(ConflictError):
+        if operation == "create":
+            store.put_new(record, ACTOR)
+        else:
+            store.transition("widget_x", "v1", "PENDING_APPROVAL", ACTOR, expected_record=record)
+    assert len(recorded) == 1
+    if operation == "transition":
+        update = recorded[0]["TransactItems"][0]["Update"]
+        assert "#revision = :previousRevision" in update["ConditionExpression"]
+        for field in ("recordType", "subtype", "payload", "stateRevision"):
+            alias = next(key for key, value in update["ExpressionAttributeNames"].items()
+                         if value == field and key.startswith("#expected"))
+            assert alias in update["ConditionExpression"]
 
 
 @pytest.mark.parametrize("bad", [
@@ -394,6 +432,47 @@ def _ctx():
     from common.ctx import Ctx
     gw = _FakeApigw()
     return Ctx(apigw=gw, conn_id="c1", email=ACTOR, rid="r1"), gw
+
+
+@pytest.mark.parametrize("timing", ["missing", "after_authorization", "before_commit"])
+def test_generic_transition_cannot_approve_a_concurrently_created_or_retyped_agent(monkeypatch, timing):
+    store = api.get_store()
+    handler = _handler_module()
+    if timing != "missing":
+        api.create_record(_rec(rtype="CUSTOM", subtype="COMPONENT"), ACTOR, embed=False)
+        api.transition("widget_x", "v1", "PENDING_APPROVAL", ACTOR)
+    before_audits = store.audit("widget_x", "v1")
+    original_get = api.get_record
+    original_write = store._write_with_audit
+
+    def retype():
+        store.rewrite("widget_x", "v1", {"recordType": "AGENT", "subtype": "HARNESS"}, "iam-admin")
+
+    def get_record(*args, **kwargs):
+        record = original_get(*args, **kwargs)
+        if timing == "missing":
+            api.create_record(_rec(subtype="HARNESS"), "iam-admin", status="PENDING_APPROVAL", embed=False)
+        elif timing == "after_authorization":
+            retype()
+        return record
+
+    def write(*args, **kwargs):
+        retype()
+        return original_write(*args, **kwargs)
+
+    if timing == "before_commit":
+        monkeypatch.setattr(store, "_write_with_audit", write)
+    else:
+        monkeypatch.setattr(api, "get_record", get_record)
+    ctx, gw = _ctx()
+    handler.registry_transition(ctx, {"name": "widget_x", "version": "v1", "to": "APPROVED"})
+    assert gw.posted[-1]["ok"] is False
+    assert gw.posted[-1]["code"] == (404 if timing == "missing" else 409)
+    assert store.get("widget_x", "v1")["status"] == "PENDING_APPROVAL"
+    audits = store.audit("widget_x", "v1")
+    assert not any(event["to"] == "APPROVED" for event in audits)
+    if timing != "missing":
+        assert audits == before_audits
 
 
 def test_handler_routes_end_to_end():

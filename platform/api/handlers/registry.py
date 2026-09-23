@@ -16,7 +16,7 @@ from __future__ import annotations
 from common.ctx import Ctx
 from common.log import log_event
 from registry import api
-from registry.model import RegistryError, STATUSES
+from registry.model import NotFoundError, RegistryError, STATUSES
 
 
 def _fail(ctx: Ctx, kind: str, e: RegistryError, **extra) -> None:
@@ -52,6 +52,8 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
     reason = str(body.get("reason", "") or "").strip()[:500]
     try:
         record = api.get_record(name, version, include_internal=True)
+        if record is None:
+            raise NotFoundError("Registry record not found")
         if record and record.get("subtype") == "AGENT_ADMIN_REQUEST":
             ctx.post({"type": "registry_transition", "ok": False, "code": 403,
                       "error": "관리자 요청의 처리 상태는 IAM 관리자만 변경할 수 있습니다."})
@@ -61,7 +63,7 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
             ctx.post({"type": "registry_transition", "ok": True,
                       **request_transition(name, version, to, ctx.email, reason)})
             return
-        rec, ev = api.transition(name, version, to, actor=ctx.email, reason=reason)
+        rec, ev = api.transition(name, version, to, actor=ctx.email, reason=reason, expected_record=record)
     except RegistryError as e:
         log_event("registry.transition_rejected", ctx.trace_id, name=name, version=version, to=to if to in STATUSES else "invalid",
                   code=e.code, errorType=type(e).__name__)

@@ -28,7 +28,7 @@ before(async () => {
             window.calls.push({action,payload});
             onEvent({type:'agent.done',sessionId:'client-session',runtimeSessionId:'server-session',
               toolsMissing:['missing_tool'],code:502,error:'Configured Gateway tools are unavailable',
-              usage:{inputTokens:0,outputTokens:0}});
+              usage:{inputTokens:0,outputTokens:0}, ...window.completion});
           }
         };` }));
     } }],
@@ -66,6 +66,25 @@ test('missing configured tools are visible with an unsuccessful invocation', asy
   await page.getByText('도구 연결 미완료 · missing_tool', { exact: true }).waitFor();
   assert.match(await page.locator('body').innerText(), /Configured Gateway tools are unavailable/);
 });
+
+for (const completion of [
+  {error: undefined, toolsMissing: ['missing_tool'], code: 502},
+  {error: undefined, toolsMissing: [], code: 409},
+]) {
+  test(`terminal code ${completion.code} fails even without an error body`, async t => {
+    const page = await pageFor(t, 'APPROVED');
+    await page.evaluate(completion => { window.completion = completion; }, completion);
+    await page.getByPlaceholder('메시지', { exact: true }).fill('Synthetic hello');
+    await page.getByRole('button', { name: '보내기', exact: true }).click();
+    await page.getByText('⚠ 호출 실패: 에이전트 요청을 완료하지 못했습니다.', { exact: true }).waitFor();
+    assert.doesNotMatch(await page.locator('body').innerText(), /입력 0 · 출력 0 토큰/);
+    await page.getByPlaceholder('메시지', { exact: true }).fill('Synthetic next turn');
+    await page.getByRole('button', { name: '보내기', exact: true }).click();
+    const calls = await page.evaluate(() => window.calls.filter(call => call.action === 'agent_invoke'));
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].payload.sessionId, 'client-session');
+  });
+}
 
 test('an accepted administration request is not shown as completed approval', async t => {
   const page = await pageFor(t, 'PENDING_APPROVAL');

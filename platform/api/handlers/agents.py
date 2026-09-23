@@ -29,6 +29,7 @@ from common.log import log_event
 from registry import api as registry_api
 from registry.model import RegistryError, STATUSES
 from engine import model_catalog
+from engine.gate import GateRefused
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
 MODELS = list(model_catalog.MODEL_IDS)
@@ -304,7 +305,7 @@ def agent_create(ctx: Ctx, body: dict) -> None:
               promptLen=len(spec["systemPrompt"]), email=ctx.email)
     ctx.post({"type": "agent_create", "ok": True, "record": registry_api.public_record(rec),
               "harness": {"arn": None, "status": "PENDING_ADMIN", "reused": False},
-              "agentcoreRegistry": {"status": "PENDING_ADMIN"}, "audit": ev,
+              "agentcoreRegistry": {"status": "PENDING_ADMIN"}, "audit": registry_api.public_agent_audit([ev])[0],
               "message": "명세를 저장했습니다. 승인 요청 후 IAM 관리자가 실행 환경을 준비합니다."})
 
 
@@ -405,7 +406,7 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 raise ValueError("Harness approval needs reconciliation")
             if harness_settings(_h) != harness_settings(_harness().build_config(spec)):
                 raise ValueError("Harness configuration changed after approval")
-        except (RegistryError, OSError, UnicodeError, ValueError, TypeError):
+        except (RegistryError, OSError, UnicodeError, ValueError, TypeError, GateRefused):
             ctx.done("agent", error="승인된 Harness·Skill 구성을 확인하지 못했습니다. IAM 관리자 검토가 필요합니다.", code=409)
             return
         kind = "harness"
@@ -450,6 +451,8 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                 tools_missing = [str(name) for name in (data or {}).get("toolsMissing", [])]
                 stop_reason = (data or {}).get("stopReason", "")
                 out_sid = (data or {}).get("sessionId") or out_sid
+                if (data or {}).get("incomplete"):
+                    errors.append("에이전트 응답이 완료되지 않았습니다.")
         meta_model = None
         blocked = stop_reason == "gate_refused"
         pii_outbound = sum(int(event.get("piiRules", 0) or 0) for event in boundary_events) if boundary_events else None
@@ -461,15 +464,16 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
                                    "boundaryCrossings": len(boundary_events),
                                    "version": rec.get("recordVersion"), "toolCalls": tool_calls, "errors": errors}
         if tools_missing:
-            done_kw["code"] = 502
+            done_kw.update(code=502, error="구성된 Gateway 도구를 사용할 수 없습니다.")
+        if stop_reason == "session_busy":
+            done_kw.update(code=409, error="같은 세션의 이전 요청이 진행 중입니다. 완료 후 다시 보내세요.")
         if blocked:
             done_kw.update(blocked=True, blockedBy="gate")
-        if errors and text_len == 0:
+        if errors and "error" not in done_kw:
             done_kw["error"] = "에이전트 스트림 오류 — " + errors[-1][:200]
         ctx.done("agent", **done_kw)
     except Exception as e:  # noqa: BLE001
         errors.append(_err(e))
-        from engine.gate import GateRefused
         if isinstance(e, GateRefused):
             blocked, pii_outbound, stop_reason = True, e.count, "gate_refused"
         ctx.done("agent", error=f"에이전트 호출 실패 — {_err(e)}", name=name, version=rec.get("recordVersion"),
