@@ -593,6 +593,15 @@ def portal_publish(ctx: Ctx, body: dict) -> None:
                 ctx.post({"type": "portal_publish", "ok": False, "code": e.code, "id": n.id, "error": str(e)[:300],
                           "errorType": type(e).__name__})
                 return
+    def source_payload(value):
+        # Publication time is receipt metadata, not an ontology source revision.
+        return {key: item for key, item in (value.get("payload") or {}).items() if key != "publishedAt"}
+    if (not record or any(record.get(key) != rec_in.get(key)
+                          for key in ("recordType", "subtype", "description"))
+            or source_payload(record) != source_payload(rec_in)):
+        ctx.post({"type": "portal_publish", "ok": False, "code": 409, "id": n.id,
+                  "error": "기존 Registry 버전의 원본이 다릅니다. 새 불변 버전으로 발행하세요."})
+        return
     log_event("portal.publish", ctx.trace_id, id=n.id, label=n.label, action=action, email=ctx.email,
               recordType=rec_in["recordType"], subtype=rec_in["subtype"], status=(record or {}).get("status"),
               ms=_elapsed(t0))

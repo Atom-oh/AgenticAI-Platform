@@ -252,10 +252,31 @@ async def run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIt
 async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncIterator[dict]:
     started = time.time()
     payload = payload if isinstance(payload, dict) else {}
+    try:
+        # Bound the full request before constructing design prompts or queues.
+        request_chars = 0
+        for chunk in json.JSONEncoder(ensure_ascii=False).iterencode(payload):
+            request_chars += len(chunk)
+            if request_chars > 100_000:
+                break
+    except (TypeError, ValueError, RecursionError):
+        yield {"type": "error", "code": 400, "message": "Invalid Runtime request"}
+        return
+    if request_chars > 100_000:
+        yield {"type": "error", "code": 413, "message": "Runtime request exceeds the admitted length"}
+        return
     name = str(payload.get("agent") or "").strip()
     prompt = str(payload.get("prompt") or "").strip()
     sid = runtime_session_id if isinstance(runtime_session_id, str) else ""
     spec = agent_specs.spec_by_name(name) if name else None
+    if spec and "approvedSourceHash" in payload:
+        try:
+            matches = payload["approvedSourceHash"] == agent_specs.source_hash(spec, SKILLS_DIR)
+        except (OSError, ValueError):
+            matches = False
+        if not matches:
+            yield {"type": "error", "code": 409, "message": "Runtime source changed after approval"}
+            return
     model_id = str(payload.get("model") or (spec or {}).get("model") or agent_specs.DEFAULT_MODEL)
 
     meta: dict[str, Any] = {"type": "meta", "usage": {"inputTokens": 0, "outputTokens": 0}, "modelId": model_id,
@@ -428,7 +449,9 @@ async def _run(payload: Any, runtime_session_id: Optional[str] = None) -> AsyncI
             try:
                 await _finish_task(create_task(asyncio.to_thread(session.close)))
             except _SessionCleanupFailed:
-                meta.update(stopReason="cleanup_failed", incomplete=True)
+                meta.update(cleanupFailed=True, incomplete=True)
+                if meta.get("stopReason") != "gate_refused":
+                    meta["stopReason"] = "cleanup_failed"
                 if not aborted:
                     yield {"type": "error", "code": 503, "message": "Runtime session cleanup failed"}
         meta["elapsedMs"] = int((time.time() - started) * 1000)

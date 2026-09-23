@@ -176,6 +176,11 @@ for (const file of ['package.json', 'package-lock.json', 'tsconfig.json']) {
 }
 const oldExports = loadBaselineModule(entry, {
   root: repository, readSource,
+  exists: name => {
+    // The generated presence marker represents a tracked baseline Runtime spec.
+    if (name === 'platform/agents/_ctx/agent_specs.py') return tracked.has('platform/agentcore/agent_specs.py');
+    return tracked.has(name) || [...tracked].some(file => file.startsWith(name + '/'));
+  },
   compile: text => ts.transpileModule(text, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
   }).outputText,

@@ -171,7 +171,12 @@ class BoundaryGateHook(HookProvider):  # type: ignore[misc]
         m["piiCount"] = m["piiRules"]
         m["piiDetectors"] = ["rules"]
         if not m["piiRules"]:
-            verification = verify_independent(outgoing_text(inspected, system_prompt))
+            from common.pii import GuardrailPolicyDenied
+            try:
+                verification = verify_independent(outgoing_text(inspected, system_prompt))
+            except GuardrailPolicyDenied:
+                verification = {"count": 0, "hits": [], "detectors": ["rules", "guardrail"]}
+                m["policyDenied"] = True
             m["piiCount"] = verification["count"]
             m["piiDetectors"] = verification["detectors"]
             m["hits"] = sorted({hit["type"] for hit in verification["hits"]})
@@ -179,9 +184,9 @@ class BoundaryGateHook(HookProvider):  # type: ignore[misc]
             self.calls += 1
             m["seq"] = self.calls
             self.measurements.append(m)
-            if m["piiCount"]:
+            if m["piiCount"] or m.get("policyDenied"):
                 self.refused = m
-        if m["piiCount"]:
+        if m["piiCount"] or m.get("policyDenied"):
             raise GateRefused(m["hits"], m)
         return m
 

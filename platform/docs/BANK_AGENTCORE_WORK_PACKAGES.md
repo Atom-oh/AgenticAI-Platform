@@ -79,6 +79,12 @@ Generic IAM decisions also synchronize their typed AgentCore mirrors. A local
 commit followed by a mirror failure reports `applied=true, completed=false`;
 reinspect the current record and retry that exact hash to finish synchronization
 without duplicating the decision audit.
+Path-backed Skills have no approved inline AgentCore descriptor: their response
+reports `UNSUPPORTED` and `retryable=false`, rather than promising that an identical
+retry will synchronize them. Their local lifecycle decision remains explicit.
+Generic decisions serialize status changes and mirroring with a DynamoDB lease;
+completion rechecks the authoritative revision. Agent requests and IAM seeding
+share a per-agent lease before changing their shared Harness.
 Consumer discovery re-reads GSI candidates from the authoritative table; a stale
 APPROVED index image cannot return a deprecated or removed record. New approvals
 can still await GSI propagation, which is a completeness delay, not permission
@@ -133,6 +139,10 @@ new version. Service drift leaves it pending and returns an administration reque
 for the existing inspect/reconcile flow. Skill bindings are rechecked after service
 creation and immediately before approval; old approved consumers must be deprecated
 before their shared Harness can be changed.
+Seeding stages the pending record and request before provisioning, rejects a
+generic record occupying a built-in Agent name, and retires superseded approved
+versions. Runtime approvals include the complete specification/Skill source hash;
+the invocation forwards it and the container rejects a different bundled source.
 
 O: synthesized policy checks prove no AgentCore control actions or PassRole on
 WsFn; tests prove no control call on user routes and cover administrative
@@ -179,6 +189,8 @@ model call. Its explicit 100,000-character verification bound never truncates;
 opaque media requires a separate boundary and is rejected. The Gateway/Harness
 retain 20,000-character bounds and the shared default remains 4,000. Missing,
 failed or incomplete independent verification blocks the call.
+A top-level Guardrail policy intervention also blocks when no PII was detected;
+the refusal retains zero detected PII rather than inventing an entity.
 Gateway/Harness refuse all identifier classes, including EMAIL and KR_PASSPORT;
 raw email customer references are not admitted through this Tier 0/1 path.
 The existing sample lookup uses its configured synthetic default. Authenticated

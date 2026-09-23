@@ -352,7 +352,10 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
     version = str(body.get("version", "") or "").strip() or None
     message = str(body.get("message", "") or "").strip()
     session_id = body.get("sessionId")
-    session_id = str(session_id)[:128] if isinstance(session_id, str) and session_id.strip() else None
+    if session_id is not None and (not isinstance(session_id, str)
+                                   or not session_id.strip() or len(session_id) > 128):
+        ctx.done("agent", error="대화 ID는 1~128자의 문자열이어야 합니다.", code=400)
+        return
     if not ctx.user_sub:
         ctx.done("agent", error="인증된 사용자 식별자가 필요합니다. 다시 연결하세요.", code=401)
         return
@@ -497,8 +500,10 @@ def agent_invoke(ctx: Ctx, body: dict) -> None:
             done_kw.update(code=502, error="구성된 Gateway 도구를 사용할 수 없습니다.")
         if stop_reason == "session_busy":
             done_kw.update(code=409, error="같은 세션의 이전 요청이 진행 중입니다. 완료 후 다시 보내세요.")
+        if stop_reason == "cleanup_failed":
+            done_kw.update(code=503, error="세션 정리를 완료하지 못했습니다. 새 대화를 시작하세요.")
         if blocked:
-            done_kw.update(blocked=True, blockedBy="gate")
+            done_kw.update(blocked=True, blockedBy="gate", code=422, error="안전 정책에 따라 요청이 차단됐습니다.")
         if errors and "error" not in done_kw:
             done_kw["error"] = "에이전트 스트림 오류 — " + errors[-1][:200]
         ctx.done("agent", **done_kw)

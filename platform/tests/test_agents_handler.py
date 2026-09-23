@@ -850,3 +850,12 @@ def test_agent_get_hides_execution_role(fakes):
     assert [a["to"] for a in ev["audit"]] == ["APPROVED", "PENDING_APPROVAL", "DRAFT"]
     h.agent_get(ctx, {"name": "nope"})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 404
+
+
+@pytest.mark.parametrize("session_id", ["x" * 129, "x" * 128 + "first", "x" * 128 + "second", {}, 12, " "])
+def test_invalid_client_session_ids_are_rejected_before_lookup(fakes, session_id):
+    h = _handler()
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "synthetic", "message": "safe", "sessionId": session_id})
+    assert gw.posted[-1]["code"] == 400
+    assert not fakes[0].calls

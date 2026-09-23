@@ -137,3 +137,16 @@ def test_model_construction_requires_bank_guardrail_configuration(runtime_app, m
     monkeypatch.setattr(deps, "GUARDRAIL_ID", "")
     with pytest.raises(RuntimeError, match="Guardrail"):
         deps._model("global.anthropic.claude-sonnet-5", 10)
+
+
+
+def test_runtime_design_rejects_oversized_nested_request_before_worker(runtime_app):
+    app, calls = runtime_app
+    events = _events(app, {"agent": "design_flow_agent", "design": {"productSpec": {"text": "x" * 100001}}})
+    assert events[0]["code"] == 413 and not calls and not app._active_sessions
+
+
+def test_runtime_rejects_approval_from_different_source(runtime_app):
+    app, calls = runtime_app
+    events = _events(app, {"agent": "design_flow_agent", "approvedSourceHash": "0" * 64})
+    assert events[0]["code"] == 409 and not calls and not app._active_sessions

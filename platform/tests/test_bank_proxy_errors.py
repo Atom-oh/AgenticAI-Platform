@@ -22,3 +22,13 @@ def test_control_room_proxy_never_returns_or_logs_upstream_bodies(monkeypatch, c
     captured = capsys.readouterr()
     assert result["error"] == "Control-room request failed"
     assert "PRIVATE_UPSTREAM" not in str(result) + captured.out + captured.err
+
+
+@pytest.mark.parametrize("message", ["person@example.invalid", "x" * 2001])
+def test_control_room_chat_rejects_local_identifiers_and_overflow_before_proxy(monkeypatch, message):
+    from types import SimpleNamespace
+    events = []
+    monkeypatch.setattr(core, "_control_room", lambda *args, **kwargs: pytest.fail("unsafe chat reached proxy"))
+    core.chat(SimpleNamespace(post=events.append), {"message": message, "idToken": "synthetic-token"})
+    assert events[-1]["code"] == (422 if "@" in message else 400)
+    assert message not in str(events)

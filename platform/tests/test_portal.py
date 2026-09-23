@@ -296,13 +296,14 @@ def test_publish_component_uses_existing_registry_record_or_creates_draft(store)
     assert rec["recordType"] == "CUSTOM" and rec["subtype"] == "COMPONENT" and rec["status"] == "DRAFT"
     assert rec["payload"]["module"] == "@atom/ui/card" and rec["payload"]["componentId"] == "CMP-Card-v1"
     assert rec["payload"]["propsSchema"]["type"] == "object" and rec["owner"] == store.get_node("CMP-Card-v1").props["owner"]
+    repeated = _call(portal.portal_publish, {"id": "CMP-Card-v1"})
+    assert repeated["ok"] and repeated["action"] == "existing"
     # 기준선이 있으면 기존 레코드(APPROVED)를 그대로 — 덮어쓰지 않는다
     registry_api.reset_for_tests()
     seedmod.seed(ACTOR)
     ev = _call(portal.portal_publish, {"id": HERO})
-    assert ev["ok"] and ev["action"] == "existing" and ev["record"]["status"] == "APPROVED"
-    assert ev["record"]["payload"]["supersededBy"] == "v3" and "덮어쓰지" in ev["note"]
-    assert ev["mapping"]["deviation"] is True
+    assert not ev["ok"] and ev["code"] == 409  # Seed payload is not the exact ontology revision.
+    assert registry_api.get_record("Button", "v2")["status"] == "APPROVED"
 
 
 def test_publish_unsupported_label_is_labeled_unimplemented(store):

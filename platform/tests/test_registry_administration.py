@@ -174,3 +174,40 @@ def test_approved_consumer_never_returns_stale_index_images(store, monkeypatch, 
     ctx, messages = context()
     routes.registry_consumer(ctx, {})
     assert messages[-1]["records"] == []
+
+
+def test_generic_mirror_serializes_overlapping_decisions(store, monkeypatch):
+    from agentcore import registry_mirror
+    from registry.model import ConflictError
+    item = record(status="PENDING_APPROVAL")
+    def concurrent(current):
+        reviewed = administration.inspect(item["name"], "v1")
+        with pytest.raises(ConflictError, match="in progress"):
+            administration.transition(item["name"], "v1", "DEPRECATED", reviewed["expectedHash"], "retire",
+                                      actor_ref="iam-invoke:" + ADMIN_CONTEXT.aws_request_id)
+        return {"status": current["status"]}
+    monkeypatch.setattr(registry_mirror, "mirror", concurrent)
+    result = administration.transition(item["name"], "v1", "APPROVED", administration.fingerprint(item),
+                                      actor_ref="iam-invoke:" + ADMIN_CONTEXT.aws_request_id)
+    assert result["completed"] and not result["sourceChanged"]
+    assert all(not row["pk"].startswith("admin-sync#") for row in store.table().dump())
+
+
+def test_generic_mirror_never_reports_stale_state_complete(store, monkeypatch):
+    from agentcore import registry_mirror
+    item = record(status="PENDING_APPROVAL")
+    def direct_admin_write(current):
+        store.force_status(current["name"], "v1", "DEPRECATED", "admin", "Synthetic maintenance")
+        return {"status": current["status"]}
+    monkeypatch.setattr(registry_mirror, "mirror", direct_admin_write)
+    result = administration.transition(item["name"], "v1", "APPROVED", administration.fingerprint(item),
+                                      actor_ref="iam-invoke:" + ADMIN_CONTEXT.aws_request_id)
+    assert result["applied"] and not result["completed"] and result["sourceChanged"]
+    assert result["record"]["status"] == "DEPRECATED"
+
+
+def test_expired_admin_lease_can_be_recovered_and_is_not_discoverable(store):
+    store.table().put_item(Item={"pk": "admin-sync#probe", "sk": "v1", "owner": "expired", "expires": 0})
+    with store.administration_lease("probe", "v1"):
+        assert store.all_records() == []
+        assert store.table().get_item(Key={"pk": "admin-sync#probe", "sk": "v1"})["Item"]["owner"] != "expired"

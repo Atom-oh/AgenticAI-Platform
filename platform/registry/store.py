@@ -12,6 +12,8 @@ from __future__ import annotations
 import itertools
 import os
 import uuid
+import time
+from contextlib import contextmanager
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -103,6 +105,31 @@ class RegistryStore:
                 from registry.fake_table import new_registry_table
                 self._table = new_registry_table()
         return self._table
+
+    @contextmanager
+    def administration_lease(self, name: str, version: str):
+        """Serialize a mirror decision beyond Lambda's maximum execution time."""
+        table = self.table()
+        key = {"pk": f"admin-sync#{name}", "sk": version}
+        owner, now = uuid.uuid4().hex, int(time.time())
+        previous = table.get_item(Key=key, ConsistentRead=True).get("Item")
+        try:
+            if previous and previous["expires"] <= now:
+                table.delete_item(Key=key, ConditionExpression="#owner = :owner AND #expires = :expires",
+                    ExpressionAttributeNames={"#owner": "owner", "#expires": "expires"},
+                    ExpressionAttributeValues={":owner": previous["owner"], ":expires": previous["expires"]})
+            table.put_item(Item={**key, "owner": owner, "expires": now + 960},
+                           ConditionExpression="attribute_not_exists(pk)")
+        except Exception as error:
+            if _is_conditional_failure(error):
+                raise ConflictError("Registry administration is already in progress") from None
+            raise
+        try:
+            yield
+        finally:
+            table.delete_item(Key=key, ConditionExpression="#owner = :owner",
+                              ExpressionAttributeNames={"#owner": "owner"},
+                              ExpressionAttributeValues={":owner": owner})
 
     # ---------- 레코드 ----------
     def _write_with_audit(self, operation: str, mutation: dict, name: str, version: str, event: dict) -> None:

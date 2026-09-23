@@ -91,3 +91,20 @@ SCENARIO_AGENTS: list[dict] = [
 
 def spec_by_name(name: str) -> dict | None:
     return next((s for s in SCENARIO_AGENTS if s["name"] == name), None)
+
+
+def source_hash(spec, skills_dir):
+    """Bind the executable specification and exact bundled Skill bytes."""
+    import hashlib
+    import json
+    from pathlib import Path
+    root = Path(skills_dir).resolve()
+    skills = {}
+    for name in spec.get("skills", []):
+        path = (root / (name + ".md")).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("Skill source escaped its bundle")
+        skills[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    value = {"spec": spec, "skills": skills}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()

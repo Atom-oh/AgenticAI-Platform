@@ -5,6 +5,22 @@ const { loadBaselineModule } = require('./load-baseline.cjs');
 const Module = require('node:module');
 const path = require('node:path');
 
+test('baseline filesystem reads use committed schema and reject unsupported reads', () => {
+  const root = path.resolve(__dirname, '../../../');
+  const source = new Map([
+    ['lib/stack.js', `const fs = require('fs'); module.exports = JSON.parse(fs.readFileSync(require('path').join(__dirname, '../tool_schema.json'), 'utf8'));`],
+    ['tool_schema.json', '{"tools":["BASE_TOOL"]}'],
+  ]);
+  const options = {root, readSource: name => source.get(name) ?? null, compile: text => text};
+  assert.deepEqual(loadBaselineModule('lib/stack.js', options), {tools: ['BASE_TOOL']});
+  source.delete('tool_schema.json');
+  assert.throws(() => loadBaselineModule('lib/stack.js', options), /Missing baseline file/);
+  source.set('lib/stack.js', "require('node:fs').readFileSync('/etc/passwd', 'utf8')");
+  assert.throws(() => loadBaselineModule('lib/stack.js', options), /escaped repository/);
+  source.set('lib/stack.js', "require('node:fs').promises.readFile('tool_schema.json')");
+  assert.throws(() => loadBaselineModule('lib/stack.js', options), /Unsupported baseline filesystem/);
+});
+
 test('cross-revision drift requires the exact committed base and resource inventory', () => {
   const manifest = {base: 'a'.repeat(40), resources: ['WsPolicy', 'Gateway']};
   const resources = {WsPolicy: {Action: 'read-only'}, Gateway: {auth: 'IAM'}};

@@ -264,7 +264,12 @@ def _inspect(value, tool, event):
     if len(text) > MAX_VERIFICATION_CHARS:
         raise pii.PiiVerificationUnavailable("Gateway verification size limit")
     measured = gate.measure("", text)
-    result = pii.scan_outbound(text, strict=True, max_chars=MAX_VERIFICATION_CHARS)
+    try:
+        result = pii.scan_outbound(text, strict=True, max_chars=MAX_VERIFICATION_CHARS)
+    except pii.GuardrailPolicyDenied:
+        log_event(event, tool=tool, chars=measured["chars"], estTokens=measured["estTokens"],
+                  piiCount=0, piiTypes=[], piiDetectors=["rules", "guardrail"], blocked=True)
+        return False
     log_event(event, tool=tool, chars=measured["chars"], estTokens=measured["estTokens"],
               piiCount=result["count"], piiTypes=sorted({hit["type"] for hit in result["hits"]}),
               piiDetectors=result["detectors"], blocked=bool(result["count"]))

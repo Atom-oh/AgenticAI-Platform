@@ -159,9 +159,25 @@ def agents(ctx: Ctx, body: dict) -> None:
 
 
 def chat(ctx: Ctx, body: dict) -> None:
-    r = _control_room("POST", "/api/chat", body.get("idToken", ""),
-                      {"agentId": body.get("agentId"), "message": body.get("message", "")[:2000],
-                       "sessionId": body.get("sessionId")})
+    from agentcore.harness import _inspect
+    from common.pii import PiiVerificationUnavailable
+    from engine.gate import GateRefused
+    message = body.get("message", "")
+    if not isinstance(message, str) or not message.strip() or len(message) > 2000:
+        ctx.post({"type": "chat", "error": "메시지 길이 또는 형식이 올바르지 않습니다.", "code": 400})
+        return
+    payload = {"agentId": body.get("agentId"), "message": message, "sessionId": body.get("sessionId")}
+    try:
+        _inspect(json.dumps(payload, ensure_ascii=False), "control-room.input")
+        r = _control_room("POST", "/api/chat", body.get("idToken", ""), payload)
+        if not r.get("error"):
+            _inspect(json.dumps({"reply": r.get("reply")}, ensure_ascii=False), "control-room.output")
+    except GateRefused:
+        ctx.post({"type": "chat", "error": "안전 정책에 따라 요청이 차단됐습니다.", "code": 422})
+        return
+    except PiiVerificationUnavailable:
+        ctx.post({"type": "chat", "error": "독립 경계 검사를 완료하지 못했습니다.", "code": 503})
+        return
     ctx.post({"type": "chat", "reply": r.get("reply"), "sessionId": r.get("sessionId"), "error": r.get("error")})
 
 

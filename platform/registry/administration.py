@@ -38,6 +38,11 @@ def inspect(name, version):
 
 
 def transition(name, version, target, expected_hash, reason="", *, actor_ref):
+    with api.get_store().administration_lease(name, version):
+        return _transition(name, version, target, expected_hash, reason, actor_ref=actor_ref)
+
+
+def _transition(name, version, target, expected_hash, reason="", *, actor_ref):
     if target not in DECISIONS:
         raise ValidationError("Unsupported Registry administration decision")
     if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
@@ -55,7 +60,12 @@ def transition(name, version, target, expected_hash, reason="", *, actor_ref):
     from agentcore import registry_mirror
     try:
         mirrored = registry_mirror.mirror(record)
+    except registry_mirror.MirrorUnsupported:
+        mirrored = {"status": "UNSUPPORTED", "retryable": False, "errorType": "MirrorUnsupported"}
     except Exception as error:
         mirrored = {"status": "SYNC_PENDING", "errorType": type(error).__name__}
-    return {"record": record, "audit": audit, "applied": True,
-            "completed": mirrored.get("status") == target, "agentcoreRegistry": mirrored}
+    latest = inspect(name, version)
+    unchanged = latest["expectedHash"] == fingerprint(record)
+    return {"record": latest["record"], "audit": audit, "applied": True,
+            "completed": unchanged and mirrored.get("status") == target, "agentcoreRegistry": mirrored,
+            "sourceChanged": not unchanged}

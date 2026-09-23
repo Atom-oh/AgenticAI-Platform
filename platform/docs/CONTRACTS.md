@@ -232,6 +232,7 @@ blocks S2, with no shared cache fallback. See
 From `platform/`, with dependencies/browser assets installed as in CI:
 
 ```bash
+bash agents/prepare_context.sh
 python3 -m pytest tests/ -q
 (cd gates && npm test)
 (cd react-kit && npm test)

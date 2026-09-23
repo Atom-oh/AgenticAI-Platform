@@ -139,8 +139,11 @@ def invoke_stream(runtime_arn: str, agent_name: str, text: str, session_id: Opti
     if extra:
         body.update(extra)
     body.pop("sessionId", None)
+    encoded = json.dumps(body, ensure_ascii=False)
+    if len(encoded) > 100_000:
+        raise ValueError("Runtime request exceeds the admitted length")
     kw: Dict[str, Any] = {"agentRuntimeArn": runtime_arn, "runtimeSessionId": sid,
-                          "payload": json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                          "payload": encoded.encode("utf-8"),
                           "contentType": "application/json", "accept": "text/event-stream"}
     if qualifier:
         kw["qualifier"] = qualifier

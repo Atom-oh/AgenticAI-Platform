@@ -289,10 +289,10 @@ def test_embed_and_rerank_are_measured_and_refuse_identifiers(fakes, monkeypatch
 # ---------- 표기 (§8-3 · §11) ----------
 def test_route_info_and_badges_are_truthful(fakes):
     g = gate.route_info("gemma")
-    assert g["badge"]["prod"] == "IDC GPU + vLLM (EKS Hybrid Nodes)"
-    assert g["badge"]["demo"] == "Bedrock Gemma 4 31B @ us-west-2 — GPU 미구성 대체"
-    assert g["tier"] == "2" and g["modelId"] == "google.gemma-4-31b" and g["inferenceRouting"] == "us-west-2 direct"
-    assert g["storage"] == "ap-northeast-2" and g["badge"]["substituted"] is True
+    assert g["badge"]["prod"] == "Bedrock Gemma 4 31B · 설명 어댑터"
+    assert g["badge"]["demo"] == "Bedrock Gemma 4 31B @ us-west-2 · 개인정보 처리기와 별도"
+    assert g["tier"] == "0/1" and g["modelId"] == "google.gemma-4-31b" and g["inferenceRouting"] == "us-west-2 direct"
+    assert g["storage"] == "ap-northeast-2" and g["badge"]["substituted"] is False
     c = gate.route_info("claude")
     assert c["tier"] == "0/1" and c["endpoint"] == "bedrock-runtime" and c["region"] == "ap-northeast-2"
     assert c["inferenceRouting"] == "global" and c["inferenceRoutingLabel"] == "global (전 세계 상용 리전)"

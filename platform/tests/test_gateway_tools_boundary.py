@@ -343,3 +343,42 @@ def test_rule_positive_output_never_reaches_cloud_inspection(monkeypatch, verifi
     monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: {"value": "CUST-0042"})
     assert gateway_tools.handler({}, context())["code"] == "BOUNDARY_REFUSED"
     assert requests == ["{}"]
+
+
+@pytest.mark.parametrize("boundary", ["gateway", "harness", "runtime"])
+def test_non_pii_policy_intervention_blocks_without_inventing_pii(monkeypatch, verified_guardrail, boundary):
+    from common import pii
+    from agentcore import harness
+    from engine.gate import GateRefused
+    normal = verified_guardrail.apply_guardrail
+    def denied(**request):
+        value = normal(**request)
+        value.update(action="GUARDRAIL_INTERVENED", assessments=[{"topicPolicy": {"topics": [{"action": "BLOCKED"}]}}])
+        return value
+    verified_guardrail.apply_guardrail = denied
+    if boundary == "gateway":
+        monkeypatch.setitem(gateway_tools.TOOLS, "synthetic", lambda args: pytest.fail("denied input executed"))
+        assert gateway_tools.handler({}, context())["code"] == "BOUNDARY_REFUSED"
+    elif boundary == "harness":
+        monkeypatch.setattr(harness, "data", lambda: pytest.fail("denied input reached model"))
+        with pytest.raises(GateRefused) as error:
+            list(harness.invoke_stream("synthetic", "Synthetic content"))
+        assert error.value.count == 0 and error.value.boundary["verification"]["policyDenied"]
+    else:
+        from tests.test_agents_runtime import boundary_gate
+        gate = boundary_gate.BoundaryGateHook()
+        with pytest.raises(boundary_gate.GateRefused):
+            gate.check([{"role": "user", "content": [{"text": "Synthetic content"}]}])
+        assert gate.last["policyDenied"] and gate.last["piiCount"] == 0
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_harness_requires_terminal_event(monkeypatch, terminal):
+    from agentcore import harness
+    events = [{"contentBlockDelta": {"delta": {"text": "partial"}}}]
+    if terminal:
+        events.append({"messageStop": {"stopReason": "end_turn"}})
+    monkeypatch.setattr(harness, "data", lambda: SimpleNamespace(invoke_harness=lambda **kwargs: {"stream": events}))
+    result = list(harness.invoke_stream("synthetic", "Synthetic content"))
+    assert result[-1][1]["incomplete"] is not terminal
+    assert any(kind == "error" for kind, _ in result) is not terminal

@@ -151,6 +151,8 @@ def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any]
         token = getattr(page, "pagination_token", None)
         if not token:
             break
+    if token:
+        raise RuntimeError("Gateway tool discovery exceeded the complete catalog limit")
     keep = set(filter_tool_names(discovered, allowed))
     counts = {}
     for name in keep:

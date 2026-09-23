@@ -213,8 +213,12 @@ class InMemoryTable:
         self._items[key] = item
         return {"Attributes": copy.deepcopy(item)} if ReturnValues in ("ALL_NEW", "UPDATED_NEW") else {}
 
-    def delete_item(self, Key: dict, **_: Any) -> dict:
+    def delete_item(self, Key: dict, ConditionExpression=None, ExpressionAttributeNames=None,
+                    ExpressionAttributeValues=None, **_: Any) -> dict:
         self.calls.append("delete_item")
+        pred = compile_condition(ConditionExpression, ExpressionAttributeNames or {}, ExpressionAttributeValues or {})
+        if not pred(self._items.get(self._key_of(Key))):
+            raise ConditionalCheckFailedException()
         self._items.pop(self._key_of(Key), None)
         return {}
 

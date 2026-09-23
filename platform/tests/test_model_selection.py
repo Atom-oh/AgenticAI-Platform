@@ -112,3 +112,10 @@ def test_studio_catalog_and_agents_share_allowed_models(monkeypatch):
         spec, error = agents._validate_create({"name": "design_helper", "systemPrompt": "디자인 검수 도우미",
                                                "model": model, "allowedTools": ["list_regulations"]})
         assert error is None and spec["model"] == model
+
+
+
+def test_gemma_badge_describes_explanation_adapter_without_privacy_topology_claims():
+    badge = gate.route_info("gemma")["badge"]
+    assert badge["title"] == "설명 생성 경로" and badge["substituted"] is False
+    assert not any(term in str(badge) for term in ("Tier 2", "IDC", "Hybrid", "GPU"))

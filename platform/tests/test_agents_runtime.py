@@ -152,7 +152,8 @@ def test_invoke_stream_requires_arn():
 def test_dispatch_strands_runtime_strips_bank_prefix(monkeypatch):
     seen = {}
 
-    def fake_runtime(arn, name, text, session_id=None, model=None):
+    def fake_runtime(arn, name, text, session_id=None, model=None, extra=None):
+        assert extra == {"approvedSourceHash": "a" * 64}
         seen.update(arn=arn, name=name, text=text, session_id=session_id, model=model)
         yield ("text", "ok")
         yield ("meta", {"usage": {}, "stopReason": "end_turn", "sessionId": session_id or "gen", "runtime": "agentcore-runtime/strands"})
@@ -166,6 +167,7 @@ def test_dispatch_strands_runtime_strips_bank_prefix(monkeypatch):
     monkeypatch.setenv("AGENTS_RUNTIME_ARN", "arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/env-arn")
 
     rec = {"name": "bank_regulation_impact_agent", "payload": {"runtime": "agentcore-runtime/strands", "model": "global.anthropic.claude-sonnet-5"}}
+    rec["payload"]["runtimeSourceHash"] = "a" * 64
     out = list(invoke.stream(rec, "질문", session_id="s-1", model="global.anthropic.claude-sonnet-5"))
     assert seen["name"] == "regulation_impact_agent" and seen["arn"].endswith("runtime/env-arn")
     assert seen["session_id"] == "s-1" and seen["text"] == "질문"
@@ -173,6 +175,7 @@ def test_dispatch_strands_runtime_strips_bank_prefix(monkeypatch):
 
     # payload.runtimeArn 이 env 보다 우선
     rec2 = {"name": "regulation_impact_agent", "payload": {"runtime": "agentcore-runtime/strands", "runtimeArn": "arn:x:payload"}}
+    rec2["payload"]["runtimeSourceHash"] = "a" * 64
     list(invoke.stream(rec2, "q"))
     assert seen["arn"] == "arn:x:payload" and seen["name"] == "regulation_impact_agent"
 
@@ -697,3 +700,39 @@ def test_runtime_missing_terminal_result_never_commits_partial_history(runtime_a
     assert events[-1]["incomplete"] is True and events[-1]["stopReason"] == "incomplete"
     assert any(event.get("code") == 502 for event in events)
     assert app._session_get(sid) == [{"text": "prior"}]
+
+
+
+def test_catalog_pagination_exhaustion_never_exposes_partial_tool_set(monkeypatch):
+    from types import SimpleNamespace
+    class Page(list):
+        pagination_token = "next-page"
+    client = SimpleNamespace(list_tools_sync=lambda token: Page([SimpleNamespace(tool_name="target___lookup")]))
+    module = SimpleNamespace(MCPAgentTool=lambda *args, **kwargs: pytest.fail("partial catalog exposed"))
+    monkeypatch.setitem(sys.modules, "strands.tools.mcp.mcp_agent_tool", module)
+    with pytest.raises(RuntimeError, match="complete catalog"):
+        _load_container_module("mcp_gateway").load_tools(client, ["lookup"])
+
+
+def test_privacy_refusal_survives_cleanup_failure(runtime_app, monkeypatch):
+    from types import SimpleNamespace
+    app, _ = runtime_app
+    sid = "refusal-cleanup-" + "s" * 40
+    refusal = boundary_gate.GateRefused(["EMAIL"])
+    async def stream(prompt):
+        raise refusal
+        yield
+    def close():
+        app._quarantine(sid)
+        raise app._SessionCleanupFailed()
+    monkeypatch.setattr(app, "find_gate_refusal", lambda error: refusal)
+    monkeypatch.setattr(app.mcp_gateway, "missing_tool_names", lambda *args: [], raising=False)
+    monkeypatch.setattr(app, "_Session", lambda *args: SimpleNamespace(
+        tools=[], discovered=[], skills_loaded=[], skills_missing=[], close=close,
+        gate=SimpleNamespace(drain=lambda: [], summary=lambda: {}),
+        agent=SimpleNamespace(messages=[], stream_async=stream)))
+    async def collect():
+        return [event async for event in app.run({"agent": "regulation_impact_agent", "prompt": "safe"}, sid)]
+    result = asyncio.run(collect())
+    assert result[-1]["stopReason"] == "gate_refused" and result[-1]["cleanupFailed"]
+    assert sid not in app._active_sessions and sid in app._quarantined_sessions

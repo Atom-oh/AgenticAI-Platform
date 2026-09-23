@@ -508,18 +508,18 @@ def route_info(route: Optional[str] = None) -> dict:
                            "region": "저장: 서울 리전 / 추론: global 라우팅",
                            "substituted": False})
     elif r == "gemma":
-        base.update(inferenceRouting="us-west-2 direct", inferenceRoutingLabel="us-west-2 직접 호출 (교차 리전 추론 미지원)",
-                    badge={"title": "PII 추론 경로 — Tier 2",
-                           "prod": "IDC GPU + vLLM (EKS Hybrid Nodes)",
-                           "demo": "Bedrock Gemma 4 31B @ us-west-2 — GPU 미구성 대체",
-                           "region": "저장: 서울 리전 / 추론: us-west-2 직접 호출",
-                           "substituted": True})
+        base.update(tier="0/1", inferenceRouting="us-west-2 direct", inferenceRoutingLabel="us-west-2 직접 호출 (교차 리전 추론 미지원)",
+                    badge={"title": "설명 생성 경로",
+                           "prod": "Bedrock Gemma 4 31B · 설명 어댑터",
+                           "demo": "Bedrock Gemma 4 31B @ us-west-2 · 개인정보 처리기와 별도",
+                           "region": "추론 설정: us-west-2 직접 호출",
+                           "substituted": False})
     else:
-        base.update(inferenceRouting="idc", inferenceRoutingLabel="IDC 내부 (EKS Hybrid Nodes)",
-                    badge={"title": "PII 추론 경로 — Tier 2",
-                           "prod": "IDC GPU + vLLM (EKS Hybrid Nodes)",
-                           "demo": "idc_vllm 어댑터 미구성 — 데모에서는 LLM_ROUTE=gemma 대체 경로를 사용",
-                           "region": "저장: 서울 리전 / 추론: IDC",
+        base.update(inferenceRouting="unconfigured", inferenceRoutingLabel="설명 어댑터 미구성",
+                    badge={"title": "설명 생성 경로 — 미구성",
+                           "prod": "idc_vllm 호환 어댑터 · 연결 미구성",
+                           "demo": "구성된 추론 서비스 없음",
+                           "region": "미확인",
                            "substituted": True, "implemented": False})
     return base
 

@@ -16,6 +16,10 @@ REGISTRY_ID = os.environ.get("AGENTCORE_REGISTRY_ID", "b2hOSZL4eOhDXAyk")
 _ctl = None
 
 
+class MirrorUnsupported(ValueError):
+    pass
+
+
 def ctl():
     global _ctl
     if _ctl is None:
@@ -33,7 +37,7 @@ def _descriptor(record: dict) -> tuple[str, dict]:
                                         "inlineContent": _bounded(json.dumps({"tools": tools}, ensure_ascii=False))}}}
     if rt == "SKILL":
         if not isinstance(payload.get("skillMd"), str) or not payload["skillMd"].strip():
-            raise ValueError("SKILL mirroring requires explicit reviewed inline Skill content")
+            raise MirrorUnsupported("Path-backed SKILL has no approved inline mirror descriptor")
         return "AGENT_SKILLS", {"agentSkills": {"skillMd": {"inlineContent": _bounded(payload["skillMd"])}}}
     if rt == "AGENT":
         body = {key: record.get(key) for key in ("name", "recordVersion", "recordType", "subtype", "description")}

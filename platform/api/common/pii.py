@@ -69,6 +69,10 @@ class PiiVerificationUnavailable(Exception):
     pass
 
 
+class GuardrailPolicyDenied(PiiVerificationUnavailable):
+    """A policy intervention cannot be represented as zero detected PII."""
+
+
 def guardrail_hits(response: dict, *, strict: bool = False) -> list[dict]:
     """Detection is distinct from policy enforcement (action NONE can detect)."""
     assessments = response.get("assessments")
@@ -142,7 +146,14 @@ def scan_guardrail(text: str, *, strict: bool = False, max_chars: int = 4000) ->
                                source="INPUT", content=[{"text": {"text": text[:max_chars]}}])
         if strict:
             verify_guardrail_coverage(r, text)
-        return guardrail_hits(r, strict=strict)
+        hits = guardrail_hits(r, strict=strict)
+        if strict and r.get("action") == "GUARDRAIL_INTERVENED" and not hits:
+            raise GuardrailPolicyDenied("Guardrail policy rejected the input")
+        return hits
+    except GuardrailPolicyDenied:
+        from common.log import log_event
+        log_event("pii.guardrail_policy_denied", chars=len(text), blocked=True)
+        raise
     except Exception as ex:  # 계측 실패는 요청을 막지 않되 기록한다
         from common.log import log_event
         log_event("pii.guardrail_scan_failed", errorType=type(ex).__name__)

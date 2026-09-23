@@ -60,6 +60,14 @@ def request_transition(name, version, target, actor, reason):
 
 
 def apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin"):
+    request = api.get_record(name, version, include_internal=True)
+    if not request or not isinstance(request.get("payload"), dict):
+        raise NotFoundError("Agent administration request not found")
+    with api.get_store().administration_lease(request["payload"].get("name", name), "agent"):
+        return _apply_request(name, version, reconcile_hash=reconcile_hash, actor_ref=actor_ref)
+
+
+def _apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin"):
     """Called only by admin_handler; this function is not a WebSocket route."""
     from agentcore import harness, registry_mirror
     request = api.get_record(name, version, include_internal=True)
@@ -76,10 +84,11 @@ def apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin")
     record = api.get_record(body["name"], body["version"])
     if not record or record.get("recordType") != "AGENT":
         raise NotFoundError("Requested agent not found")
-    if request["status"] == "APPROVED":
-        return {"record": record, "request": request, "replayed": True, "applied": True, "completed": True}
     applied = (record["status"] == body["to"] and record.get("stateRevision") == body["expectedRevision"] + 1
                and fingerprint({**record, "status": None, "stateRevision": None}) == body.get("specHash"))
+    if request["status"] == "APPROVED" and not applied:
+        return {"record": record, "request": request, "replayed": True, "applied": True,
+                "completed": False, "sourceChanged": True}
     if fingerprint(record) != body["expectedHash"] and not applied:
         raise ConflictError("The agent changed after this request; submit a new request")
     if not applied:
@@ -149,6 +158,13 @@ def apply_request(name, version="v1", *, reconcile_hash=None, actor_ref="admin")
         # Local approval is already committed; a retry finishes the metadata mirror.
         return {"record": updated, "request": request, "audit": audit,
                 "agentcoreRegistry": mirrored, "applied": True, "completed": False}
+    latest = api.get_record(updated["name"], updated["recordVersion"])
+    if fingerprint(latest) != fingerprint(updated):
+        return {"record": latest, "request": request, "audit": audit, "agentcoreRegistry": mirrored,
+                "applied": True, "completed": False, "sourceChanged": True}
+    if request["status"] == "APPROVED":
+        return {"record": updated, "request": request, "replayed": True, "agentcoreRegistry": mirrored,
+                "applied": True, "completed": True}
     if request["status"] == "DRAFT":
         api.transition(name, version, "PENDING_APPROVAL", actor_ref, "IAM administration accepted request")
     saved, _ = api.transition(name, version, "APPROVED", actor_ref, "Agent transition applied")

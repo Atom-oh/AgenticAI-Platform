@@ -141,6 +141,7 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
     r = data().invoke_harness(harnessArn=harness_arn, runtimeSessionId=sid,
                               messages=[{"role": "user", "content": [{"text": text}]}])
     usage, stop = {}, ""
+    terminal = False
     tool_name = None
     tool_buf: list[str] = []
     for ev in r["stream"]:
@@ -162,20 +163,32 @@ def invoke_stream(harness_arn: str, text: str, session_id: str | None = None):
                 tool_name = None
         elif "messageStop" in ev:
             stop = ev["messageStop"].get("stopReason", "")
+            terminal = bool(stop)
         elif "metadata" in ev:
             usage = ev["metadata"].get("usage", {}) or usage
         elif any(k in ev for k in ("validationException", "internalServerException", "runtimeClientError",
                                    "throttlingException", "accessDeniedException")):
             stop = "error"
             yield ("error", "Harness transport failed; upstream details are withheld")
-    yield ("meta", {"usage": usage, "stopReason": stop, "sessionId": sid})
+    if not terminal and stop != "error":
+        stop = "incomplete"
+        yield ("error", "Harness stream ended without a terminal result")
+    yield ("meta", {"usage": usage, "stopReason": stop, "sessionId": sid,
+                    "incomplete": not terminal})
 
 
 def _inspect(text, purpose):
     from engine import gate
     from common import pii as verifier
     measured = gate.measure("", text)
-    result = verifier.scan_outbound(text, strict=True, max_chars=20000)
+    try:
+        result = verifier.scan_outbound(text, strict=True, max_chars=20000)
+    except verifier.GuardrailPolicyDenied:
+        measured["verification"] = {"count": 0, "types": [], "detectors": ["rules", "guardrail"],
+                                    "policyDenied": True}
+        gate._log("agentcore.harness.boundary", purpose=purpose, chars=measured["chars"],
+                  estTokens=measured["estTokens"], piiCount=0, piiDetectors=["rules", "guardrail"], blocked=True)
+        raise gate.GateRefused([], 0, measured, purpose) from None
     types = sorted({hit["type"] for hit in result["hits"]})
     measured["verification"] = {"count": result["count"], "types": types, "detectors": result["detectors"]}
     gate._log("agentcore.harness.boundary", purpose=purpose, chars=measured["chars"],
