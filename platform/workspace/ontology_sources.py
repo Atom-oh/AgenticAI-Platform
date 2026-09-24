@@ -34,8 +34,11 @@ def _authority_error(error):
 def round_state(run, row):
     """publishing-handoff/1 state of one generated round, fail-closed to the restricted states."""
     approval = run.get("approval") or {}
-    if (row.get("passed") is True and approval.get("round") == row.get("number")
-            and row.get("sourceHash") and approval.get("sourceHash") == row["sourceHash"]):
+    if row.get("passed") is True and approval.get("round") == row.get("number") and (
+            row.get("sourceHash") and approval.get("sourceHash") == row["sourceHash"]
+            # An HTML round's approval binds its exact artifact bytes instead.
+            or not row.get("sourceHash") and row.get("artifactSha256")
+            and approval.get("artifactSha256") == row["artifactSha256"]):
         return "approved"
     verification = row.get("verification")
     if (row.get("passed") is True and row.get("blockingFindings") == []
@@ -362,9 +365,7 @@ class Sources:
         if len(rows) != 1:
             _not_found()
         row = rows[0]
-        if (round_state(run, row) not in ("reviewable", "approved")
-                and self.ctx.scope["role"] not in ROUND_EDITORS):
-            _not_found()
+        self._round_permission(run, row)
         location = ref.get("location", {})
         if "round" in location and location["round"] != number:
             fail(400, "ontology-source-location", "라운드 위치가 참조 리비전과 다릅니다.")
@@ -373,6 +374,38 @@ class Sources:
         if ref["audienceRevision"] != PROJECT_AUDIENCE:
             fail(409, "ontology-source-stale", "라운드의 읽기 권한 기준이 다릅니다.")
         self._remember("run", run)
+        return run, row
+
+    def _round_permission(self, run, row):
+        """publishing-handoff/1 content permission: restricted states are owner/designer/developer only."""
+        if (round_state(run, row) not in ("reviewable", "approved")
+                and self.ctx.scope["role"] not in ROUND_EDITORS):
+            _not_found()
+
+    def round_delivery(self, run_id, number):
+        """The copy/download gate for every stored artifact of one round (each chunk, release, export).
+
+        The same content permission and upstream-lineage checks as the `run-round`
+        adapter: a restricted state or a revoked upstream (contract revision,
+        admission, guideline or bound input asset) is `404 not-found`. A merely
+        superseded upstream keeps diagnostic delivery (publishing-handoff/1
+        "Stale/withdrawn/quarantined"); current reuse still requires `resolve`.
+        """
+        self._fresh()
+        try:
+            run = self.ctx.get("run", run_id)
+        except CollaborationError as error:
+            if error.status == 404:
+                _not_found()
+            raise
+        rows = [row for row in run.get("rounds", []) if isinstance(row, dict) and row.get("number") == number]
+        if type(number) is not int or len(rows) != 1:
+            _not_found()
+        row = rows[0]
+        self._round_permission(run, row)
+        self._remember("run", run)
+        self._round_upstream_historical(run, row)
+        self.recheck()
         return run, row
 
     def _round_files(self, row):

@@ -360,3 +360,47 @@ def test_foreign_project_contract_is_not_found(env, design):
                         "projectId": other["project"]["id"]})
     ref = {**contract_reference(contract), "sourceId": "foreign-contract", "revision": "1"}
     assert code(Sources(ctx(env)).resolve, ref) == (404, "not-found")
+
+
+# Fix round 1 (PR #29 review) ------------------------------------------------
+
+def blob(env, run_id, kind, actor="alice", offset=None, route="runs"):
+    query = {"kind": kind, **({"round": "1"} if route == "runs" else {}),
+             **({"offset": str(offset)} if offset is not None else {})}
+    status, payload, _ = call(env.api, "GET", f"/{route}/{run_id}/blob", actor=actor, project=env.pid, query=query)
+    return status, payload
+
+
+def test_round_downloads_apply_the_shared_round_state_permission(env, design):
+    """Finding 1: every chunk of every round artifact uses the adapter's content permission."""
+    failed = react_run(env, design[1], run_id="run-failed", status="needs_changes", passed=False)
+    owner = f"project:{env.pid}"
+    row = failed["rounds"][0]
+    candidate = key_for(owner, "run", failed["id"], "rounds/1-candidate.json")
+    env.api.storage.put_blob_once(candidate, b"{}", "application/json")
+    env.api.storage.put(owner, "run", {**failed, "rounds": [{**row, "candidateKey": candidate}]}, failed["version"])
+    assert code(Sources(ctx(env, "bob")).resolve, run_round_reference(failed, 1)) == (404, "not-found")
+    for kind in ("source", "candidate"):
+        for offset in (None, 0, 1):
+            assert blob(env, failed["id"], kind, actor="bob", offset=offset)[0] == 404
+        assert blob(env, failed["id"], kind, actor="carol")[0] == 200
+    reviewable = react_run(env, design[1], run_id="run-review")
+    assert blob(env, reviewable["id"], "source", actor="bob")[0] == 200
+
+
+def test_round_and_release_downloads_deny_a_revoked_upstream_admission(env, design):
+    """Finding 1: the blob routes share the adapter's upstream-lineage check."""
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)], approval=True)
+    row = run["rounds"][0]
+    owner = f"project:{env.pid}"
+    release = env.api.storage.put(owner, "release", {
+        "id": "rel-1", "runId": run["id"], "round": 1, "status": "ready", "sourceHash": row["sourceHash"],
+        "sourceKey": row["sourceKey"]})
+    assert blob(env, run["id"], "source")[0] == 200
+    assert blob(env, release["id"], "source", route="releases")[0] == 200
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    assert code(Sources(ctx(env)).resolve, run_round_reference(run, 1)) == (409, "source-upstream-revoked")
+    for offset in (None, 1):
+        assert blob(env, run["id"], "source", offset=offset)[0] == 404
+        assert blob(env, release["id"], "source", offset=offset, route="releases")[0] == 404

@@ -161,7 +161,12 @@ live sharing or release evidence.
   `409 source-upstream-revoked`. Text requires `location.path` and reads the
   verified source archive (`read_archive` over the stored archive hash).
   `Sources.release_source` returns the verified archive bytes under the same
-  constraints. Historical authorization rechecks upstream permission: a
+  constraints. Existing delivery routes use the same checks through
+  `Sources.round_delivery` (every run/release blob chunk of every artifact kind,
+  including `candidate`, the baseline route and Git export): the round-state
+  permission and the historical upstream-permission checks below. A revoked
+  upstream or a restricted state is `404 not-found`; a merely superseded upstream
+  keeps diagnostic delivery. Historical authorization rechecks upstream permission: a
   superseded but still readable upstream (retained contract revision, admission
   whose source was superseded but is still readable, guideline still published)
   admits metadata; a revoked upstream denies with `404 not-found`.

@@ -202,7 +202,7 @@ class WorkspaceAPI:
                 elif segments[0] == "releases":
                     action = "export" if segments[-1] == "git" else "release"
             scope = self.collaboration.require(scope, action)
-            return self._route(scope["owner"], method, segments, event, query, scope=scope)
+            return self._route(scope["owner"], method, segments, event, query, scope=scope, claims=claims)
         except CollaborationError as error:
             return _json(error.status, {"error": error.message, "code": error.code})
         except HTTPError as error:
@@ -305,7 +305,19 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Private artifact not found")
         return key
 
-    def _route(self, owner, method, parts, event, query, scope=None):
+    def _round_delivery(self, scope, claims, run_id, number):
+        """Shared publishing-handoff/1 gate (ontology_sources.Sources.round_delivery) for round bytes.
+
+        A project scope is required for delivery of shared round content; the
+        single-owner legacy workspace has no other audience and no admissions.
+        """
+        if not scope or not scope.get("project"):
+            return
+        from workbench.service import Service
+        from workspace.ontology_sources import Sources
+        Sources(Service(self, scope, claims or {})).round_delivery(run_id, number)
+
+    def _route(self, owner, method, parts, event, query, scope=None, claims=None):
         if parts[0] in ("documents", "impact-analyses"):
             from documents.errors import DocumentError
             try:
@@ -355,10 +367,13 @@ class WorkspaceAPI:
                 from workspace.git_service import hydrate_release
                 return _json(200, {"release": hydrate_release(self.storage, owner, release)})
             if parts[2] == "blob":
+                self._round_delivery(scope, claims, release.get("runId"), release.get("round"))
                 return self._release_download(owner, release, query)
         if len(parts) == 3 and parts[0] == "releases" and parts[2] == "git" and method == "POST":
             from workspace.git_service import create_export
-            return create_export(self, owner, self._get(owner, "release", parts[1]), _body(event), scope)
+            release = self._get(owner, "release", parts[1])
+            self._round_delivery(scope, claims, release.get("runId"), release.get("round"))
+            return create_export(self, owner, release, _body(event), scope)
         if len(parts) == 1 and parts[0] in ("assets", "contracts", "runs") and method == "GET":
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
             page = self.storage.list_page(owner, kind, limit=100, cursor=query.get("cursor"))
@@ -386,6 +401,7 @@ class WorkspaceAPI:
                 row, project, _ = approved_artifacts(self.storage, owner, record, number)
             except (ValueError, TypeError) as error:
                 raise HTTPError(409, "baseline-unavailable", "기준 시안의 현재 승인을 확인할 수 없습니다.") from error
+            self._round_delivery(scope, claims, record["id"], number)
             return _json(200, {"baseline": {"runId": record["id"], "round": number, "sourceHash": row["sourceHash"]},
                                "files": sorted(generated_files(project))})
         if len(parts) == 2 and method == "GET":
@@ -433,6 +449,9 @@ class WorkspaceAPI:
             if kind == "run":
                 return self._run_approve(owner, record, _body(event), scope=scope)
         if len(parts) == 3 and parts[2] == "blob" and method == "GET" and kind in ("asset", "run"):
+            if kind == "run":
+                # Every chunk of every round artifact kind rechecks state permission and lineage.
+                self._round_delivery(scope, claims, record["id"], self._query_int(query, "round", 1, 5, minimum=1))
             return self._download(owner, kind, record, query)
         raise HTTPError(404, "not-found", "Route not found")
 

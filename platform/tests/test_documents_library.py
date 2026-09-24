@@ -26,11 +26,11 @@ CHUNK = 2 * 1024 * 1024
 class DocumentHost(WorkspaceAPI):
     """Use the real JWT/scope boundary while parent owns workspace routing."""
 
-    def _route(self, owner, method, parts, event, query, scope=None):
+    def _route(self, owner, method, parts, event, query, scope=None, claims=None):
         if parts[0] == "documents":
             from documents.api import handle
             return handle(self, scope, method, parts, event, query)
-        return super()._route(owner, method, parts, event, query, scope=scope)
+        return super()._route(owner, method, parts, event, query, scope=scope, claims=claims)
 
 
 @pytest.fixture

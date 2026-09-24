@@ -153,6 +153,12 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   It makes no AI call and compares the rebuilt page against the approved screenshot
   at tolerance `0.02`; this does not prove fidelity to an original design image.
 - GET `/releases/:id` and `/releases/:id/blob?kind=source|dist|manifest|report` expose authorized results.
+- Round and release bytes share one delivery gate (`Sources.round_delivery`,
+  `ONTOLOGY_CONTRACT.md` "Source authority"): every chunk of
+  `/runs/:id/blob?kind=html|screenshot|diff|report|source|dist|candidate`, every
+  `/releases/:id/blob` chunk, `/runs/:id/baseline` and `/releases/:id/git` apply the
+  publishing-handoff/1 round-state content permission and the upstream-lineage
+  permission checks; a restricted state or revoked upstream is `404 not-found`.
 - Release record includes sourceHash,bundleHash,catalogHash,contractHash,guidelineId,approval,rebuildEvidence,status.
 - GET `/git-connections` exposes configured connection IDs/labels/repository visibility only; no credentials.
 - POST `/releases/:id/git` `{connectionId,requestId}` starts authorized feature-branch export.
