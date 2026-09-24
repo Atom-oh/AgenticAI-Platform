@@ -46,7 +46,7 @@ PROPERTIES = {
 PROPERTIES["Pattern"] = DESIGN_PROPERTIES | {"usageBindings"}
 # Screen code is generated and procedure semantics live in NEXT edges: neither carries a uxModel.
 PROPERTIES["Screen"] = PROPERTIES["Screen"] - {"uxModel"}
-PROPERTIES["Procedure"] = PROPERTIES["Procedure"] - {"uxModel"}
+PROPERTIES["Procedure"] = (PROPERTIES["Procedure"] - {"uxModel"}) | {"entryScreenId"}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
 
@@ -227,6 +227,8 @@ def validate_node(value):
         if key in properties and (not isinstance(properties[key], list) or len(properties[key]) > 100
                                   or any(not isinstance(item, str) or not _ID.fullmatch(item) for item in properties[key])):
             raise ValueError("Invalid design references")
+    if "entryScreenId" in properties:
+        _identifier(properties["entryScreenId"])
     if "required" in properties and type(properties["required"]) is not bool:
         raise ValueError("Invalid policy requirement flag")
     if "usageBindings" in properties:
@@ -306,7 +308,7 @@ def validate_edge(value):
         raise ValueError("Invalid ontology edge lifecycle")
     properties = value.get("properties", {})
     if (not isinstance(properties, dict) or properties.keys() - {"conditionId", "condition", "retains", "line", "column",
-                                                                "symbol", "resolution", "conditional"}
+                                                                "symbol", "resolution", "conditional", "navigation"}
             or len(canonical(properties)) > 8000):
         raise ValueError("Edge metadata exceeds the contract")
     for key in properties.keys() & {"line", "column"}:
@@ -314,6 +316,8 @@ def validate_edge(value):
             raise ValueError("Invalid edge source position")
     if "conditional" in properties and type(properties["conditional"]) is not bool:
         raise ValueError("Invalid conditional dependency")
+    if "navigation" in properties and (value["type"] != "NEXT" or properties["navigation"] not in {"forward", "back", "cancel"}):
+        raise ValueError("Invalid transition navigation kind")
     for key in properties.keys() - {"line", "column", "conditional"}:
         _text(properties[key], 4000)
     if _hash(value["contentHash"]) != digest({k: v for k, v in value.items() if k != "contentHash"}):

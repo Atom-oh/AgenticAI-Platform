@@ -277,6 +277,8 @@ class Ontology:
                     properties[field] = [identities.get(item, item) for item in properties[field]]
             if "fileId" in properties:
                 properties["fileId"] = identities.get(properties["fileId"], properties["fileId"])
+            if "entryScreenId" in properties:
+                properties["entryScreenId"] = identities.get(properties["entryScreenId"], properties["entryScreenId"])
             if "uxModel" in properties:
                 from workspace.ontology_ux import rewrite
                 properties["uxModel"] = rewrite(properties["uxModel"], identities)
@@ -637,6 +639,126 @@ class Ontology:
         if historical:
             result["impactSeeds"] = sorted(impact_seeds & nodes.keys())
         return result
+
+    def procedure_snapshot(self, procedure_id, *, max_screens=20, max_nodes=300, max_edges=1000):
+        """Authorized view of one Procedure: member Screens, NEXT transitions, design dependencies and the
+        property-only uxModel references. It is a read view, never approval (engine plan, Task E4)."""
+        from workspace.ontology_ux import references
+        schema._identifier(procedure_id)
+        if (type(max_screens) is not int or not 1 <= max_screens <= 20 or type(max_nodes) is not int
+                or not 1 <= max_nodes <= schema.MAX_NODES or type(max_edges) is not int
+                or not 1 <= max_edges <= schema.MAX_EDGES):
+            fail(400, "ontology-scope", "지원되는 절차 조회 범위가 필요합니다.")
+        current = self.current()
+        if not current:
+            fail(409, "ontology-not-indexed", "프로젝트 온톨로지가 아직 등록되지 않았습니다.")
+        procedure = self._node(current, procedure_id)
+        if (not procedure or procedure["type"] != "Procedure" or procedure["tombstone"]
+                or not self._visible_node(current, procedure)):
+            fail(404, "not-found", "조회할 수 있는 절차가 없습니다.")
+        unknown, members, flow_edges = set(), {}, {}
+
+        def edges_of(identifier):
+            for edge_id in self._index(current, "adjacency", _bucket(identifier)).get(identifier, []):
+                loc = self._index(current, "edges", _bucket(edge_id)).get(edge_id)
+                if not loc:
+                    fail(409, "ontology-integrity", "온톨로지 관계 인덱스가 누락되었습니다.")
+                edge = next((e for e in self._part(current, loc["partition"])["graph"]["edges"] if e["id"] == edge_id), None)
+                if not edge or edge["contentHash"] != loc["contentHash"]:
+                    fail(409, "ontology-integrity", "관계 원본과 인덱스가 일치하지 않습니다.")
+                if edge["tombstone"] or edge["reviewState"] in {"rejected", "deprecated"}:
+                    continue
+                if not self._visible(edge["sourceRefs"]):
+                    unknown.add("unmapped-or-inaccessible")
+                    continue
+                yield edge
+
+        for edge in edges_of(procedure_id):
+            if edge["type"] != "PART_OF" or edge["dst"]["id"] != procedure_id:
+                continue
+            screen = self._node(current, edge["src"]["id"])
+            if screen and screen["type"] == "Screen" and (screen["tombstone"] or screen["reviewState"] in {"rejected", "deprecated"}):
+                unknown.add("retired-or-rejected-mapping")     # a required member never silently disappears
+                continue
+            if (not screen or screen["type"] != "Screen" or not self._visible_node(current, screen)):
+                unknown.add("unmapped-or-inaccessible")
+                continue
+            if screen["revision"] != edge["src"]["revision"] or procedure["revision"] != edge["dst"]["revision"]:
+                unknown.add("stale-endpoint-revisions")
+                continue
+            if screen["id"] in members:
+                continue
+            if len(members) >= max_screens:
+                unknown.add("too-many-screens")
+                break
+            members[screen["id"]] = screen
+            flow_edges[edge["id"]] = edge
+        for identifier in list(members):
+            for edge in edges_of(identifier):
+                if (edge["type"] == "NEXT" and edge["src"]["id"] == identifier and edge["dst"]["id"] in members
+                        and all(members[edge[end]["id"]]["revision"] == edge[end]["revision"] for end in ("src", "dst"))):
+                    flow_edges[edge["id"]] = edge
+        design = self.closure(sorted(members), direction="dependencies", max_nodes=max_nodes, max_edges=max_edges) \
+            if members else {"generation": current["generation"], "nodes": [], "edges": [],
+                             "coverage": {"unknown": [], "truncated": False}}
+        nodes = {n["id"]: n for n in design["nodes"]}
+        nodes.update(members)
+        nodes[procedure_id] = procedure
+        edges = {e["id"]: e for e in design["edges"]}
+        edges.update(flow_edges)
+        unknown |= set(design["coverage"]["unknown"])
+        truncated = bool(design["coverage"]["truncated"])
+
+        def merge(view):
+            if view["generation"] != current["generation"]:
+                fail(409, "ontology-changed", "조회 중 온톨로지가 변경되었습니다. 다시 조회하세요.")
+            nodes.update({n["id"]: n for n in view["nodes"]})
+            edges.update({e["id"]: e for e in view["edges"]})
+
+        # uxModel slot alternatives and condition targets are properties, not edges (review round 11, AE1).
+        requested = set()
+        for _ in range(4):
+            wanted = sorted({ref for node in nodes.values()
+                             for ref in references(node.get("properties", {}).get("uxModel") or {})}
+                            - nodes.keys() - requested)
+            if not wanted or truncated:
+                break
+            requested.update(wanted)
+            found = []
+            for start in range(0, len(wanted), 50):
+                batch = wanted[start:start + 50]
+                page = self.read(batch)
+                merge({**page, "nodes": [], "edges": []})
+                readable = [n["id"] for n in page["nodes"]]
+                if set(batch) - set(readable):
+                    unknown.add("unmapped-or-inaccessible")
+                found += readable
+            for start in range(0, len(found), 20):                # closure accepts at most 20 seeds
+                remaining_nodes, remaining_edges = max_nodes - len(nodes), max_edges - len(edges)
+                if remaining_nodes < 1 or remaining_edges < 1:
+                    truncated = True
+                    break
+                view = self.closure(found[start:start + 20], direction="dependencies",
+                                    max_nodes=remaining_nodes, max_edges=remaining_edges)
+                merge(view)
+                unknown |= set(view["coverage"]["unknown"])
+                truncated = truncated or bool(view["coverage"]["truncated"])
+        else:
+            if {ref for node in nodes.values() for ref in references(node.get("properties", {}).get("uxModel") or {})} - nodes.keys() - requested:
+                truncated = True
+        if len(nodes) > max_nodes or len(edges) > max_edges:
+            truncated = True
+        if "rejected-mapping" in unknown:
+            unknown.add("retired-or-rejected-mapping")
+        self._recheck(current)
+        truncated = truncated or "too-many-screens" in unknown or "truncated" in unknown
+        if truncated:
+            unknown.add("truncated")
+        return {"schemaVersion": 1, "projectId": self.ctx.project_id, "generation": current["generation"],
+                "nodes": sorted(nodes.values(), key=lambda n: n["id"]),
+                "edges": sorted(edges.values(), key=lambda e: e["id"]),
+                "coverage": {"complete": False, "scope": "authorized-procedure-snapshot",
+                             "truncated": truncated, "unknown": sorted(unknown | {"outside-snapshot-not-certified"})}}
 
     def context(self, node_ids):
         graph = self.closure(node_ids, direction="both", max_nodes=50)

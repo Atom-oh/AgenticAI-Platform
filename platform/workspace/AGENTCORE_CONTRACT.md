@@ -47,7 +47,7 @@ the first match.
 | `IMPORTS`, `REFERENCES` | Code → module/resource. Record cycles and visit them once; these are not visual composition. |
 | `GOVERNED_BY` | Product/Screen/Procedure/design usage → exact rule revision. |
 | `PART_OF` | Screen → Procedure, Procedure → Product; many-to-many membership. |
-| `NEXT` | Screen → Screen within a Procedure, with condition ID and retained-state specification. Loops/back navigation are permitted. |
+| `NEXT` | Screen → Screen within a Procedure, with condition ID, retained-state specification and `navigation` (`forward`, `back` or `cancel`; default `forward`). Loops/back navigation are permitted; a Procedure may name its `entryScreenId`. |
 | `DERIVED_FROM` | Resource/relation → source evidence; provenance, not impact propagation. |
 | `OWNED_BY` | Resource → responsible team; terminal assignment metadata, not a dependency. |
 

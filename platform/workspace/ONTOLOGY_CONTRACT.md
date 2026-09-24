@@ -146,6 +146,46 @@ Compatible v1 change: canonical JSON nesting is limited to depth 14 (was 8) so
 a graph or partition envelope can carry `uxModel.layers.code.props.<name>.values`.
 Canonical bytes do not depend on the limit, so existing hashes are unchanged.
 
+## Procedure snapshot (design view)
+
+`Ontology.procedure_snapshot(procedure_id, *, max_screens=20, max_nodes=300,
+max_edges=1000)` is a read view for design generation, not approval. It reads
+the Procedure, collects member Screens through `PART_OF` edges whose `dst` is
+the procedure, keeps `NEXT` edges whose endpoints are both members at their
+exact revisions, and runs `closure(direction="dependencies")` over the members.
+`uxModel` slot alternatives and condition targets are properties, not edges, so
+after the closure it reads missing referenced ids with `read` in batches of at
+most 50 and runs `closure` on them in batches of at most 20 seeds. All batches
+share the aggregate node/edge budgets and must observe the same generation; it
+repeats for at most four rounds. It applies the same visibility, exact-revision
+and final `_recheck` rules as `closure`; tombstoned, rejected and deprecated
+nodes and edges are excluded.
+
+The result is `{schemaVersion, projectId, generation, nodes, edges, coverage}`
+with scope `authorized-procedure-snapshot` and `complete: false`.
+`coverage.unknown` is the union of the closure reasons and its own:
+`too-many-screens`, `unmapped-or-inaccessible` (including an unreadable
+`uxModel` reference), `stale-endpoint-revisions` and
+`retired-or-rejected-mapping` (a member Screen or dependency that was rejected
+or retired). `coverage.truncated` is true when any limit is hit.
+
+Design views accept unreviewed edges between approved nodes; rejected/deprecated
+edges are excluded. The ontology has no edge review step, so edge usability is:
+not tombstoned, `reviewState` not `rejected`/`deprecated`, and both endpoints
+live (approved, or reviewed/candidate when candidates are explicitly included)
+at the exact revisions the edge names. `design_loop.knowledge.from_snapshot`
+reports a non-live dependency as `unapproved-dependency` and a rejected or
+retired one as `retired-or-rejected-mapping`; both block `Knowledge.complete`,
+as do truncation, unresolved `uxModel` references and `ambiguous-entry`.
+
+Schema amendment (v1 compatible): `Procedure` properties accept
+`entryScreenId`, rewritten through the publication `identities` map like
+`slots`. `NEXT` edge properties accept `navigation: forward|back|cancel`
+(default `forward`). The entry is `entryScreenId` when present (it must be a
+member); otherwise the unique member with no incoming forward edge. Zero or
+several candidates yield `ambiguous-entry`. Back and cancel edges are user
+actions and do not participate in entry detection or forward ordering.
+
 ## Source authority
 
 `ontology_sources.py` resolves assets, current published product guidelines,

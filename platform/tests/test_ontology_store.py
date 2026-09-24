@@ -260,3 +260,102 @@ def test_publication_rewrites_ux_model_references_to_canonical_ids(wb):
     ontology = Ontology(context(wb))
     part = ontology._part(current, result["partitionId"])
     schema.validate_graph(part["graph"])
+
+
+def _review_all(ontology, ids):
+    from design_fixtures import review_all
+    review_all(ontology, ids)
+
+
+def test_procedure_snapshot_includes_members_transitions_and_dependencies(wb):
+    """Task E4: real publish_candidate, the returned identities applied, and the complete seed stored validly."""
+    ontology = Ontology(context(wb))
+    from design_fixtures import raw_graph_with, seed_document_ref
+    graph = raw_graph_with(seed_document_ref(wb), project_id=wb.project["id"])
+    published = ontology.publish_candidate("design-seed", graph, expected_generation=None, request_id="seed-1")
+    ids = published["identities"]
+    part = ontology._part(wb.storage.get(wb.owner, "ontology", CURRENT), published["partitionId"])
+    schema.validate_graph(part["graph"])                       # complete seed, stored partition (E3 Step 4a)
+    _review_all(ontology, ids)
+    snap = ontology.procedure_snapshot(ids["savings-signup"])
+    types = {n["type"] for n in snap["nodes"]}
+    assert {"Screen", "PageTemplate", "Organism", "Procedure"} <= types
+    assert sum(1 for e in snap["edges"] if e["type"] == "NEXT") == 9
+    assert all(e["reviewState"] == "candidate" for e in snap["edges"])      # edges are never node-reviewed
+    from design_loop.knowledge import from_snapshot
+    k = from_snapshot(snap)
+    assert k.complete and len(k.procedures[ids["savings-signup"]]["transitions"]) == 9
+    assert k.procedures[ids["savings-signup"]]["entry"] == ids["intro"]     # entryScreenId rewritten
+    tpl = k.templates[ids["single-task"]]
+    assert all(a in k.assets for slot in tpl["slots"].values() for a in slot["allowed"])  # rewrite applied (Codex #4)
+    assert ids["notice-alert"] in k.assets and ids["step-bar"] in k.assets   # slot-only alternatives are read
+
+
+def test_procedure_snapshot_truncates_at_max_screens(wb):
+    ontology = Ontology(context(wb))
+    from design_fixtures import extra_screens_graph, seed_document_ref
+    graph = extra_screens_graph(21, source_ref=seed_document_ref(wb), project_id=wb.project["id"])
+    ids = ontology.publish_candidate("big", graph, expected_generation=None, request_id="big-1")["identities"]
+    _review_all(ontology, ids)
+    snap = ontology.procedure_snapshot(ids["p-big"])
+    assert snap["coverage"]["truncated"] and "too-many-screens" in snap["coverage"]["unknown"]
+    assert sum(1 for n in snap["nodes"] if n["type"] == "Screen") == 20
+
+
+def _slot_graph(project, ref, alternatives, extra_allowed=()):
+    from design_fixtures import extra_screens_graph
+    graph = extra_screens_graph(1, source_ref=ref, project_id=project)
+    base = {k: v for k, v in graph["nodes"][0].items() if k != "contentHash"}
+    atoms = [f"alt{i:02d}" for i in range(alternatives)]
+    graph["nodes"] += [schema.seal({**base, "id": a, "type": "Atom", "title": a}) for a in atoms]
+    graph["nodes"].append(schema.seal({**base, "id": "tpl", "type": "PageTemplate", "title": "tpl", "properties": {
+        "uxModel": {"slots": {"body": {"required": True, "allowed": [*atoms, *extra_allowed]}}}}}))
+    edge = {k: v for k, v in graph["edges"][0].items() if k != "contentHash"}
+    graph["edges"].append(schema.seal({**edge, "id": "use-tpl", "type": "COMPOSES",
+                                       "src": {"id": "s00", "revision": 1}, "dst": {"id": "tpl", "revision": 1}}))
+    return graph
+
+
+def test_procedure_snapshot_reads_property_only_alternatives_in_bounded_batches(wb):
+    """21+ slot-only alternatives exceed one 20-seed closure batch (review round 12, AF2)."""
+    from design_fixtures import seed_document_ref
+    from design_loop.knowledge import from_snapshot
+    ontology = Ontology(context(wb))
+    graph = _slot_graph(wb.project["id"], seed_document_ref(wb), 23)
+    ids = ontology.publish_candidate("slots", graph, expected_generation=None, request_id="slots-1")["identities"]
+    _review_all(ontology, ids)
+    snap = ontology.procedure_snapshot(ids["p-big"])
+    present = {n["id"] for n in snap["nodes"]}
+    assert all(ids[f"alt{i:02d}"] in present for i in range(23))
+    k = from_snapshot(snap)
+    assert k.complete, (k.coverage, k.unresolved)
+    tight = ontology.procedure_snapshot(ids["p-big"], max_nodes=10)
+    assert tight["coverage"]["truncated"]
+
+
+def test_procedure_snapshot_unreadable_reference_blocks(wb):
+    from design_fixtures import seed_document_ref
+    from design_loop.knowledge import from_snapshot
+    ontology = Ontology(context(wb))
+    graph = _slot_graph(wb.project["id"], seed_document_ref(wb), 1, extra_allowed=("ghost-asset",))
+    ids = ontology.publish_candidate("ghost", graph, expected_generation=None, request_id="ghost-1")["identities"]
+    _review_all(ontology, ids)
+    snap = ontology.procedure_snapshot(ids["p-big"])
+    assert "unmapped-or-inaccessible" in snap["coverage"]["unknown"]
+    assert not from_snapshot(snap).complete
+
+
+def test_procedure_snapshot_reports_a_deprecated_member(wb):
+    from design_fixtures import seed_document_ref, review_all
+    ontology = Ontology(context(wb))
+    graph = _slot_graph(wb.project["id"], seed_document_ref(wb), 1)
+    ids = ontology.publish_candidate("retire", graph, expected_generation=None, request_id="retire-1")["identities"]
+    _review_all(ontology, ids)
+    screen = ontology.read([ids["s00"]])["nodes"][0]
+    ontology.review_node(ids["s00"], expected_generation=ontology.current()["generation"], revision=screen["revision"],
+                         decision="deprecated", reason="retired", request_id="retire-s00")
+    snap = ontology.procedure_snapshot(ids["p-big"])
+    assert "retired-or-rejected-mapping" in snap["coverage"]["unknown"]
+    with pytest.raises(CollaborationError) as error:
+        ontology.procedure_snapshot(ids["s00"])
+    assert error.value.status == 404
