@@ -219,7 +219,10 @@ live sharing or release evidence.
   its whole lineage is current, checked on every current and historical read
   without origin membership: the transcription and image admissions at the bound
   revisions and hashes, their policies and reviewer grants/provenance, and the
-  original image asset; every record is fenced into the destination reader. Withdrawal is
+  original image asset, which (like a published `asset` source) must pass the
+  complete current-asset conditions of `Sources.resolve` — stored, not archived,
+  revoked, tombstoned or deleted, exact import revision/hash, stored bytes matching
+  size and hash; every record is fenced into the destination reader. Withdrawal is
   `409 source-withdrawn` and a newer revision `409 source-superseded` for current
   use; historical metadata stays readable while the grant and upstream remain.
   Returned metadata (current and historical) is built only from the granted

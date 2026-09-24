@@ -520,11 +520,34 @@ def _transcription_lineage(storage, origin, revision):
             or dict(picture["source"]) != lineage.get("sourceRef")):
         return None
     source = picture["source"]
-    asset = storage.get(f"project:{origin}", "asset", source["sourceId"]) if source["sourceKind"] == "asset" else None
-    if (source["sourceKind"] != "asset" or not asset or asset.get("accessRevoked") or asset.get("tombstone")
-            or asset.get("status") == "deleted" or asset.get("sha256") != source["sha256"]):
+    asset = _current_asset(storage, origin, source) if source["sourceKind"] == "asset" else None
+    if asset is None:
         return None
     return [*first, *second, (f"project:{origin}", "asset", asset)]
+
+
+def _current_asset(storage, origin, ref):
+    """The same current-source conditions as `Sources.resolve` for an `asset` (without membership).
+
+    Stored, not archived/revoked/tombstoned/deleted, exact import revision and
+    hash, and stored bytes matching the recorded size and hash.
+    """
+    owner = f"project:{origin}"
+    row = storage.get(owner, "asset", ref["sourceId"])
+    if (not row or row.get("projectId") != origin or row.get("archived") or row.get("accessRevoked")
+            or row.get("tombstone") or row.get("status") == "deleted" or row.get("uploadStatus") != "stored"
+            or row.get("sha256") != ref["sha256"] or str(row.get("importRevision", 1)) != str(ref["revision"])):
+        return None
+    key = row.get("originalKey")
+    if not key or not storage.owns_key(owner, key):
+        return None
+    try:
+        info = storage.blob_info(key)
+    except (FileNotFoundError, KeyError, ValueError):
+        return None
+    if info["sha256"] != row["sha256"] or info["size"] != row.get("size"):
+        return None
+    return row
 
 
 def _upstream(storage, origin, ref):
@@ -535,11 +558,8 @@ def _upstream(storage, origin, ref):
     owner = f"project:{origin}"
     kind = ref["sourceKind"]
     if kind == "asset":
-        row = storage.get(owner, "asset", ref["sourceId"])
-        if (not row or row.get("projectId") != origin or row.get("accessRevoked") or row.get("tombstone")
-                or row.get("status") == "deleted" or row.get("uploadStatus") != "stored"
-                or row.get("sha256") != ref["sha256"] or str(row.get("importRevision", 1)) != ref["revision"]
-                or ref["audienceRevision"] != PROJECT_AUDIENCE):
+        row = _current_asset(storage, origin, ref) if ref["audienceRevision"] == PROJECT_AUDIENCE else None
+        if row is None:
             return None
         return [(owner, "asset", row)]
     if kind == "document-revision":

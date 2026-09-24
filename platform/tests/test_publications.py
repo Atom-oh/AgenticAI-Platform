@@ -669,3 +669,40 @@ def test_ontology_change_after_the_node_read_fails_the_publication_commit(org, m
     else:
         assert denied(publications.approve, ctx(org.api, "carol", org.origin), pub["id"])[0] == 409
         assert org.api.storage.get(publications.PUBLICATION_OWNER, "publication", pub["id"])["status"] == "proposed"
+
+
+def transcription_publication(chain):
+    api = chain.api
+    people = ("alice", "bob", "carol", "dana", "erin", "frank", "gina")
+    api.collaboration.directory = lambda q: [{"sub": x, "displayName": x} for x in people if q in x]
+    assert library_review(chain, "bob")[0] == 200
+    ref = doc_ref(chain)
+    graph = {"schemaVersion": 1, "projectId": chain.pid, "edges": [],
+             "nodes": [node("atom-t", "Atom", project=chain.pid, sourceRefs=[ref])]}
+    result = Ontology(ctx(api, "alice", chain.pid)).publish_candidate("collection", graph, expected_generation=None,
+                                                                      request_id="transcribed")
+    identifier, generation = result["identities"]["atom-t"], result["generation"]
+    for decision in ("reviewed", "approved"):
+        generation = Ontology(ctx(api, "carol", chain.pid)).review_node(
+            identifier, expected_generation=generation, revision=1, decision=decision, reason="checked",
+            request_id=f"t-{decision}")["generation"]
+    nodes = {n["id"]: n for n in Ontology(ctx(api, "alice", chain.pid)).read([identifier])["nodes"]}
+    share(api, chain.pid, ref)
+    dest = new_project(api, "dest", {"erin": "owner", "gina": "designer"})
+    org = SimpleNamespace(api=api, origin=chain.pid, dest=dest, nodes=nodes, refs=[ref])
+    pub = published(org)
+    return dest, publications.published_asset_reference(pub, granted(org, pub))
+
+
+@pytest.mark.parametrize("change", [{"archived": True}, {"uploadStatus": "uploading"}, {"size": 1}])
+def test_shared_transcription_applies_full_image_source_currency(chain, change):
+    """Review 3 #4: the original image must pass the complete current-asset checks."""
+    dest, ref = transcription_publication(chain)
+    reader = Sources(ctx(chain.api, "gina", dest))
+    assert reader.resolve(ref, text=True)["text"]
+    owner = chain.chain["owner"]
+    asset = chain.api.storage.get(owner, "asset", chain.chain["ref"]["sourceId"])
+    chain.api.storage.put(owner, "asset", {**asset, **change}, asset["version"])
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+    assert denied(Sources(ctx(chain.api, "gina", dest)).resolve, ref) == (409, "source-upstream-revoked")
