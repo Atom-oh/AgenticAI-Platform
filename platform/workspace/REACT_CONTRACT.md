@@ -196,6 +196,11 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   execution by `ontology_sources.job_lineage` (recorded actor's current authority and
   the same lineage checks) before any model call or rebuild, and the same reader is
   rechecked before the outcome (job completion / release `ready`) is recorded.
+  Inside the generation, repair and rebuild loops every model call and protected
+  service call (browser verifier, React build) goes through one wrapper
+  (`ontology_sources.protected_calls`) that rechecks the retained reader
+  immediately before the call; a revoked input refuses the call
+  (`ProtectedCallRefused`) and fails the job without further rounds.
 - The queued Git export worker (`git_service.process_export`) rebuilds the recorded
   actor's current `export` scope (`ontology_sources.job_reader`), reruns the same
   round-delivery lineage check at execution and rechecks that reader after reading

@@ -980,6 +980,30 @@ def test_revoked_round_is_never_approved_and_creation_replay_omits_it(env, bound
     assert status == 202 and replay["run"]["rounds"] == [], replay
     assert decision["id"] not in json.dumps(replay)
 
+def test_model_is_never_called_after_revocation_inside_the_repair_loop(env, bound):
+    """Review 4 #2: every model/protected service call rechecks retained authority first."""
+    from workspace.worker import Worker
+    asset, contract, _ = bound
+    body = {"contractId": contract["id"], "contractVersion": contract["version"], "outputType": "react",
+            "variant": "baseline", "generationMode": "guided", "maxRounds": 3, "requestId": "repair-loop"}
+    status, created = http(env, "POST", "/runs", body, actor="carol")
+    assert status == 202, created
+    owner = f"project:{env.pid}"
+    calls = []
+
+    def model(system, user, *args):
+        calls.append(user)
+        if len(calls) == 1:
+            current = env.api.storage.get(owner, "asset", asset["id"])
+            env.api.storage.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+        return "not a React project", {}, {"modelId": "synthetic"}
+    services = []
+    worker = Worker(storage=env.api.storage, model_call=model, react_call=lambda *args: services.append(args))
+    result = worker.handle({"owner": owner, "jobId": created["job"]["id"]})
+    assert result["status"] == "failed"
+    assert len(calls) == 1 and services == []
+    assert env.api.storage.get(owner, "job", created["job"]["id"])["status"] == "failed"
+
 
 def test_revoked_asset_metadata_previews_listing_and_every_chunk_are_missing(env):
     """Review 4 #4: current asset permission applies to metadata, previews, listings and chunks."""

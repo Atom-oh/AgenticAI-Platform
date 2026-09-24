@@ -1,6 +1,7 @@
 """Resolve canonical ontology references through their existing access authority."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -230,6 +231,44 @@ def recheck_job(reader):
         reader.recheck()
     except CollaborationError:
         raise ValueError("작업 중 권한 또는 입력 원본 근거가 변경되었습니다.") from None
+
+
+class ProtectedCallRefused(RuntimeError):
+    """A model or protected service call refused because retained authority changed."""
+
+
+PROTECTED_CALLS = ("model_call", "render_call", "react_call")
+
+
+@contextlib.contextmanager
+def protected_calls(worker, reader, names=PROTECTED_CALLS):
+    """The one protected-call wrapper for generation/repair/rebuild workers.
+
+    While the block runs, every model call and protected service call (browser
+    verification, React build) the worker makes first rechecks the job's retained
+    lineage reader; a revoked or changed authority refuses the call before any
+    retained context is delivered. The single-owner workspace has no reader.
+    """
+    if reader is None:
+        yield worker
+        return
+    saved = {name: getattr(worker, name) for name in names}
+
+    def guard(call):
+        def protected(*args, **kwargs):
+            try:
+                recheck_job(reader)
+            except ValueError as error:
+                raise ProtectedCallRefused(str(error)) from None
+            return call(*args, **kwargs)
+        return protected
+    for name, call in saved.items():
+        setattr(worker, name, guard(call))
+    try:
+        yield worker
+    finally:
+        for name, call in saved.items():
+            setattr(worker, name, call)
 
 
 class Sources:

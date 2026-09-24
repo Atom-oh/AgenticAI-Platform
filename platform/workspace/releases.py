@@ -99,14 +99,21 @@ def create_release(api, owner, body, scope):
 
 
 def process_release(worker, owner, job):
-    from workspace.worker import _json_bytes
     release = worker.storage.get(owner, "release", job["input"]["releaseId"])
     if not release or release.get("status") != "queued":
         raise ValueError("처리할 React 릴리스가 없습니다.")
     run = worker.storage.get(owner, "run", release["runId"])
     # Execution-time lineage gate (shared Sources reader), rechecked before recording ready.
-    from workspace.ontology_sources import job_lineage, recheck_job
+    from workspace.ontology_sources import job_lineage, protected_calls
     lineage = job_lineage(worker, owner, job)
+    # The React rebuild/verifier call rechecks the retained lineage first (protected call).
+    with protected_calls(worker, lineage):
+        return _rebuild(worker, owner, job, release, run, lineage)
+
+
+def _rebuild(worker, owner, job, release, run, lineage):
+    from workspace.worker import _json_bytes
+    from workspace.ontology_sources import recheck_job
     resolve_generation_context(worker.storage, owner, {**run, "actor": release["actor"]}, "release")
     row, project, original = approved_artifacts(worker.storage, owner, run, release["round"], release["approvalHash"])
     worker._update(owner, "release", release["id"], status="running")
