@@ -12,6 +12,11 @@ class TestKeyVerifier:
     def __init__(self):
         if "pytest" not in sys.modules:
             raise PermissionError("the offline test verifier is constructible only under pytest")
+        self.epoch = 1
+
+    def revision(self):
+        """The offline key-registry revision; a rotation or revocation increments it."""
+        return self.epoch
 
     def sign(self, body):
         return hmac.new(_KEY, json.dumps(body, sort_keys=True, ensure_ascii=False).encode(), hashlib.sha256).hexdigest()

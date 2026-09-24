@@ -266,6 +266,8 @@ class Ledger:
             raise PermissionError("offline receipt verifiers are not production verifiers")
         if type(verifier) not in _REGISTERED:
             raise PermissionError("unregistered receipt verifier")
+        if not callable(getattr(verifier, "revision", None)):
+            raise PermissionError("the receipt verifier must expose its key-registry revision")
         if getattr(storage, "single_attempt", False) is not True:
             raise PermissionError("the ledger requires a single-attempt storage transport")
         return cls(storage, verifier, _CONSTRUCT, cost_gate=CostGuardGate())
@@ -847,9 +849,36 @@ class Ledger:
                 raise LedgerError("receipt-invalid")
         entry["receiptRef"] = key
 
+    def _key_revision(self):
+        """The verifier's current key-registry revision (verifier epoch); None for a verifier without one."""
+        revision = getattr(self.verifier, "revision", None)
+        if not callable(revision):
+            return None
+        try:
+            return revision()
+        except Exception as error:  # noqa: BLE001 - an unreadable key registry is no current key authority
+            raise LedgerError("receipt-invalid", reason="key-registry") from error
+
+    def _key_guard(self, receipts, revision):
+        """Final key-authority fence run immediately before submission (review 4, RUN-04): the key-registry
+        revision the chain was verified under is still current and every retained receipt still verifies."""
+        def guard():
+            if self._key_revision() != revision:
+                raise LedgerError("receipt-invalid", reason="key-revision")
+            for receipt in receipts:
+                try:
+                    valid = self.verifier.verify(receipt) is True
+                except Exception:  # noqa: BLE001
+                    valid = False
+                if not valid:
+                    raise LedgerError("receipt-invalid", reason="key-revoked")
+        return guard
+
     def _reverify_chain(self, owner, job, stages, attempt):
-        """Completion re-reads every retained signed receipt and re-verifies it with the CURRENT verifier."""
-        previous = None
+        """Completion re-reads every retained signed receipt and re-verifies it with the CURRENT verifier.
+
+        Returns the verified receipts, for the submission-time key guard."""
+        previous, verified = None, []
         for row in stages:
             ref = row.get("receiptRef")
             expected = self.storage.key_for(owner, "job", job["id"],
@@ -868,6 +897,8 @@ class Ledger:
                     or receipt.get("nonce") != row["nonce"] or receipt.get("previous") != previous):
                 raise LedgerError("receipt-invalid")
             previous = row["receiptHash"]
+            verified.append(receipt)
+        return verified
 
     def _check_evidence_graph(self, job, stage, inputs, outputs, stages):
         """Stage-specific input/output relationships (review 2): no stage verifies an unrelated object."""
@@ -1798,11 +1829,17 @@ class Ledger:
         if self._terminal_status(job, stages) != status:
             raise LedgerError("status-inconsistent")
         deliverables = self._check_result_manifest(job, current, result)
-        self._reverify_chain(owner, job, stages, attempt)
+        key_revision = self._key_revision()
+        receipts = self._reverify_chain(owner, job, stages, attempt)
         self._fresh_obligations(owner, before)
-        protected, guard = self._protect(owner, before, recovery=recovery)
+        protected, temporal = self._protect(owner, before, recovery=recovery)
+        key_guard = self._key_guard(receipts, key_revision)
+
+        def guard():
+            temporal()
+            key_guard()
         after = {**job, "status": status, "result": copy.deepcopy(result), "deliverables": deliverables,
-                 "completedAt": self.storage.clock()}
+                 "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock()}
         after["cleanup"] = self._cleanup_for(after)
         quotas = self._quota_writes(owner, job["actor"], job["projectId"], remove=job["id"])
         prepared_job, ledger_writes = self._prepare(owner, before, after, extra_writes=quotas, op=op)

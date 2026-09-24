@@ -613,6 +613,7 @@ module-private ledger writer token):
 | `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
 | `deliverables` | Set at completion: the result manifest's bundle and sources bound to their compile, Browser and generate receipt hashes |
 | `accounting` | Pending daily-usage obligations `[{id: "chg-"+40 hex, tokens, callId}]`, committed in the same write as the outcome that charges them |
+| `verifiedKeyRevision` | The verifier key-registry revision the completed chain was verified and submitted under |
 | `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
@@ -702,7 +703,12 @@ receipt hash is SHA-256 over sorted-key JSON.
 Completion (`finish`, and `reconcile` through the same path) re-reads every
 retained signed receipt of the attempt and re-verifies it with the current
 verifier (signature and key), its hash, bindings and `previous` linkage; any
-failure is `receipt-invalid`. It also re-reads every chain output of the current attempt, including the result manifest and every
+failure is `receipt-invalid`. The re-verification is bound to the verifier's
+key-registry revision (`verifier.revision()`, read before re-verifying), and
+the completion transaction's `before_attempt` guard rechecks immediately
+before submission that this revision is unchanged and that every retained
+receipt still verifies; a rotation or revocation in between is `receipt-invalid`
+and nothing commits. The terminal job records `verifiedKeyRevision`. It also re-reads every chain output of the current attempt, including the result manifest and every
 object it lists, and requires the stored hash and size to match before any
 terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
 Every `files`/`objects` entry of the result manifest must be an object with a
@@ -813,7 +819,8 @@ re-read, not treated as a lost race), and returns `unknown-outcome`.
 | `tool()` (ontology Lambda facade) | `claim`, `heartbeat`, `intent`, `outcome`, `stage`, `finish`, `fail`, `open_manifest`, `open_prior`, `open_input`, `read_chunk`, `open_output`, `write_chunk`, `close_output` |
 | `reconciler()` (IAM-only watchdog/reconciler) | `sweep`, `reconcile`, `settle`, `resolve_orphan`, `run_due` |
 
-`Ledger.production` requires a registered verifier type and single-attempt
+`Ledger.production` requires a registered verifier type that exposes
+`revision()` (its key-registry revision) and single-attempt
 storage (`Storage(single_attempt=True)`). It uses the fail-closed
 `common.costguard` gate. `register_verifier` accepts only a class defined by,
 and registered from, the reviewed verifier module `workspace.execution_verifier`

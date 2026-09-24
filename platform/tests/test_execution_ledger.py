@@ -1411,6 +1411,9 @@ def test_production_requires_a_registered_verifier_and_single_attempt_storage(mo
     class ReviewedVerifier:
         def verify(self, receipt):
             return False
+
+        def revision(self):
+            return 7
     monkeypatch.setattr(module, "_REGISTERED", {ReviewedVerifier})
     with pytest.raises(PermissionError):
         Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b"), verifier=ReviewedVerifier())
@@ -2005,7 +2008,7 @@ def test_completion_reverifies_the_retained_signed_chain_with_the_current_verifi
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
     ledger.verifier = CountingVerifier(accept=True)
     assert finish(ledger, job, "succeeded", result)["status"] == "succeeded"
-    assert ledger.verifier.calls == len(refs)
+    assert ledger.verifier.calls == 2 * len(refs)      # at re-read and again by the submission key guard
 
 
 def test_completion_refuses_a_missing_retained_receipt(xfer):
@@ -2601,3 +2604,41 @@ def test_explicit_retry_charges_the_superseded_unknown_call_independently(xfer, 
     assert stored["budget"]["tokensReserved"] == 0
     assert stored["budget"]["tokensUsed"] == (1000 if then == "cancel" else 1003)
     assert ledger.cost_gate.recorded == ([1000] if then == "cancel" else [1000, 3])
+
+
+@pytest.mark.parametrize("change", ["verifier-rejects", "key-revision"])
+def test_key_revocation_during_completion_staging_is_refused_at_submission(xfer, change):
+    """Review 4 finding 6: completion is bound to the verified key-registry revision and rechecked at submission."""
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+
+    def revoke_while_staging(context):
+        if change == "verifier-rejects":
+            ledger.verifier.verify = lambda receipt: False
+        else:
+            ledger.verifier.epoch += 1
+        return {"writes": [], "checks": [], "sourceBindings": []}
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, stage_completion=revoke_while_staging)
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def test_completion_records_the_verified_key_revision(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    done = finish(ledger, job, "succeeded", result)
+    assert done["status"] == "succeeded"
+    assert storage.get(OWNER, "job", job["id"])["verifiedKeyRevision"] == ledger.verifier.revision()
+
+
+def test_production_requires_a_key_registry_revision(monkeypatch):
+    from workspace import execution_ledger as module
+
+    class NoRevision:
+        def verify(self, receipt):
+            return False
+    monkeypatch.setattr(module, "_REGISTERED", {NoRevision})
+    with pytest.raises(PermissionError):
+        Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True),
+                          verifier=NoRevision())
