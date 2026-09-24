@@ -191,7 +191,9 @@ live sharing or release evidence.
   Historical authorization of a contract or round reauthorizes the same inputs
   (a retained contract revision uses the `assetIds` of its immutable revision
   blob); a revoked input is `404 not-found`, an archived but readable one keeps
-  diagnostics. A draft or foreign contract is `404 not-found`.
+  diagnostics. Historical resolution returns metadata only from the authorized
+  revision: the current record when it is that approved revision, otherwise the
+  hash-verified retained revision blob, never newer content. A draft or foreign contract is `404 not-found`.
   An edited contract's retained revision, or an approved one whose criteria
   changed, is `409 source-superseded` for current use and readable historically.
   Current `ux-contract` and `run-round` resolution retains the consulted product

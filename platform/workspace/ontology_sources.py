@@ -845,7 +845,9 @@ class Sources:
                 raise
             fail(409, "source-upstream-revoked", "승인 규칙의 기준 시안 근거를 현재 사용할 수 없습니다.")
         if historical:
-            return contract, current
+            # Metadata only from the authorized revision: the current record when it is that
+            # revision, otherwise the retained immutable revision (never newer content).
+            return bound, current
         if not current:
             fail(409, "source-superseded", "새 규칙 리비전으로 대체된 승인 규칙입니다.")
         criteria = {key: contract[key] for key in ("projectId", "productId", "guidelineId", "ontologyHash")

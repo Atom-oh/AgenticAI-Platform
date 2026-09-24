@@ -793,3 +793,16 @@ def test_ontology_impact_with_an_admitted_round_source(env, design):
         "changeId": "round-change", "kind": "design", "oldSource": ref,
         "expectedGeneration": published["generation"]}, {})
     assert status == 200 and result["coverage"]["complete"] is False
+
+
+def test_historical_contract_resolution_returns_only_the_retained_revision(env, design):
+    """Review 3 #2: historical metadata comes exclusively from the authorized retained revision."""
+    _, contract = design
+    ref = contract_reference(contract)
+    status, payload = http(env, "PUT", f"/contracts/{contract['id']}",
+                           {"title": "edited newer content", "version": contract["version"]}, actor="carol")
+    assert status == 200, payload
+    record = Sources(ctx(env)).resolve(ref, historical=True)["record"]
+    assert record["title"] == contract["title"] and record["version"] == contract["version"]
+    assert "edited newer content" not in json.dumps(record)
+    assert record.get("approval", {}).get("hash") == ref["sha256"]
