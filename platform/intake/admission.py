@@ -413,12 +413,34 @@ def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=No
                        vision["ocrSha256"], "artifact-changed", maximum=1024 * 1024)
     checks = [_check(owner, "adm_decision", decision),
               *(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)]
+    if decision["artifact"]["kind"] == "diagram-transcription":
+        checks.extend(_lineage_checks(host, scope, decision, reader, claims))
     # Final authority recheck after every read (AUTH-08), not only for observers.
     fences = _final_recheck(host, reader, checks)
     if observe is not None:
         observe.extend(checks)
         observe.extend(fences)
     return decision, data, reader, checks
+
+
+def _lineage_checks(host, scope, decision, reader, claims):
+    """A transcription is current only while its admitted image decision is (recursively) current.
+
+    The image decision is fully verified (policy, provenance/grant, current source,
+    artifact and vision hashes) and its records join this verification's fences.
+    """
+    lineage = decision["lineage"]
+    try:
+        image, _, _, checks = _verified(host, scope, lineage["decisionId"], claims=claims, sources=reader)
+    except AdmissionError:
+        raise AdmissionError("source-changed") from None
+    placed = decision["artifact"].get("region") or {}
+    if (image["artifact"]["kind"] != "image" or image["revision"] != lineage["decisionRevision"]
+            or image["source"] != decision["source"]
+            or placed.get("normalizedImageHash") != image["artifact"]["sha256"]
+            or decision["derivation"]["originalHash"] != image["derivation"]["derivativeHash"]):
+        raise AdmissionError("source-changed")
+    return checks
 
 
 def verify(host, scope, decision_id, *, claims=None, sources=None, observe=None):

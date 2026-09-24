@@ -132,7 +132,10 @@ def test_published_transcription_is_an_in_review_md_revision_with_server_owned_l
     assert revision["status"] == "in_review" and revision["name"] == "transcription.md"
     lineage = revision["transcriptionOf"]
     image = chain.chain["image"]
+    transcribed = chain.chain["transcription"]
     assert lineage == {"sourceRef": image["source"], "decisionId": image["id"], "decisionRevision": image["revision"],
+                       "transcription": {"decisionId": transcribed["id"], "decisionRevision": transcribed["revision"],
+                                         "artifactHash": transcribed["derivation"]["derivativeHash"]},
                        "visionSha256": image["artifact"]["vision"]["sha256"],
                        "normalizedImageHash": image["artifact"]["sha256"],
                        "region": {"left": 10, "top": 10, "width": 300, "height": 180}}
@@ -345,3 +348,37 @@ def test_policy_retired_immediately_before_the_publish_transaction_publishes_not
             "guide-rules", rule_graph(chain, ref), expected_generation=None, request_id="rules-2")
     assert error.value.status == 409
     assert storage.get(chain.chain["owner"], "ontology", CURRENT) is None
+
+
+# PR #28 review round 1 ----------------------------------------------------------
+
+def test_image_reviewer_revocation_invalidates_the_transcription_admission(chain):
+    """Finding 4: a transcription's verification recursively verifies its image lineage."""
+    transcribed = chain.chain["transcription"]
+    assert admission.verify(chain.api, chain.scope(), transcribed["id"])["id"] == transcribed["id"]
+    chain.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(chain.api, chain.scope(), transcribed["id"])
+    assert error.value.status == 409
+
+
+def test_transcription_reviewer_revocation_fences_the_library_revision(chain):
+    """Finding 4: the library revision binds both admissions and fences all upstream authority."""
+    revision = chain.chain["revision"]
+    lineage = revision["transcriptionOf"]
+    transcribed = chain.chain["transcription"]
+    assert lineage["transcription"] == {"decisionId": transcribed["id"], "decisionRevision": transcribed["revision"],
+                                        "artifactHash": transcribed["derivation"]["derivativeHash"]}
+    base = f"/documents/{revision['documentId']}/revisions/{revision['id']}"
+    assert chain.http("GET", base)[0] == 200
+    assert library_review(chain, "bob")[0] == 200
+    from workbench.service import Service
+    reader = Sources(Service(chain.api, chain.scope(), {"sub": "alice"}))
+    reader.resolve(doc_ref(chain), text=True)
+    assert (INTAKE_OWNER, "adm_grant", "grant-bob") in set(reader.observed)
+    assert (chain.chain["owner"], "adm_decision", transcribed["id"]) in set(reader.observed)
+    chain.admin({"op": "revoke_grant", "id": "grant-bob", "expectedRevision": 1})
+    status, payload = chain.http("GET", base)
+    assert status == 409 and payload["code"] == "source-upstream-revoked"
+    with pytest.raises(CollaborationError):
+        reader.recheck()

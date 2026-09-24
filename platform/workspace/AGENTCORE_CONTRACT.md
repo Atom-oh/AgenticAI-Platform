@@ -659,7 +659,10 @@ live evidence and the privacy redaction adapter remain outstanding.
 - **Decisions.** Synthetic/public inputs require a current, in-scope
   `adm_provenance` matching the exact source revision and byte hash;
   internal-non-sensitive inputs, prompt text and transcriptions are
-  `pending-review` until a reviewer admits them. Expiry is
+  `pending-review` until a reviewer admits them. A `diagram-transcription`
+  decision binds its admitted image decision (`lineage`); verifying it
+  recursively verifies that image decision and fences its records, so revoking
+  either reviewer grant invalidates the transcription and its library revision. Expiry is
   `min(policy, provenance/grant, now + 30 days)`. `verify` raises
   `decision-not-current`, `policy-changed`, `grant-revoked`, `source-changed`,
   `artifact-changed` or `inspection-changed`. `pages_for` is the only text read

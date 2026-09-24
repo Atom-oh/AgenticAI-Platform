@@ -230,11 +230,23 @@ class Library:
         return revision
 
     def _lineage(self, revision):
-        """A transcription revision stays readable only while its image lineage is current."""
+        """A transcription revision stays readable only while its whole lineage is current:
+        the transcription admission, its reviewer grant, the image admission, the image
+        reviewer grant, the policy and the image source. Every record read joins the fence."""
         from intake import admission
         lineage = revision["transcriptionOf"]
         observed = []
         try:
+            # Both admissions are bound: the reviewer-validated transcription (whose
+            # verification recursively verifies its image) and the image itself.
+            bound = lineage["transcription"]
+            transcribed = admission.verify(self.host, self.scope, bound["decisionId"], observe=observed)
+            if (transcribed["revision"] != bound["decisionRevision"]
+                    or transcribed["artifact"]["kind"] != "diagram-transcription"
+                    or transcribed["derivation"]["derivativeHash"] != bound["artifactHash"]
+                    or transcribed["lineage"] != {"decisionId": lineage["decisionId"],
+                                                  "decisionRevision": lineage["decisionRevision"]}):
+                raise admission.AdmissionError("source-changed")
             decision = admission.verify(self.host, self.scope, lineage["decisionId"], observe=observed)
             if (decision["revision"] != lineage["decisionRevision"] or decision["artifact"]["kind"] != "image"
                     or decision["artifact"]["vision"]["sha256"] != lineage["visionSha256"]
@@ -410,6 +422,8 @@ def publish_transcription(host, scope, decision):
     now = library.storage.clock()
     placed = current["artifact"]["region"]
     lineage = {"sourceRef": dict(image["source"]), "decisionId": image["id"], "decisionRevision": image["revision"],
+               "transcription": {"decisionId": current["id"], "decisionRevision": current["revision"],
+                                 "artifactHash": current["derivation"]["derivativeHash"]},
                "visionSha256": image["artifact"]["vision"]["sha256"],
                "normalizedImageHash": image["artifact"]["sha256"],
                "region": {k: placed[k] for k in ("left", "top", "width", "height")}}
