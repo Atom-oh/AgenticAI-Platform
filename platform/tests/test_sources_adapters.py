@@ -559,3 +559,48 @@ def test_superseded_admission_fallback_also_retains_its_authority(env, design):
     env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
     with pytest.raises(CollaborationError):
         reader.recheck()
+
+
+def test_downloads_recheck_authority_after_reading_each_chunk(env, design, monkeypatch):
+    """Review 2 #6: revocation during byte retrieval denies that very chunk."""
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)], approval=True)
+    row = run["rounds"][0]
+    owner = f"project:{env.pid}"
+    env.api.storage.put(owner, "release", {"id": "rel-1", "runId": run["id"], "round": 1, "status": "ready",
+                                           "sourceHash": row["sourceHash"], "sourceKey": row["sourceKey"]})
+    storage = env.api.storage
+    original = storage.get_blob
+    state = {"revision": 1}
+
+    def revoking(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key == row["sourceKey"] and state["revision"]:
+            env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": state["revision"]})
+            state["revision"] = 0
+        return data
+    monkeypatch.setattr(storage, "get_blob", revoking)
+    status, payload = blob(env, run["id"], "source")
+    assert status in (404, 409) and not isinstance(payload, bytes)
+
+
+def test_release_download_rechecks_authority_after_reading_the_chunk(env, design, monkeypatch):
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)], approval=True)
+    row = run["rounds"][0]
+    owner = f"project:{env.pid}"
+    env.api.storage.put(owner, "release", {"id": "rel-1", "runId": run["id"], "round": 1, "status": "ready",
+                                           "sourceHash": row["sourceHash"], "sourceKey": row["sourceKey"]})
+    storage = env.api.storage
+    original = storage.get_blob
+    state = {"armed": True}
+
+    def revoking(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key == row["sourceKey"] and state["armed"]:
+            state["armed"] = False
+            env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+        return data
+    monkeypatch.setattr(storage, "get_blob", revoking)
+    status, payload = blob(env, "rel-1", "source", route="releases")
+    assert status in (404, 409) and not isinstance(payload, bytes)

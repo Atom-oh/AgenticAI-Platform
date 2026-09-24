@@ -159,6 +159,8 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   `/releases/:id/blob` chunk, `/runs/:id/baseline` and `/releases/:id/git` apply the
   publishing-handoff/1 round-state content permission and the upstream-lineage
   permission checks; a restricted state or revoked upstream is `404 not-found`.
+  The same reader rechecks every observed version and deadline after each chunk's
+  bytes are read and before the chunk is returned.
 - Release record includes sourceHash,bundleHash,catalogHash,contractHash,guidelineId,approval,rebuildEvidence,status.
 - GET `/git-connections` exposes configured connection IDs/labels/repository visibility only; no credentials.
 - POST `/releases/:id/git` `{connectionId,requestId}` starts authorized feature-branch export.

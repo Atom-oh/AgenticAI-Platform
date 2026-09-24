@@ -312,10 +312,13 @@ class WorkspaceAPI:
         single-owner legacy workspace has no other audience and no admissions.
         """
         if not scope or not scope.get("project"):
-            return
+            return None
         from workbench.service import Service
         from workspace.ontology_sources import Sources
-        Sources(Service(self, scope, claims or {})).round_delivery(run_id, number)
+        reader = Sources(Service(self, scope, claims or {}))
+        reader.round_delivery(run_id, number)
+        # The caller performs its last byte read and then `reader.recheck()` before returning.
+        return reader
 
     def _route(self, owner, method, parts, event, query, scope=None, claims=None):
         if parts[0] in ("documents", "impact-analyses"):
@@ -367,8 +370,8 @@ class WorkspaceAPI:
                 from workspace.git_service import hydrate_release
                 return _json(200, {"release": hydrate_release(self.storage, owner, release)})
             if parts[2] == "blob":
-                self._round_delivery(scope, claims, release.get("runId"), release.get("round"))
-                return self._release_download(owner, release, query)
+                reader = self._round_delivery(scope, claims, release.get("runId"), release.get("round"))
+                return self._release_download(owner, release, query, after_read=reader and reader.recheck)
         if len(parts) == 3 and parts[0] == "releases" and parts[2] == "git" and method == "POST":
             from workspace.git_service import create_export
             release = self._get(owner, "release", parts[1])
@@ -449,10 +452,13 @@ class WorkspaceAPI:
             if kind == "run":
                 return self._run_approve(owner, record, _body(event), scope=scope)
         if len(parts) == 3 and parts[2] == "blob" and method == "GET" and kind in ("asset", "run"):
+            reader = None
             if kind == "run":
-                # Every chunk of every round artifact kind rechecks state permission and lineage.
-                self._round_delivery(scope, claims, record["id"], self._query_int(query, "round", 1, 5, minimum=1))
-            return self._download(owner, kind, record, query)
+                # Every chunk of every round artifact kind rechecks state permission and lineage,
+                # and the same reader rechecks after the chunk's bytes are read.
+                reader = self._round_delivery(scope, claims, record["id"],
+                                              self._query_int(query, "round", 1, 5, minimum=1))
+            return self._download(owner, kind, record, query, after_read=reader and reader.recheck)
         raise HTTPError(404, "not-found", "Route not found")
 
     def _create_asset(self, owner, body):
@@ -1150,7 +1156,7 @@ class WorkspaceAPI:
             raise HTTPError(400, "invalid-offset", f"Invalid {key}")
         return _integer(int(value), key, minimum, maximum)
 
-    def _release_download(self, owner, release, query):
+    def _release_download(self, owner, release, query, after_read=None):
         kind = query.get("kind", "source")
         if kind not in ("source", "dist", "manifest", "report"):
             raise HTTPError(400, "invalid-kind", "Choose a release artifact")
@@ -1162,6 +1168,8 @@ class WorkspaceAPI:
         if info["size"] > MAX_FILE_BYTES or offset > info["size"] or (offset == info["size"] and offset != 0):
             raise HTTPError(416, "invalid-range", "Offset is outside the stored artifact")
         data = self.storage.get_blob(key, offset=offset, length=CHUNK_BYTES)
+        if after_read:
+            after_read()
         extension = "zip" if kind in ("source", "dist") else "json"
         filename = f"{release['id']}-{kind}.{extension}"
         return {"statusCode": 200, "isBase64Encoded": True, "body": base64.b64encode(data).decode(),
@@ -1170,7 +1178,7 @@ class WorkspaceAPI:
                             "X-Content-Type": info["contentType"], "X-Total-Size": str(info["size"]),
                             "X-Chunk-Size": str(len(data)), "X-SHA256": info["sha256"]}}
 
-    def _download(self, owner, kind, record, query):
+    def _download(self, owner, kind, record, query, after_read=None):
         offset = self._query_int(query, "offset", 0, MAX_FILE_BYTES)
         requested = query.get("kind", "original" if kind == "asset" else "html")
         filename, declared_type = record.get("name", "artifact"), "application/octet-stream"
@@ -1205,6 +1213,8 @@ class WorkspaceAPI:
         # Only inert raster formats can be navigated inline on the app origin.
         mime = declared_type if declared_type in ("image/png", "image/jpeg", "image/webp") and info["contentType"] == declared_type else "application/octet-stream"
         data = self.storage.get_blob(key, offset=offset, length=CHUNK_BYTES)
+        if after_read:
+            after_read()
         headers = {
             **_BASE_HEADERS, "Content-Type": mime, "X-Content-Type": mime,
             "X-Total-Size": str(info["size"]), "X-Chunk-Size": str(len(data)), "X-SHA256": info["sha256"],
