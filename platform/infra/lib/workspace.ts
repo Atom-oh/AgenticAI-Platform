@@ -214,13 +214,15 @@ export class StudioWorkspace extends Construct {
     browser.grantInvoke(workerRole);
     // source-admission/1: the intake-image task runs the residual scan in the Worker.
     // The private deny-list is an SSM SecureString named by context; without it
-    // the Worker has no deny-list and image admission blocks (denylist-unavailable).
-    worker.addEnvironment('INTAKE_DEPLOYMENT', String(this.node.tryGetContext('intakeDeployment') ?? stack.stackName));
+    // the Worker has no deny-list or deployment scope and image admission blocks
+    // (denylist-unavailable / policy-unavailable). Without the context the Worker
+    // template is unchanged (no main-stack delta until B1 enables intake).
     const intakeDenylistParam = this.node.tryGetContext('intakeDenylistParam');
     if (intakeDenylistParam !== undefined) {
       if (typeof intakeDenylistParam !== 'string' || !/^\/[A-Za-z0-9_.\/-]{1,1000}$/.test(intakeDenylistParam)) {
         throw new Error('intakeDenylistParam must be an SSM parameter name starting with "/"; values are never inlined.');
       }
+      worker.addEnvironment('INTAKE_DEPLOYMENT', String(this.node.tryGetContext('intakeDeployment') ?? stack.stackName));
       worker.addEnvironment('INTAKE_DENYLIST_PARAM', intakeDenylistParam);
       workerRole.addToPolicy(new iam.PolicyStatement({
         actions: ['ssm:GetParameter'],
