@@ -647,7 +647,10 @@ live evidence and the privacy redaction adapter remain outstanding.
   `ConditionCheckItem` fences remain. `check_infra.py` fails any other policy
   that can write the workspace table without that Deny. Without intake context
   the admission path has no deployment scope (`policy-unavailable`) and the
-  main-stack template is unchanged.
+  main-stack template is unchanged. With intake configured, the Workspace API
+  (reviewer routes and document admission), the Worker and IntakeAdminFn all
+  receive the same `INTAKE_DEPLOYMENT` (`intakeDeployment` context, default the
+  stack name); `check_infra.py` checks each function's environment on its own.
 - **Reviewer routes.** `GET /studio-api/intake/reviews` and
   `POST /studio-api/intake/reviews/{decisionId}` require the workspace JWT, a
   current `adm_grant` covering the project with `review-internal`, **and**

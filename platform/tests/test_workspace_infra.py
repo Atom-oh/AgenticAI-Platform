@@ -40,7 +40,7 @@ def test_tls_denial_is_not_mistaken_for_public_grant():
 
 def _worker(template, parameter="/bank/intake/denylist", resource=None, actions=("ssm:GetParameter",)):
     template["Resources"]["DesignerWorkspaceWorkerABC"] = {"Type": "AWS::Lambda::Function", "Properties": {
-        "Environment": {"Variables": {"INTAKE_DENYLIST_PARAM": parameter}}}}
+        "Environment": {"Variables": {"INTAKE_DENYLIST_PARAM": parameter, "INTAKE_DEPLOYMENT": "BankPlatform"}}}}
     arn = resource if resource is not None else {"Fn::Join": ["", [
         "arn:", {"Ref": "AWS::Partition"}, ":ssm:ap-northeast-2:", {"Ref": "AWS::AccountId"}, ":parameter", parameter]]}
     template["Resources"]["DesignerWorkspaceWorkerRoleDefaultPolicyABC"] = {"Type": "AWS::IAM::Policy", "Properties": {
@@ -68,7 +68,8 @@ INTAKE_KEYS = ["owner#" + __import__("hashlib").sha256(b"intake:deployment").hex
 def _intake_admin(template):
     resources = template["Resources"]
     resources["IntakeAdminFnABC"] = {"Type": "AWS::Lambda::Function", "Properties": {
-        "Handler": "intake.admin_handler.handler", "Role": {"Fn::GetAtt": ["IntakeAdminRoleABC", "Arn"]}}}
+        "Handler": "intake.admin_handler.handler", "Role": {"Fn::GetAtt": ["IntakeAdminRoleABC", "Arn"]},
+        "Environment": {"Variables": {"INTAKE_DEPLOYMENT": "BankPlatform"}}}}
     resources["IntakeAdminRoleDefaultPolicyABC"] = {"Type": "AWS::IAM::Policy", "Properties": {"PolicyDocument": {
         "Statement": [{"Effect": "Allow", "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
                        "Resource": {"Fn::GetAtt": ["DesignerWorkspaceRecords", "Arn"]},
@@ -117,6 +118,11 @@ def test_synthesized_template_with_the_intake_flag_passes(tmp_path):
     assert resources[functions[0]]["Properties"]["Handler"] == "intake.admin_handler.handler"
     assert resources[functions[0]]["Properties"]["Runtime"] == "python3.12"
     assert audit_template(data) == []
+    # Review 2, finding 3: each function carries the same deployment scope.
+    scopes = {k: v["Properties"].get("Environment", {}).get("Variables", {}).get("INTAKE_DEPLOYMENT")
+              for k, v in resources.items() if v["Type"] == "AWS::Lambda::Function"
+              and k.startswith(("DesignerWorkspaceApi", "DesignerWorkspaceWorker", "IntakeAdmin"))}
+    assert len(scopes) == 3 and len(set(scopes.values())) == 1 and None not in scopes.values(), scopes
     # Finding 1 (PR #28 review): the API and Worker roles carry the partition Deny,
     # and removing it from either is a release blocker.
     for marker in ("DesignerWorkspaceApiRoleDefaultPolicy", "DesignerWorkspaceWorkerRoleDefaultPolicy"):
@@ -180,3 +186,28 @@ def test_intake_partition_rule_applies_whenever_the_worker_is_intake_configured(
     unconfigured = template()
     _workload(unconfigured, "DesignerWorkspaceApiRoleDefaultPolicyABC", deny=False)
     assert audit_template(unconfigured) == []
+
+
+# PR #28 review round 2: every intake function receives the same deployment scope ----
+
+def _functions(template, api="BankPlatform", worker="BankPlatform", admin="BankPlatform"):
+    resources = template["Resources"]
+    for name, value in (("DesignerWorkspaceApiABC", api), ("DesignerWorkspaceWorkerABC", worker)):
+        variables = {} if value is None else {"INTAKE_DEPLOYMENT": value}
+        resources[name] = {"Type": "AWS::Lambda::Function", "Properties": {"Environment": {"Variables": variables}}}
+    _intake_admin(template)
+    if admin is None:
+        del resources["IntakeAdminFnABC"]["Properties"]["Environment"]
+    else:
+        resources["IntakeAdminFnABC"]["Properties"]["Environment"]["Variables"]["INTAKE_DEPLOYMENT"] = admin
+    return template
+
+
+def test_every_intake_function_receives_the_same_deployment_scope():
+    """Review 2, finding 3: API, Worker and IntakeAdminFn are checked independently."""
+    assert audit_template(_functions(template())) == []
+    for field in ("api", "worker", "admin"):
+        missing = audit_template(_functions(template(), **{field: None}))
+        assert any("INTAKE_DEPLOYMENT" in item for item in missing), field
+        other = audit_template(_functions(template(), **{field: "Other"}))
+        assert any("INTAKE_DEPLOYMENT" in item for item in other), field

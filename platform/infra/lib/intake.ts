@@ -22,6 +22,11 @@ export function intakeConfigured(node: Node): boolean {
     || node.tryGetContext('intakeDeployment') !== undefined;
 }
 
+/** The single deployment scope shared by the Workspace API, the Worker and IntakeAdminFn. */
+export function intakeDeploymentScope(node: Node, stack: cdk.Stack): string {
+  return String(node.tryGetContext('intakeDeployment') ?? stack.stackName);
+}
+
 /**
  * source-admission/1: policies, provenance and reviewer grants share the workspace
  * table, so a workload role that can write the table gets an explicit Deny on the
@@ -84,7 +89,7 @@ export class IntakeAdmin extends Construct {
       reservedConcurrentExecutions: 1, logGroup,
       environment: {
         WORKSPACE_TABLE: props.table.tableName,
-        INTAKE_DEPLOYMENT: String(this.node.tryGetContext('intakeDeployment') ?? stack.stackName),
+        INTAKE_DEPLOYMENT: intakeDeploymentScope(this.node, stack),
       },
       description: 'IAM-only source-admission administration; no API route or Function URL',
     });

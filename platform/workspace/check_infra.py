@@ -72,6 +72,7 @@ def audit_template(template: dict) -> list[str]:
     issues.extend(_intake_denylist_issues(resources))
     issues.extend(_intake_admin_issues(resources))
     issues.extend(_intake_partition_issues(resources))
+    issues.extend(_intake_scope_issues(resources))
     for identifier, resource in resources.items():
         if resource["Type"] == "AWS::CloudFront::Distribution":
             origins = json.dumps(resource.get("Properties", {}).get("DistributionConfig", {}).get("Origins", []))
@@ -257,6 +258,31 @@ def _intake_partition_issues(resources):
         if writers and not _denies_intake_writes(statements, records):
             issues.append(f"{identifier}: a workload that can write the workspace table must be denied "
                           "writes to the intake:deployment administrative partition")
+    return issues
+
+
+INTAKE_SCOPED_FUNCTIONS = ("DesignerWorkspaceApi", "DesignerWorkspaceWorker", "IntakeAdmin")
+
+
+def _intake_scope_issues(resources):
+    """Every intake function carries the same `INTAKE_DEPLOYMENT` (reviewer routes need it).
+
+    Each function is checked on its own: the Workspace API (reviewer routes and
+    document admission), the Worker (`intake-image`) and IntakeAdminFn.
+    """
+    if not _intake_configured(resources):
+        return []
+    issues, scopes = [], {}
+    for identifier, resource in resources.items():
+        if resource["Type"] != "AWS::Lambda::Function" or not identifier.startswith(INTAKE_SCOPED_FUNCTIONS):
+            continue
+        value = resource.get("Properties", {}).get("Environment", {}).get("Variables", {}).get("INTAKE_DEPLOYMENT")
+        if not isinstance(value, str) or not value:
+            issues.append(f"{identifier}: intake is configured but INTAKE_DEPLOYMENT is missing")
+        else:
+            scopes[identifier] = value
+    if len(set(scopes.values())) > 1:
+        issues.append("Intake functions disagree on INTAKE_DEPLOYMENT: " + ", ".join(sorted(scopes)))
     return issues
 
 
