@@ -207,7 +207,12 @@ live sharing or release evidence.
   (`adm_sharing`) at exactly the revision bound at approval, still active and
   unexpired (restricted, revoked or re-issued upstream policy beats the grant:
   `409 source-upstream-revoked`; historical `404 not-found`). Policy records are
-  fenced and their currency rechecked by `recheck()` and before commit. Withdrawal is
+  fenced and their currency rechecked by `recheck()` and before commit.
+  A transcription document revision (`transcriptionOf`) is shareable only while
+  its whole lineage is current, checked on every current and historical read
+  without origin membership: the transcription and image admissions at the bound
+  revisions and hashes, their policies and reviewer grants/provenance, and the
+  original image asset; every record is fenced into the destination reader. Withdrawal is
   `409 source-withdrawn` and a newer revision `409 source-superseded` for current
   use; historical metadata stays readable while the grant and upstream remain.
   Returned metadata (current and historical) is built only from the granted

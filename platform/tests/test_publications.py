@@ -592,3 +592,39 @@ def test_published_package_sources_join_the_package_recheck_set(api, monkeypatch
     original = component_catalog.read_catalog()
     monkeypatch.setattr(component_catalog, "read_catalog", lambda: {**original, "hash": "f" * 64})
     assert denied(reader.recheck) == (409, "ontology-package-stale")
+
+
+from test_intake_admission import env  # noqa: E402,F401
+from test_intake_transcription import chain, doc_ref, library_review  # noqa: E402,F401
+
+
+def test_shared_transcription_is_fenced_through_its_image_lineage(chain):
+    """Review 2 #2: publication reads validate transcriptionOf -> image admission lineage."""
+    api = chain.api
+    people = ("alice", "bob", "carol", "dana", "erin", "frank", "gina")
+    api.collaboration.directory = lambda q: [{"sub": x, "displayName": x} for x in people if q in x]
+    assert library_review(chain, "bob")[0] == 200
+    ref = doc_ref(chain)
+    graph = {"schemaVersion": 1, "projectId": chain.pid, "edges": [],
+             "nodes": [node("atom-t", "Atom", project=chain.pid, sourceRefs=[ref])]}
+    result = Ontology(ctx(api, "alice", chain.pid)).publish_candidate("collection", graph, expected_generation=None,
+                                                                      request_id="transcribed")
+    identifier, generation = result["identities"]["atom-t"], result["generation"]
+    for decision in ("reviewed", "approved"):
+        generation = Ontology(ctx(api, "carol", chain.pid)).review_node(
+            identifier, expected_generation=generation, revision=1, decision=decision, reason="checked",
+            request_id=f"t-{decision}")["generation"]
+    nodes = {n["id"]: n for n in Ontology(ctx(api, "alice", chain.pid)).read([identifier])["nodes"]}
+    share(api, chain.pid, ref)
+    dest = new_project(api, "dest", {"erin": "owner", "gina": "designer"})
+    org = SimpleNamespace(api=api, origin=chain.pid, dest=dest, nodes=nodes, refs=[ref])
+    pub = published(org)
+    published_ref = publications.published_asset_reference(pub, granted(org, pub))
+    reader = Sources(ctx(api, "gina", dest))
+    assert reader.resolve(published_ref, text=True)["text"]
+    assert ("intake:deployment", "adm_grant", "grant-dana") in set(reader.observed)
+    chain.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+    assert denied(Sources(ctx(api, "gina", dest)).resolve, published_ref) == (409, "source-upstream-revoked")
+    assert denied(Sources(ctx(api, "gina", dest)).authorize, published_ref) == (404, "not-found")

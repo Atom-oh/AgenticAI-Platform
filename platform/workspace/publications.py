@@ -442,8 +442,80 @@ def impact(ctx, publication_id):
 
 # published-asset source adapter ------------------------------------------------
 
+def _admitted(storage, origin, decision_id, revision, artifact_kind):
+    """One admitted decision of the origin project with its current policy, grant/provenance.
+
+    A record-level check that needs no origin membership: the decision must be
+    schema-valid, admitted and unexpired at the bound revision, and every
+    administration record it depends on current. Returns fences or None.
+    """
+    from intake import admission, records
+    owner, now = f"project:{origin}", storage.clock()
+    try:
+        decision = storage.get(owner, "adm_decision", decision_id)
+        decision = records.validate("adm_decision", decision) if decision else None
+    except ValueError:
+        return None
+    if (not decision or decision["projectId"] != origin or decision["status"] != "admitted"
+            or not records.is_current(decision, now) or decision["revision"] != revision
+            or decision["artifact"]["kind"] != artifact_kind):
+        return None
+    try:
+        policy = admission._policy_current(storage, decision, origin)
+    except admission.AdmissionError:
+        return None
+    fences = [(owner, "adm_decision", decision), (INTAKE_OWNER, "adm_policy", policy)]
+    if "provenance" in decision:
+        provenance = admission._admin_record(storage, "adm_provenance", decision["provenance"]["id"])
+        if (not provenance or provenance["revision"] != decision["provenance"]["revision"]
+                or not admission._provenance_ok(provenance, policy, decision["source"], origin,
+                                                decision["dataClass"], now)):
+            return None
+        fences.append((INTAKE_OWNER, "adm_provenance", provenance))
+    if "review" in decision:
+        grant = admission._admin_record(storage, "adm_grant", decision["review"]["grantId"])
+        if (not grant or grant["revision"] != decision["review"]["grantRevision"]
+                or not admission._grant_ok(grant, decision["review"]["actor"], policy, origin, now)):
+            return None
+        fences.append((INTAKE_OWNER, "adm_grant", grant))
+    return decision, fences
+
+
+def _transcription_lineage(storage, origin, revision):
+    """A transcription revision is shareable only while its whole image lineage is current.
+
+    The same bindings as `Library._lineage`: the reviewer-validated transcription
+    admission, the image admission it derives from, their policies and reviewer
+    grants, and the original image asset. Returns every record to fence, or None.
+    """
+    lineage = revision.get("transcriptionOf")
+    if not isinstance(lineage, dict) or not isinstance(lineage.get("transcription"), dict):
+        return None
+    bound = lineage["transcription"]
+    transcribed = _admitted(storage, origin, bound.get("decisionId"), bound.get("decisionRevision"),
+                            "diagram-transcription")
+    image = _admitted(storage, origin, lineage.get("decisionId"), lineage.get("decisionRevision"), "image")
+    if transcribed is None or image is None:
+        return None
+    (transcription, first), (picture, second) = transcribed, image
+    if (transcription["derivation"]["derivativeHash"] != bound.get("artifactHash")
+            or transcription.get("lineage") != {"decisionId": picture["id"], "decisionRevision": picture["revision"]}
+            or picture["artifact"].get("vision", {}).get("sha256") != lineage.get("visionSha256")
+            or dict(picture["source"]) != lineage.get("sourceRef")):
+        return None
+    source = picture["source"]
+    asset = storage.get(f"project:{origin}", "asset", source["sourceId"]) if source["sourceKind"] == "asset" else None
+    if (source["sourceKind"] != "asset" or not asset or asset.get("accessRevoked") or asset.get("tombstone")
+            or asset.get("status") == "deleted" or asset.get("sha256") != source["sha256"]):
+        return None
+    return [*first, *second, (f"project:{origin}", "asset", asset)]
+
+
 def _upstream(storage, origin, ref):
-    """The origin source's current audience still admits organization reuse; returns its record."""
+    """The origin source's current audience still admits organization reuse.
+
+    Returns `(owner, kind, record)` fences, or None when the upstream is restricted.
+    """
     owner = f"project:{origin}"
     kind = ref["sourceKind"]
     if kind == "asset":
@@ -453,7 +525,7 @@ def _upstream(storage, origin, ref):
                 or row.get("sha256") != ref["sha256"] or str(row.get("importRevision", 1)) != ref["revision"]
                 or ref["audienceRevision"] != PROJECT_AUDIENCE):
             return None
-        return [("asset", row)]
+        return [(owner, "asset", row)]
     if kind == "document-revision":
         document = storage.get(owner, "document", ref["sourceId"])
         revision = storage.get(owner, "docrevision", ref["revision"]) if ref["revision"].startswith(
@@ -464,14 +536,20 @@ def _upstream(storage, origin, ref):
                 or str(document.get("aclVersion")) != ref["audienceRevision"]
                 or sorted(document.get("readRoles", [])) != sorted(ROLES)):
             return None
-        return [("document", document), ("docrevision", revision)]
+        fences = [(owner, "document", document), (owner, "docrevision", revision)]
+        if "transcriptionOf" in revision:
+            lineage = _transcription_lineage(storage, origin, revision)
+            if lineage is None:
+                return None
+            fences.extend(lineage)
+        return fences
     if kind == "product-guideline":
         guide = storage.get(owner, "guideline", ref["sourceId"])
         if (not guide or guide.get("projectId") != origin or guide.get("status") != "published"
                 or guide.get("sha256") != ref["sha256"] or str(guide.get("revision")) != ref["revision"]
                 or ref["audienceRevision"] != PROJECT_AUDIENCE):
             return None
-        return [("guideline", guide)]
+        return [(owner, "guideline", guide)]
     if kind == "package":
         from workspace.component_catalog import read_catalog
         catalog = read_catalog()
@@ -563,8 +641,8 @@ def resolve_published(sources, ref, *, historical=False, text=False):
                 if historical:
                     _not_found()
                 fail(409, "source-upstream-revoked", "원본 프로젝트의 읽기 범위가 변경되어 게시물을 사용할 수 없습니다.")
-            for kind, item in upstream:
-                sources._remember_owned(f"project:{record['originProject']}", kind, item)
+            for owner, kind, item in upstream:
+                sources._remember_owned(owner, kind, item)
     if not historical:
         if record["status"] == "withdrawn":
             fail(409, "source-withdrawn", "철회된 게시물입니다.")
