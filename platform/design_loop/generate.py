@@ -50,7 +50,7 @@ def build_prompts(prd: Dict[str, Any], sm: Dict[str, Any], spec: Dict[str, Any],
         asset_txt = "\n\n### 디자인 자산 (팔레트·토큰 — 이 값이 기본 스타일을 이긴다)\n" + "\n".join(
             f"- {a.get('name')} ({a.get('type')}): {json.dumps(a.get('content'), ensure_ascii=False)[:600]}" for a in assets)
     style = {
-        "design": "완성도 있는 모바일 뱅킹 화면(하나은행 톤, 청록 #008485 계열). 실제 서비스처럼 보이되 이미지는 쓰지 않는다(CSS 도형·이모지만).",
+        "design": "완성도 있는 모바일 뱅킹 화면(고객사 A 톤, 청록 #008485 계열). 실제 서비스처럼 보이되 이미지는 쓰지 않는다(CSS 도형·이모지만).",
         "wireframe": "회색조 와이어프레임. 브랜드 컬러 사용 금지, 자리표시 박스와 라벨만.",
         "mockup": "고충실도 목업. 실제 문구·수치 채움.",
         "uxflow": "각 스텝 화면 상단에 진행 표시(현재 스텝 강조)를 넣고, 분기 조건을 화면 안에 배지로 표기.",

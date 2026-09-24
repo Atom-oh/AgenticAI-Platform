@@ -416,6 +416,15 @@ export class BankPlatformStack extends cdk.Stack {
       agentsRuntime.node.addDependency(runtimeRole);
     }
 
+    // ---------- 공개 게시 게이트 deny-list (engine plan E2 3a) ----------
+    // 운영자가 SecureString 으로 만드는 사설 파라미터. 두 레거시 공개 게시자(WsFn·StudioLoopFn)는 정확히 이 파라미터만
+    // 읽는다. 값이 없거나 읽지 못하면 게시가 차단된다(api/common/public_scan.py). check_infra.py 가 확인한다.
+    const publicDenylistParam = '/bank-platform/public-denylist';
+    const publicDenylistRead = new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:aws:ssm:${region}:${account}:parameter${publicDenylistParam}`],
+    });
+
     // ---------- WsFn — 클라우드 플레인 본체 (VPC 밖: Bedrock·Cognito·API GW·프록시) ----------
     const fn = new lambda.Function(this, 'WsFn', {
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -454,10 +463,12 @@ export class BankPlatformStack extends cdk.Stack {
         AGENTCORE_REGISTRY_REGION: 'us-east-1',
         AGENTS_RUNTIME_ARN: agentsRuntime ? agentsRuntime.attrAgentRuntimeArn : '',
         WEB_BUCKET: webBucket.bucketName,   // 디자인 스튜디오 산출물 design-runs/* (CloudFront 로 서빙)
+        PUBLIC_DENYLIST_PARAM: publicDenylistParam,
       },
       description: 'bank-platform websocket backend (cloud plane)',
     });
     webBucket.grantReadWrite(fn, 'design-runs/*');
+    fn.addToRolePolicy(publicDenylistRead);
     connTable.grantReadWriteData(fn);
     traceTable.grantReadWriteData(fn);
     cacheTable.grantReadWriteData(fn);
@@ -559,6 +570,7 @@ export class BankPlatformStack extends cdk.Stack {
         CACHE_TABLE: cacheTable.tableName,
         DAILY_TOKEN_CAP: '2000000',
         WEB_BUCKET: webBucket.bucketName,
+        PUBLIC_DENYLIST_PARAM: publicDenylistParam,
         WEB_URL: `https://${props.domainName ?? 'agent.atomai.click'}`,
         TRACE_TABLE: traceTable.tableName,
         GRAPH_BACKEND: props.graphBackend,
@@ -579,6 +591,7 @@ export class BankPlatformStack extends cdk.Stack {
     traceTable.grantReadWriteData(studioLoopFn);
     cacheTable.grantReadWriteData(studioLoopFn);
     webBucket.grantReadWrite(studioLoopFn, 'studio/*');
+    studioLoopFn.addToRolePolicy(publicDenylistRead);
     studioLoopFn.addToRolePolicy(bedrockInvoke);
     studioLoopFn.addToRolePolicy(guardrailApply);
     wsStage.grantManagementApiAccess(studioLoopFn);

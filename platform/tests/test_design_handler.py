@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "api"))
@@ -19,6 +22,13 @@ from handlers import design  # noqa: E402
 import handlers  # noqa: E402
 from agentcore import runtime  # noqa: E402
 from design_loop import derive_prd  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _public_denylist(monkeypatch):
+    """Legacy public writers require the private deny-list (engine plan E2 3a); tests use a synthetic entry."""
+    from common import public_scan
+    monkeypatch.setattr(public_scan, "load_patterns", lambda: ["zz" + uuid.uuid4().hex + "zz"])
 
 
 class _Apigw:

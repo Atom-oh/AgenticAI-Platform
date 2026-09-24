@@ -97,10 +97,10 @@ def handler(event, context):
 
         if method == "POST":
             # every write requires a signed-in designer (Cognito access token
-            # in the x-hana-auth header; Authorization is reserved by OAC)
+            # in the x-bank-auth header; Authorization is reserved by OAC)
             actor = actor_from_event(event)
             if actor is None:
-                return _resp(401, {"error": "로그인이 필요합니다 (x-hana-auth)"})
+                return _resp(401, {"error": "로그인이 필요합니다 (x-bank-auth)"})
             if path.endswith("/api/feedback"):
                 return _resp(*handle_feedback(body, actor))
             if path.endswith("/api/assets"):

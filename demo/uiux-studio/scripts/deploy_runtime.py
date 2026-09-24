@@ -8,8 +8,8 @@ import time
 import boto3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-REPO = "hana-design-harness"
-RUNTIME = "hana_design_harness"
+REPO = "bank-design-harness"
+RUNTIME = "bank_design_harness"
 
 
 def list_all_agent_runtimes(ac):
@@ -62,11 +62,11 @@ def main():
     sm = boto3.client("secretsmanager", region_name=region)
     secret_value = client_desc["UserPoolClient"]["ClientSecret"]
     try:
-        sec = sm.create_secret(Name="hana/m2m-client-secret", SecretString=secret_value)
+        sec = sm.create_secret(Name="bank/m2m-client-secret", SecretString=secret_value)
     except sm.exceptions.ResourceExistsException:
-        sm.put_secret_value(SecretId="hana/m2m-client-secret", SecretString=secret_value)
-        sec = sm.describe_secret(SecretId="hana/m2m-client-secret")
-    # secretsmanager:GetSecretValue for hana-agentcore-runtime is granted in CDK (infra/stack.py)
+        sm.put_secret_value(SecretId="bank/m2m-client-secret", SecretString=secret_value)
+        sec = sm.describe_secret(SecretId="bank/m2m-client-secret")
+    # secretsmanager:GetSecretValue for bank-agentcore-runtime is granted in CDK (infra/stack.py)
 
     env = {"GATEWAY_URL": cfg["gateway_url"],
            "USER_POOL_DOMAIN": cfg["cognito_domain"],

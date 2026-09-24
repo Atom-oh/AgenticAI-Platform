@@ -35,6 +35,9 @@ echo "== 1) api-dist 조립 =="
 rm -rf api-dist && mkdir -p api-dist/seed/out
 cp api/*.py api-dist/
 cp -r api/common api/handlers engine graph onprem semantic api-dist/
+# 공개 게시 게이트(api/common/public_scan.py)의 스캐너 코어와 승인 미디어 레지스트리 — 두 번째 사본을 두지 않고 복사한다
+cp ../scripts/check_public_identifiers.py api-dist/common/public_scan_core.py
+cp ../scripts/public-assets.sha256 api-dist/common/public-assets.sha256
 for m in registry screengen report agentcore design_loop studio workspace workbench documents; do [ -d "$m" ] && cp -r "$m" api-dist/; done
 mkdir -p api-dist/react-kit
 cp react-kit/catalog.json api-dist/react-kit/

@@ -6,7 +6,57 @@ import sys
 from pathlib import Path
 
 
-def audit_template(template: dict) -> list[str]:
+PUBLIC_DENYLIST_PARAM = "/bank-platform/public-denylist"
+PUBLIC_WRITERS = ("WsFn", "StudioLoopFn")   # legacy public publishers (engine plan E2 3a)
+
+
+def _logical(ref) -> str:
+    if isinstance(ref, dict):
+        if "Ref" in ref:
+            return ref["Ref"]
+        if "Fn::GetAtt" in ref:
+            return ref["Fn::GetAtt"][0]
+    return ""
+
+
+def audit_public_writers(resources: dict) -> list[str]:
+    """Each legacy public writer gets PUBLIC_DENYLIST_PARAM and ssm:GetParameter on exactly that parameter
+    (review round 21, AO2). A wildcard or a list of other parameters is not "exactly"."""
+    issues = []
+    for writer in PUBLIC_WRITERS:
+        functions = [(i, r) for i, r in resources.items() if r.get("Type") == "AWS::Lambda::Function"
+                     and i.startswith(writer) and not i.startswith(writer + "ServiceRole")]
+        if len(functions) != 1:
+            issues.append(f"{writer}: expected exactly one public publisher function")
+            continue
+        identifier, fn = functions[0]
+        props = fn.get("Properties", {})
+        if props.get("Environment", {}).get("Variables", {}).get("PUBLIC_DENYLIST_PARAM") != PUBLIC_DENYLIST_PARAM:
+            issues.append(f"{identifier}: PUBLIC_DENYLIST_PARAM must name {PUBLIC_DENYLIST_PARAM}")
+        role = _logical(props.get("Role"))
+        granted = False
+        for resource in resources.values():
+            if resource.get("Type") != "AWS::IAM::Policy":
+                continue
+            if role not in [_logical(r) for r in resource.get("Properties", {}).get("Roles", [])]:
+                continue
+            for statement in resource["Properties"].get("PolicyDocument", {}).get("Statement", []):
+                actions = statement.get("Action", [])
+                actions = [actions] if isinstance(actions, str) else actions
+                if statement.get("Effect") != "Allow" or "ssm:GetParameter" not in actions:
+                    continue
+                target = json.dumps(statement.get("Resource"))
+                if isinstance(statement.get("Resource"), list) or "*" in target \
+                        or not target.rstrip('"]} ').endswith(":parameter" + PUBLIC_DENYLIST_PARAM):
+                    issues.append(f"{identifier}: ssm:GetParameter must target exactly {PUBLIC_DENYLIST_PARAM}")
+                else:
+                    granted = True
+        if not granted:
+            issues.append(f"{identifier}: ssm:GetParameter on {PUBLIC_DENYLIST_PARAM} is missing")
+    return issues
+
+
+def audit_template(template: dict, *, require_publishers: bool = False) -> list[str]:
     resources = template.get("Resources", {})
     issues = []
     private_buckets = []
@@ -76,12 +126,14 @@ def audit_template(template: dict) -> list[str]:
                 issues.append(f"{identifier}: private originals must not be a CloudFront origin")
     if len(browser_functions) != 1 or len(private_buckets) != 1:
         issues.append("Expected exactly one private workspace bucket and isolated browser function")
+    if require_publishers:
+        issues += audit_public_writers(resources)
     return issues
 
 
 def main():
     template = json.loads(Path(sys.argv[1]).read_text())
-    issues = audit_template(template)
+    issues = audit_template(template, require_publishers=True)
     print(json.dumps({"passed": not issues, "issues": issues}, ensure_ascii=False, indent=2))
     return 1 if issues else 0
 

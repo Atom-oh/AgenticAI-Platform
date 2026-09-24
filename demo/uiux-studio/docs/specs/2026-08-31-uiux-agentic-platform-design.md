@@ -1,6 +1,6 @@
 # Original UI/UX Studio — historical PoC design
 
-**Date: 2026-08-31.** The design was recorded as user-approved with spec review pending. It targeted the former `hana/uiux-platform/` project in account `180294183052`, Seoul. The migrated implementation is now `demo/uiux-studio/`. This record preserves decisions; [the current README](../../README.md), code, and `demo/SECURITY-GOVERNANCE.md` establish present scope.
+**Date: 2026-08-31.** The design was recorded as user-approved with spec review pending. It targeted the former `uiux-platform/` project in account `180294183052`, Seoul. The migrated implementation is now `demo/uiux-studio/`. This record preserves decisions; [the current README](../../README.md), code, and `demo/SECURITY-GOVERNANCE.md` establish present scope.
 
 This was an external-service HTML-design PoC. It is separate from root `SPEC.md` §7-1's main React workspace, which accepts approved files without a Figma connection and creates private verified React releases.
 
@@ -8,7 +8,7 @@ This was an external-service HTML-design PoC. It is separate from root `SPEC.md`
 
 Demonstrate shared design assets and organizational instructions: Figma ingestion → Gateway MCP → skill registry → AgentCore Runtime generation → CloudFront gallery. The selected gallery direction was a prompt-first showcase with large preview cards. The original canvas reference was <https://claude.ai/code/artifact/cf92ef19-6fb2-40b5-b001-6cdacddd64d5>; local design references remain in `design-canvas/`.
 
-The chosen draft direction was a mobile single screen with card sections, a primary action, no fake device chrome, and 44-pixel minimum hit targets. Hana-themed green/ink/off-white tokens and Noto Sans KR were design inputs, not evidence of customer approval or compliance. Korean copy and bank-like values in samples are fixtures.
+The chosen draft direction was a mobile single screen with card sections, a primary action, no fake device chrome, and 44-pixel minimum hit targets. Bank-themed green/ink/off-white tokens and Noto Sans KR were design inputs, not evidence of customer approval or compliance. Korean copy and bank-like values in samples are fixtures.
 
 ## Components and implementation boundary
 

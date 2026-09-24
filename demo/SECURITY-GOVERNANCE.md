@@ -57,7 +57,7 @@ The control room's PKCE frontend uses transient `sessionStorage` state during lo
 
 ## 4. Original UI/UX Studio
 
-`demo/uiux-studio/infra/stack.py` sets Cognito self-registration off and uses an `AWS_IAM` Function URL behind CloudFront OAC. `feedback/auth.py` validates the custom `x-hana-auth` access token with Cognito. Normal POST asset/generation/feedback routes require a designer identity.
+`demo/uiux-studio/infra/stack.py` sets Cognito self-registration off and uses an `AWS_IAM` Function URL behind CloudFront OAC. `feedback/auth.py` validates the custom `x-bank-auth` access token with Cognito. Normal POST asset/generation/feedback routes require a designer identity.
 
 These facts do not establish full protection:
 
@@ -79,4 +79,4 @@ Get current account assignments and credentials from the demo administrator thro
 | Control room | `d1twhttjtzqewp.cloudfront.net` | `demo/builder-harness/` |
 | Original Studio | `d4zwmnh2s47e9.cloudfront.net` | `demo/uiux-studio/` |
 
-The 2026-09-02 surface-registration notes and later deployment reports are historical evidence. Do not infer current `APPROVED` status, uptime, matching accounts, or a unified authorization policy from these URLs. Old `Nexus`/`Hana` resource names remain identifiers for separate implementations.
+The 2026-09-02 surface-registration notes and later deployment reports are historical evidence. Do not infer current `APPROVED` status, uptime, matching accounts, or a unified authorization policy from these URLs. Old `Nexus`/`Bank` resource names remain identifiers for separate implementations.

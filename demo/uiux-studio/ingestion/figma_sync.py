@@ -43,7 +43,7 @@ def handler(event, context):
     s3.put_object(Bucket=bucket, Key="tokens/latest.json",
                   Body=json.dumps(normalized, ensure_ascii=False).encode(),
                   ContentType="application/json")
-    table.put_item(Item={"asset_id": "token:latest", "type": "token", "name": "hana-tokens",
+    table.put_item(Item={"asset_id": "token:latest", "type": "token", "name": "bank-tokens",
                          "version": "latest", "s3_key": "tokens/latest.json",
                          "figma_node_id": file_key, "updated_at": now})
     for comp in normalized["components"]:

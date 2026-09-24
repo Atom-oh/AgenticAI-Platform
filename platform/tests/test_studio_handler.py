@@ -68,10 +68,10 @@ def test_run_invokes_worker_with_clamped_job(monkeypatch):
     calls = []
     monkeypatch.setattr(h, "_invoke", lambda fn, payload: calls.append((fn, payload)))
     ctx, a = _ctx()
-    h.studio_run(ctx, {"brief": "축구 적금", "productCode": "PRD-DEP-001", "maxRounds": 50, "passScore": 20, "outputType": "ux-flow", "axis": "흐름", "assetIds": ["palette:hana"]})
+    h.studio_run(ctx, {"brief": "축구 적금", "productCode": "PRD-DEP-001", "maxRounds": 50, "passScore": 20, "outputType": "ux-flow", "axis": "흐름", "assetIds": ["palette:bank"]})
     fn, p = calls[0]
     assert fn == "studio-fn" and p["connId"] == "c1" and p["endpoint"] == "https://ws.example/prod" and p["reqId"] == "r1" and p["email"] == "u@x"
-    assert p["job"]["maxRounds"] == 20 and p["job"]["passScore"] == 50 and p["job"]["assetIds"] == ["palette:hana"] and len(p["job"]["jobId"]) == 12
+    assert p["job"]["maxRounds"] == 20 and p["job"]["passScore"] == 50 and p["job"]["assetIds"] == ["palette:bank"] and len(p["job"]["jobId"]) == 12
     ack = a.sent[-1]
     assert ack["type"] == "studio_run" and ack["jobId"] == p["job"]["jobId"] and ack["maxRounds"] == 20
     assert h._store.get_job(p["job"]["jobId"])["status"] == "running"
