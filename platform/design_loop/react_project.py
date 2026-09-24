@@ -27,7 +27,8 @@ LOGIC = ("src/logic/cases.ts", "src/logic/data.ts", "src/logic/flow.ts", "src/lo
 # values are strings, so these are emitted as numbers; anything else stays a string and the types gate decides.
 KIT_NUMERIC = {"Stack": {"gap"}, "Grid": {"gap", "columns"}, "Inline": {"gap"}}
 # Case-fixture form values per controlled adapter; the contract (E13) fills the same values.
-FIXTURE = {"controlled-text": "10000", "controlled-bool": True, "controlled-choice": "o1"}
+# Choice fixtures pick the second option: a controlled <select> whose state never updates still shows its first option.
+FIXTURE = {"controlled-text": "10000", "controlled-bool": True, "controlled-choice": "o2"}
 FINISHED_TEST_ID = "flow-finished"
 CASE_SELECT = "case-select"
 
@@ -200,7 +201,7 @@ def _ts_type(value):
 
 def project(flow, screens, k, prd_bindings, *, cases, registry=None, meta=None):
     """`screens` maps `(screenId, state)` to its composition. Returns `{path: source}`."""
-    registry = registry or Registry(k)
+    registry = (registry or Registry(k)).register_flow(flow)
     for s in flow["screens"]:
         if (s, "default") not in screens:
             raise ValueError(f"missing default composition for {s}")

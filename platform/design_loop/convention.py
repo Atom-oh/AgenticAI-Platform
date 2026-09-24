@@ -84,6 +84,12 @@ class Registry:
                 self._field(entry, field_key(self.k, asset_id))
         return entry
 
+    def register_flow(self, flow):
+        """Allocate every flow screen in flow order, so keys never depend on which consumer calls first."""
+        for screen in flow["screens"]:
+            self._entry(screen)
+        return self
+
     def page_id(self, screen):
         return self._entry(screen)["pageId"]
 

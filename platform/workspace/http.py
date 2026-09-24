@@ -27,7 +27,8 @@ from workspace.intake import EXTENSIONS
 PURPOSES = frozenset({"reference", "component", "token", "skill", "guide", "prototype", "archive"})
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
 _REQUEST = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
-_EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules", "unresolved", "bindings", "guideRefs", "requiredStates", "changeRequest")
+_EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules", "unresolved", "bindings", "guideRefs", "requiredStates", "changeRequest",
+             "designSnapshotHash")
 _BASE_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
 _JOB_TARGETS = {"finalize": ("asset", "assetId"), "run": ("run", "runId"), "release": ("release", "releaseId"),
                 "git": ("gitexport", "exportId"), "document-finalize": ("docrevision", "revisionId"),

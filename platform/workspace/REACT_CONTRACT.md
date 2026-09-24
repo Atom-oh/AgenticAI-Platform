@@ -92,6 +92,13 @@ catalog bump changes `catalogHash`, so runs approved under 1.0.0 become historic
 The exported runner (`templates/flow.test.cjs`, E12b) matches the verifier for `expectVisible false`: it polls the
 target count up to the step timeout; 0 passes (a conditionally unmounted node), 1 must not be visible, more than 1
 fails with "Unique target required". The 1.2.0 catalog bump records this runner change.
+
+Engine-derived contracts (`design_loop/contract.py`, engine plan E13) are composition-independent and frozen at
+flow approval. Targets come only from `design_loop.convention.Registry`: the page root `<pageId>`, `k<p>-cta`,
+`k<p>-f<n>`, `k<p>-n<n>`, `k<p>-f<n>-o<j>`, `case-select` (the generated App's `검증용 케이스` Select, options
+`<caseIndex>:<screenId>:<state>[:empty]`) and `flow-finished`. `derive` returns one normalized contract or the
+critical findings `contract-capacity`, `published-page-missing`, `visibility-unverifiable` or
+`contract-unsupported`, never a partial contract. Every compile, repair and Browser run uses that exact contract.
 Do not silently replace a failed React build with HTML or a stub.
 
 ## Projects, scoped access and planning

@@ -49,7 +49,7 @@ def _contains(k, screen_id):
     return seen
 
 
-def expected(prd, k):
+def expected(prd, k, published_pages=()):
     conditions, requirements = [], [{"kind": "reach-terminal", "case": "*"}]
     elig = prd.get("eligibility") if isinstance(prd.get("eligibility"), dict) else None
     eligible = elig.get("conditionId") if elig else None
@@ -75,6 +75,9 @@ def expected(prd, k):
             requirements.append({"kind": "rule-screen", "rule": rid, "when": rule.get("appliesWhen")})
     for n, notice in enumerate(prd.get("notices") or [], 1):
         requirements.append({"kind": "notice", "id": notice.get("id"), "path": f"product.notice.notice-{n}"})
+    for page in published_pages or ():                    # published mandatory pages (review round 5, Y3)
+        if page.get("required"):
+            requirements.append({"kind": "published-page", "pageId": page["pageId"], "content": page["content"]})
     return {"conditions": conditions, "requirements": requirements}
 
 
@@ -166,6 +169,10 @@ def flow_issues(flow, expectation, k):
                 targets = set(k.rules.get(req["rule"], {}).get("targets", []))
                 if applies is None or applies and not targets & shown:
                     add("rule-screen-missing", case, {"rule": req["rule"]})
+    page_ids = {k.screens.get(s, {}).get("pageId") for s in flow["screens"]}
+    for req in expectation["requirements"]:
+        if req["kind"] == "published-page" and req["pageId"] not in page_ids:
+            add("published-page-missing", detail={"pageId": req["pageId"]})
     for s in flow["screens"]:
         if s not in visited:
             add("unreachable-screen", detail={"screen": s})

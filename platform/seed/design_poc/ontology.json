@@ -397,7 +397,15 @@
        },
        "childrenProp": null
       }
-     }
+     },
+     "dataBindings": [
+      {
+       "field": "message",
+       "source": "product",
+       "path": "product.notice.notice-1",
+       "required": true
+      }
+     ]
     }
    }
   },
@@ -2183,6 +2191,24 @@
    "type": "COMPOSES",
    "src": "confirm",
    "dst": "product-summary",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-confirm-notice-alert",
+   "type": "COMPOSES",
+   "src": "confirm",
+   "dst": "notice-alert",
    "sourceRefs": [
     {
      "sourceKind": "asset",
