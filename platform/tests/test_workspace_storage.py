@@ -242,6 +242,11 @@ class FakeS3:
             self.reads.append(kwargs)
             return {"Body": body}
 
+    def delete_object(self, **kwargs):
+        with self.lock:
+            self.objects.pop((kwargs["Bucket"], kwargs["Key"]), None)
+        return {}
+
 
 @pytest.fixture
 def storage():

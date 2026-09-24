@@ -1,6 +1,7 @@
 """Single logical transition writer for agentcore-execution jobs (AGENTCORE_CONTRACT platform-execution/1)."""
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -41,6 +42,8 @@ QUOTA_OWNER = "execution:quota"
 MAX_ACTOR_ACTIVE, MAX_PROJECT_ACTIVE = 1, 2
 MAX_SOURCE_CHECKS, MAX_SOURCE_BINDINGS, TRANSACTION_LIMIT = 90, 50, 100
 DEFAULT_COMPLETION_SCOPE = {"nonSourceOperations": 10, "sourceChecks": 0, "sourceBindings": 0}
+CHUNK_BYTES, MAX_TRANSFER_CHUNKS, MAX_TRANSFER_BYTES = 256 * 1024, 512, 128 * 1024 * 1024
+_OUTPUT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}\Z")
 _OPERATION_ID = re.compile(r"[A-Za-z0-9_-]{22,128}\Z")
 _REGISTERED: set[type] = set()
 
@@ -222,11 +225,15 @@ class _Facade:
 
 
 class Ledger:
-    def __init__(self, storage, verifier, _token, *, offline=False, cost_gate=None):
+    def __init__(self, storage, verifier, _token, *, offline=False, cost_gate=None, input_resolver=None,
+                 prior_authority=None):
         if _token is not _CONSTRUCT:
             raise PermissionError("use Ledger.production or Ledger.offline")
         self.storage, self.verifier, self.offline = storage, verifier, offline
         self.cost_gate = cost_gate or CostGuardGate()
+        # B0 intake (pages_for / admitted derivative) and the B0-sharing run-round adapter are separate units;
+        # until they are wired, production refuses input and prior transfers (fail closed).
+        self.input_resolver, self.prior_authority = input_resolver, prior_authority
 
     @classmethod
     def production(cls, storage, *, verifier):
@@ -235,14 +242,15 @@ class Ledger:
         return cls(storage, verifier, _CONSTRUCT, cost_gate=CostGuardGate())
 
     @classmethod
-    def offline(cls, storage, *, verifier, cost_gate=None):
+    def offline(cls, storage, *, verifier, cost_gate=None, input_resolver=None, prior_authority=None):
         if "pytest" not in sys.modules or type(verifier).__module__ != "execution_fakes":
             raise PermissionError("offline ledger requires the offline test verifier")
-        return cls(storage, verifier, _CONSTRUCT, offline=True, cost_gate=cost_gate or _OfflineCostGate())
+        return cls(storage, verifier, _CONSTRUCT, offline=True, cost_gate=cost_gate or _OfflineCostGate(),
+                   input_resolver=input_resolver, prior_authority=prior_authority)
 
     def api(self): return _Facade(self, ("admit", "cancel", "retry", "read"))
     def dispatcher(self): return _Facade(self, ("allocate",))
-    def tool(self): return _Facade(self, ("claim", "heartbeat", "intent", "outcome", "stage", "transfer", "finish", "fail",
+    def tool(self): return _Facade(self, ("claim", "heartbeat", "intent", "outcome", "stage", "finish", "fail",
                                           "open_manifest", "open_prior", "open_input", "read_chunk",
                                           "open_output", "write_chunk", "close_output"))
     def reconciler(self): return _Facade(self, ("sweep", "reconcile", "resolve_orphan", "run_due"))
@@ -751,6 +759,196 @@ class Ledger:
             self.cost_gate.record(actual)
         return saved
 
+    # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
+    def _open_read(self, owner, job, op, *, source, key, sha256, stage=None):
+        """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts."""
+        try:
+            if not isinstance(key, str) or not self.storage.owns_key(owner, key):
+                raise ValueError("foreign key")
+            data = self.storage.get_blob(key)
+        except (ValueError, FileNotFoundError, RuntimeError) as error:
+            raise LedgerError("transfer-invalid") from error
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise LedgerError("transfer-invalid")
+        handle_id = "hdl-" + secrets.token_hex(16)
+        chunks = max(1, -(-len(data) // CHUNK_BYTES))
+        handle = {"direction": "in", "source": source, "key": key, "sha256": sha256, "total": len(data),
+                  "chunks": chunks, "attemptId": job["attempt"]["id"], "stage": stage, "status": "open", "read": []}
+        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, op=op,
+                             value=handle_id, reindex=False)
+        return {"handleId": handle_id, "total": len(data), "sha256": sha256, "chunks": chunks, "job": saved}
+
+    def _replayed_handle(self, replay):
+        handle = replay["job"]["handles"].get(replay["value"], {})
+        return {"handleId": replay["value"], "total": handle.get("total"), "sha256": handle.get("sha256"),
+                "chunks": handle.get("chunks"), "job": replay["job"]}
+
+    def _open_manifest(self, owner, job_id, attempt_id, fence, *, operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "open_manifest", operation_id, {"jobId": job_id, "attemptId": attempt_id,
+                                                                   "fence": fence})
+        if replay:
+            return self._replayed_handle(replay)
+        self._current(job, attempt_id, fence, statuses=("running",))
+        return self._open_read(owner, job, op, source="manifest", key=job["manifest"]["ref"],
+                               sha256=job["manifest"]["hash"])
+
+    def _open_prior(self, owner, job_id, attempt_id, fence, *, ref, operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "open_prior", operation_id, {"jobId": job_id, "attemptId": attempt_id,
+                                                                "fence": fence, "ref": ref})
+        if replay:
+            return self._replayed_handle(replay)
+        self._current(job, attempt_id, fence, statuses=("running",))
+        prior = next((row for row in self._manifest_priors(owner, job) if row.get("key") == ref), None)
+        if (prior is None or prior.get("sourceKind") not in ("run-round", "release")
+                or not callable(self.prior_authority)):
+            raise LedgerError("transfer-invalid")
+        try:
+            current = self.prior_authority(owner, job, copy.deepcopy(prior)) is True
+        except Exception:  # noqa: BLE001 - an authority failure is a refusal
+            current = False
+        if not current:
+            raise LedgerError("transfer-invalid")
+        return self._open_read(owner, job, op, source="prior", key=prior["key"], sha256=prior.get("sha256"))
+
+    def _open_input(self, owner, job_id, attempt_id, fence, *, decision_id, stage, operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "open_input", operation_id, {"jobId": job_id, "attemptId": attempt_id,
+                                                                "fence": fence, "decisionId": decision_id,
+                                                                "stage": stage})
+        if replay:
+            return self._replayed_handle(replay)
+        self._current(job, attempt_id, fence, statuses=("running",))
+        admission = next((row for row in job["admissions"] if row.get("decisionId") == decision_id), None)
+        if admission is None or stage not in OPERATIONS[job["operation"]] or not callable(self.input_resolver):
+            raise LedgerError("transfer-invalid")
+        try:
+            blob = self.input_resolver(owner, copy.deepcopy(admission))
+        except Exception:  # noqa: BLE001
+            blob = None
+        if not isinstance(blob, dict) or not isinstance(blob.get("key"), str):
+            raise LedgerError("transfer-invalid")
+        return self._open_read(owner, job, op, source="input", key=blob["key"], sha256=blob.get("sha256"),
+                               stage=stage)
+
+    def _transfer_budget(self, job, chunks, size):
+        usage = dict(job.get("transferUsage") or {"chunks": 0, "bytes": 0})
+        if usage["chunks"] + chunks > MAX_TRANSFER_CHUNKS or usage["bytes"] + size > MAX_TRANSFER_BYTES:
+            raise LedgerError("transfer-invalid")
+        usage.update(chunks=usage["chunks"] + chunks, bytes=usage["bytes"] + size)
+        return usage
+
+    def _handle(self, job, handle_id, direction):
+        handle = (job.get("handles") or {}).get(handle_id) if isinstance(handle_id, str) else None
+        if (not handle or handle.get("direction") != direction or handle.get("status") != "open"
+                or handle.get("attemptId") != (job.get("attempt") or {}).get("id")):
+            raise LedgerError("transfer-invalid")
+        return handle
+
+    def _read_chunk(self, owner, job_id, attempt_id, fence, handle_id, index):
+        job = self._get(owner, job_id)
+        self._current(job, attempt_id, fence, statuses=("running",))
+        handle = self._handle(job, handle_id, "in")
+        if type(index) is not int or not 0 <= index < handle["chunks"]:
+            raise LedgerError("transfer-invalid")
+        offset = index * CHUNK_BYTES
+        try:
+            data = self.storage.get_blob(handle["key"], offset, min(CHUNK_BYTES, handle["total"] - offset))
+        except (ValueError, FileNotFoundError) as error:
+            raise LedgerError("transfer-invalid") from error
+        digest = hashlib.sha256(data).hexdigest()
+        if index not in handle["read"]:
+            usage = self._transfer_budget(job, 1, len(data))
+            handles = {**job["handles"], handle_id: {**handle, "read": [*handle["read"], index]}}
+            self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, reindex=False)
+        return {"index": index, "data": base64.b64encode(data).decode(), "sha256": digest}
+
+    def _open_output(self, owner, job_id, attempt_id, fence, *, stage, name, total, sha256, operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "open_output", operation_id, {
+            "jobId": job_id, "attemptId": attempt_id, "fence": fence, "stage": stage, "name": name,
+            "total": total, "sha256": sha256})
+        if replay:
+            return self._replayed_handle(replay)
+        attempt = self._current(job, attempt_id, fence, statuses=("running",))
+        if (not isinstance(name, str) or not _OUTPUT_NAME.fullmatch(name) or ".." in name
+                or stage not in OPERATIONS[job["operation"]] or type(total) is not int or not 0 < total
+                or not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+            raise LedgerError("transfer-invalid")
+        chunks = -(-total // CHUNK_BYTES)
+        self._transfer_budget(job, chunks, total)          # the declared size must fit the remaining budget
+        key = self.storage.key_for(owner, "job", job_id, f"out/{attempt['id']}/{stage}/{name}")
+        if any(h.get("key") == key and h.get("direction") == "out" for h in job["handles"].values()):
+            raise LedgerError("transfer-invalid")
+        handle_id = "hdl-" + secrets.token_hex(16)
+        handle = {"direction": "out", "key": key, "stage": stage, "name": name, "total": total, "sha256": sha256,
+                  "chunks": chunks, "attemptId": attempt["id"], "status": "open", "parts": [], "partKeys": []}
+        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, op=op,
+                             value=handle_id, reindex=False)
+        return {"handleId": handle_id, "key": key, "total": total, "sha256": sha256, "chunks": chunks, "job": saved}
+
+    def _write_chunk(self, owner, job_id, attempt_id, fence, handle_id, index, data, *, operation_id=None):
+        """Idempotent by (handleId, index, chunkHash); not an op entry (review round 3, N6)."""
+        job = self._get(owner, job_id)
+        self._current(job, attempt_id, fence, statuses=("running",))
+        handle = self._handle(job, handle_id, "out")
+        try:
+            raw = base64.b64decode(data, validate=True) if isinstance(data, str) else None
+        except ValueError:
+            raw = None
+        if raw is None or not 0 < len(raw) <= CHUNK_BYTES or type(index) is not int:
+            raise LedgerError("transfer-invalid")
+        digest = hashlib.sha256(raw).hexdigest()
+        if index < len(handle["parts"]):
+            if handle["parts"][index] == digest:
+                return self._projection(job)
+            raise LedgerError("transfer-invalid")
+        if index != len(handle["parts"]) or index >= handle["chunks"]:
+            raise LedgerError("transfer-invalid")
+        usage = self._transfer_budget(job, 1, len(raw))
+        # Parts live under the job's temporary "parts/" prefix, which the bucket lifecycle expires.
+        part_key = self.storage.key_for(owner, "job", job_id,
+                                        f"parts/out/{handle['attemptId']}/{handle['stage']}/{handle['name']}.part{index:04d}")
+        try:
+            self.storage.put_blob_once(part_key, raw, "application/octet-stream")
+        except Conflict as error:
+            raise LedgerError("transfer-invalid") from error
+        handles = {**job["handles"], handle_id: {**handle, "parts": [*handle["parts"], digest],
+                                                 "partKeys": [*handle["partKeys"], part_key]}}
+        return self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, reindex=False)
+
+    def _close_output(self, owner, job_id, attempt_id, fence, handle_id, *, operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "close_output", operation_id, {"jobId": job_id, "attemptId": attempt_id,
+                                                                  "fence": fence, "handleId": handle_id})
+        if replay:
+            return replay["job"]
+        self._current(job, attempt_id, fence, statuses=("running",))
+        handle = self._handle(job, handle_id, "out")
+        try:
+            data = b"".join(self.storage.get_blob(key) for key in handle["partKeys"])
+        except (ValueError, FileNotFoundError) as error:
+            raise LedgerError("transfer-invalid") from error
+        if (len(handle["parts"]) != handle["chunks"] or len(data) != handle["total"]
+                or hashlib.sha256(data).hexdigest() != handle["sha256"]):
+            raise LedgerError("transfer-invalid")
+        try:
+            info = self.storage.put_blob_once(handle["key"], data, "application/octet-stream")
+        except Conflict as error:
+            raise LedgerError("transfer-invalid") from error
+        output = {"handleId": handle_id, "key": handle["key"], "sha256": info["sha256"], "size": info["size"],
+                  "stage": handle["stage"], "attemptId": handle["attemptId"]}
+        handles = {**job["handles"], handle_id: {**handle, "status": "closed"}}
+        saved = self._commit(owner, job, {**job, "handles": handles, "transfers": [*job["transfers"], output]},
+                             op=op, reindex=False)
+        for key in handle["partKeys"]:
+            try:
+                self.storage.s3().delete_object(Bucket=self.storage.bucket, Key=key)
+            except Exception:  # noqa: BLE001 - the lifecycle rule expires the temporary parts
+                pass
+        return saved
+
     # --- reconciler role: watchdog sweep -------------------------------------
     def _sweep(self, owner, job_id, *, operation_id=None):
         """The watchdog never sets succeeded/needs_changes."""
@@ -786,9 +984,9 @@ class Ledger:
             return job
         for handle_id in job["cleanup"]:
             handle = (job.get("handles") or {}).get(handle_id) or {}
-            for index in range(len(handle.get("parts", []))):
+            for index in range(len(handle.get("partKeys", []))):
                 try:
-                    self.storage.s3().delete_object(Bucket=self.storage.bucket, Key=f"{handle['key']}.part{index:04d}")
+                    self.storage.s3().delete_object(Bucket=self.storage.bucket, Key=handle["partKeys"][index])
                 except Exception:  # noqa: BLE001 - a later sweep retries
                     return job
         return self._commit(owner, job, {**job, "cleanup": []})

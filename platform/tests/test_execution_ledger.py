@@ -657,3 +657,253 @@ def test_job_record_stays_bounded_under_heartbeats_and_recorded_operations(env):
     assert len(stored["ops"]) == 150
     import json
     assert len(json.dumps(stored).encode()) < 200_000
+
+
+# === Task 7: admission-bound transfer receipts (RUN-05) ==============================================
+
+import base64  # noqa: E402
+import json as _json  # noqa: E402
+
+CHUNK = 256 * 1024
+
+
+@pytest.fixture
+def xfer():
+    """A ledger with an admitted-input resolver; the fake S3 stores real bytes."""
+    now = [1_800_000_000_000]
+    storage = Storage(table=FakeTable(), s3=FakeS3(), bucket="private-test", clock=lambda: now[0])
+    storage.put(OWNER, "project", {"id": "p1", "status": "active", "members": {
+        a: {"role": "designer"} for a in ("designer-1", "alice", "bob", "carol")}})
+    data = bytes(range(256)) * 2048 + b"tail"            # 512 KiB + 4 bytes -> 3 chunks
+    key = storage.key_for(OWNER, "asset", "adm-src", "derivative.bin")
+    storage.put_blob_once(key, data, "application/octet-stream")
+    admitted = {"adm-1": {"key": key, "sha256": hashlib.sha256(data).hexdigest()}}
+    grants = []
+
+    def resolver(owner, admission):
+        return admitted.get(admission["decisionId"])
+
+    def prior_authority(owner, job, prior):
+        grants.append(prior["sourceId"])
+        return prior.get("sourceId") != "revoked-round"
+    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), input_resolver=resolver,
+                            prior_authority=prior_authority)
+    return storage, ledger, now, data
+
+
+def run_job(ledger, **over):
+    job = admit(ledger, **over)
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    return ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+
+
+def ids(job):
+    return OWNER, job["id"], job["attempt"]["id"], job["fence"]
+
+
+def read_all(ledger, job, handle):
+    chunks = []
+    for index in range(handle["chunks"]):
+        chunk = ledger.tool().read_chunk(*ids(job), handle["handleId"], index)
+        raw = base64.b64decode(chunk["data"])
+        assert hashlib.sha256(raw).hexdigest() == chunk["sha256"]
+        chunks.append(raw)
+    return b"".join(chunks)
+
+
+def test_admitted_input_read_completes_with_server_computed_hashes(xfer):
+    storage, ledger, _, data = xfer
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    assert handle["total"] == len(data) and handle["chunks"] == 3
+    assert handle["sha256"] == hashlib.sha256(data).hexdigest()
+    assert read_all(ledger, job, handle) == data
+    assert storage.get(OWNER, "job", job["id"])["transferUsage"] == {"chunks": 3, "bytes": len(data)}
+
+
+def test_input_handle_for_a_decision_outside_the_admissions_is_refused(xfer):
+    _, ledger, _, _ = xfer
+    job = run_job(ledger)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-9", stage="context")
+    assert error.value.code == "transfer-invalid"
+
+
+def open_out(ledger, job, data, name="page.tsx", stage="generate"):
+    return ledger.tool().open_output(*ids(job), operation_id=op_id(), stage=stage, name=name, total=len(data),
+                                     sha256=hashlib.sha256(data).hexdigest())
+
+
+def b64(raw):
+    return base64.b64encode(raw).decode()
+
+
+def test_output_is_assembled_server_side_and_recorded(xfer):
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    data = b"x" * (CHUNK + 10)
+    handle = open_out(ledger, job, data)
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data[:CHUNK]))
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 1, b64(data[CHUNK:]))
+    closed = ledger.tool().close_output(*ids(job), handle["handleId"], operation_id=op_id())
+    [output] = closed["transfers"]
+    assert output["key"] == storage.key_for(OWNER, "job", job["id"], f"out/{job['attempt']['id']}/generate/page.tsx")
+    assert storage.get_blob(output["key"]) == data and output["sha256"] == hashlib.sha256(data).hexdigest()
+    assert not any(k[1].endswith(("part0000", "part0001")) for k in storage.s3().objects)
+
+
+def test_out_of_order_output_chunk_is_refused(xfer):
+    _, ledger, _, _ = xfer
+    job = run_job(ledger)
+    data = b"y" * (CHUNK + 1)
+    handle = open_out(ledger, job, data)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().write_chunk(*ids(job), handle["handleId"], 1, b64(data[CHUNK:]))
+    assert error.value.code == "transfer-invalid"
+
+
+def test_output_whose_server_hash_differs_from_the_declared_hash_is_refused(xfer):
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    handle = ledger.tool().open_output(*ids(job), operation_id=op_id(), stage="generate", name="a.txt", total=4,
+                                       sha256=hashlib.sha256(b"good").hexdigest())
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(b"evil"))
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().close_output(*ids(job), handle["handleId"], operation_id=op_id())
+    assert error.value.code == "transfer-invalid"
+    assert storage.get(OWNER, "job", job["id"])["transfers"] == []
+
+
+@pytest.mark.parametrize("name", ["a/b.txt", "../x", "", "A.txt", "x" * 101])
+def test_output_names_are_constrained(xfer, name):
+    _, ledger, _, _ = xfer
+    job = run_job(ledger)
+    with pytest.raises(LedgerError) as error:
+        open_out(ledger, job, b"z", name=name)
+    assert error.value.code == "transfer-invalid"
+
+
+def test_chunk_after_cancel_is_fenced_and_the_handle_is_cleaned_up(xfer):
+    storage, ledger, now, _ = xfer
+    job = run_job(ledger)
+    data = b"q" * (CHUNK + 5)
+    handle = open_out(ledger, job, data)
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data[:CHUNK]))
+    cancelled = ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+    assert cancelled["cleanup"] == [handle["handleId"]]
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().write_chunk(*ids(job), handle["handleId"], 1, b64(data[CHUNK:]))
+    assert error.value.code == "stale-attempt"
+    ledger.reconciler().run_due()
+    assert storage.get(OWNER, "job", job["id"])["cleanup"] == []
+    assert not any(".part" in k[1] for k in storage.s3().objects)
+
+
+def test_transfer_chunk_budget_is_bounded(xfer):
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    from workspace.execution_ledger import _seed_for_tests
+    stored = storage.get(OWNER, "job", job["id"])
+    _seed_for_tests(storage, OWNER, "job", {**stored, "transferUsage": {"chunks": 511, "bytes": 0}}, stored["version"])
+    handle = open_out(ledger, job, b"ab")
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(b"ab"))       # the 512th chunk
+    with pytest.raises(LedgerError) as error:           # the 513th chunk: refused when declared
+        open_out(ledger, job, b"cd", name="b.txt")
+    assert error.value.code == "transfer-invalid"
+    with pytest.raises(LedgerError) as error:           # and when written
+        ledger.tool().write_chunk(*ids(job), handle["handleId"], 1, b64(b"cd"))
+    assert error.value.code == "transfer-invalid"
+    with pytest.raises(LedgerError) as error:
+        open_out(ledger, job, b"e" * (CHUNK * 600), name="huge.bin")
+    assert error.value.code == "transfer-invalid"
+
+
+def test_retried_write_chunk_is_idempotent(xfer):
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    data = b"r" * 10
+    handle = open_out(ledger, job, data)
+    operation = op_id()
+    first = ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
+    again = ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
+    assert again["version"] == first["version"]
+    assert again["transferUsage"]["chunks"] == first["transferUsage"]["chunks"]
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(b"s" * 10))
+    assert error.value.code == "transfer-invalid"
+
+
+def test_finish_requires_every_output_handle_closed(xfer):
+    _, ledger, _, _ = xfer
+    job = run_job(ledger)
+    open_out(ledger, job, b"open")
+    stored = ledger.api().read(OWNER, job["id"])
+    assert any(h["status"] == "open" for h in stored["handles"].values())
+
+
+class FakeRuntime:
+    """Holds only the invocation envelope and the Gateway tool facade: no storage, no S3 client."""
+
+    def __init__(self, tool, envelope):
+        self.tool, self.envelope = tool, envelope
+
+    def __getattr__(self, name):
+        if name in ("storage", "s3"):
+            raise AttributeError("direct S3 access is denied to the Runtime")
+        raise AttributeError(name)
+
+    def read(self, handle):
+        e = self.envelope
+        return b"".join(base64.b64decode(self.tool.read_chunk(e["owner"], e["jobId"], e["attemptId"], e["fence"],
+                                                              handle["handleId"], index)["data"])
+                        for index in range(handle["chunks"]))
+
+
+def test_design_release_chain_retrieves_manifest_and_approved_source_through_the_gateway(xfer):
+    storage, ledger, _, _ = xfer
+    source = b"export default function Page(){return null}\n" * 100
+    source_key = storage.key_for(OWNER, "run", "run-1", "rounds/2/source.zip")
+    storage.put_blob_once(source_key, source, "application/zip")
+    prior = {"sourceKind": "run-round", "sourceId": "run-1", "revision": "2",
+             "sha256": hashlib.sha256(source).hexdigest(), "key": source_key}
+    manifest = _json.dumps({"priors": [prior]}).encode()
+    manifest_key = storage.key_for(OWNER, "run", "run-1", "release-manifest.json")
+    storage.put_blob_once(manifest_key, manifest, "application/json")
+    job = run_job(ledger, operation="design.release",
+                  manifest={"ref": manifest_key, "hash": hashlib.sha256(manifest).hexdigest()})
+    envelope = {"owner": OWNER, "jobId": job["id"], "attemptId": job["attempt"]["id"], "fence": job["fence"],
+                "manifest": job["manifest"]}
+    runtime = FakeRuntime(ledger.tool(), envelope)
+    with pytest.raises(AttributeError):
+        runtime.storage
+    opened = runtime.tool.open_manifest(OWNER, job["id"], job["attempt"]["id"], job["fence"], operation_id=op_id())
+    assert hashlib.sha256(runtime.read(opened)).hexdigest() == envelope["manifest"]["hash"]
+    listed = _json.loads(runtime.read(opened))["priors"][0]
+    handle = runtime.tool.open_prior(OWNER, job["id"], job["attempt"]["id"], job["fence"],
+                                     operation_id=op_id(), ref=listed["key"])
+    assert runtime.read(handle) == source
+
+
+def test_prior_not_listed_or_revoked_is_refused(xfer):
+    storage, ledger, _, _ = xfer
+    data = b"prior"
+    key = storage.key_for(OWNER, "run", "run-2", "source.zip")
+    storage.put_blob_once(key, data, "application/zip")
+    prior = {"sourceKind": "run-round", "sourceId": "revoked-round", "revision": "1",
+             "sha256": hashlib.sha256(data).hexdigest(), "key": key}
+    manifest = _json.dumps({"priors": [prior]}).encode()
+    manifest_key = storage.key_for(OWNER, "run", "run-2", "manifest.json")
+    storage.put_blob_once(manifest_key, manifest, "application/json")
+    job = run_job(ledger, operation="design.release",
+                  manifest={"ref": manifest_key, "hash": hashlib.sha256(manifest).hexdigest()})
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().open_prior(*ids(job), operation_id=op_id(), ref=key)
+    assert error.value.code == "transfer-invalid"
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().open_prior(*ids(job), operation_id=op_id(), ref=storage.key_for(OWNER, "run", "x", "y"))
+    assert error.value.code == "transfer-invalid"
+
+
+def test_production_ledger_has_no_input_resolver():
+    from workspace.execution_ledger import Ledger as L
+    assert "input_resolver" not in L.production.__code__.co_varnames
