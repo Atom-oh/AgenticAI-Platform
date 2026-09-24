@@ -12,7 +12,7 @@ def test_python_and_actual_node_builder_lock_the_same_component_bytes():
     actual = read_catalog(root)
     assert actual["hash"] == node["hash"]
     assert actual["files"] == node["files"]
-    assert actual["version"] == "1.0.0"
+    assert actual["version"] == "1.1.0"   # E12a: scalable type tokens bumped the catalog
     assert "Button" in {item["name"] for item in actual["components"]}
 
 

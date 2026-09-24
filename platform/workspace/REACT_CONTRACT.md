@@ -16,7 +16,9 @@ Exact versions: React/ReactDOM 18.3.1, TypeScript 5.6.3, esbuild 0.25.12,
 
 - `ui/index.tsx`: real named exports listed below; generated code imports from `@studio/approved-ui`.
 - `ui/tokens.css`: authoritative styles/tokens. Generated code cannot replace this file or supply CSS.
-- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.0.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
+  Every `font-size` is `calc(var(--studio-text-scale, 1) * <n>px)`; unitless line-heights are unchanged, so the kit
+  is identical at scale 1. Only the verifier sets `--studio-text-scale` (engine plan E12a).
+- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.1.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
   Each component has `{name,description,props,variationAxes}`. `props` is descriptive data; actual TS types are the compiler authority.
 - `manifest.cjs`: `catalog()` returns descriptor plus `{hash,files:[{path,sha256}]}` calculated from actual `ui/*` and catalog bytes.
   `hash` is SHA256 of canonical JSON of sorted file hashes. It excludes generated timestamps and node_modules.
@@ -83,6 +85,10 @@ Compilation does not execute generated module code, user configuration or packag
 A `kind="react"` task runs compilation in the credential-free browser child, then
 the behavioral/a11y/image verifier checks the actual static bundle. The response contains build fields and browser report.
 `evaluate_html` remains compatible; `evaluate_bundle` fulfills only exact local bundle URLs in memory and denies every other request.
+`evaluate_html`/`evaluate_bundle(..., text_scale=1.0)`: a scale in 1..3 other than 1 sets `--studio-text-scale` through the
+verifier's init script and adds `largeText: {status, overflow:[testId], unscaled:[testId]}` (tagged elements that overflow,
+and tagged elements whose text did not scale). A failed or unmeasured large-text pass is a blocking finding. The 1.1.0
+catalog bump changes `catalogHash`, so runs approved under 1.0.0 become historical.
 Do not silently replace a failed React build with HTML or a stub.
 
 ## Projects, scoped access and planning

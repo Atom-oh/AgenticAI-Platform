@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "studio-ui",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "label": "플랫폼 기본 React 컴포넌트",
   "components": [
     {
