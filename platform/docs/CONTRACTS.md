@@ -316,6 +316,9 @@ linked artifact also checks, in the same transaction, that the stored linked
 job is unchanged since the guard read it; a job that becomes reserved in
 between makes the write fail with a conflict.
 
-This changes an earlier behavior. Legacy read repair no longer fails an
-artifact whose linked job is missing. The reconciler fails such an orphan with
-`orphan-legacy-job`.
+An unmarked record whose legacy-format job (not an `exec-` id) is missing, for
+example after the 30-day job retention TTL, keeps its legacy behavior: human
+document review and legacy repair continue, with the job's absence fenced in
+the same transaction. A missing `exec-` job is treated as reserved. The
+reconciler only closes refusal reports; it never mutates an unmarked legacy
+record or rewrites a document lifecycle state.

@@ -274,12 +274,9 @@ class Storage:
         linked = read_job(link)
         if is_reserved(linked) or linked is None and link.startswith(EXECUTION_JOB_PREFIX):
             raise ReservedRecord(kind, identifier, "linked-reserved-job")
-        # Unknown linkage is refused only for REPAIR of an existing linked record (review round 7, AA1):
-        # the stored record already names this job, the job is not proposed in the same transaction,
-        # and the write changes status. Creation and first linkage are unaffected.
-        if (linked is None and stored_link == link and (owner, link) not in proposed_jobs
-                and previous.get("status") != item.get("status")):
-            raise ReservedRecord(kind, identifier, "unknown-linkage")
+        # A missing legacy-format job (not an ``exec-`` id) on an unmarked record is legacy linkage, e.g. a job
+        # deleted by its retention TTL (PR #27 review 4, #1): human review and legacy repair continue unchanged.
+        # The absence is fenced above, so a reserved job created at that id aborts this write.
 
     def put(self, owner: str, kind: str, item: dict, expected_version: int | None = None, *, _writer=None) -> dict:
         fences = []

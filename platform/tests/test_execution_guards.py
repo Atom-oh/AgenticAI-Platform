@@ -175,16 +175,28 @@ def test_first_linkage_and_creation_with_the_job_succeed(storage):
     assert saved[0]["status"] == "processing"
 
 
-def test_unknown_linkage_repair_is_refused_and_reported(storage):
+def test_missing_legacy_job_keeps_legacy_repair_with_its_absence_fenced(storage):
+    """PR #27 review 4, #1: a legacy job deleted by retention is legacy linkage, not a reserved one."""
     artifact = storage.put("project:p1", "wb_artifact", {"id": "orphan", "projectId": "p1", "jobId": "legacy-gone",
                                                           "status": "processing"})
+    repaired = storage.put("project:p1", "wb_artifact", {**artifact, "status": "failed"}, artifact["version"])
+    assert repaired["status"] == "failed" and reports(storage) == []
+    fence = storage.table().transactions[-1]["TransactItems"][-1]["ConditionCheck"]
+    assert fence["Key"]["sk"] == "job#legacy-gone" and fence["ConditionExpression"] == "attribute_not_exists(#pk)"
+    # A reserved job created at that id after the guard's read aborts the legacy write.
+    table = storage.table()
+    table.before_transaction = lambda: seed(storage, {**NEW, "id": "legacy-gone"})
+    with pytest.raises(Conflict):
+        storage.put("project:p1", "wb_artifact", {**repaired, "status": "queued"}, repaired["version"])
+    assert storage.get("project:p1", "wb_artifact", "orphan")["status"] == "failed"
+
+
+def test_missing_execution_job_still_refuses_legacy_writes(storage):
     with pytest.raises(ReservedRecord) as error:
-        storage.put("project:p1", "wb_artifact", {**artifact, "status": "failed"}, artifact["version"])
-    assert error.value.reason == "unknown-linkage"
-    assert storage.get("project:p1", "wb_artifact", "orphan")["status"] == "processing"
-    assert [row["reason"] for row in reports(storage)] == ["unknown-linkage"]
-    # A metadata-only update that keeps the status is not a repair.
-    storage.put("project:p1", "wb_artifact", {**artifact, "note": "x"}, artifact["version"])
+        storage.put("project:p1", "wb_artifact", {"id": "gone-exec", "projectId": "p1",
+                                                  "jobId": "exec-" + "0" * 32, "status": "processing"})
+    assert error.value.reason == "linked-reserved-job"
+    assert storage.get("project:p1", "wb_artifact", "gone-exec") is None
 
 
 # --- human-authorized writer (review round 3, F1) ------------------------------------------------
@@ -234,57 +246,34 @@ def test_human_writer_cannot_move_a_linked_run_into_an_outcome_status(http_api):
     assert http_api.storage.get("alice", "run", run["id"])["version"] == run["version"]
 
 
-# --- orphan resolution by the IAM-only reconciler (review rounds 37-38, BE1/BF2) -----------------
+# --- refusal reports: the IAM-only reconciler never mutates unmarked legacy records (PR #27 review 4, #1) ---
 
-def _orphan(storage):
+def test_legacy_orphan_repair_fails_the_artifact_itself_without_a_report(storage):
     from workbench.worker import _mark_failed
     from workspace.worker import Worker
     storage.put("project:p1", "project", {"id": "p1", "status": "active", "members": {"alice": {"role": "owner"}}})
-    art = storage.put("project:p1", "wb_artifact", {"id": "orph", "projectId": "p1", "jobId": "ontology-job-x",
-                                                    "status": "processing"})
+    storage.put("project:p1", "wb_artifact", {"id": "orph", "projectId": "p1", "jobId": "ontology-job-x",
+                                              "status": "processing"})
     _mark_failed(Worker(storage=storage), "project:p1",
                  {"id": "ontology-job-x", "input": {"operation": "ontology-analyze", "artifactId": "orph"}},
                  "dispatch-interrupted")
-    assert storage.get("project:p1", "wb_artifact", "orph")["version"] == art["version"]
-    return art
+    assert storage.get("project:p1", "wb_artifact", "orph")["status"] == "failed"
+    assert reports(storage) == [] and due_entries(storage) == []
 
 
-def test_orphan_is_reported_and_failed_by_an_ordinary_scheduler_event(storage):
+@pytest.mark.parametrize("state", ["processing", "draft", "in_review"])
+def test_reconciler_only_tombstones_a_report_for_an_unmarked_record(storage, state):
     from workspace.execution_ledger import _run_due
-    _orphan(storage)
-    assert [row["reason"] for row in reports(storage)] == ["unknown-linkage"]
+    record = storage.put("project:p1", "docrevision", {"id": "rev-x", "jobId": "legacy-gone", "status": state,
+                                                       "parseStatus": "complete"})
+    storage._report("project:p1", ReservedRecord("docrevision", "rev-x", "unknown-linkage"))
     [due] = due_entries(storage)
     assert due["status"] == "pending"
     _run_due(storage)       # no supplied ids
-    failed = storage.get("project:p1", "wb_artifact", "orph")
-    assert failed["status"] == "failed" and failed["errorCode"] == "orphan-legacy-job"
+    stored = storage.get("project:p1", "docrevision", "rev-x")
+    assert stored["version"] == record["version"] and stored["status"] == state
+    assert stored["parseStatus"] == "complete" and "errorCode" not in stored
     assert [row["status"] for row in due_entries(storage)] == ["done"]
-
-
-def test_orphan_whose_job_reappeared_is_left_untouched(storage):
-    from workspace.execution_ledger import _run_due
-    art = _orphan(storage)
-    storage.put("project:p1", "job", {"id": "ontology-job-x", "task": "workbench"})
-    _run_due(storage)
-    assert storage.get("project:p1", "wb_artifact", "orph")["version"] == art["version"]
-    assert [row["status"] for row in due_entries(storage)] == ["done"]
-
-
-def test_orphan_resolution_aborts_when_the_job_is_recreated_before_submission(storage):
-    from workspace.execution_ledger import _resolve_orphan
-    art = _orphan(storage)
-    [due] = due_entries(storage)
-    table = storage.table()
-
-    def recreate():
-        storage.put("project:p1", "job", {"id": "ontology-job-x", "task": "workbench"})
-    table.before_transaction = recreate
-    with pytest.raises(Conflict):
-        _resolve_orphan(storage, due)
-    assert storage.get("project:p1", "wb_artifact", "orph")["status"] == "processing"
-    assert storage.get("project:p1", "wb_artifact", "orph")["version"] == art["version"]
-    assert storage.get("project:p1", "job", "ontology-job-x")["status"] == "queued"
-    assert [row["status"] for row in due_entries(storage)] == ["pending"]
 
 
 # === Task 3: RUN-01 legacy writer inventory (W1-W12), each driving the REAL legacy function ===========

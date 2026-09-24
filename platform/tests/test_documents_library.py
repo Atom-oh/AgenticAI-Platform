@@ -771,15 +771,6 @@ def test_source_read_repairs_pending_target_after_job_expiry(api, missing):
         api.storage.put("alice", "job", {**job, "status": "failed", "errorCode": "job-timeout",
                                         "stopReason": "timeout"}, job["version"])
     status, source, _ = call(api, "GET", path(result))
-    if missing:
-        # platform-execution/1: unknown linkage is reported and failed only by the IAM-only reconciler.
-        from workspace.execution_ledger import _run_due
-        assert status == 200 and source["revision"]["status"] == "processing"
-        assert [row["reason"] for row in api.storage.list("alice", "exec_report")] == ["unknown-linkage"]
-        _run_due(api.storage)
-        status, source, _ = call(api, "GET", path(result))
-        stored = api.storage.get("alice", "docrevision", result["revision"]["id"])
-        assert stored["errorCode"] == "orphan-legacy-job" and stored["parseStatus"] == "failed"
     assert status == 200 and source["revision"]["status"] == "failed"
     if missing:
         assert call(api, "GET", "/jobs/" + job["id"])[0] == 404
@@ -860,3 +851,45 @@ def test_failed_job_repairs_target_when_worker_second_failure_write_is_interrupt
     assert repaired["status"] == "failed" and repaired.get("errorCode") == failed.get("errorCode")
     assert repaired.get("stopReason") == failed.get("stopReason")
     assert repaired["error"] == failed["error"]
+
+
+# --- PR #27 review 4, #1: an expired legacy job never blocks human document review -----------------
+
+def _expire_job(api, job_id, owner="alice"):
+    key = api.storage._key(owner, "job", job_id)
+    del api.storage.table().items[(key["pk"], key["sk"])]          # the 30-day TTL deleted the job record
+
+
+def test_human_review_of_a_legacy_document_survives_job_retention_expiry(api):
+    from workspace.execution_ledger import _run_due
+    result = finalize(api, upload(api))
+    assert result["revision"]["status"] == "draft" and result["revision"]["parseStatus"] == "complete"
+    _expire_job(api, result["revision"]["jobId"])
+    status, submitted, _ = call(api, "POST", path(result) + "/submit", {"version": result["revision"]["version"]})
+    assert status == 200, submitted
+    assert submitted["revision"]["status"] == "in_review"
+    status, reviewed, _ = call(api, "POST", path(result) + "/review", {
+        "version": submitted["revision"]["version"], "decision": "approved", "note": "Reviewed"})
+    assert status == 200, reviewed
+    assert reviewed["revision"]["status"] == "approved"
+    assert api.storage.list("alice", "exec_report") == []
+    _run_due(api.storage)
+    stored = api.storage.get("alice", "docrevision", result["revision"]["id"])
+    assert stored["status"] == "approved" and stored["parseStatus"] == "complete" and "errorCode" not in stored
+
+
+def test_reconciler_never_rewrites_an_unmarked_legacy_draft(api):
+    from workspace.execution_ledger import _run_due
+    from workspace.storage import ReservedRecord
+    result = finalize(api, upload(api))
+    revision = api.storage.get("alice", "docrevision", result["revision"]["id"])
+    _expire_job(api, revision["jobId"])
+    # Even a report naming this unmarked legacy record (e.g. a refused malformed relink) never lets the
+    # reconciler change its document lifecycle state.
+    api.storage._report("alice", ReservedRecord("docrevision", revision["id"], "unknown-linkage"))
+    _run_due(api.storage)
+    stored = api.storage.get("alice", "docrevision", revision["id"])
+    assert stored["version"] == revision["version"]
+    assert stored["status"] == "draft" and stored["parseStatus"] == "complete"
+    status, submitted, _ = call(api, "POST", path(result) + "/submit", {"version": stored["version"]})
+    assert status == 200 and submitted["revision"]["status"] == "in_review"

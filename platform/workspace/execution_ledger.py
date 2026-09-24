@@ -11,7 +11,7 @@ import sys
 
 from workspace import ontology_schema as schema
 from workspace import storage as _storage
-from workspace.storage import DUE_OWNER, EXECUTION_JOB_PREFIX, LINKED_KINDS, Conflict, due_id, is_reserved
+from workspace.storage import DUE_OWNER, Conflict, due_id
 
 TASK, SCHEMA_VERSION = "agentcore-execution", 1
 _WRITER = _storage._ledger_writer()
@@ -118,12 +118,6 @@ def _actor_quota_id(actor):
 def _project_quota_id(project_id):
     return "quota-project-" + str(project_id)
 
-# Legacy statuses the orphan resolver never changes: terminal, approved or not yet queued.
-_SETTLED = frozenset({"completed", "failed", "cancelled", "FAILED", "DRAFT", "APPROVED", "DEPRECATED",
-                      "ready", "committed", "approved", "needs_changes"})
-_ORPHAN_MESSAGE = "작업 기록이 없어 종료했습니다. 새 요청으로 다시 실행하세요."
-
-
 def _seed_for_tests(storage, owner, kind, record, expected_version=None):
     import os
     if os.environ.get("PYTEST_CURRENT_TEST") is None:
@@ -131,56 +125,19 @@ def _seed_for_tests(storage, owner, kind, record, expected_version=None):
     return storage.put(owner, kind, record, expected_version, _writer=_WRITER)
 
 
-# --- orphan resolution (IAM-only reconciler; review rounds 37-38, BE1/BF2) --------------------------
-
-def _execution_references(storage, owner, identifier):
-    """Fail closed: any execution job in the partition that mentions the record keeps it out of legacy repair."""
-    cursor = None
-    while True:
-        page = storage.list_page(owner, "job", 100, cursor, prefix=EXECUTION_JOB_PREFIX)
-        for job in page["items"]:
-            if json.dumps(job, ensure_ascii=False, default=str).find(json.dumps(identifier)) >= 0:
-                return True
-        cursor = page.get("cursor")
-        if not cursor:
-            return False
-
-
-def _orphan_failure(kind):
-    update = {"status": "FAILED" if kind == "wb_skill" else "failed", "error": _ORPHAN_MESSAGE,
-              "errorCode": "orphan-legacy-job"}
-    if kind == "docrevision":
-        update["parseStatus"] = "failed"
-    if kind == "asset":
-        update.update(uploadStatus="failed", parseStatus="failed")
-    return update
-
+# --- refusal reports (IAM-only reconciler) ---------------------------------------------------------
 
 def _resolve_orphan(storage, due):
-    """Recheck a reported record and fail it only while it is still an unmarked legacy orphan.
+    """Close a legacy-refusal report entry. The reported record is never mutated (PR #27 review 4, #1).
 
-    The artifact CAS, the due-entry tombstone and the linked job's absence are one transaction:
-    a job recreated before submission aborts it and nothing changes.
+    A report names a record a legacy writer was refused for. Reserved records are resolved by the ledger through
+    their own job due entries; an unmarked legacy record (for example a document draft whose legacy job expired)
+    keeps its lifecycle state, so the reconciler only tombstones the entry.
     """
-    owner, ref = due["targetOwner"], due.get("ref") or {}
-    kind, identifier = ref.get("kind"), ref.get("id")
     done = {"owner": DUE_OWNER, "kind": "exec_due", "item": {**due, "status": "done"},
             "expected_version": due["version"]}
-    artifact = storage.get(owner, kind, identifier) if kind in LINKED_KINDS else None
-    job_id = (artifact or {}).get("jobId")
-    orphan = bool(artifact) and not is_reserved(artifact) and artifact.get("status") not in _SETTLED
-    orphan = orphan and isinstance(job_id, str) and bool(_storage._ID.fullmatch(job_id))
-    orphan = orphan and not job_id.startswith(EXECUTION_JOB_PREFIX)
-    orphan = orphan and storage.get(owner, "job", job_id) is None
-    orphan = orphan and not _execution_references(storage, owner, identifier)
-    if not orphan:
-        storage.put_many([done], retry_conflicts=False, _writer=_WRITER)
-        return None
-    item = {**artifact, **_orphan_failure(kind)}
-    return storage.put_many(
-        [{"owner": owner, "kind": kind, "item": item, "expected_version": artifact["version"]}, done],
-        [{"owner": owner, "kind": "job", "id": job_id, "version": None}],
-        retry_conflicts=False, _writer=_WRITER)[0]
+    storage.put_many([done], retry_conflicts=False, _writer=_WRITER)
+    return None
 
 
 def _run_due(storage, *, limit=100):

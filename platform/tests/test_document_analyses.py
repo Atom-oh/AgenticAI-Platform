@@ -443,16 +443,6 @@ def test_analysis_repairs_pending_target_for_terminal_or_missing_job(api, missin
         api.storage.put("alice", "job", {**job, "status": "failed", "errorCode": "job-timeout",
                                         "stopReason": "timeout"}, job["version"])
     status, payload, _ = result(api, created)
-    if missing:
-        # platform-execution/1: legacy read repair never fails an artifact whose job is unknown;
-        # the refusal is reported and the IAM-only reconciler fails the orphan.
-        from workspace.execution_ledger import _run_due
-        assert status == 200 and payload["analysis"]["status"] == "queued"
-        assert [row["reason"] for row in api.storage.list("alice", "exec_report")] == ["unknown-linkage"]
-        _run_due(api.storage)
-        status, payload, _ = result(api, created)
-        stored = api.storage.get("alice", "docanalysis", created["analysis"]["id"])
-        assert stored["errorCode"] == "orphan-legacy-job"
     assert status == 200 and payload["analysis"]["status"] == "failed"
     if missing:
         assert api.storage.get("alice", "job", job["id"]) is None
@@ -468,8 +458,7 @@ def test_missing_analysis_job_recovery_is_fenced_against_a_new_job(api):
     del api.storage.table().items[(key["pk"], key["sk"])]
     api.storage.table().before_transaction = lambda: api.storage.put("alice", "job", {
         **job, "status": "queued"})
-    # platform-execution/1: legacy repair of an unknown linkage is refused before any transaction.
-    assert result(api, created)[0] in (200, 409)
+    assert result(api, created)[0] == 409
     assert api.storage.get("alice", "docanalysis", created["analysis"]["id"])["status"] == "queued"
 
 

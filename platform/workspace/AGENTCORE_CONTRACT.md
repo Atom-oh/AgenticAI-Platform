@@ -486,8 +486,12 @@ including `_mark_failed` and analysis-read reconciliation. New artifacts carry
 the immutable execution discriminator and exact execution/job linkage.
 Legacy code must refuse mutation if the artifact is marked for new execution
 or its linked job has a reserved/new discriminator. A missing job never makes
-a marked artifact legacy. Mismatched/unknown linkage is reported for the
-IAM-only new reconciler; legacy code does not fail or complete that artifact.
+a marked artifact legacy, and a missing `exec-` job is reserved linkage.
+Mismatched or malformed linkage is refused and reported for the IAM-only new
+reconciler; legacy code does not fail or complete that artifact. An unmarked
+record whose legacy-format job is missing (for example after the job retention
+TTL) is legacy linkage: authorized human review and legacy repair continue, and
+the reconciler never mutates unmarked legacy records.
 
 One platform-runtime deployment owner installs the reviewed guard change and
 records worker/API revision or image hashes and RUN-01 live guard/legacy-control
@@ -821,9 +825,11 @@ Legacy guard: `Storage._prepare` refuses any non-ledger write in these cases:
 - The item or the stored record is reserved: its `task` is reserved, or
   `executionSchemaVersion` or `executionId` is present.
 - A linked artifact's stored job is reserved or has an `exec-` id.
-- A linkage is moved to or from such a job.
-- An existing linked record changes status while its stored job is missing
-  (`unknown-linkage`).
+- A linkage is moved to or from such a job, or a linkage id is malformed
+  (`linkage-mismatch`/`unknown-linkage`).
+
+A missing legacy-format job is not refused: the write proceeds with the job's
+absence fenced (PR #27 review 4).
 
 Non-ledger updates also carry
 `attribute_not_exists(executionSchemaVersion) AND attribute_not_exists(executionId)`.
@@ -835,9 +841,9 @@ artifact write.
 Human approval, release creation and Git export use a separate module-checked
 token. That token applies only to kinds `run`, `release`, `gitexport` and
 `design`, and never moves a status into `failed`, `needs_changes` or
-`completed`. The IAM-only reconciler resolves orphan reports with
-`orphan-legacy-job`. It uses one transaction with the artifact CAS, the job
-absence check and the due tombstone.
+`completed`. The IAM-only reconciler (`resolve_orphan`, `run_due`) closes
+refusal reports by tombstoning their due entries; it never mutates the reported
+record, so an unmarked legacy record keeps its lifecycle state.
 
 Not yet implemented in B0:
 
