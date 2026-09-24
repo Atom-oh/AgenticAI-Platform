@@ -518,3 +518,22 @@ def test_revocation_during_the_derivative_read_stops_delivery(env, monkeypatch, 
     with pytest.raises((AdmissionError,)) as error:
         admission.pages_for(env.api, env.scope(), decision["id"])
     assert error.value.status == 409
+
+
+def test_fresh_admission_generation_after_provenance_registration_keeps_history(env):
+    """Review 3, finding 7 (Minor): an explicit new generation re-evaluates; history stays."""
+    policy = env.policy()
+    ref = guide(env)
+    blocked = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert blocked["status"] == "blocked" and blocked["blocking"] == ["provenance-required"]
+    env.provenance(ref, policy)
+    # Repeating the same request returns the recorded (historical) decision.
+    assert admission.request(env.api, env.scope(), ref, data_class="public")["id"] == blocked["id"]
+    fresh = admission.request(env.api, env.scope(), ref, data_class="public", generation=2)
+    assert fresh["status"] == "admitted" and fresh["id"] != blocked["id"]
+    stored = env.api.storage.get(f"project:{env.pid}", "adm_decision", blocked["id"])
+    assert stored["status"] == "blocked"
+    for bad in (0, 1001, "2", True):
+        with pytest.raises(AdmissionError) as error:
+            admission.request(env.api, env.scope(), ref, data_class="public", generation=bad)
+        assert error.value.status == 400

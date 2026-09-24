@@ -173,7 +173,7 @@ def _expiry(now, *records_):
 
 def decide(host, scope, *, reader, source, data_class, policy, artifact, derivation, receipt, receipt_bytes,
            payload, blocking=(), identity=(), extra_checks=(), extra_blobs=None, content_type="application/json",
-           lineage=None, identifier=None, completion=None):
+           lineage=None, identifier=None, completion=None, generation=1):
     """Seal and commit one decision after the current policy/provenance checks.
 
     `payload` is the canonical derivative object whose sha256 is the derivative
@@ -184,9 +184,13 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     blocking = sorted(set(blocking) | set(receipt["blocking"]))
     if data_class not in policy["dataClasses"]:
         blocking = sorted(set(blocking) | {"data-class-ineligible"})
-    identifier = identifier or "adm-" + schema.digest([project_id, source, policy["id"], policy["revision"],
-                                                       data_class, artifact["kind"], derivation, receipt["hash"],
-                                                       list(identity)])[:40]
+    # Generation 1 keeps the historical identity; an explicit later generation is a
+    # fresh evaluation (e.g. after provenance registration) that never replaces history.
+    basis = [project_id, source, policy["id"], policy["revision"], data_class, artifact["kind"], derivation,
+             receipt["hash"], list(identity)]
+    if generation != 1:
+        basis.append({"generation": generation})
+    identifier = identifier or "adm-" + schema.digest(basis)[:40]
     existing = storage.get(owner, "adm_decision", identifier)
     if existing:
         return records.validate("adm_decision", existing)
@@ -250,9 +254,19 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
         raise AdmissionError("conflict") from None
 
 
-def request(host, scope, source_ref, *, data_class, claims=None, kind="document-pages"):
-    """Inspect, normalize and record an admission for a verified actor's source."""
+MAX_GENERATION = 1000
+
+
+def request(host, scope, source_ref, *, data_class, claims=None, kind="document-pages", generation=1):
+    """Inspect, normalize and record an admission for a verified actor's source.
+
+    Repeating a request returns its recorded decision. `generation` (1..1000)
+    asks for an explicit fresh evaluation under a new decision id, for example
+    after provenance was registered; earlier decisions are kept as history.
+    """
     _project(scope)
+    if type(generation) is not int or not 1 <= generation <= MAX_GENERATION:
+        raise AdmissionError("invalid-generation", 400)
     if kind == "image":
         return request_image(host, scope, source_ref, data_class=data_class, claims=claims)
     if kind != "document-pages":
@@ -282,7 +296,7 @@ def request(host, scope, source_ref, *, data_class, claims=None, kind="document-
                   derivation={"profile": derivative.PROFILE, "originalHash": resolved["originalHash"],
                               "derivativeHash": derived["derivativeHash"]},
                   receipt=receipt, receipt_bytes=schema.canonical(receipt),
-                  payload=schema.canonical(derived["pages"]), blocking=blocking)
+                  payload=schema.canonical(derived["pages"]), blocking=blocking, generation=generation)
 
 
 def request_image(host, scope, source_ref, *, data_class, claims=None):

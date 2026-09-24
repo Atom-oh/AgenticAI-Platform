@@ -674,7 +674,10 @@ live evidence and the privacy redaction adapter remain outstanding.
   decision binds its admitted image decision (`lineage`); verifying it
   recursively verifies that image decision and fences its records, so revoking
   either reviewer grant invalidates the transcription and its library revision. Expiry is
-  `min(policy, provenance/grant, now + 30 days)`. `verify` raises
+  `min(policy, provenance/grant, now + 30 days)`. A repeated request returns its recorded
+  decision; `request(..., generation=n)` (1..1000) is an explicit fresh
+  evaluation under a new decision id (for example after provenance
+  registration), and earlier decisions remain as history. `verify` raises
   `decision-not-current`, `policy-changed`, `grant-revoked`, `source-changed`,
   `artifact-changed` or `inspection-changed`. `pages_for` is the only text read
   for model use, in bounded batches (≤ 400 000 bytes by default, never above
