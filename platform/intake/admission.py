@@ -134,7 +134,7 @@ def _blocked(reasons):
     return {"status": "blocked", "blocking": sorted(set(reasons))}
 
 
-def _read_verified(storage, owner, key, expected, code, maximum=16 * 1024 * 1024):
+def _read_verified(storage, owner, key, expected, code, maximum=50 * 1024 * 1024):
     if not isinstance(key, str) or not storage.owns_key(owner, key):
         raise AdmissionError(code)
     try:
@@ -154,7 +154,8 @@ def _expiry(now, *records_):
 
 
 def decide(host, scope, *, reader, source, data_class, policy, artifact, derivation, receipt, receipt_bytes,
-           payload, blocking=(), identity=(), extra_checks=(), extra_blobs=None):
+           payload, blocking=(), identity=(), extra_checks=(), extra_blobs=None, content_type="application/json",
+           lineage=None):
     """Seal and commit one decision after the current policy/provenance checks.
 
     `payload` is the canonical derivative object whose sha256 is the derivative
@@ -172,10 +173,15 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
         return records.validate("adm_decision", existing)
     keys = {"pages": storage.key_for(owner, "adm_decision", identifier, artifact.pop("suffix", "pages.json")),
             "inspection": storage.key_for(owner, "adm_decision", identifier, "inspection.json")}
-    info = storage.put_blob_once(keys["pages"], payload, "application/json")
+    info = storage.put_blob_once(keys["pages"], payload, content_type)
     receipt_info = storage.put_blob_once(keys["inspection"], receipt_bytes, "application/json")
     for suffix, data in (extra_blobs or {}).items():
-        storage.put_blob_once(storage.key_for(owner, "adm_decision", identifier, suffix), data, "application/json")
+        data, kind = data if isinstance(data, tuple) else (data, "application/json")
+        storage.put_blob_once(storage.key_for(owner, "adm_decision", identifier, suffix), data, kind)
+    if "vision" in artifact:
+        vision = dict(artifact["vision"])
+        vision["key"] = storage.key_for(owner, "adm_decision", identifier, vision.pop("suffix"))
+        artifact = {**artifact, "vision": vision}
     if info["sha256"] != derivation["derivativeHash"]:
         raise AdmissionError("artifact-changed")
     record = {"id": identifier, "revision": 1, "projectId": project_id, "source": source,
@@ -184,6 +190,8 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
               "policy": {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]},
               "inspection": {"receiptKey": keys["inspection"], "hash": receipt_info["sha256"]},
               "dataClass": data_class}
+    if lineage is not None:
+        record["lineage"] = lineage
     checks = [_check(INTAKE_OWNER, "adm_policy", policy), *extra_checks]
     if blocking:
         record.update(status="blocked", blocking=blocking, expiresAt=_expiry(now, policy))
@@ -303,6 +311,11 @@ def verified(host, scope, decision_id, *, claims=None, sources=None, observe=Non
         raise AdmissionError("artifact-changed")
     _read_verified(storage, owner, decision["inspection"]["receiptKey"], decision["inspection"]["hash"],
                    "inspection-changed", maximum=1024 * 1024)
+    if "vision" in decision["artifact"]:
+        vision = decision["artifact"]["vision"]
+        _read_verified(storage, owner, vision["key"], vision["sha256"], "artifact-changed")
+        _read_verified(storage, owner, storage.key_for(owner, "adm_decision", decision["id"], "ocr.json"),
+                       vision["ocrSha256"], "artifact-changed", maximum=1024 * 1024)
     if observe is not None:
         observe.append(_check(owner, "adm_decision", decision))
         observe.extend(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)

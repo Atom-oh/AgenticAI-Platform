@@ -72,6 +72,18 @@ class Sources:
             fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
         return record
 
+    def _remember_owned(self, owner, kind, record):
+        """Observe an upstream record in its actual owner partition (e.g. intake:deployment)."""
+        check = {"owner": owner, "kind": kind, "id": record["id"], "version": record["version"]}
+        key = (owner, kind, record["id"])
+        prior = self.observed.get(key)
+        if prior and prior != check:
+            fail(409, "ontology-source-changed", "온톨로지 원본이 조회 중 변경되었습니다.")
+        self.observed[key] = check
+        if len(self.observed) > self.max_records:
+            fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
+        return record
+
     def _blob(self, key, expected, maximum=2_000_000):
         if not self.storage.owns_key(self.ctx.owner, key):
             fail(403, "ontology-source-forbidden", "이 프로젝트에서 읽을 수 없는 원본입니다.")
@@ -157,6 +169,10 @@ class Sources:
                     fail(409, "ontology-source-stale", "문서의 기록된 읽기 권한이 다릅니다.")
                 self._remember("document", document)
                 self._remember("docrevision", revision)
+                # A transcription revision's lineage (image asset, image admission
+                # decision, policy/grant) is fenced with each record's own owner.
+                for check in library._upstream:
+                    self._remember_owned(check["owner"], check["kind"], check)
                 projection = library.projection(document, revision) if text else None
                 return {"ref": ref, "kind": kind, "record": revision,
                         "text": "\n".join(p["text"] for p in projection["paragraphs"]) if projection else None}
@@ -259,4 +275,8 @@ class Sources:
             row = self.storage.get(check["owner"], check["kind"], check["id"])
             if not row or row["version"] != check["version"]:
                 fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
+            if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision"):
+                from intake.records import is_current
+                if not is_current(row, self.storage.clock()):
+                    fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
         return list(self.observed.values())

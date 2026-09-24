@@ -86,11 +86,23 @@ def decide(host, scope, decision_id, *, approve, reason, claims=None):
     unique = {(c["owner"], c["kind"], c["id"]): c for c in fences}
     unique.pop((owner, "adm_decision", decision["id"]), None)
     try:
-        return storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed,
-                                  "expected_version": decision["version"]}],
-                                checks=list(unique.values()), retry_conflicts=False)[0]
+        saved = storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed,
+                                   "expected_version": decision["version"]}],
+                                 checks=list(unique.values()), retry_conflicts=False)[0]
     except Conflict:
         raise AdmissionError("conflict") from None
+    if approve and saved["artifact"]["kind"] == "diagram-transcription":
+        publish(host, scope, saved)
+    return saved
+
+
+def publish(host, scope, decision):
+    """Publish a reviewer-validated transcription as an in-review library revision.
+
+    Idempotent; library approval by a planner/owner remains a separate step.
+    """
+    from documents.library import publish_transcription
+    return publish_transcription(host, scope, decision)
 
 
 def _title(host, scope, decision):

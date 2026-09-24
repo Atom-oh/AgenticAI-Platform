@@ -51,13 +51,14 @@ indexes. Missing or unavailable discovery cannot veto an otherwise authorized
 (optional existing Regulation/Document node ID), `createdBy`, `projectId`,
 `readRoles`, `aclVersion`, `status` (`active|archived`), `latestRevisionId`,
 `approvedRevisionId`, `createdAt`, `updatedAt`, `provenance`
-(`uploaded|synthetic_sample`).
+(`uploaded|synthetic_sample|intake-transcription`).
 
 `Revision` fields: `id`, `documentId`, `version` (metadata CAS), `revision`
 (file import ordinal), `name`, `size`, `sha256` (original bytes), `versionLabel`,
 `effectiveDate` (optional supplied date), `createdBy`, `status`
 (`uploading|processing|draft|in_review|approved|rejected|failed`), `parseStatus`,
-`textHash`, `paragraphCount`, `pages`, `warnings`, timestamps and review metadata.
+`textHash`, `paragraphCount`, `pages`, `warnings`, timestamps and review metadata,
+and the server-owned optional `transcriptionOf` described below.
 Private `parts`, blob keys and request fingerprints are not returned to clients.
 Approving a revision never mutates its content. New content needs a new revision.
 Approval cannot replace a newer already-approved import ordinal with an older
@@ -151,6 +152,34 @@ owner, job)` handles `document-finalize`. Its stored input contains trusted
 `documents.library.authorize_job(host, scope, job)` protects generic job reads.
 `DocumentError(status, code, message)` is a bounded, non-sensitive domain error.
 Library code never imports a model client.
+
+### Transcription revisions (`source-admission/1`, I6b)
+
+`documents.library.publish_transcription(host, scope, decision)` is a trusted
+server adapter callable only from `intake.review` (any other caller gets
+`PermissionError`). It turns an admitted, reviewer-validated
+`diagram-transcription` admission decision into an MD document of kind
+`guide-transcription` (`provenance: "intake-transcription"`, `readRoles` copied
+from the source audience; a project-wide image asset gives all four roles) with
+one revision in status `in_review`. That revision carries the **server-owned**
+field `transcriptionOf = {sourceRef, decisionId, decisionRevision, visionSha256,
+normalizedImageHash, region}`, where `sourceRef` is the original image asset
+reference and `decisionId` its admitted image decision. The public document API
+never accepts caller-supplied `provenance` or `transcriptionOf`.
+
+Library approval stays separate: a planner/owner approves the revision through
+the existing review route; the intake grant confers no library review.
+
+`Library.revision()` (and therefore `projection()`, paragraph reads, every
+download chunk and review approval) rechecks `transcriptionOf` lineage for any
+revision that carries it through `intake.admission.verify`. A revoked or changed
+upstream returns `409 source-upstream-revoked`. The records that check read (the
+image asset, the image `adm_decision` and its `adm_policy`/`adm_provenance`/
+`adm_grant`) are kept in `Library._upstream` as `{owner, kind, id, version}` in
+their actual owner partitions and join `checks()`, so `commit()` and
+`assert_current()` fence upstream authority atomically with the library write.
+`Sources.resolve` propagates the same observations with
+`Sources._remember_owned(owner, kind, record)`.
 
 `Storage.list_page` gains optional `prefix=""`; encoded cursors must match the
 owner, kind AND prefix. Revision/audit IDs start with `{documentId}--`, so

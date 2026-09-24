@@ -38,7 +38,7 @@ _REVISION_FIELDS = frozenset({
     "id", "documentId", "version", "revision", "name", "size", "sha256", "versionLabel", "effectiveDate",
     "createdBy", "status", "parseStatus", "textHash", "paragraphCount", "pages", "warnings", "createdAt",
     "updatedAt", "submittedBy", "submittedAt", "reviewedBy", "reviewedAt", "reviewNote", "review",
-    "completedAt", "error", "jobId",
+    "completedAt", "error", "jobId", "transcriptionOf",
 })
 
 
@@ -157,6 +157,9 @@ class Library:
         self.collaboration = getattr(host, "collaboration", None) or Collaboration(self.storage)
         self._actions = {}
         self._scope_snapshot = None
+        # Upstream records read while validating `transcriptionOf` lineage; they
+        # join every commit/assert_current fence as version checks.
+        self._upstream = []
 
     def fresh(self):
         try:
@@ -222,7 +225,32 @@ class Library:
         if approved and (current.get("status") != "active" or current.get("approvedRevisionId") != revision_id
                          or revision.get("status") != "approved" or revision.get("parseStatus") != "complete"):
             raise DocumentError(409, "source-not-approved", "The selected source is not currently approved")
+        if revision.get("transcriptionOf") is not None:
+            self._lineage(revision)
         return revision
+
+    def _lineage(self, revision):
+        """A transcription revision stays readable only while its image lineage is current."""
+        from intake import admission
+        lineage = revision["transcriptionOf"]
+        observed = []
+        try:
+            decision = admission.verify(self.host, self.scope, lineage["decisionId"], observe=observed)
+            if (decision["revision"] != lineage["decisionRevision"] or decision["artifact"]["kind"] != "image"
+                    or decision["artifact"]["vision"]["sha256"] != lineage["visionSha256"]
+                    or decision["artifact"]["sha256"] != lineage["normalizedImageHash"]
+                    or decision["source"] != lineage["sourceRef"]):
+                raise admission.AdmissionError("source-changed")
+        except (admission.AdmissionError, CollaborationError, DocumentError, KeyError, TypeError, ValueError):
+            raise DocumentError(409, "source-upstream-revoked",
+                                "The transcription's original image or its admission is no longer current") from None
+        for check in observed:
+            prior = next((c for c in self._upstream if (c["owner"], c["kind"], c["id"]) ==
+                          (check["owner"], check["kind"], check["id"])), None)
+            if prior and prior != check:
+                raise Conflict("Transcription lineage changed")
+            if prior is None:
+                self._upstream.append(check)
 
     def blob_key(self, revision, suffix):
         """Do not accept merely owner-prefixed addresses for a different source."""
@@ -308,6 +336,11 @@ class Library:
             if document["id"] not in seen:
                 checks.append({"owner": self.owner, "kind": "document", "id": document["id"], "version": document["version"]})
                 seen.add(document["id"])
+        present = {(c["owner"], c["kind"], c["id"]) for c in checks}
+        for check in self._upstream:
+            if (check["owner"], check["kind"], check["id"]) not in present:
+                checks.append(dict(check))
+                present.add((check["owner"], check["kind"], check["id"]))
         return checks
 
     def commit(self, writes, documents=()):
@@ -339,6 +372,74 @@ class Library:
         if revision:
             event["revisionId"] = revision["id"]
         return self.write("docaudit", event)
+
+
+def publish_transcription(host, scope, decision):
+    """Trusted server adapter: a reviewer-validated transcription becomes an in-review
+    MD revision with server-owned `transcriptionOf`. Callable only from `intake.review`;
+    the public document API never accepts caller-supplied provenance or lineage."""
+    import sys
+    caller = sys._getframe(1).f_globals.get("__name__")
+    if caller != "intake.review":
+        raise PermissionError("publish_transcription is reserved for intake.review")
+    from documents.intake import extract
+    from intake import admission, transcription
+    library = Library(host, scope)
+    library.fresh()
+    if (decision.get("status") != "admitted" or decision.get("artifact", {}).get("kind") != "diagram-transcription"
+            or decision.get("projectId") != library.project_id):
+        raise DocumentError(409, "transcription-not-admitted", "Only an admitted transcription can be published")
+    current = admission.verify(host, library.scope, decision["id"])
+    image = admission.verify(host, library.scope, current["lineage"]["decisionId"])
+    value = transcription.read(host, library.scope, current)
+    data = transcription.markdown(value)
+    did = "d-" + fingerprint(["intake-transcription", current["id"]])[:40]
+    rid = did + "--r000001"
+    existing = library.storage.get(library.owner, "document", did)
+    if existing:
+        document = library.document(did)
+        return document, library.revision(document, rid)
+    projection = extract("transcription.md", data)
+    if projection["parseStatus"] != "complete":
+        raise DocumentError(409, "extraction-limit", "The transcription could not be extracted")
+    encoded = canonical_json(projection)
+    original_key = library.storage.key_for(library.owner, "docrevision", rid, "original")
+    projection_key = library.storage.key_for(library.owner, "docrevision", rid, "projection.json")
+    library.storage.put_blob_once(original_key, data, "application/octet-stream")
+    library.storage.put_blob_once(projection_key, encoded, "application/json")
+    now = library.storage.clock()
+    placed = current["artifact"]["region"]
+    lineage = {"sourceRef": dict(image["source"]), "decisionId": image["id"], "decisionRevision": image["revision"],
+               "visionSha256": image["artifact"]["vision"]["sha256"],
+               "normalizedImageHash": image["artifact"]["sha256"],
+               "region": {k: placed[k] for k in ("left", "top", "width", "height")}}
+    # An asset source is project-wide (PROJECT_AUDIENCE): its audience is every role.
+    roles = list(ROLES)
+    digest = fingerprint({"decision": current["id"], "revision": current["revision"], "sha256": hashlib.sha256(data).hexdigest()})
+    document = {"id": did, "title": "가이드 도식 전사", "kind": "guide-transcription", "graphRef": None,
+                "readRoles": roles, "createdBy": library.scope["actor"], "projectId": library.project_id,
+                "aclVersion": 1, "status": "active", "latestRevisionId": rid, "approvedRevisionId": None,
+                "provenance": "intake-transcription", "revisionCount": 1, "requestHash": digest}
+    revision = {"id": rid, "documentId": did, "revision": 1, "name": "transcription.md", "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(), "versionLabel": "", "effectiveDate": None,
+                "createdBy": library.scope["actor"], "status": "in_review", "parseStatus": projection["parseStatus"],
+                "textHash": hashlib.sha256(encoded).hexdigest(), "paragraphCount": len(projection["paragraphs"]),
+                "pages": projection["pages"], "warnings": projection["warnings"], "parts": {}, "partCount": 0,
+                "requestHash": digest, "originalKey": original_key, "projectionKey": projection_key,
+                "completedAt": now, "submittedBy": library.scope["actor"], "submittedAt": now,
+                "transcriptionOf": lineage}
+    quota = library.storage.get(library.owner, "docbinding", "collection-quota")
+    count = quota["count"] if quota else 0
+    if count >= MAX_DOCUMENTS:
+        raise DocumentError(409, "collection-full", "A collection can contain at most 200 documents")
+    library._lineage(revision)  # fence the upstream records into this commit
+    saved = library.commit([
+        library.write("document", document), library.write("docrevision", revision),
+        library.write("docbinding", {"id": "collection-quota", "count": count + 1, "status": "internal"},
+                      quota["version"] if quota else None),
+        library.audit(document, "transcription-published", revision, decisionId=current["id"]),
+    ])
+    return saved[0], saved[1]
 
 
 def authorize_job(host, scope, job):

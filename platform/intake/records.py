@@ -19,7 +19,7 @@ DECISION_CLASSES = DATA_CLASSES + ("sensitive",)
 INSPECTION_PROFILE = "inspect-1"
 NORMALIZATION_PROFILE = "identifier-normalization-1"
 DECISION_STATUSES = ("pending-review", "admitted", "rejected", "blocked", "revoked", "expired")
-ARTIFACT_KINDS = ("document-pages", "image", "code-collection", "prompt-text")
+ARTIFACT_KINDS = ("document-pages", "image", "code-collection", "prompt-text", "diagram-transcription")
 PROVENANCE_SOURCE_KINDS = ("document-revision", "asset", "product-guideline")
 DECISION_SOURCE_KINDS = PROVENANCE_SOURCE_KINDS + ("prompt-text",)
 AUDIT_OPS = ("put_policy", "activate_policy", "retire_policy", "register_provenance",
@@ -189,7 +189,7 @@ def _resolver(record):
 
 
 def _artifact(value):
-    _closed(value, {"kind", "key", "sha256"}, {"pages", "files", "resolver", "vision", "region"})
+    _closed(value, {"kind", "key", "sha256"}, {"pages", "files", "resolver", "vision", "region", "width", "height"})
     kind = _choice(value["kind"], ARTIFACT_KINDS)
     if not isinstance(value["key"], str) or not value["key"].startswith("workspace/") or len(value["key"]) > 1024:
         _bad("Invalid private artifact key")
@@ -222,7 +222,14 @@ def _artifact(value):
         _choice(vision["format"], ("png", "jpeg"))
         _int(vision["size"])
         _unique_list(vision["transform"], lambda x: _label(x), minimum=0, maximum=20)
+    for key in ("width", "height"):
+        if key in value:
+            if kind != "image":
+                _bad("Only an image records normalized dimensions")
+            _int(value[key])
     if "region" in value:
+        if kind != "diagram-transcription":
+            _bad("Only a transcription binds an image region")
         region = value["region"]
         _closed(region, {"page", "left", "top", "width", "height", "normalizedImageHash"})
         for key in ("left", "top"):
@@ -235,7 +242,7 @@ def _artifact(value):
 def _decision(record):
     _closed(record, {"id", "revision", "projectId", "source", "artifact", "derivation", "policy",
                      "inspection", "dataClass", "status", "expiresAt", "hash"},
-            {"provenance", "review", "blocking"})
+            {"provenance", "review", "blocking", "lineage"})
     _identifier(record["projectId"])
     _source(record["source"], audience=True, kinds=DECISION_SOURCE_KINDS)
     _artifact(record["artifact"])
@@ -252,6 +259,14 @@ def _decision(record):
         _closed(record["provenance"], {"id", "revision"})
         _identifier(record["provenance"]["id"])
         _int(record["provenance"]["revision"])
+    if "lineage" in record:
+        if record["artifact"]["kind"] != "diagram-transcription":
+            _bad("Only a transcription records image lineage")
+        _closed(record["lineage"], {"decisionId", "decisionRevision"})
+        _identifier(record["lineage"]["decisionId"])
+        _int(record["lineage"]["decisionRevision"])
+    elif record["artifact"]["kind"] == "diagram-transcription":
+        _bad("A transcription must bind its admitted image decision")
     _closed(record["inspection"], {"receiptKey", "hash"})
     if not isinstance(record["inspection"]["receiptKey"], str) or not record["inspection"]["receiptKey"].startswith("workspace/"):
         _bad("Invalid private receipt key")
