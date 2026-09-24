@@ -612,6 +612,7 @@ module-private ledger writer token):
 | `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate` |
 | `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
 | `deliverables` | Set at completion: the result manifest's bundle and sources bound to their compile, Browser and generate receipt hashes |
+| `accounting` | Pending daily-usage obligations `[{id: "chg-"+40 hex, tokens, callId}]`, committed in the same write as the outcome that charges them |
 | `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
@@ -620,7 +621,16 @@ failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?,
 usageEstimated?, settledBy?}`; usage holds only `{inputTokens, outputTokens}`.
 A model call recorded without usage is charged its full reservation as used
 tokens and daily cost-gate usage and marked `usageEstimated: true`; the
-reservation is never released to zero. `outcome` for an `interpreter` or
+reservation is never released to zero. Every daily charge (measured, estimated
+or `unknown`) is first persisted as an `accounting` obligation in the same
+conditional write as the outcome, settlement or `unknown` marking. The ledger
+then records it through the cost gate keyed by the obligation id (the
+production gate writes a `usage-charge#{id}` marker and the day's usage in one
+transaction, so a retried charge counts once) and removes it with a CAS. A
+failed usage write is never swallowed: the call returns `accounting-pending`
+with the outcome committed and the obligation retained. Repeating the identical
+`outcome`, or the reconciler's `sweep` (a terminal job keeps a due entry while
+`accounting` is pending), settles it. `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
 stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
 receiptHash, receiptRef, nonce, attemptId, status, service, result, inputs,
@@ -820,7 +830,7 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
 `completion-contention`, `completion-obligations`, `completion-unavailable`,
-`completion-invalid`, `calls-unresolved`, `profile-invalid`, `manifest-invalid`,
+`completion-invalid`, `calls-unresolved`, `accounting-pending`, `profile-invalid`, `manifest-invalid`,
 `evidence-stale`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.

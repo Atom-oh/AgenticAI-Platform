@@ -8,6 +8,7 @@ import json
 import re
 import secrets
 import sys
+import time
 
 from workspace import ontology_schema as schema
 from workspace import storage as _storage
@@ -65,6 +66,7 @@ _COMPLETION_UNAVAILABLE = {"source.analyze": "source-staging-adapter"}
 TERMINAL = frozenset({"succeeded", "needs_changes", "failed", "cancelled", "expired"})
 ACTIVE = frozenset({"queued", "dispatched", "running", "recovery_required"})
 QUOTA_OWNER = "execution:quota"
+ACCOUNTING_RETRY_MS = 60_000
 MAX_ACTOR_ACTIVE, MAX_PROJECT_ACTIVE = 1, 2
 MAX_SOURCE_CHECKS, MAX_SOURCE_BINDINGS, TRANSACTION_LIMIT = 90, 50, 100
 DEFAULT_COMPLETION_SCOPE = {"nonSourceOperations": 10, "sourceChecks": 0, "sourceBindings": 0}
@@ -193,23 +195,44 @@ class CostGuardGate:
         if ok is not True:
             raise LedgerError("daily-budget")
 
-    def record(self, tokens):
+    def record(self, tokens, charge_id):
+        """Idempotent daily usage charge (review 4, RUN-03): a per-charge marker and the day's usage counter are one
+        transaction, so a retried settlement of the same obligation never counts twice. Failures are raised."""
+        costguard = self._module()
+        if type(tokens) is not int or tokens <= 0 or not isinstance(charge_id, str) or not charge_id:
+            raise LedgerError("daily-budget-unavailable")
         try:
-            self._module().add_usage(tokens)
-        except Exception:  # noqa: BLE001 - usage accounting never rewrites the ledger outcome
-            pass
+            table = costguard._tbl
+            client, ttl = table.meta.client, int(time.time()) + 3 * 86400
+            client.transact_write_items(TransactItems=[
+                {"Put": {"TableName": table.name, "ConditionExpression": "attribute_not_exists(pk)",
+                         "Item": {"pk": {"S": "usage-charge#" + charge_id}, "tokens": {"N": str(tokens)},
+                                  "ttl": {"N": str(ttl)}}}},
+                {"Update": {"TableName": table.name, "Key": {"pk": {"S": "usage#" + costguard._today()}},
+                            "UpdateExpression": "ADD tokens :t SET #ttl = :ttl",
+                            "ExpressionAttributeNames": {"#ttl": "ttl"},
+                            "ExpressionAttributeValues": {":t": {"N": str(tokens)}, ":ttl": {"N": str(ttl)}}}}])
+        except Exception as error:  # noqa: BLE001 - classified below; never swallowed
+            reasons = getattr(error, "response", {}).get("CancellationReasons") or []
+            if reasons and isinstance(reasons[0], dict) and reasons[0].get("Code") == "ConditionalCheckFailed":
+                return None                  # this charge was already recorded
+            raise LedgerError("daily-budget-unavailable") from error
+        return None
 
 
 class _OfflineCostGate:
     def __init__(self):
         if "pytest" not in sys.modules:
             raise PermissionError("the unlimited cost gate is offline-only")
-        self.recorded = []
+        self.recorded, self.charges = [], set()
 
     def check(self):
         return None
 
-    def record(self, tokens):
+    def record(self, tokens, charge_id=None):
+        if charge_id is not None and charge_id in self.charges:
+            return
+        self.charges.add(charge_id)
         self.recorded.append(tokens)
 
 
@@ -308,6 +331,8 @@ class Ledger:
         status = job["status"]
         if status in TERMINAL:
             due = [job["clock"]] if job.get("cleanup") else []
+            if job.get("accounting"):
+                due.append(job["clock"] + ACCOUNTING_RETRY_MS)       # a retained accounting obligation
             if self._outstanding(job) and job.get("settlementDueAt") is not None:
                 due.append(job["settlementDueAt"])
             return min(due) if due else None
@@ -954,7 +979,7 @@ class Ledger:
         if call["status"] != "intent":
             if {"status": call["status"], "usage": call.get("usage"),
                     "serviceSessionId": call.get("serviceSessionId")} == recorded:
-                return self._projection(job)
+                return self._projection(self._settle_accounting(owner, job))     # settles a retained obligation
             raise LedgerError("operation-changed")
         if status not in ("completed", "failed"):
             raise LedgerError("call-invalid")
@@ -964,10 +989,48 @@ class Ledger:
         elif service_session_id is not None:
             raise LedgerError("call-invalid")
         calls, budget, charge = self._settled_call(job, index, status, usage, service_session_id)
-        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget}, reindex=False)
-        if charge:
-            self.cost_gate.record(charge)
-        return saved
+        after = {**job, "calls": calls, "budget": budget, "accounting": self._obligations(job, [(call, charge)])}
+        saved = self._commit(owner, job, after, reindex=False)
+        return self._settle_accounting(owner, saved)
+
+    # --- accounting obligations (review 4, RUN-03) ----------------------------------------------------
+    @staticmethod
+    def _obligations(job, charges):
+        """The job's pending daily-usage charges plus new ones, committed atomically with their outcome."""
+        pending = list(job.get("accounting") or [])
+        for call, tokens in charges:
+            if tokens:
+                identifier = "chg-" + hashlib.sha256(f"{job['id']}:{call['callId']}".encode()).hexdigest()[:40]
+                if all(entry["id"] != identifier for entry in pending):
+                    pending.append({"id": identifier, "tokens": tokens, "callId": call["callId"]})
+        return pending
+
+    def _settle_accounting(self, owner, job):
+        """Record every retained obligation with the idempotent cost gate, then drop it from the job (CAS).
+
+        A charge is keyed by its obligation id, so a settlement retried after a crash never counts twice. A failed
+        usage write is raised as ``accounting-pending`` and the obligation stays for a retry or the reconciler.
+        """
+        pending = list(job.get("accounting") or [])
+        if not pending:
+            return job
+        try:
+            for entry in pending:
+                self.cost_gate.record(entry["tokens"], charge_id=entry["id"])
+        except Exception as error:  # noqa: BLE001 - surfaced; the obligation is retained
+            raise LedgerError("accounting-pending", charges=[entry["id"] for entry in pending]) from error
+        settled = {entry["id"] for entry in pending}
+        for _ in range(3):
+            current = self._get(owner, job["id"])
+            remaining = [entry for entry in current.get("accounting") or [] if entry["id"] not in settled]
+            if remaining == list(current.get("accounting") or []):
+                return current
+            try:
+                return self._commit(owner, current, {**current, "accounting": remaining},
+                                    reindex=current["status"] in TERMINAL)
+            except LedgerError:
+                continue                      # a concurrent write: re-read; the recorded charges are idempotent
+        raise LedgerError("accounting-pending", charges=sorted(settled))
 
     def _settled_call(self, job, index, status, usage, service_session_id, *, settled_by=None):
         """The call's recorded outcome and budget effect: returns (calls, budget, daily charge).
@@ -1305,6 +1368,13 @@ class Ledger:
         """The watchdog never sets succeeded/needs_changes."""
         job = self._get(owner, job_id)
         now, profile = self.storage.clock(), job["profileBody"]
+        if job.get("accounting"):
+            try:
+                job = self._settle_accounting(owner, job)
+            except LedgerError as error:
+                if error.code != "accounting-pending":
+                    raise
+                # Retained, not dropped: a terminal job's due index keeps an entry while ``accounting`` is pending.
         if job["status"] in TERMINAL:
             job = self._cleanup(owner, job)
             if self._outstanding(job) and now >= job.get("settlementDueAt", 0):
@@ -1393,10 +1463,9 @@ class Ledger:
             job, index, observation["status"], observation.get("usage"),
             None if call["kind"] == "model" else service["sessionId"], settled_by="reconciler")
         saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget,
+                                          "accounting": self._obligations(job, [(call, charge)]),
                                           "nonces": [*job.get("nonces", []), observation["nonce"]]}, op=op)
-        if charge:
-            self.cost_gate.record(charge)
-        return saved
+        return self._settle_accounting(owner, saved)
 
     def _op_any(self, job, method, operation_id, args):
         """Operation idempotency that also applies to a terminal job (settlement is accounting, not execution)."""
@@ -1416,21 +1485,25 @@ class Ledger:
 
     def _expire_calls(self, owner, job):
         """The settlement bound passed: unresolved calls become ``unknown`` with their reservation charged."""
-        budget, calls, charge = dict(job["budget"]), [], 0
+        calls, budget, charges = self._unknown_calls(job)
+        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget, "settlementDueAt": None,
+                                          "unknownOutcome": True, "accounting": self._obligations(job, charges)})
+        return self._settle_accounting(owner, saved)
+
+    @staticmethod
+    def _unknown_calls(job):
+        """Unresolved calls become ``unknown`` with their reservation charged as used (conservative accounting)."""
+        budget, calls, charges = dict(job["budget"]), [], []
         for call in job["calls"]:
             if call.get("status") == "intent":
                 reserved = call.get("reserved", 0)
                 budget.update(tokensReserved=budget["tokensReserved"] - reserved,
                               tokensUsed=budget["tokensUsed"] + reserved)
-                charge += reserved if call.get("kind") == "model" else 0
+                charges.append((call, reserved if call.get("kind") == "model" else 0))
                 call = {**call, "status": "unknown", "usageEstimated": True if call.get("kind") == "model"
                         else call.get("usageEstimated")}
             calls.append(call)
-        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget, "settlementDueAt": None,
-                                          "unknownOutcome": True})
-        if charge:
-            self.cost_gate.record(charge)
-        return saved
+        return calls, budget, charges
 
     def _cleanup(self, owner, job):
         """Delete fenced output parts of a terminal job, then drop its due entry."""

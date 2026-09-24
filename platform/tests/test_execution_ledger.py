@@ -2450,3 +2450,126 @@ def test_intent_replay_is_fenced_and_never_authorizes_another_invocation(xfer):
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(*ids(job), **replay_args(operation))
     assert error.value.code == "stale-attempt"
+
+
+class CrashingGate:
+    """An offline cost gate whose usage write fails (a crash or an unavailable costguard) a given number of times."""
+
+    def __init__(self, failures=1):
+        self.failures, self.recorded, self.charges = failures, [], {}
+
+    def check(self):
+        return None
+
+    def record(self, tokens, charge_id=None):
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("synthetic crash after the outcome commit")
+        if charge_id in self.charges:
+            return
+        self.charges[charge_id] = tokens
+        self.recorded.append(tokens)
+
+
+def crashed_outcome(xfer, failures=1):
+    storage, _, now, _ = xfer
+    ledger = offline_ledger(storage, cost_gate=CrashingGate(failures))
+    job = run_job(ledger)
+    call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                max_tokens=1000)["callId"]
+    usage = {"inputTokens": 100, "outputTokens": 200}
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().outcome(*ids(job), call, status="completed", usage=usage)
+    assert error.value.code == "accounting-pending"                  # surfaced, never swallowed
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["calls"][-1]["status"] == "completed"
+    [obligation] = stored["accounting"]                              # persisted with the outcome
+    assert obligation["tokens"] == 300 and obligation["callId"] == call
+    return ledger, job, call, usage
+
+
+def test_a_crash_after_the_outcome_commit_keeps_the_accounting_obligation_for_a_retry(xfer):
+    """Review 4 finding 5: the identical retried outcome settles the retained obligation exactly once."""
+    storage = xfer[0]
+    ledger, job, call, usage = crashed_outcome(xfer)
+    again = ledger.tool().outcome(*ids(job), call, status="completed", usage=usage)
+    assert again["accounting"] == [] and ledger.cost_gate.recorded == [300]
+    ledger.tool().outcome(*ids(job), call, status="completed", usage=usage)
+    assert ledger.cost_gate.recorded == [300] and storage.get(OWNER, "job", job["id"])["accounting"] == []
+
+
+def test_a_retained_obligation_survives_cancellation_and_is_settled_by_the_reconciler(xfer):
+    from workspace.storage import DUE_OWNER
+    storage, _, now, _ = xfer
+    ledger, job, call, _ = crashed_outcome(xfer)
+    ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "cancelled" and len(stored["accounting"]) == 1
+    due = storage.get(DUE_OWNER, "exec_due", stored["dueId"])
+    assert due["status"] == "pending"
+    now[0] = due["dueAt"]
+    ledger.reconciler().run_due()
+    settled = storage.get(OWNER, "job", job["id"])
+    assert settled["accounting"] == [] and ledger.cost_gate.recorded == [300]
+    assert settled["status"] == "cancelled" and settled["dueId"] is None
+
+
+def test_an_obligation_recorded_before_its_removal_crashed_is_not_charged_twice(xfer):
+    storage = xfer[0]
+    ledger, job, call, usage = crashed_outcome(xfer)
+    original = ledger._commit
+    state = {"crash": 3}                  # every bounded removal attempt fails after the charge was recorded
+
+    def crash_removal(owner, before, after, **kwargs):
+        if state["crash"] and after.get("accounting") == [] and before.get("accounting"):
+            state["crash"] -= 1
+            raise LedgerError("conflict")
+        return original(owner, before, after, **kwargs)
+    ledger._commit = crash_removal
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().outcome(*ids(job), call, status="completed", usage=usage)
+    assert error.value.code == "accounting-pending"
+    assert len(storage.get(OWNER, "job", job["id"])["accounting"]) == 1
+    ledger._commit = original
+    ledger.reconciler().sweep(OWNER, job["id"])
+    assert storage.get(OWNER, "job", job["id"])["accounting"] == [] and ledger.cost_gate.recorded == [300]
+
+
+def test_production_cost_gate_records_each_charge_once_and_surfaces_failures(monkeypatch):
+    import types
+    from workspace.execution_ledger import CostGuardGate
+
+    class Canceled(Exception):
+        def __init__(self, code):
+            super().__init__(code)
+            self.response = {"CancellationReasons": [{"Code": code}, {"Code": "None"}]}
+
+    class Client:
+        exceptions = types.SimpleNamespace(TransactionCanceledException=Canceled)
+
+        def __init__(self):
+            self.markers, self.tokens, self.down = set(), 0, False
+
+        def transact_write_items(self, TransactItems):
+            if self.down:
+                raise OSError("costguard unreachable")
+            marker = TransactItems[0]["Put"]["Item"]["pk"]["S"]
+            if marker in self.markers:
+                raise Canceled("ConditionalCheckFailed")
+            self.markers.add(marker)
+            self.tokens += int(TransactItems[1]["Update"]["ExpressionAttributeValues"][":t"]["N"])
+
+    client = Client()
+    table = types.SimpleNamespace(name="cache-test", meta=types.SimpleNamespace(client=client))
+    fake = types.SimpleNamespace(_tbl=table, budget_ok=lambda: True, _today=lambda: "2027-01-15")
+    monkeypatch.setenv("CACHE_TABLE", "cache-test")
+    monkeypatch.setitem(sys.modules, "common.costguard", fake)
+    monkeypatch.setitem(sys.modules, "common", types.SimpleNamespace(costguard=fake))
+    gate = CostGuardGate()
+    gate.record(300, charge_id="chg-1")
+    gate.record(300, charge_id="chg-1")
+    assert client.tokens == 300
+    client.down = True
+    with pytest.raises(LedgerError) as error:
+        gate.record(5, charge_id="chg-2")
+    assert error.value.code == "daily-budget-unavailable"
