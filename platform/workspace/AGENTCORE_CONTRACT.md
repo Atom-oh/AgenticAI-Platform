@@ -102,7 +102,10 @@ inferred from an agent/service identity.
 Effective access intersects current membership, publication grant and upstream
 source policy. Grants cannot widen a restricted upstream audience. Organization
 publication requires a separately authorized source-policy change; ordinary
-uploads or project ownership do not create it. A new revision needs a new grant
+uploads or project ownership do not create it. It is an IAM-administered,
+versioned `adm_sharing` policy per exact origin source revision
+(`intake/admin_handler.py` `grant_sharing`/`revoke_sharing`), bound by revision
+at proposal/approval and rechecked on every access. A new revision needs a new grant
 binding or explicit renewal. Withdrawal immediately invalidates downstream reuse.
 
 Impact crosses shared boundaries only through authorized references. Return

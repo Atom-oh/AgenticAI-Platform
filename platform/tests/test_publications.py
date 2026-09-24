@@ -61,6 +61,14 @@ def capability(api, actor, name="design_publish", identifier=None):
         "expiresAt": api.storage.clock() + 30 * DAY}})
 
 
+def share(api, pid, ref, expected=None):
+    """IAM-only organization-sharing source policy for one exact source revision."""
+    source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256")}
+    return admin(api, {"op": "grant_sharing", **({"expectedRevision": expected} if expected else {}), "record": {
+        "id": records.sharing_policy_id(pid, source), "projectId": pid, "source": source,
+        "audience": "organization", "expiresAt": api.storage.clock() + 30 * DAY}})
+
+
 def approved_nodes(api, pid, *, documents=1, request="collection"):
     """Seed approved design nodes whose sources are approved document revisions."""
     refs = [approved(api, pid, f"Synthetic design source {i}.\n".encode(), name=f"design-{i}.txt",
@@ -94,6 +102,8 @@ def org(api, monkeypatch):
     dest = new_project(api, "dest", {"erin": "owner", "frank": "planner", "gina": "designer"})
     hidden = new_project(api, "hidden", {"hank": "owner", "ivy": "designer"})
     nodes, refs = approved_nodes(api, origin)
+    for ref in refs:
+        share(api, origin, ref)
     return SimpleNamespace(api=api, origin=origin, dest=dest, hidden=hidden, nodes=nodes, refs=refs)
 
 
@@ -453,6 +463,8 @@ def org_two(api, monkeypatch):
     dest = new_project(api, "dest", {"erin": "owner", "frank": "planner", "gina": "designer"})
     hidden = new_project(api, "hidden", {"hank": "owner", "ivy": "designer"})
     nodes, refs = approved_nodes(api, origin, documents=2)
+    for ref in refs:
+        share(api, origin, ref)
     return SimpleNamespace(api=api, origin=origin, dest=dest, hidden=hidden, nodes=nodes, refs=refs)
 
 
@@ -496,3 +508,56 @@ def test_publication_pagination_uses_opaque_scope_bound_cursors(org_two):
                     query={"view": view, "limit": "2", "cursor": first["cursor"]})[0] == 409
         assert call(org.api, "GET", "/publications", actor="hank", project=org.hidden,
                     query={"view": view, "limit": "1", "cursor": first["cursor"]})[0] == 409
+
+
+def test_organization_publication_requires_an_explicit_sharing_policy_per_source(org):
+    """Finding 8: project-wide audience alone is not organization-sharing permission."""
+    policy = records.sharing_policy_id(org.origin, {k: org.refs[0][k] for k in ("sourceKind", "sourceId", "revision",
+                                                                                 "sha256")})
+    admin(org.api, {"op": "revoke_sharing", "id": policy, "expectedRevision": 1})
+    assert denied(proposed, org) == (409, "publication-source-policy-required")
+    # A project owner has no route to create one; only the IAM-only admin entry point does.
+    status, _, _ = call(org.api, "POST", "/publications/sharing", {"sourceId": org.refs[0]["sourceId"]},
+                        actor="alice", project=org.origin)
+    assert status in (400, 403, 404)
+    renewed = share(org.api, org.origin, org.refs[0], expected=2)
+    assert renewed["revision"] == 3 and renewed["status"] == "active"
+    pub = published(org)
+    assert pub["sharing"] == [{"policyId": policy, "revision": 3}]
+    grant = granted(org, pub)
+    ref = publications.published_asset_reference(pub, grant)
+    assert Sources(ctx(org.api, "gina", org.dest)).resolve(ref)
+    reader = Sources(ctx(org.api, "gina", org.dest))
+    reader.resolve(ref)
+    admin(org.api, {"op": "revoke_sharing", "id": policy, "expectedRevision": 3})
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+    assert denied(Sources(ctx(org.api, "gina", org.dest)).resolve, ref) == (409, "source-upstream-revoked")
+    assert denied(Sources(ctx(org.api, "gina", org.dest)).authorize, ref) == (404, "not-found")
+    assert call(org.api, "GET", f"/publications/{pub['id']}", actor="gina", project=org.dest)[0] == 404
+    # A re-issued policy is a new version: the approved revision stays bound to the revoked one.
+    share(org.api, org.origin, org.refs[0], expected=4)
+    assert denied(Sources(ctx(org.api, "gina", org.dest)).resolve, ref) == (409, "source-upstream-revoked")
+
+
+def test_sharing_policy_expiry_is_rechecked_at_approval_commit(org, monkeypatch):
+    """Finding 8/7: the sharing policy is fenced and its expiry rechecked before submission."""
+    storage = org.api.storage
+    now = [storage.clock()]
+    monkeypatch.setattr(storage, "clock", lambda: now[0])
+    source = {k: org.refs[0][k] for k in ("sourceKind", "sourceId", "revision", "sha256")}
+    policy = records.sharing_policy_id(org.origin, source)
+    admin(org.api, {"op": "grant_sharing", "expectedRevision": 1, "record": {
+        "id": policy, "projectId": org.origin, "source": source, "audience": "organization",
+        "expiresAt": now[0] + 60_000}})
+    pub = proposed(org)
+    capability(org.api, "carol")
+    original = storage.put_blob_once
+
+    def slow_snapshot(*args, **kwargs):
+        result = original(*args, **kwargs)
+        now[0] += 120_000
+        return result
+    monkeypatch.setattr(storage, "put_blob_once", slow_snapshot)
+    assert denied(publications.approve, ctx(org.api, "carol", org.origin), pub["id"]) == (
+        409, "source-upstream-revoked")

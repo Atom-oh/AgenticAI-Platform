@@ -193,8 +193,12 @@ live sharing or release evidence.
   sha256: publication hash, audienceRevision: str(grant revision)}`. Resolution
   requires an active destination grant for this publication revision naming the
   caller's role, the `published` revision, the grant revision and hash, and the
-  current origin source audience of every published node source (restricted or
-  revoked upstream beats the grant: `409 source-upstream-revoked`). Withdrawal is
+  current origin source audience of every published node source, and for each
+  non-`package` source the IAM-administered organization-sharing policy
+  (`adm_sharing`) at exactly the revision bound at approval, still active and
+  unexpired (restricted, revoked or re-issued upstream policy beats the grant:
+  `409 source-upstream-revoked`; historical `404 not-found`). Policy records are
+  fenced and their currency rechecked by `recheck()` and before commit. Withdrawal is
   `409 source-withdrawn` and a newer revision `409 source-superseded` for current
   use; historical metadata stays readable while the grant and upstream remain.
   Returned metadata (current and historical) is built only from the granted

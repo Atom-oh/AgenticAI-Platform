@@ -711,7 +711,8 @@ class Sources:
             row = self.storage.get(check["owner"], check["kind"], check["id"])
             if not row or row["version"] != check["version"]:
                 fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
-            if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "capability"):
+            if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "capability",
+                                 "adm_sharing"):
                 from intake.records import is_current
                 if not is_current(row, self.storage.clock()):
                     fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")

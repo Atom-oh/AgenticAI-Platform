@@ -93,7 +93,52 @@ def view(record):
 
 
 def _hash(record):
-    return schema.digest({key: record[key] for key in ("id", "originProject", "kind", "revision", "nodes")})
+    return schema.digest({**{key: record[key] for key in ("id", "originProject", "kind", "revision", "nodes")},
+                          "sharing": record.get("sharing", [])})
+
+
+def _policy_source(ref):
+    return {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256")}
+
+
+def sharing_policy(storage, origin, ref):
+    """The current IAM-administered organization-sharing policy for this exact origin source, or None.
+
+    Project-wide audience is not organization permission (AGENTCORE_CONTRACT
+    "Shared-publication authority"): each source needs its own policy record.
+    """
+    from intake import records
+    source = _policy_source(ref)
+    if source["sourceKind"] not in records.SHARING_SOURCE_KINDS:
+        return None
+    try:
+        row = storage.get(INTAKE_OWNER, "adm_sharing", records.sharing_policy_id(origin, source))
+        row = records.validate("adm_sharing", row) if row else None
+    except ValueError:
+        return None
+    if (not row or row["projectId"] != origin or row["source"] != source or row["audience"] != "organization"
+            or not records.is_current(row, storage.clock())):
+        return None
+    return row
+
+
+def _sharing_bindings(storage, origin, nodes):
+    """Every non-package node source needs a current sharing policy; returns bindings and fences."""
+    policies = {}
+    for node in nodes:
+        for ref in node["sourceRefs"]:
+            if ref["sourceKind"] == "package":
+                continue  # The platform component package is platform-wide, not project-owned content.
+            row = sharing_policy(storage, origin, ref)
+            if row is None:
+                fail(409, "publication-source-policy-required",
+                     "조직 공유가 승인되지 않은 원본은 게시할 수 없습니다. 원본별 조직 공유 정책이 필요합니다.")
+            policies[row["id"]] = row
+    bindings = [{"policyId": row["id"], "revision": row["revision"]} for row in
+                sorted(policies.values(), key=lambda item: item["id"])]
+    checks = [{"owner": INTAKE_OWNER, "kind": "adm_sharing", "id": row["id"], "version": row["version"]}
+              for row in policies.values()]
+    return bindings, checks
 
 
 def _bindings(node_ids, revision_bindings):
@@ -133,7 +178,9 @@ def _origin_nodes(ctx, kind, node_ids, revision_bindings, *, denied):
             if ref["sourceKind"] not in PUBLISHABLE_SOURCES or "allowedRoles" in ref:
                 fail(409, "publication-restricted-source", "역할 제한 또는 공유 불가 원본은 조직에 게시할 수 없습니다.")
         nodes.append(node)
-    return nodes, ontology.sources.recheck()
+    checks = ontology.sources.recheck()
+    sharing, fences = _sharing_bindings(ctx.storage, ctx.project_id, nodes)
+    return nodes, [*checks, *fences], sharing
 
 
 def propose(ctx, *, kind, node_ids, revision_bindings):
@@ -147,7 +194,7 @@ def propose(ctx, *, kind, node_ids, revision_bindings):
 
     def denied():
         _not_found()
-    nodes, checks = _origin_nodes(ctx, kind, node_ids, revision_bindings, denied=denied)
+    nodes, checks, sharing = _origin_nodes(ctx, kind, node_ids, revision_bindings, denied=denied)
     summary = [{"id": n["id"], "revision": n["revision"], "contentHash": n["contentHash"],
                 "type": n["type"], "sourceRefs": n["sourceRefs"]} for n in nodes]
     identifier = origin_prefix(ctx.project_id) + schema.digest([ctx.project_id, kind, node_ids])[:32]
@@ -155,12 +202,13 @@ def propose(ctx, *, kind, node_ids, revision_bindings):
     if previous:
         if previous["status"] == "withdrawn":
             fail(409, "publication-withdrawn", "철회된 게시물은 다시 제안할 수 없습니다. 새 게시로 제안하세요.")
-        if previous["nodes"] == summary:
+        if previous["nodes"] == summary and previous.get("sharing") == sharing:
             return view(previous)
     revision = previous["revision"] + 1 if previous else 1
     history = list((previous or {}).get("history", []))
     record = {"id": identifier, "projectId": ctx.project_id, "originProject": ctx.project_id, "kind": kind,
-              "revision": revision, "nodes": summary, "status": "proposed", "proposedBy": ctx.actor,
+              "revision": revision, "nodes": summary, "sharing": sharing, "status": "proposed",
+              "proposedBy": ctx.actor,
               "grants": list((previous or {}).get("grants", [])), "history": history[-MAX_HISTORY:]}
     record["hash"] = _hash(record)
     saved = ctx.commit([_write(PUBLICATION_OWNER, "publication", record, previous["version"] if previous else None)],
@@ -214,20 +262,23 @@ def approve(ctx, publication_id):
     node_ids = [n["id"] for n in record["nodes"]]
     bindings = {n["id"]: {"revision": n["revision"], "contentHash": n["contentHash"]} for n in record["nodes"]}
     try:
-        nodes, checks = _origin_nodes(ctx, kind, node_ids, bindings, denied=denied)
+        nodes, checks, sharing = _origin_nodes(ctx, kind, node_ids, bindings, denied=denied)
     except CollaborationError as error:
-        if error.status in (401,) or error.code in ("publication-binding-stale", "publication-authority-required"):
+        if error.status in (401,) or error.code in ("publication-binding-stale", "publication-authority-required",
+                                                   "publication-source-policy-required"):
             raise
         fail(403, "publication-authority-required", "게시할 원본을 현재 권한으로 확인하지 못했습니다.")
+    if sharing != record.get("sharing"):
+        fail(409, "publication-binding-stale", "원본의 조직 공유 정책이 제안 이후 변경되었습니다. 다시 제안하세요.")
     snapshot = schema.canonical({"publicationId": record["id"], "revision": record["revision"],
-                                 "hash": record["hash"], "nodes": nodes})
+                                 "hash": record["hash"], "nodes": nodes, "sharing": sharing})
     key = ctx.storage.key_for(PUBLICATION_OWNER, "publication", record["id"], f"revisions/{record['revision']}.json")
     info = ctx.storage.put_blob_once(key, snapshot, "application/json")
     approved_at = ctx.storage.clock()
     # Revision-specific approval history: historical resolution never reads the current record's metadata.
     entry = {"revision": record["revision"], "hash": record["hash"], "snapshotKey": key,
              "snapshotSha256": info["sha256"], "approvedBy": ctx.actor, "approvedAt": approved_at,
-             "capability": {"id": capability["id"], "revision": capability["revision"]}}
+             "capability": {"id": capability["id"], "revision": capability["revision"]}, "sharing": sharing}
     updated = {**{k: v for k, v in record.items() if k not in ("version", "createdAt", "updatedAt")},
                "status": "published", "approvedBy": ctx.actor, "approvedAt": approved_at,
                "capability": {"id": capability["id"], "revision": capability["revision"]},
@@ -466,6 +517,7 @@ def _revision_view(record, entry, snapshot):
     return public({"id": record["id"], "originProject": record["originProject"], "kind": record["kind"],
                    "revision": revision, "hash": entry["hash"], "nodes": nodes, "status": status,
                    "approvedBy": entry.get("approvedBy"), "approvedAt": entry.get("approvedAt"),
+                   "sharing": entry.get("sharing", []),
                    "recallNeeded": bool(record.get("recallNeeded"))})
 
 
@@ -493,9 +545,21 @@ def resolve_published(sources, ref, *, historical=False, text=False):
     raw, snapshot = _snapshot(storage, entry)
     if snapshot.get("publicationId") != record["id"]:
         fail(409, "ontology-source-integrity", "게시 스냅샷이 게시물과 다릅니다.")
+    bound = {item.get("policyId"): item.get("revision") for item in entry.get("sharing", [])
+             if isinstance(item, dict)}
+    if entry.get("sharing") != snapshot.get("sharing"):
+        fail(409, "ontology-source-integrity", "게시 스냅샷의 공유 정책 기록이 다릅니다.")
     for node in snapshot.get("nodes", []):
         for source in node.get("sourceRefs", []):
-            upstream = _upstream(storage, record["originProject"], schema.source_ref(source))
+            upstream_ref = schema.source_ref(source)
+            upstream = _upstream(storage, record["originProject"], upstream_ref)
+            if upstream is not None and upstream_ref["sourceKind"] != "package":
+                # The versioned organization-sharing policy bound at approval must still be current.
+                policy = sharing_policy(storage, record["originProject"], upstream_ref)
+                if policy is None or bound.get(policy["id"]) != policy["revision"]:
+                    upstream = None
+                else:
+                    sources._remember_owned(INTAKE_OWNER, "adm_sharing", policy)
             if upstream is None:
                 if historical:
                     _not_found()

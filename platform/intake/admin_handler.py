@@ -21,7 +21,9 @@ _EVENT_FIELDS = frozenset({"op", "record", "id", "expectedRevision", "operator"}
 _CREATE = {"put_policy": "adm_policy", "register_provenance": "adm_provenance",
            "grant_reviewer": "adm_grant", "put_resolver_profile": "adm_resolver",
            # Organization design_publish/policy_publish capabilities: never a project API write.
-           "grant_capability": "capability"}
+           "grant_capability": "capability",
+           # Organization-sharing source policy (the separate source-policy change for publication).
+           "grant_sharing": "adm_sharing"}
 # op -> (kind, required current status, new status)
 _TRANSITIONS = {
     "activate_policy": ("adm_policy", ("draft",), "active"),
@@ -30,12 +32,15 @@ _TRANSITIONS = {
     "revoke_grant": ("adm_grant", ("active",), "revoked"),
     "retire_resolver_profile": ("adm_resolver", ("active",), "retired"),
     "revoke_capability": ("capability", ("active",), "revoked"),
+    "revoke_sharing": ("adm_sharing", ("active",), "revoked"),
 }
 _INITIAL_STATUS = {"adm_policy": "draft", "adm_provenance": "active", "adm_grant": "active",
-                   "adm_resolver": "active", "capability": "active"}
+                   "adm_resolver": "active", "capability": "active", "adm_sharing": "active"}
 # Kinds whose content may be replaced by a new revision (a changed resolver
 # profile hash makes every dependent collection decision a new decision).
-_EDITABLE = ("adm_policy", "adm_resolver")
+# A sharing policy is re-issued as a new revision; publications bound to an
+# earlier revision stay denied until a new publication revision is approved.
+_EDITABLE = ("adm_policy", "adm_resolver", "adm_sharing")
 
 
 def storage_factory():

@@ -24,6 +24,7 @@ def fail(status, code, message):
 
 _TIMED_AUTHORITY = {
     "capability": ("publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다."),
+    "adm_sharing": ("source-upstream-revoked", "원본의 조직 공유 정책이 만료되었거나 회수되었습니다."),
 }
 
 

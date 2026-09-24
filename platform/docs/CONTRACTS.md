@@ -322,6 +322,13 @@ publications: `grant_capability` (record `{id, actor, name, expiresAt}`) and
 `revoke_capability` (`{id, expectedRevision}`). Kind `capability` lives in
 `intake:deployment` with an `adm_audit` event per write. No workspace route
 creates or activates a capability; project ownership confers none.
+The same entry point owns organization-sharing source policies (kind
+`adm_sharing` in `intake:deployment`): `grant_sharing` (record `{id, projectId,
+source: {sourceKind, sourceId, revision, sha256}, audience: "organization",
+expiresAt}`, where `id` must equal `records.sharing_policy_id(projectId, source)`;
+re-issue with `expectedRevision` creates a new revision) and `revoke_sharing`
+(`{id, expectedRevision}`). One policy admits exactly one origin source revision
+(`asset`, `document-revision` or `product-guideline`) to organization publication.
 
 ## Shared publications
 
@@ -334,7 +341,7 @@ caller cannot use returns the same `404 not-found` as a missing one.
 
 | Method / path | Input / output |
 |---|---|
-| POST `/studio-api/publications` | Origin project; `{kind: "design"\|"policy", nodeIds, revisionBindings: {nodeId: {revision, contentHash}}}` (closed fields). Design: owner/designer; policy: owner/planner. Every node must be a current, readable, `approved` origin node at the bound revision whose sources are publishable (`asset`, `document-revision`, `product-guideline`, `package`, no `allowedRoles`) → `201 {publication: {id, originProject, kind, revision, nodes, hash, status: "proposed", recallNeeded}}`. A changed binding of the same node set is a new revision; `409 publication-binding-stale` / `publication-restricted-source` / `publication-withdrawn`, `422 publication-node-kind` |
+| POST `/studio-api/publications` | Origin project; `{kind: "design"\|"policy", nodeIds, revisionBindings: {nodeId: {revision, contentHash}}}` (closed fields). Design: owner/designer; policy: owner/planner. Every node must be a current, readable, `approved` origin node at the bound revision whose sources are publishable (`asset`, `document-revision`, `product-guideline`, `package`, no `allowedRoles`) and, except `package`, each covered by a current `adm_sharing` policy → `201 {publication: {id, originProject, kind, revision, nodes, sharing: [{policyId, revision}], hash, status: "proposed", recallNeeded}}`. A changed binding or sharing-policy revision of the same node set is a new revision; `409 publication-source-policy-required` without a policy. A changed binding of the same node set is a new revision; `409 publication-binding-stale` / `publication-restricted-source` / `publication-withdrawn`, `422 publication-node-kind` |
 | POST `/studio-api/publications/{id}/approve` | Origin project; `{}`. Requires a current `capability` for the actor (`design_publish` or `policy_publish`) **and** origin source authority (source-owner role that can still read every bound node) → `{publication: {..., status: "published", approvedBy, capability: {id, revision}}}`. The capability's version, status and expiry are rechecked by the storage transaction guard immediately before submission (`workbench/service.check_source_deadlines`); `403 publication-capability-required` / `publication-authority-required` |
 | POST `/studio-api/publications/{id}/grants` | Destination project owner; `{roles}` → `201 {grant: {id, publicationId, publicationRevision, publicationHash, originProject, destinationProject, roles, revision, status}, reference}` where `reference` is the `published-asset` source reference. A new publication revision needs a new grant; changed roles bump the grant revision |
 | POST `/studio-api/publications/{id}/withdraw` | Origin owner or the approving publisher; `{}` → `{publication: {..., status: "withdrawn", recallNeeded: boolean}}`. Destination IDs stay internal recall metadata |

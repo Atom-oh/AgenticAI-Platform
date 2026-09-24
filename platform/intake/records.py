@@ -13,7 +13,11 @@ from workspace import ontology_schema as schema
 from workspace.ontology_schema import _fields
 
 INTAKE_OWNER = "intake:deployment"
-KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver", "capability")
+KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver", "capability",
+         "adm_sharing")
+# Organization-sharing source policies: the separately authorized source-policy
+# change that admits one exact origin source revision to organization publication.
+SHARING_SOURCE_KINDS = ("asset", "document-revision", "product-guideline")
 # Organization publication capabilities (AGENTCORE_CONTRACT "Shared-publication authority").
 CAPABILITY_NAMES = ("design_publish", "policy_publish")
 DATA_CLASSES = ("synthetic", "public", "internal-non-sensitive")
@@ -26,7 +30,8 @@ PROVENANCE_SOURCE_KINDS = ("document-revision", "asset", "product-guideline")
 DECISION_SOURCE_KINDS = PROVENANCE_SOURCE_KINDS + ("prompt-text",)
 AUDIT_OPS = ("put_policy", "activate_policy", "retire_policy", "register_provenance",
              "revoke_provenance", "grant_reviewer", "revoke_grant", "put_resolver_profile",
-             "retire_resolver_profile", "grant_capability", "revoke_capability")
+             "retire_resolver_profile", "grant_capability", "revoke_capability", "grant_sharing",
+             "revoke_sharing")
 _PACKAGE = re.compile(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+(?:/[a-zA-Z0-9._/-]+)?\Z")
 _JSON_FIELD = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{0,63}\Z")
 # Storage.put owns these; they are never part of the sealed content hash.
@@ -175,6 +180,23 @@ def _capability(record):
     _choice(record["status"], ("active", "revoked"))
 
 
+def sharing_policy_id(project_id, source):
+    """Deterministic ID of the sharing policy for one exact origin source revision."""
+    return "share-" + schema.digest(["organization-sharing", project_id, source["sourceKind"], source["sourceId"],
+                                     source["revision"], source["sha256"]])[:40]
+
+
+def _sharing(record):
+    """IAM-administered organization-sharing policy of one exact origin source revision."""
+    _closed(record, {"id", "revision", "projectId", "source", "audience", "status", "expiresAt", "hash"})
+    _identifier(record["projectId"])
+    _source(record["source"], audience=False, kinds=SHARING_SOURCE_KINDS)
+    _choice(record["audience"], ("organization",))
+    _choice(record["status"], ("active", "revoked"))
+    if record["id"] != sharing_policy_id(record["projectId"], record["source"]):
+        _bad("A sharing policy ID is bound to its project and exact source revision")
+
+
 def _resolver(record):
     """IAM-administered code-collection resolver profile (I6a; review round 8, AB2)."""
     _closed(record, {"id", "revision", "aliases", "packages", "jsonAssetFields", "status", "expiresAt", "hash"})
@@ -307,7 +329,8 @@ def _decision(record):
 def _audit(record):
     _closed(record, {"id", "op", "kind", "recordId", "revision", "operator", "at"}, {"status"})
     _choice(record["op"], AUDIT_OPS)
-    _choice(record["kind"], ("adm_policy", "adm_provenance", "adm_grant", "adm_resolver", "capability"))
+    _choice(record["kind"], ("adm_policy", "adm_provenance", "adm_grant", "adm_resolver", "capability",
+                             "adm_sharing"))
     _identifier(record["recordId"])
     _label(record["operator"])
     _int(record["at"])
@@ -318,7 +341,7 @@ def _audit(record):
 
 _VALIDATORS = {"adm_policy": _policy, "adm_provenance": _provenance, "adm_grant": _grant,
                "adm_decision": _decision, "adm_audit": _audit, "adm_resolver": _resolver,
-               "capability": _capability}
+               "capability": _capability, "adm_sharing": _sharing}
 
 
 def _content(record):
