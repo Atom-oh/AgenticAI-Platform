@@ -135,6 +135,13 @@ targets and slot `allowed` ids. `publish_candidate` applies
 unchanged. These references are properties, not edges, so closure does not
 follow them.
 
+`ontology_ux.evaluate(when, case)` is the single evaluator of the `when`
+grammar: `None` holds, and every referenced condition needs a boolean in
+`case` or it raises (fail closed). `ontology_ux.visible(spec, case)` is
+`evaluate(spec.when, case) != spec.negate`, a whole-expression negation shared
+by flow traversal, composition visibility, coverage and generated
+`src/logic/flow.ts`.
+
 `PolicyRule` properties also accept `severity` (`critical|major|minor`),
 `citation` `{sourceKind: document-revision|product-guideline, page >= 1, quote,
 derivativeHash, region?, normalizedImageHash?}`, `extraction` `{method: model,

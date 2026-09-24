@@ -61,6 +61,26 @@ def parse_when(expr):
     return [(t.startswith("!"), t.lstrip("!")[5:]) for t in terms]
 
 
+def evaluate(expr, case):
+    """The one `when` evaluator: `None` holds; every term needs a boolean assignment in `case` (fail closed)."""
+    if expr is None:
+        return True
+    result = True
+    for negated, cid in parse_when(expr):
+        value = case.get(cid) if isinstance(case, dict) else None
+        if type(value) is not bool:
+            raise ValueError(f"Case does not assign condition {cid}")
+        result = result and (value != negated)
+    return result
+
+
+def visible(spec, case):
+    """Shared visibility rule (engine plan E10, review round 16/17, AJ1): whole-expression negation."""
+    if spec is None:
+        return True
+    return evaluate(spec["when"], case) != bool(spec["negate"])
+
+
 def _code(code):
     _exact(code, {"importPath", "exportName", "props"}, {"childrenProp", "adapter"}, "code layer")
     if "adapter" in code and code["adapter"] not in ADAPTERS:

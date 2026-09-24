@@ -2017,24 +2017,6 @@
    "tombstone": false
   },
   {
-   "id": "c-preferential-auto-transfer",
-   "type": "COMPOSES",
-   "src": "preferential",
-   "dst": "auto-transfer",
-   "sourceRefs": [
-    {
-     "sourceKind": "asset",
-     "sourceId": "seed-design-poc",
-     "revision": "1",
-     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
-     "audienceRevision": "1"
-    }
-   ],
-   "provenance": "declared",
-   "reviewState": "candidate",
-   "tombstone": false
-  },
-  {
    "id": "c-preferential-cta-next",
    "type": "COMPOSES",
    "src": "preferential",

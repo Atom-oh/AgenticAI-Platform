@@ -83,13 +83,14 @@ def from_snapshot(snapshot, *, include_candidates=False):
                                  "code": ux.get("layers", {}).get("code"), "requiredStates": ux.get("requiredStates", []),
                                  "stateProps": ux.get("stateProps", {}),
                                  "conditions": ux.get("conditions", []), "bindings": ux.get("dataBindings", []),
-                                 "composes": []}
+                                 "composes": [], "reviewState": n["reviewState"]}
         elif kind == "PageTemplate":
             k.templates[n["id"]] = {"id": n["id"], "title": n["title"], "slots": ux.get("slots", {}),
-                                    "code": ux.get("layers", {}).get("code")}
+                                    "code": ux.get("layers", {}).get("code"), "reviewState": n["reviewState"]}
         elif kind == "Screen":
             k.screens[n["id"]] = {"id": n["id"], "title": n["title"], "pageId": props.get("pageId", n["id"]),
-                                  "templateId": None, "assets": [], "procedureId": None}
+                                  "templateId": None, "assets": [], "procedureId": None,
+                                  "reviewState": n["reviewState"]}
         elif kind == "Procedure":
             k.procedures[n["id"]] = {"id": n["id"], "title": n["title"], "entry": None, "screens": [], "transitions": []}
             entries[n["id"]] = props.get("entryScreenId")
@@ -97,7 +98,7 @@ def from_snapshot(snapshot, *, include_candidates=False):
             k.rules[n["id"]] = {"id": n["id"], "ruleId": props.get("ruleId", n["id"]),
                                 "statement": props.get("statement", n["title"]), "required": bool(props.get("required")),
                                 "severity": props.get("severity", "major"), "targets": [], "citation": props.get("citation"),
-                                "appliesWhen": props.get("appliesWhen")}
+                                "appliesWhen": props.get("appliesWhen"), "reviewState": n["reviewState"]}
         elif kind == "Foundation" and props.get("token"):
             k.tokens[props.get("name", n["id"])] = props["token"]
         for ref in references(ux) if ux else []:
