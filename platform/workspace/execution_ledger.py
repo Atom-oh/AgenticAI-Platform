@@ -345,7 +345,10 @@ class Ledger:
     def _due_at(self, job):
         status = job["status"]
         if status in TERMINAL:
-            return job["clock"] if job.get("cleanup") else None
+            due = [job["clock"]] if job.get("cleanup") else []
+            if self._outstanding(job) and job.get("settlementDueAt") is not None:
+                due.append(job["settlementDueAt"])
+            return min(due) if due else None
         if status == "queued":
             return job["deadlineAt"]
         if status == "recovery_required":
@@ -449,8 +452,17 @@ class Ledger:
         if bump_fence:
             after["fence"] = job["fence"] + 1
         after["cleanup"] = self._cleanup_for(after)
+        # RUN-02/03: every terminal transition derives uncertainty from outstanding calls and keeps a bounded
+        # settlement deadline for them (accounting only; the execution itself is never revived).
+        if self._outstanding(after):
+            after["unknownOutcome"] = True
+            after["settlementDueAt"] = self.storage.clock() + job["profileBody"]["recoveryWindowMs"]
         quotas = self._quota_writes(owner, job["actor"], job["projectId"], remove=job["id"])
         return self._commit(owner, job, after, extra_writes=quotas, checks=checks, op=op)
+
+    @staticmethod
+    def _outstanding(job):
+        return any(call.get("status") == "intent" for call in job.get("calls", []))
 
     def _cleanup_for(self, job):
         cleanup = list(job.get("cleanup") or [])
@@ -1311,7 +1323,10 @@ class Ledger:
         job = self._get(owner, job_id)
         now, profile = self.storage.clock(), job["profileBody"]
         if job["status"] in TERMINAL:
-            return self._cleanup(owner, job)
+            job = self._cleanup(owner, job)
+            if self._outstanding(job) and now >= job.get("settlementDueAt", 0):
+                return self._expire_calls(owner, job)
+            return job
         unknown = any(call.get("status") == "intent" for call in job["calls"])
         if now >= job["deadlineAt"]:
             return self._terminal(owner, job, "expired", error={"code": "deadline"}, bump_fence=True,
@@ -1333,6 +1348,24 @@ class Ledger:
             writes = self._due_writes(owner, job, job_after, force=True)
             return self._put(owner, {**job_after, "clock": now}, job["version"], extra_writes=writes)
         return job
+
+    def _expire_calls(self, owner, job):
+        """The settlement bound passed: unresolved calls become ``unknown`` with their reservation charged."""
+        budget, calls, charge = dict(job["budget"]), [], 0
+        for call in job["calls"]:
+            if call.get("status") == "intent":
+                reserved = call.get("reserved", 0)
+                budget.update(tokensReserved=budget["tokensReserved"] - reserved,
+                              tokensUsed=budget["tokensUsed"] + reserved)
+                charge += reserved if call.get("kind") == "model" else 0
+                call = {**call, "status": "unknown", "usageEstimated": True if call.get("kind") == "model"
+                        else call.get("usageEstimated")}
+            calls.append(call)
+        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget, "settlementDueAt": None,
+                                          "unknownOutcome": True})
+        if charge:
+            self.cost_gate.record(charge)
+        return saved
 
     def _cleanup(self, owner, job):
         """Delete fenced output parts of a terminal job, then drop its due entry."""

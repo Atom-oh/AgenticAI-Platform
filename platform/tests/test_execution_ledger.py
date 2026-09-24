@@ -2139,3 +2139,33 @@ def test_a_completed_model_call_without_usage_keeps_its_conservative_reservation
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0, max_tokens=budget)
     assert error.value.code == "token-budget"
+
+
+@pytest.mark.parametrize("transition", ["cancel", "fail", "revocation"])
+def test_terminal_transitions_keep_outstanding_call_obligations(xfer, transition):
+    """Review 3 finding 3: a terminal job with an unresolved call stays uncertain and due for settlement."""
+    from workspace.storage import DUE_OWNER
+    storage, ledger, now, _ = xfer
+    job = run_job(ledger)
+    ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0, max_tokens=1000)
+    if transition == "cancel":
+        ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+    elif transition == "fail":
+        ledger.tool().fail(*ids(job), code="runtime-crash")
+    else:
+        withdraw_admission(storage)
+        with pytest.raises(LedgerError):
+            ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] in ("cancelled", "failed")
+    assert stored["unknownOutcome"] is True and stored["dueId"] is not None
+    due = storage.get(DUE_OWNER, "exec_due", stored["dueId"])
+    assert due["status"] == "pending" and due["dueAt"] == stored["settlementDueAt"]
+    ledger.reconciler().sweep(OWNER, job["id"])                    # before the bound: nothing is revived
+    assert storage.get(OWNER, "job", job["id"])["calls"][-1]["status"] == "intent"
+    now[0] = stored["settlementDueAt"]
+    ledger.reconciler().run_due()
+    settled = storage.get(OWNER, "job", job["id"])
+    assert settled["status"] == stored["status"] and settled["calls"][-1]["status"] == "unknown"
+    assert settled["budget"]["tokensReserved"] == 0 and settled["budget"]["tokensUsed"] == 1000
+    assert settled["dueId"] is None and settled["unknownOutcome"] is True

@@ -607,6 +607,7 @@ module-private ledger writer token):
 | `obligations` | Frozen `{sourceChecks: [{owner, kind, id, version}], sourceBindings: [...]}` taken from the validated input manifest |
 | `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate` |
 | `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
+| `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
 heartbeatAt, startedAt, completionSubmissions?}`. Call: `{callId, stage, kind, status: intent|completed|
@@ -681,6 +682,13 @@ Every `files`/`objects` entry of the result manifest must be an object with a
 string `key` and a 64-hex `sha256` (and, if given, the recorded `size`) that
 names a chain output of the attempt; a malformed or non-member entry is
 `receipt-invalid`.
+Every terminal transition (cancel, fail, revocation, expiry, contention
+failure) that leaves `intent` calls sets `unknownOutcome: true` and
+`settlementDueAt`, and keeps a due entry for it. The execution is not revived:
+until the bound, only the reconciler's `settle` may record those outcomes; at the
+bound the watchdog marks them `unknown`, charges their reservations as used
+(and to the daily cost gate) and clears the due entry.
+
 Completion is refused with `calls-unresolved` while any call of the attempt is
 still `intent` (no recorded outcome): the attempt stays open, the watchdog moves
 it to `recovery_required` with `unknownOutcome`, and `retry` marks such calls
