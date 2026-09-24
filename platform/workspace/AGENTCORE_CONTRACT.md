@@ -580,6 +580,112 @@ construction rejects test verifiers, unregistered adapters and unregistered
 keys; it requires the reviewed KMS/key-registry verifier. A callable's label or
 caller-supplied test flag is not a trust basis.
 
+#### Record fields (v1)
+
+Status: the offline protocol is implemented in `workspace/execution_ledger.py`
+(B0). It is not deployed. No API route, dispatcher, Lambda facade or IAM role
+calls it yet; those transports are planned (C, B2). Offline tests are the only
+callers.
+
+Job record (`kind="job"`, id `exec-` + 128 random bits, written only with the
+module-private ledger writer token):
+
+| Field | Meaning |
+|---|---|
+| `task`, `executionSchemaVersion` | Immutable discriminator `agentcore-execution` / exact `int` 1 |
+| `requestKey`, `inputHash` | Actor-scoped idempotency key; digest of actor, operation, model, manifest, admissions, backend revision, profile hash, authority, completion scope, `supersedes` |
+| `actor`, `actorRole`, `projectId`, `authority` | Verified requester, role at admission and `{authorityRevision, membershipDigest}` from the current project record |
+| `operation`, `model`, `backend`, `backendConfigRevision` | Closed operation map (`OPERATIONS`), selected model, `agentcore`, backend revision |
+| `profile`, `profileBody` | `{id, revision, hash}` and the bounded profile body (`PROFILE_DEFAULT`) |
+| `manifest`, `admissions` | Immutable input manifest `{ref, hash}`; consumed decisions `[{decisionId, revision, artifactHash}]` |
+| `status`, `fence`, `attempt`, `attempts` | State, fencing number, current attempt, archived attempts (with `stages` receipt hashes and `late` diagnostics) |
+| `calls`, `budget` | Per-call intents; `{calls, maxCalls, tokensReserved, tokensUsed, tokenBudget}` |
+| `stages`, `nonces` | Verified receipts of the current attempt; nonces seen on the job |
+| `handles`, `transfers`, `transferUsage`, `cleanup` | Transfer handles, closed outputs, `{chunks, bytes}`, fenced handles awaiting cleanup |
+| `deadlineAt`, `authorizationExpiresAt`, `recoveryAt` | `min(now + deadlineMs, authorization expiry)`; JWT expiry; recovery start |
+| `completionScope` | Frozen `{nonSourceOperations, sourceChecks, sourceBindings}` accepted at admission |
+| `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate` |
+| `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
+
+Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
+heartbeatAt, startedAt}`. Call: `{callId, stage, kind, status: intent|completed|
+failed|unknown, at, attemptId, reserved, usage?}`; usage holds only
+`{inputTokens, outputTokens}`. Stage: `{stage, receiptHash, nonce, attemptId,
+status, result, outputs}`. Transfer output: `{handleId, key, sha256, size,
+stage, attemptId}` under `out/{attemptId}/{stage}/{name}` of the job.
+
+Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
+`attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,
+`admissions`, `keyId` and `signature`. The optional fields `operationId`,
+`inputs`, `outputs`, `objects`, `service`, `iat`/`exp`, `status`, `result` and
+`previous` are validated when present. Any other field is rejected. The
+receipt hash is SHA-256 over sorted-key JSON.
+
+| Facade (caller role) | Methods |
+|---|---|
+| `api()` (authenticated API) | `admit`, `cancel`, `retry`, `read` |
+| `dispatcher()` (IAM-only dispatcher) | `allocate` |
+| `tool()` (ontology Lambda facade) | `claim`, `heartbeat`, `intent`, `outcome`, `stage`, `finish`, `fail`, `open_manifest`, `open_prior`, `open_input`, `read_chunk`, `open_output`, `write_chunk`, `close_output` |
+| `reconciler()` (IAM-only watchdog/reconciler) | `sweep`, `reconcile`, `resolve_orphan`, `run_due` |
+
+`Ledger.production` requires a registered verifier type and single-attempt
+storage (`Storage(single_attempt=True)`). It uses the fail-closed
+`common.costguard` gate. `Ledger.offline` requires pytest and the
+`execution_fakes` verifier. The production operation IDs are mandatory. Offline
+tests may omit them.
+
+Error codes: `request-changed`, `admission-required`, `authority-changed`,
+`concurrency-actor`, `concurrency-project`, `execution-completion-scope`,
+`unknown-operation`, `not-an-execution`, `not-queued`, `already-claimed`,
+`attempts-exhausted`, `stale-attempt`, `receipt-invalid`, `budget-exhausted`,
+`deadline-budget`, `token-budget`, `model-not-allowed`, `call-invalid`,
+`daily-budget`, `daily-budget-unavailable`, `transfer-invalid`,
+`transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
+`operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
+`unknown-outcome`, `terminal`, `deadline`, `retry-expired`,
+`acknowledge-required`, `not-retryable`, `forbidden`.
+
+Supporting storage kinds:
+
+- `exec_request`: the actor-scoped request marker `{jobId, inputHash}`.
+- `exec_quota`: `active` job lists. The per-actor list lives in partition
+  `execution:quota` (at most 1 active job). The per-project list lives in the
+  project partition (at most 2 active jobs).
+- `exec_due`: due-time-ordered entries in partition `execution:due`, with fields
+  `{type: job|report, dueAt, status: pending|done, targetOwner, ref}`. Entries
+  are tombstoned, not deleted.
+- `exec_report`: the metadata-only legacy refusal report
+  `{kind, recordId, reason, count, firstAt, lastAt, dueId}`. It has no payload
+  and no source text.
+
+Legacy guard: `Storage._prepare` refuses any non-ledger write in these cases:
+
+- The item or the stored record is reserved: its `task` is reserved, or
+  `executionSchemaVersion` or `executionId` is present.
+- A linked artifact's stored job is reserved or has an `exec-` id.
+- A linkage is moved to or from such a job.
+- An existing linked record changes status while its stored job is missing
+  (`unknown-linkage`).
+
+Non-ledger updates also carry
+`attribute_not_exists(executionSchemaVersion) AND attribute_not_exists(executionId)`.
+Human approval, release creation and Git export use a separate module-checked
+token. That token applies only to kinds `run`, `release`, `gitexport` and
+`design`, and never moves a status into `failed`, `needs_changes` or
+`completed`. The IAM-only reconciler resolves orphan reports with
+`orphan-legacy-job`. It uses one transaction with the artifact CAS, the job
+absence check and the due tombstone.
+
+Not yet implemented in B0:
+
+- the staging mode of `publish_candidate`. `ontology_store.py` is owned by
+  Unit A. `finish` accepts a `stage_completion` callable whose writes and
+  checks commit with the terminal job.
+- the admitted-input resolver and the run-round prior-authority adapter. They
+  come from the B0 intake and sharing units. Until then, production refuses
+  input and prior transfers.
+- the 4 MiB model-visible text budget.
+
 ### source-admission/1
 
 Private intake owns the following closed, versioned record schemas. Unknown

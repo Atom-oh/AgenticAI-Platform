@@ -291,3 +291,28 @@ Extend existing run/round/release/Git interfaces with exact context and observed
 service receipts. The [design](ARCHITECTURE.md) maps the integration sequence;
 the [acceptance cases](ONTOLOGY_AGENTCORE_VALIDATION.md) define its verification.
 The default backend and graph mode remain legacy until their applicable gates.
+
+### Execution ledger storage and reserved jobs
+
+The storage kinds `exec_report`, `exec_request`, `exec_quota` and `exec_due`
+belong to `platform-execution/1`. See the record fields in
+[`workspace/AGENTCORE_CONTRACT.md`](../workspace/AGENTCORE_CONTRACT.md). An
+`exec_report` is a metadata-only record of a refused legacy write. It is
+delivered to the IAM-only reconciler through an `exec_due` entry.
+
+Every legacy `POST` route that creates a job goes through `WorkspaceAPI._new_job`.
+Those routes reject a reserved task (`agentcore-execution`) with
+`400 reserved-task`.
+
+Legacy workers, stale-job expiry, dispatch-failure handling, `_mark_failed` and
+analysis/document read repair never change these records:
+
+- a reserved job
+- an artifact marked for new execution
+- an artifact whose stored job is reserved
+
+Each refusal is reported and returns the record unchanged.
+
+This changes an earlier behavior. Legacy read repair no longer fails an
+artifact whose linked job is missing. The reconciler fails such an orphan with
+`orphan-legacy-job`.
