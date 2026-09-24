@@ -1197,7 +1197,7 @@ def test_single_attempt_transport_configuration():
 class FlakyTable(FakeTable):
     def __init__(self, mode, failures=1):
         super().__init__()
-        self.mode, self.failures, self.wire = mode, failures, 0
+        self.mode, self.failures, self.wire, self.hook = mode, failures, 0, None
         self.meta.client.transact_write_items = self.flaky
 
     def flaky(self, **kwargs):
@@ -1208,6 +1208,9 @@ class FlakyTable(FakeTable):
         self.wire += 1
         if self.failures:
             self.failures -= 1
+            if self.hook is not None:           # a concurrent writer acting while this submission is in flight
+                hook, self.hook = self.hook, None
+                hook(self.wire)
             if self.mode == "timeout-before":
                 raise ReadTimeoutError(endpoint_url="https://dynamodb.invalid")
             if self.mode == "timeout-after":
@@ -1258,9 +1261,48 @@ def test_proven_contention_retries_with_fresh_authority_checks(monkeypatch):
     monkeypatch.setattr(ledger, "_authority", lambda *a: calls.append(1) or original(*a))
     with pytest.raises(LedgerError) as error:
         finish(ledger, job, "succeeded", result, operation_id=op_id())
-    assert error.value.code == "conflict"
+    assert error.value.code == "completion-contention"
     assert storage.table().wire == 3 and len(calls) == 3
-    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "failed" and stored["error"] == {"code": "completion-contention"}
+    assert stored["fence"] == job["fence"] + 1 and quota(storage, job) == ([], [])
+
+
+def test_exhausted_contention_refuses_further_submissions_for_the_attempt():
+    """Finding 8: after two retries the fenced completion-contention failure is durable."""
+    env = flaky_env("contention", failures=6)
+    storage, ledger, _ = env
+    job, result = chain(env)
+    operation = op_id()
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, operation_id=operation)
+    assert error.value.code == "completion-contention"
+    for again in (operation, op_id()):
+        with pytest.raises(LedgerError) as error:
+            finish(ledger, job, "succeeded", result, operation_id=again)
+        assert error.value.code in ("terminal", "stale-attempt")
+    assert storage.table().wire == 3
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+
+
+def test_exhausted_contention_preserves_a_concurrent_cancellation():
+    env = flaky_env("contention", failures=3)
+    storage, ledger, _ = env
+    job, result = chain(env)
+    table = storage.table()
+    table.hook = lambda wire: None
+    original = table.flaky
+
+    def cancel_on_last(**kwargs):
+        if table.wire == 2:                  # the third (last) submission is in flight
+            table.hook = lambda wire: ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+        return original(**kwargs)
+    table.meta.client.transact_write_items = cancel_on_last
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, operation_id=op_id())
+    assert error.value.code == "completion-contention"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "cancelled" and stored["error"]["code"] == "cancelled"
 
 
 @pytest.mark.parametrize("version", [True, "1", 2, None, "missing"])

@@ -641,6 +641,12 @@ authorization expiry (`deadline`), the attempt lease for `finish`
 (`stale-attempt`), and for `reconcile` the recovery bound
 `now < recoveryAt + recoveryWindowMs` (`recovery-window`), which `reconcile`
 also checks on entry independently of the watchdog.
+Proven transaction contention is retried at most `completionRetries` (2)
+times with fresh checks. On exhaustion the ledger persists a fenced
+`failed` transition with error `completion-contention` (fence bumped, quota
+released) for the still-current attempt, and returns `completion-contention`;
+later submissions for that attempt get `stale-attempt`/`terminal`. A job that
+concurrently became cancelled, expired or superseded keeps that state.
 
 | Facade (caller role) | Methods |
 |---|---|
@@ -667,6 +673,7 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `daily-budget`, `daily-budget-unavailable`, `transfer-invalid`,
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
+`completion-contention`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
 

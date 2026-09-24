@@ -1285,8 +1285,30 @@ class Ledger:
             except _storage.TransactionContention as error:
                 # Proven contention wrote nothing: retry with fresh actor, deadline and attempt checks.
                 if attempt_number >= job["profileBody"]["completionRetries"]:
-                    raise LedgerError("conflict") from error
-        raise LedgerError("conflict")
+                    self._contention_failure(owner, job_id, attempt_id, ("dispatched", "running"))
+                    raise LedgerError("completion-contention") from error
+        raise LedgerError("completion-contention")
+
+    def _contention_failure(self, owner, job_id, attempt_id, statuses):
+        """Exhausted proven contention: a fenced metadata failure of the still-current attempt (ontology-tools/1).
+
+        A job that meanwhile became cancelled, expired or superseded (another attempt/fence) keeps that state.
+        """
+        for _ in range(3):
+            try:
+                current = self._get(owner, job_id)
+            except LedgerError:
+                return None
+            attempt = current.get("attempt") or {}
+            if (current["status"] not in statuses or attempt.get("id") != attempt_id
+                    or attempt.get("fence") != current["fence"]):
+                return None
+            try:
+                return self._terminal(owner, current, "failed", error={"code": "completion-contention"},
+                                      bump_fence=True)
+            except LedgerError:
+                continue                    # re-read: a concurrent transition decides what is preserved
+        return None
 
     # --- reconciler role -----------------------------------------------------
     def _resolve_orphan(self, due):
@@ -1359,5 +1381,6 @@ class Ledger:
                                       stage_completion=stage_completion, recovery=True)
             except _storage.TransactionContention as error:
                 if attempt_number >= job["profileBody"]["completionRetries"]:
-                    raise LedgerError("conflict") from error
-        raise LedgerError("conflict")
+                    self._contention_failure(owner, job_id, attempt_id, ("recovery_required",))
+                    raise LedgerError("completion-contention") from error
+        raise LedgerError("completion-contention")
