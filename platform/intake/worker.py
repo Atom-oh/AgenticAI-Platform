@@ -30,11 +30,14 @@ def process_image(worker, owner, job):
     data = job.get("input", {})
     storage = worker.storage
     collaboration = getattr(worker, "collaboration", None) or Collaboration(storage)
-    scope = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"))
+    deadline = data.get("authorizationExpiresAt")
+    if type(deadline) is not int or deadline <= storage.clock():
+        raise IntakeBlocked(["authorization-expired"])
+    # The reconstructed scope keeps the request's authorization deadline, so every
+    # later `fresh()`/`Sources.recheck` (including each commit attempt) enforces it.
+    scope = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
     if scope["owner"] != owner or job.get("task") != "intake-image":
         raise ValueError("작업 범위가 반입 요청과 다릅니다.")
-    if data.get("authorizationExpiresAt", 0) <= storage.clock():
-        raise IntakeBlocked(["authorization-expired"])
     current = storage.get(owner, "job", job["id"])
     if not current or current.get("status") != "running" or current.get("input") != data:
         raise ValueError("반입 작업이 변경되었습니다.")

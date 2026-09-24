@@ -224,3 +224,35 @@ def test_policy_retired_during_the_image_request_queues_no_job(env, monkeypatch)
         admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive", kind="image")
     assert error.value.code == "policy-changed"
     assert env.api.storage.list(f"project:{env.pid}", "job") == []
+
+
+# PR #28 review round 4 ----------------------------------------------------------
+
+def _queue(env, ref, data_class="synthetic", claims=None):
+    queued = admission.request(env.api, env.scope(), ref, data_class=data_class, kind="image", claims=claims)
+    assert queued["status"] == "queued"
+    return queued, json.loads(env.api.lambda_client.calls[-1]["Payload"])
+
+
+def test_authorization_expiring_during_ocr_commits_nothing(env):
+    """Review 4, finding 1: the job's authorization deadline is enforced before every commit attempt."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    storage = env.api.storage
+    clock = storage.clock
+
+    def ocr(data):
+        storage.clock = lambda: clock() + 600_000  # past the 5-minute request authorization
+        return OCR_TEXT, "complete"
+
+    worker = worker_for(env)
+    worker.ocr = ocr
+    outcome = worker.handle(invoked)
+    storage.clock = clock
+    owner = f"project:{env.pid}"
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+    assert storage.get(owner, "job", queued["job"]["id"])["status"] == "failed"
+
