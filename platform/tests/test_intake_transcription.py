@@ -614,3 +614,35 @@ def test_pending_transcription_preview_requires_its_image_admission(env, monkeyp
     env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
     status, listed = env.http("GET", "/intake/reviews", actor="bob")
     assert status == 200 and listed["reviews"] == []
+
+
+def test_reviewer_grant_expiring_during_publication_commits_nothing(env, monkeypatch):
+    """Review 3, finding 5: the publication guard covers the pending decision and the reviewing grant."""
+    env.policy()
+    env.admin({"op": "grant_reviewer", "record": {
+        "id": "grant-bob", "actor": "bob", "policyId": "policy-1", "scope": {"projectIds": [env.pid]},
+        "operations": ["review-internal"], "expiresAt": env.api.storage.clock() + 2 * DAY}})
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "table", "text": "표 전사", "tables": [["a", "b"]]},
+                                       ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    clock = storage.clock
+
+    def expire():
+        storage.clock = lambda: clock() + 3 * DAY  # past grant-bob only
+
+    # 1st read: the review's artifact check; 2nd: prepare_transcription's derivative read.
+    fired = revoke_during_read(env, monkeypatch, "transcription.json", expire, occurrence=2)
+    status, payload = env.http("POST", f"/intake/reviews/{transcribed['id']}",
+                               {"approve": True, "reason": "matches"}, actor="bob")
+    assert fired and status == 409, payload
+    storage.clock = clock
+    assert storage.get(owner, "adm_decision", transcribed["id"])["status"] == "pending-review"
+    assert storage.list(owner, "document") == []

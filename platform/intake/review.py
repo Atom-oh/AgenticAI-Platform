@@ -89,19 +89,22 @@ def decide(host, scope, decision_id, *, approve, reason, claims=None):
     write = {"owner": owner, "kind": "adm_decision", "item": sealed, "expected_version": decision["version"]}
     # Expiry is invisible to version fences: recheck the pending decision, policy,
     # grant and sources immediately before the commit.
-    admission.Authority(host, reader, [admission._check(owner, "adm_decision", decision),
-                                       admission._check(INTAKE_OWNER, "adm_policy", policy),
-                                       admission._check(INTAKE_OWNER, "adm_grant", grant)],
-                        pending={decision["id"]}).recheck()
+    # The same guard runs before every transaction attempt (including retries).
+    authority = admission.Authority(host, reader, [admission._check(owner, "adm_decision", decision),
+                                                   admission._check(INTAKE_OWNER, "adm_policy", policy),
+                                                   admission._check(INTAKE_OWNER, "adm_grant", grant)],
+                                    pending={decision["id"]})
+    authority.recheck()
     if approve and sealed["artifact"]["kind"] == "diagram-transcription":
-        return _approve_transcription(host, scope, write, list(unique.values()))
+        return _approve_transcription(host, scope, write, list(unique.values()), authority)
     try:
-        return storage.put_many([write], checks=list(unique.values()), retry_conflicts=False)[0]
+        return storage.put_many([write], checks=list(unique.values()), retry_conflicts=False,
+                                before_attempt=authority.recheck)[0]
     except Conflict:
         raise AdmissionError("conflict") from None
 
 
-def _approve_transcription(host, scope, write, checks):
+def _approve_transcription(host, scope, write, checks, authority):
     """Admit a transcription and publish its in-review library revision in ONE transaction.
 
     If the publication cannot commit, nothing is written: the decision stays
@@ -112,7 +115,9 @@ def _approve_transcription(host, scope, write, checks):
     from documents.library import prepare_transcription
     try:
         library, writes = prepare_transcription(host, scope, write["item"])
-        return library.commit([write, *writes], extra_checks=checks)[0]
+        # The pending decision, the reviewing grant, the policy and sources are
+        # rechecked (with expiry) before every commit attempt, with the lineage guard.
+        return library.commit([write, *writes], extra_checks=checks, guard=authority.recheck)[0]
     except DocumentError as error:
         raise AdmissionError(error.code, error.status) from None
     except Conflict:
