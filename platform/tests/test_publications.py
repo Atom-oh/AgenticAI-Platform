@@ -628,3 +628,18 @@ def test_shared_transcription_is_fenced_through_its_image_lineage(chain):
         reader.recheck()
     assert denied(Sources(ctx(api, "gina", dest)).resolve, published_ref) == (409, "source-upstream-revoked")
     assert denied(Sources(ctx(api, "gina", dest)).authorize, published_ref) == (404, "not-found")
+
+
+def test_replayed_approve_and_withdraw_apply_current_source_authorization(org):
+    """Review 2 #4: idempotent replay responses never disclose restricted references."""
+    pub = published(org)
+    restrict(org, ["owner", "planner"])
+    secret = org.refs[0]["sourceId"]
+    status, payload, _ = call(org.api, "POST", f"/publications/{pub['id']}/approve", {}, actor="carol",
+                              project=org.origin)
+    assert status in (403, 404) and secret not in json.dumps(payload)
+    for _ in range(2):
+        status, payload, _ = call(org.api, "POST", f"/publications/{pub['id']}/withdraw", {}, actor="alice",
+                                  project=org.origin)
+        assert status == 200 and payload["publication"]["status"] == "withdrawn"
+        assert secret not in json.dumps(payload) and "nodes" not in payload["publication"]

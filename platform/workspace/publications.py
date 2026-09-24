@@ -247,6 +247,9 @@ def approve(ctx, publication_id):
     if record["status"] == "withdrawn":
         fail(409, "publication-withdrawn", "철회된 게시물입니다.")
     if record["status"] == "published":
+        # An idempotent replay is a read: it discloses bound references only under current source access.
+        if not _origin_readable(ctx, record):
+            fail(403, "publication-authority-required", "게시할 원본을 현재 권한으로 읽을 수 없습니다.")
         return view(record)
     capability = current_capability(ctx.storage, ctx.actor, CAPABILITIES[kind])
     if capability is None:
@@ -326,17 +329,22 @@ def withdraw(ctx, publication_id):
     if ctx.scope["role"] != "owner" and ctx.actor != record.get("approvedBy"):
         fail(403, "forbidden", "게시자 또는 원본 프로젝트 소유자만 철회할 수 있습니다.")
     if record["status"] == "withdrawn":
-        return view(record)
+        return _origin_response(ctx, record)
     recall = [{"destinationProject": row["destinationProject"], "grantId": row["grantId"],
                "publicationRevision": row["publicationRevision"]} for row in record.get("grants", [])]
     updated = {**{k: v for k, v in record.items() if k not in ("version", "createdAt", "updatedAt")},
                "status": "withdrawn", "withdrawnBy": ctx.actor, "withdrawnAt": ctx.storage.clock(),
                "recallNeeded": recall}
     saved = ctx.commit([_write(PUBLICATION_OWNER, "publication", updated, record["version"])])[0]
-    result = view(saved)
-    if not _origin_readable(ctx, saved):
-        # Withdrawal is protective and allowed; bound source references stay hidden from this caller.
+    return _origin_response(ctx, saved)
+
+
+def _origin_response(ctx, record):
+    """Withdrawal is protective and always allowed; bound references need current source access."""
+    result = view(record)
+    if not _origin_readable(ctx, record):
         result.pop("nodes", None)
+        result.pop("sharing", None)
     return result
 
 
