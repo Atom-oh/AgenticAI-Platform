@@ -612,7 +612,10 @@ heartbeatAt, startedAt}`. Call: `{callId, stage, kind, status: intent|completed|
 failed|unknown, at, attemptId, reserved, usage?}`; usage holds only
 `{inputTokens, outputTokens}`. Stage: `{stage, receiptHash, nonce, attemptId,
 status, result, outputs}`. Transfer output: `{handleId, key, sha256, size,
-stage, attemptId}` under `out/{attemptId}/{stage}/{name}` of the job.
+stage, attemptId}` under `out/{attemptId}/{stage}/{name}` of the job. An input
+handle (`source="input"`) is opened only when the resolved artifact hash equals
+the frozen `admissions[*].artifactHash`; it records that `decisionId`,
+`revision` and hash, and the server re-hashes the stored bytes against it.
 
 Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,

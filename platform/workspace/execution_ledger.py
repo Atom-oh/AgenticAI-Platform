@@ -788,7 +788,7 @@ class Ledger:
         return saved
 
     # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
-    def _open_read(self, owner, job, op, *, source, key, sha256, stage=None):
+    def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None):
         """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts."""
         try:
             if not isinstance(key, str) or not self.storage.owns_key(owner, key):
@@ -801,7 +801,8 @@ class Ledger:
         handle_id = "hdl-" + secrets.token_hex(16)
         chunks = max(1, -(-len(data) // CHUNK_BYTES))
         handle = {"direction": "in", "source": source, "key": key, "sha256": sha256, "total": len(data),
-                  "chunks": chunks, "attemptId": job["attempt"]["id"], "stage": stage, "status": "open", "read": []}
+                  "chunks": chunks, "attemptId": job["attempt"]["id"], "stage": stage, "status": "open", "read": [],
+                  **(binding or {})}
         saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, op=op,
                              value=handle_id, reindex=False)
         return {"handleId": handle_id, "total": len(data), "sha256": sha256, "chunks": chunks, "job": saved}
@@ -855,10 +856,13 @@ class Ledger:
             blob = self.input_resolver(owner, copy.deepcopy(admission))
         except Exception:  # noqa: BLE001
             blob = None
-        if not isinstance(blob, dict) or not isinstance(blob.get("key"), str):
+        # RUN-05: the served bytes are exactly the frozen admission's artifact (decision, revision, hash).
+        if (not isinstance(blob, dict) or not isinstance(blob.get("key"), str)
+                or not isinstance(admission.get("artifactHash"), str) or blob.get("sha256") != admission["artifactHash"]):
             raise LedgerError("transfer-invalid")
-        return self._open_read(owner, job, op, source="input", key=blob["key"], sha256=blob.get("sha256"),
-                               stage=stage)
+        return self._open_read(owner, job, op, source="input", key=blob["key"], sha256=admission["artifactHash"],
+                               stage=stage, binding={"decisionId": admission["decisionId"],
+                                                     "revision": admission.get("revision")})
 
     def _transfer_budget(self, job, chunks, size):
         usage = dict(job.get("transferUsage") or {"chunks": 0, "bytes": 0})

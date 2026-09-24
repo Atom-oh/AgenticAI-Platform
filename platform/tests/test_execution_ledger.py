@@ -15,7 +15,9 @@ from workspace import ontology_schema as schema  # noqa: E402
 from workspace.execution_ledger import receipt_hash  # noqa: E402
 
 OWNER = "project:p1"
-ADM = [{"decisionId": "adm-1", "revision": "1", "artifactHash": "a" * 64}]
+import hashlib as _hashlib  # noqa: E402
+XFER_DATA = bytes(range(256)) * 2048 + b"tail"            # the admitted derivative served by the xfer fixture
+ADM = [{"decisionId": "adm-1", "revision": "1", "artifactHash": _hashlib.sha256(XFER_DATA).hexdigest()}]
 
 
 @pytest.fixture
@@ -675,7 +677,7 @@ def xfer():
     storage = Storage(table=FakeTable(), s3=FakeS3(), bucket="private-test", clock=lambda: now[0])
     storage.put(OWNER, "project", {"id": "p1", "status": "active", "members": {
         a: {"role": "designer"} for a in ("designer-1", "alice", "bob", "carol")}})
-    data = bytes(range(256)) * 2048 + b"tail"            # 512 KiB + 4 bytes -> 3 chunks
+    data = XFER_DATA                                      # 512 KiB + 4 bytes -> 3 chunks
     key = storage.key_for(OWNER, "asset", "adm-src", "derivative.bin")
     storage.put_blob_once(key, data, "application/octet-stream")
     admitted = {"adm-1": {"key": key, "sha256": hashlib.sha256(data).hexdigest()}}
@@ -1354,3 +1356,26 @@ def test_production_rejects_offline_verifier_types_even_when_registered(monkeypa
                           verifier=Signing())
     with pytest.raises(PermissionError):
         module.register_verifier(type("Other", (), {"verify": lambda self, r: True}))
+
+
+def test_input_transfer_is_bound_to_the_frozen_admission_artifact(xfer):
+    """Finding 2: the resolved artifact must equal admission.artifactHash; the handle keeps decisionId/revision."""
+    storage, ledger, _, data = xfer
+    other = b"not the admitted derivative"
+    key = storage.key_for(OWNER, "asset", "adm-src", "other.bin")
+    storage.put_blob_once(key, other, "application/octet-stream")
+    ledger.input_resolver = lambda owner, admission: {"key": key, "sha256": hashlib.sha256(other).hexdigest()}
+    job = run_job(ledger)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    assert error.value.code == "transfer-invalid"
+    assert storage.get(OWNER, "job", job["id"])["handles"] == {}
+
+
+def test_input_handle_records_the_admission_decision_and_revision(xfer):
+    storage, ledger, _, data = xfer
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    stored = storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]
+    assert stored["decisionId"] == "adm-1" and stored["revision"] == "1"
+    assert stored["sha256"] == ADM[0]["artifactHash"] == hashlib.sha256(data).hexdigest()
