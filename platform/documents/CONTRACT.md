@@ -167,10 +167,11 @@ characters without splitting a paragraph; citations use those page numbers.
 
 ### Transcription revisions (`source-admission/1`, I6b)
 
-`documents.library.publish_transcription(host, scope, decision)` is a trusted
+`documents.library.prepare_transcription(host, scope, decision)` is a trusted
 server adapter callable only from `intake.review` (any other caller gets
-`PermissionError`). It turns an admitted, reviewer-validated
-`diagram-transcription` admission decision into an MD document of kind
+`PermissionError`). It returns the library writes that turn a reviewer-validated
+`diagram-transcription` admission decision (sealed as `admitted`, not yet
+stored) into an MD document of kind
 `guide-transcription` (`provenance: "intake-transcription"`, `readRoles` copied
 from the source audience; a project-wide image asset gives all four roles) with
 one revision in status `in_review`. That revision carries the **server-owned**
@@ -180,6 +181,10 @@ image asset reference, `decisionId` its admitted image decision and
 `transcription = {decisionId, decisionRevision, artifactHash}` the
 reviewer-validated transcription decision. Both admissions are bound. The public
 document API never accepts caller-supplied `provenance` or `transcriptionOf`.
+`intake.review` commits the decision's approval and these writes in **one**
+`Library.commit` transaction (with the review's policy/grant/source fences as
+`extra_checks`), so a failed publication writes nothing: the decision stays
+`pending-review` and the reviewer can retry.
 
 Library approval stays separate: a planner/owner approves the revision through
 the existing review route; the intake grant confers no library review.

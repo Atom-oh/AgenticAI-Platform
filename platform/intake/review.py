@@ -86,24 +86,37 @@ def decide(host, scope, decision_id, *, approve, reason, claims=None):
               {"owner": owner, "kind": "project", "id": project_id, "version": scope["project"]["version"]}]
     unique = {(c["owner"], c["kind"], c["id"]): c for c in fences}
     unique.pop((owner, "adm_decision", decision["id"]), None)
+    write = {"owner": owner, "kind": "adm_decision", "item": sealed, "expected_version": decision["version"]}
+    # Expiry is invisible to version fences: recheck the pending decision, policy,
+    # grant and sources immediately before the commit.
+    admission.Authority(host, reader, [admission._check(owner, "adm_decision", decision),
+                                       admission._check(INTAKE_OWNER, "adm_policy", policy),
+                                       admission._check(INTAKE_OWNER, "adm_grant", grant)],
+                        pending={decision["id"]}).recheck()
+    if approve and sealed["artifact"]["kind"] == "diagram-transcription":
+        return _approve_transcription(host, scope, write, list(unique.values()))
     try:
-        saved = storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed,
-                                   "expected_version": decision["version"]}],
-                                 checks=list(unique.values()), retry_conflicts=False)[0]
+        return storage.put_many([write], checks=list(unique.values()), retry_conflicts=False)[0]
     except Conflict:
         raise AdmissionError("conflict") from None
-    if approve and saved["artifact"]["kind"] == "diagram-transcription":
-        publish(host, scope, saved)
-    return saved
 
 
-def publish(host, scope, decision):
-    """Publish a reviewer-validated transcription as an in-review library revision.
+def _approve_transcription(host, scope, write, checks):
+    """Admit a transcription and publish its in-review library revision in ONE transaction.
 
-    Idempotent; library approval by a planner/owner remains a separate step.
+    If the publication cannot commit, nothing is written: the decision stays
+    `pending-review` and the reviewer can retry. Library approval by a
+    planner/owner remains a separate step.
     """
-    from documents.library import publish_transcription
-    return publish_transcription(host, scope, decision)
+    from documents.errors import DocumentError
+    from documents.library import prepare_transcription
+    try:
+        library, writes = prepare_transcription(host, scope, write["item"])
+        return library.commit([write, *writes], extra_checks=checks)[0]
+    except DocumentError as error:
+        raise AdmissionError(error.code, error.status) from None
+    except Conflict:
+        raise AdmissionError("conflict") from None
 
 
 def _title(host, scope, decision):

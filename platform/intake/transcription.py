@@ -7,10 +7,11 @@ diagrams take a separate, source-bound path:
 2. `request_diagram` pins the page and a region on the normalized image,
 3. `transcribe` (the `intake.transcribe` operation: context -> generate -> verify)
    sends the admitted vision derivative through `engine.gate.generate_with_images`,
-4. a reviewer validates the transcription (`/intake/reviews`),
-5. `documents.library.publish_transcription` (callable only from `intake.review`)
-   creates an in-review library revision carrying server-owned `transcriptionOf`,
-6. a planner/owner approves it through the existing library review route.
+4. a reviewer validates the transcription (`/intake/reviews`); in the same
+   transaction `documents.library.prepare_transcription` (callable only from
+   `intake.review`) creates an in-review library revision carrying server-owned
+   `transcriptionOf`,
+5. a planner/owner approves it through the existing library review route.
 
 Registering `intake.transcribe` as a B0 ledger operation belongs to the ledger unit.
 """

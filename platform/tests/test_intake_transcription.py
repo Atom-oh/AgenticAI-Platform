@@ -145,9 +145,9 @@ def test_published_transcription_is_an_in_review_md_revision_with_server_owned_l
 
 
 def test_publish_transcription_outside_intake_review_is_refused(chain):
-    from documents.library import publish_transcription
+    from documents.library import prepare_transcription
     with pytest.raises(PermissionError):
-        publish_transcription(chain.api, chain.scope(), chain.chain["transcription"])
+        prepare_transcription(chain.api, chain.scope(), chain.chain["transcription"])
 
 
 def test_public_document_api_cannot_supply_lineage(chain):
@@ -491,3 +491,44 @@ def test_admission_expiring_during_the_original_read_blocks_download_and_approva
     storage.clock = clock
     saved = storage.get(chain.chain["owner"], "docrevision", revision["id"])
     assert saved["status"] == "in_review"
+
+
+def test_transcription_approval_and_library_publication_are_atomic(env, monkeypatch):
+    """Review 2, finding 4: a failed publication leaves the decision pending and retryable."""
+    from workspace.storage import Conflict
+    env.policy()
+    env.grant("bob", "grant-bob")
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "table", "text": "표 전사", "tables": [["a", "b"]]},
+                                       ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    original = storage.put_many
+
+    def failing(writes, checks=None, **kwargs):
+        if any(w["kind"] == "document" for w in writes):
+            raise Conflict("injected publication conflict")
+        return original(writes, checks, **kwargs)
+
+    monkeypatch.setattr(storage, "put_many", failing)
+    status, payload = env.http("POST", f"/intake/reviews/{transcribed['id']}",
+                               {"approve": True, "reason": "matches"}, actor="bob")
+    assert status == 409, payload
+    assert storage.get(owner, "adm_decision", transcribed["id"])["status"] == "pending-review"
+    assert storage.list(owner, "document") == []
+    assert [r["id"] for r in env.http("GET", "/intake/reviews", actor="bob")[1]["reviews"]] == [transcribed["id"]]
+    monkeypatch.setattr(storage, "put_many", original)
+    status, payload = env.http("POST", f"/intake/reviews/{transcribed['id']}",
+                               {"approve": True, "reason": "matches"}, actor="bob")
+    assert status == 200 and payload["decision"]["status"] == "admitted", payload
+    [document] = storage.list(owner, "document")
+    revision = storage.get(owner, "docrevision", document["id"] + "--r000001")
+    assert revision["status"] == "in_review"
+    assert revision["transcriptionOf"]["transcription"]["decisionId"] == transcribed["id"]
+    assert revision["transcriptionOf"]["transcription"]["decisionRevision"] == payload["decision"]["revision"]
