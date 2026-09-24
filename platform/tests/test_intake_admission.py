@@ -429,3 +429,61 @@ def test_deny_listed_term_split_across_logical_pages_is_normalized(env):
     assert [entry["page"] for entry in batch["pages"]] == [1, 2]
     assert batch["pages"][0]["text"].startswith("가") and batch["pages"][1]["text"].endswith("안내.\n")
     assert env.term not in serialized
+
+
+def _tamper(env, kind, identifier, **fields):
+    storage = env.api.storage
+    row = storage.get(INTAKE_OWNER, kind, identifier)
+    stored = {key: value for key, value in row.items() if key not in ("createdAt", "updatedAt", "version")}
+    storage.put(INTAKE_OWNER, kind, {**stored, **fields}, expected_version=row["version"])
+
+
+@pytest.mark.parametrize("fields", [
+    {"operations": []},
+    {"schemaVersion": 2},
+    {"hash": "0" * 64},
+    {"operations": [], "schemaVersion": 2, "hash": "0" * 64},
+])
+def test_stored_grant_outside_its_closed_schema_does_not_authorize(env, fields):
+    """Finding 5: the current grant passes records.validate on every verification."""
+    decision = internal_admitted(env)
+    _tamper(env, "adm_grant", "grant-1", **fields)
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(env.api, env.scope(), decision["id"])
+    assert error.value.code == "grant-revoked"
+    with pytest.raises(AdmissionError):
+        admission.pages_for(env.api, env.scope(), decision["id"])
+
+
+@pytest.mark.parametrize("fields", [
+    {"schemaVersion": 2},
+    {"hash": "0" * 64},
+    {"kind": "fixture", "publicUrl": None},
+])
+def test_stored_provenance_outside_its_closed_schema_does_not_authorize(env, fields):
+    """Finding 5: provenance is validated and must match the decision's data class."""
+    policy = env.policy()
+    ref = guide(env)
+    env.provenance(ref, policy)
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision["status"] == "admitted"
+    if fields.get("publicUrl", 1) is None:
+        # A well-formed, re-sealed fixture registration cannot back a public decision.
+        row = env.api.storage.get(INTAKE_OWNER, "adm_provenance", "prov-1")
+        content = {k: v for k, v in row.items() if k not in records.STORAGE_FIELDS and k != "publicUrl"}
+        sealed = records.seal("adm_provenance", {**content, "kind": "fixture"})
+        env.api.storage.put(INTAKE_OWNER, "adm_provenance", sealed, expected_version=row["version"])
+    else:
+        _tamper(env, "adm_provenance", "prov-1", **fields)
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(env.api, env.scope(), decision["id"])
+    assert error.value.code == "grant-revoked"
+
+
+def test_fixture_provenance_does_not_admit_a_public_source(env):
+    """Finding 5: public data needs a public reference; synthetic data needs a fixture."""
+    policy = env.policy()
+    ref = guide(env)
+    env.provenance(ref, policy, kind="fixture")
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision["status"] == "blocked" and decision["blocking"] == ["provenance-required"]

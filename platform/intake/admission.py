@@ -84,12 +84,21 @@ def current_policy(storage, project_id, *, policy_id=None):
     return policies[0]
 
 
-def _policy_current(storage, decision, project_id):
-    policy = storage.get(INTAKE_OWNER, "adm_policy", decision["policy"]["id"])
+def _admin_record(storage, kind, identifier):
+    """One administration record, only if it passes its closed schema, version and hash."""
+    row = storage.get(INTAKE_OWNER, kind, identifier)
     try:
-        policy = records.validate("adm_policy", policy) if policy else None
+        return records.validate(kind, row) if row else None
     except ValueError:
-        policy = None
+        return None
+
+
+# The only provenance kind that can back each trusted data class (source-admission/1).
+PROVENANCE_KINDS = {"synthetic": "fixture", "public": "public-reference"}
+
+
+def _policy_current(storage, decision, project_id):
+    policy = _admin_record(storage, "adm_policy", decision["policy"]["id"])
     if (not policy or not records.is_current(policy, storage.clock())
             or policy["revision"] != decision["policy"]["revision"] or policy["hash"] != decision["policy"]["hash"]
             or not _in_scope(policy["scope"], project_id) or decision["dataClass"] not in policy["dataClasses"]):
@@ -101,12 +110,23 @@ def _reference_matches(reference, source):
     return all(reference[key] == source[key] for key in ("sourceKind", "sourceId", "revision", "sha256"))
 
 
-def find_provenance(storage, policy, source, project_id):
+def _provenance_ok(record, policy, source, project_id, data_class, now):
+    return (records.is_current(record, now) and record["kind"] == PROVENANCE_KINDS.get(data_class)
+            and bool(policy["trustedProvenance"].get(data_class))
+            and record["policyId"] == policy["id"] and record["policyRevision"] == policy["revision"]
+            and _reference_matches(record["reference"], source) and _in_scope(record["scope"], project_id))
+
+
+def _grant_ok(record, actor, policy, project_id, now):
+    return (records.is_current(record, now) and record["actor"] == actor and record["policyId"] == policy["id"]
+            and "review-internal" in record["operations"]
+            and _in_scope(record["scope"], project_id, deployment_bound=False))
+
+
+def find_provenance(storage, policy, source, project_id, data_class):
     now = storage.clock()
     for record in _admin_records(storage, "adm_provenance"):
-        if (records.is_current(record, now) and record["policyId"] == policy["id"]
-                and record["policyRevision"] == policy["revision"] and _reference_matches(record["reference"], source)
-                and _in_scope(record["scope"], project_id)):
+        if _provenance_ok(record, policy, source, project_id, data_class, now):
             return record
     return None
 
@@ -114,9 +134,7 @@ def find_provenance(storage, policy, source, project_id):
 def find_grant(storage, actor, policy, project_id):
     now = storage.clock()
     for record in _admin_records(storage, "adm_grant"):
-        if (records.is_current(record, now) and record["actor"] == actor and record["policyId"] == policy["id"]
-                and "review-internal" in record["operations"]
-                and _in_scope(record["scope"], project_id, deployment_bound=False)):
+        if _grant_ok(record, actor, policy, project_id, now):
             return record
     return None
 
@@ -197,7 +215,7 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     if blocking:
         record.update(status="blocked", blocking=blocking, expiresAt=_expiry(now, policy))
     elif data_class in ("synthetic", "public"):
-        provenance = (find_provenance(storage, policy, source, project_id)
+        provenance = (find_provenance(storage, policy, source, project_id, data_class)
                       if policy["trustedProvenance"].get(data_class) else None)
         if provenance is None:
             record.update(status="blocked", blocking=["provenance-required"], expiresAt=_expiry(now, policy))
@@ -334,20 +352,16 @@ def verified(host, scope, decision_id, *, claims=None, sources=None, observe=Non
     policy = _policy_current(storage, decision, project_id)
     upstream = [("adm_policy", policy)]
     if "provenance" in decision:
-        provenance = storage.get(INTAKE_OWNER, "adm_provenance", decision["provenance"]["id"])
-        if (not provenance or not records.is_current(provenance, storage.clock())
-                or provenance["revision"] != decision["provenance"]["revision"]
-                or not _reference_matches(provenance["reference"], decision["source"])
-                or provenance["policyId"] != policy["id"] or provenance["policyRevision"] != policy["revision"]
-                or not _in_scope(provenance["scope"], project_id)):
+        provenance = _admin_record(storage, "adm_provenance", decision["provenance"]["id"])
+        if (not provenance or provenance["revision"] != decision["provenance"]["revision"]
+                or not _provenance_ok(provenance, policy, decision["source"], project_id, decision["dataClass"],
+                                      storage.clock())):
             raise AdmissionError("grant-revoked")
         upstream.append(("adm_provenance", provenance))
     if "review" in decision:
-        grant = storage.get(INTAKE_OWNER, "adm_grant", decision["review"]["grantId"])
-        if (not grant or not records.is_current(grant, storage.clock())
-                or grant["revision"] != decision["review"]["grantRevision"]
-                or grant["actor"] != decision["review"]["actor"] or grant["policyId"] != policy["id"]
-                or not _in_scope(grant["scope"], project_id, deployment_bound=False)):
+        grant = _admin_record(storage, "adm_grant", decision["review"]["grantId"])
+        if (not grant or grant["revision"] != decision["review"]["grantRevision"]
+                or not _grant_ok(grant, decision["review"]["actor"], policy, project_id, storage.clock())):
             raise AdmissionError("grant-revoked")
         upstream.append(("adm_grant", grant))
     reader = sources or Sources(inspect.context(host, scope, claims))
