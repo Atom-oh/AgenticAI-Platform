@@ -675,6 +675,11 @@ live evidence and the privacy redaction adapter remain outstanding.
   unexpired. Grants and provenance pass `records.validate` on every use; a
   grant must name `review-internal` for the reviewing actor and provenance must
   be a `fixture` for synthetic data or a `public-reference` for public data.
+- **Code-collection ZIPs.** The ZIP asset is at most 8 MiB. Before any member
+  is decompressed, the central directory must show at most 100 selected files,
+  100 KiB per text file, 2 MiB of text and 8 MiB expanded in total including
+  assets; reads are then bounded by each member's declared size and the
+  remaining budget (`collection-too-large` / `collection-format`).
 - **Redaction.** PII redaction is `unavailable`: an input whose inspection or
   residual scan finds PII is `blocked: redaction-required` until the privacy
   adapter for source documents is reviewed. Sanitized SVG is blocked
