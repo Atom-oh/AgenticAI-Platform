@@ -398,3 +398,34 @@ def test_cursor_is_bound_to_actor_and_expires(env):
     with pytest.raises(AdmissionError) as error:
         admission.pages_for(env.api, env.scope(), decision["id"], cursor=first["cursor"])
     assert error.value.code == "admission-cursor-stale"
+
+
+# PR #28 review round 1 ----------------------------------------------------------
+
+def test_phone_number_split_across_logical_pages_is_blocked(env):
+    """Finding 2: inspection and the residual scan cross logical-page boundaries."""
+    env.policy()
+    env.grant("bob")
+    ref = guide(env, text="가" * 3997 + "010-5550-7391 끝.\n", name="split-phone.txt")
+    decision = admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive")
+    assert decision["status"] == "blocked" and "redaction-required" in decision["blocking"]
+    receipt = json.loads(env.api.storage.get_blob(decision["inspection"]["receiptKey"]))
+    assert {"type": "PHONE", "count": 1} in receipt["pii"]
+    assert "7391" not in json.dumps(receipt)
+
+
+def test_deny_listed_term_split_across_logical_pages_is_normalized(env):
+    """Finding 2: a deny-listed identifier spanning two pages is replaced; page mapping kept."""
+    policy = env.policy()
+    ref = guide(env, text="가" * (4000 - len(env.term) // 2) + env.term + " 안내.\n", name="split-term.txt")
+    env.provenance(ref, policy)
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision["status"] == "admitted"
+    batch = admission.pages_for(env.api, env.scope(), decision["id"])
+    serialized = json.dumps(batch, ensure_ascii=False)
+    joined = "".join(entry["text"] for entry in batch["pages"])
+    assert env.term not in joined and env.term.lower() not in joined.lower()
+    assert "고객사 A" in joined
+    assert [entry["page"] for entry in batch["pages"]] == [1, 2]
+    assert batch["pages"][0]["text"].startswith("가") and batch["pages"][1]["text"].endswith("안내.\n")
+    assert env.term not in serialized

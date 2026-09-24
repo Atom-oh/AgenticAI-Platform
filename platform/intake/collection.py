@@ -233,7 +233,8 @@ def request_collection(host, scope, source_ref, *, root, resolver_profile_id, da
     resolver = derive_resolver(profile, terms, denylist)
     residual_text = [f["path"] for f in files] + [f["text"] for f in files if "text" in f] + [
         json.dumps(resolver, ensure_ascii=False)]
-    report = derivative.residual([{"page": i + 1, "text": t} for i, t in enumerate(residual_text)], denylist)
+    report = derivative.residual([{"page": i + 1, "text": t} for i, t in enumerate(residual_text)], denylist,
+                                 contiguous=False)  # separate files, not one continuous text
     identifiers, pii_counts = report["identifiers"], report["pii"]
     payload = analyzer_payload(files, resolver)
     size = request_size(payload)
@@ -247,7 +248,7 @@ def request_collection(host, scope, source_ref, *, root, resolver_profile_id, da
     private_mapping = {"paths": mapping, "packages": {name: _rename(name, terms, denylist)
                                                       for name in profile["packages"]}}
     original_pages = [{"page": i + 1, "text": e["path"] + "\n" + e.get("text", "")} for i, e in enumerate(entries)]
-    receipt = inspect.inspect(original_pages, denylist=denylist)
+    receipt = inspect.inspect(original_pages, denylist=denylist, contiguous=False)
     blocking = (["residual-identifiers"] if identifiers else []) + (["redaction-required"] if pii_counts else [])
     index_bytes = schema.canonical(index)
     resolver_binding = {"profile": {"id": profile["id"], "revision": profile["revision"], "hash": profile["hash"]},
