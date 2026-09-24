@@ -137,9 +137,51 @@ returning data or committing a mutation.
 Opaque pagination cursors use the separate `ontology_cursor` record kind,
 with an application expiry and DynamoDB TTL of at most five minutes.
 
-The v1 schema reserves `published-asset`, `ux-contract` and `run-round` source
-kinds for later authority adapters. Until those adapters are installed, reads fail unavailable.
-This is explicit staging, not completed sharing or release integration.
+The `run-round`, `ux-contract` and `published-asset` source kinds have installed
+authority adapters (B0 sharing). Each resolves the exact record in the current
+project (or active grant), rechecks current membership and audience, and compares
+revision and hash. Missing and inaccessible records return the same `404 not-found`.
+Current resolution (`Sources.resolve`) is the only reuse authority; historical
+authorization (`Sources.authorize`, or `resolve(..., historical=True)`, metadata
+only, never text) admits diagnostics. Offline code and tests exist; this is not
+live sharing or release evidence.
+
+- `run-round` `{sourceId: runId, revision: "<round>", sha256: round.sourceHash,
+  audienceRevision: "current-project-members-v1", location?: {round, path}}`.
+  The run is a React run of this project; the round exists. Content permission
+  depends on round state: draft, failed or needs-changes rounds are readable only
+  by owner/designer/developer; reviewable, approved or released rounds by any
+  current project reader. The state check precedes the hash check, so a restricted
+  reader receives `404 not-found` for any reference. A different hash is
+  `409 source-changed`; an archived run is `409 ontology-source-stale` for current
+  use. Current use also requires current upstream lineage: the approved contract
+  (through the `ux-contract` rules), every `designManifestInput.admissions` entry
+  (`intake.admission.verify` with matching revision and derivative hash) and the
+  product/guideline criteria (`resolve_generation_context`); otherwise
+  `409 source-upstream-revoked`. Text requires `location.path` and reads the
+  verified source archive (`read_archive` over the stored archive hash).
+  `Sources.release_source` returns the verified archive bytes under the same
+  constraints. Historical authorization rechecks upstream permission: a
+  superseded but still readable upstream (retained contract revision, admission
+  whose source was superseded but is still readable, guideline still published)
+  admits metadata; a revoked upstream denies with `404 not-found`.
+- `ux-contract` `{sourceId: contractId, revision: str(contract.version), sha256:
+  contract.approval.hash, audienceRevision: "current-project-members-v1"}`. The
+  contract is `approved` at that version, the approval hash matches and
+  `rules.contract_hash` recomputes it (`409 source-changed` otherwise); its
+  product/guideline criteria and catalog hash are still current
+  (`Collaboration.is_current`). A draft or foreign contract is `404 not-found`.
+  An edited contract's retained revision, or an approved one whose criteria
+  changed, is `409 source-superseded` for current use and readable historically.
+- `published-asset` `{sourceId: publicationId, revision: str(publication revision),
+  sha256: publication hash, audienceRevision: str(grant revision)}`. Resolution
+  requires an active destination grant for this publication revision naming the
+  caller's role, the `published` revision, the grant revision and hash, and the
+  current origin source audience of every published node source (restricted or
+  revoked upstream beats the grant: `409 source-upstream-revoked`). Withdrawal is
+  `409 source-withdrawn` and a newer revision `409 source-superseded` for current
+  use; historical metadata stays readable while the grant and upstream remain.
+  See `platform/docs/CONTRACTS.md` "Shared publications".
 
 ## APIs
 

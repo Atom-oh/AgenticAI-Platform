@@ -30,11 +30,15 @@ An edge contains `id`, `type`, exact source/target node IDs and revisions,
 A source reference contains `sourceKind`, `sourceId`, `revision`, `sha256`,
 `audienceRevision` and a location when applicable: document page, source
 path/export/line, or image region. Implemented source-kind identifiers are
-`asset`, `document-revision`, `product-guideline`, `workbench-document` and
-`package`. Imported code revisions use `asset` with an exact import revision,
-byte hash and file location. `published-asset`, `ux-contract` and `run-round`
-are reserved for their separately installed authority adapters and fail closed
-until those adapters exist.
+`asset`, `document-revision`, `product-guideline`, `workbench-document`,
+`package`, `run-round`, `ux-contract` and `published-asset`. Imported code
+revisions use `asset` with an exact import revision, byte hash and file location.
+The last three have installed authority adapters (B0 sharing) in
+`workspace/ontology_sources.py` and `workspace/publications.py`; their rules are
+in `ONTOLOGY_CONTRACT.md` "Source authority". A missing and an inaccessible
+record return the same `404 not-found`. Current resolution alone admits reuse;
+historical authorization admits metadata only. Intake (`source-admission/1`)
+has no admission adapter for these kinds and still refuses them with `503`.
 IDs are stable within a scope; revision hashes identify immutable content.
 Original IDs live in namespace mappings. Ambiguity cannot silently select
 the first match.
@@ -109,8 +113,8 @@ without exposing that project to the initiating caller.
 
 Project roles remain the authoritative owner/planner/designer/developer roles.
 Organization-level `design_publish` and `policy_publish` capabilities are
-separate grants assigned through IAM-only administration; project owners cannot
-self-grant them. Origin source authority is also required. Destination acceptance
+separate grants assigned through IAM-only administration (`intake/admin_handler.py`
+`grant_capability`/`revoke_capability`); project owners cannot self-grant them. Origin source authority is also required. Destination acceptance
 requires destination ownership. Explicit deny, upstream restriction, expiry and
 revocation override allows.
 
