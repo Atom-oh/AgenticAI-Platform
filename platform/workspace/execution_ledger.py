@@ -16,6 +16,10 @@ from workspace.storage import DUE_OWNER, EXECUTION_JOB_PREFIX, LINKED_KINDS, Con
 TASK, SCHEMA_VERSION = "agentcore-execution", 1
 _WRITER = _storage._ledger_writer()
 
+# Pinned compiler (Interpreter) and Browser verifier profiles. A receipt from any other tool profile is not
+# evidence for this execution profile (RUN-04, "Atomic publication and reproducible evidence").
+TOOL_PROFILES = {"interpreter": "compiler-node20-esbuild/1", "browser": "browser-verifier-chromium/1"}
+
 PROFILE_DEFAULT = {"id": "agentcore-default", "revision": "1", "deadlineMs": 14 * 60_000,
                    "heartbeatMs": 30_000, "leaseMs": 90_000, "recoveryWindowMs": 300_000,
                    "readRetries": 2, "completionRetries": 2, "maxAttempts": 3,
@@ -26,7 +30,8 @@ PROFILE_DEFAULT = {"id": "agentcore-default", "revision": "1", "deadlineMs": 14 
                                            "design.compose": 20, "design.release": 10, "source.analyze": 10,
                                            "intake.transcribe": 6},
                    # Spend and cleanup reservations (N7; AGENTCORE_CONTRACT.md:712-716).
-                   "tokenBudget": 400_000, "cleanupReserveMs": 60_000}
+                   "tokenBudget": 400_000, "cleanupReserveMs": 60_000,
+                   "toolProfiles": dict(TOOL_PROFILES)}
 
 OPERATIONS = {"design.extract": ("context", "generate", "verify"),
               "design.generate": ("context", "generate", "compile", "browser", "verify"),
@@ -36,6 +41,15 @@ OPERATIONS = {"design.extract": ("context", "generate", "verify"),
               "intake.transcribe": ("context", "generate", "verify"),
               "source.analyze": ("context", "analyze")}
 
+# The evidence graph: each stage consumes the latest receipt of its predecessor stage in the attempt.
+# A Browser stage consumes exactly the bundle output(s) of the latest compile receipt.
+_DESIGN_BUILD = {"generate": "context", "compile": "generate", "browser": "compile", "verify": "browser"}
+_BUNDLE_CHECK = {"compile": "context", "browser": "compile", "verify": "browser"}
+STAGE_INPUTS = {"design.extract": {"generate": "context", "verify": "generate"},
+                "intake.transcribe": {"generate": "context", "verify": "generate"},
+                "design.generate": _DESIGN_BUILD, "design.edit": _DESIGN_BUILD,
+                "design.compose": _BUNDLE_CHECK, "design.release": _BUNDLE_CHECK,
+                "source.analyze": {"analyze": "context"}}
 # The observing service each stage's receipt must bind (RUN-04 trusted-adapter observation). A non-runtime
 # service is a ledger-recorded call of the same attempt, stage and kind; the Runtime session is the attempt's.
 STAGE_SERVICES = {"context": ("runtime",), "generate": ("model",), "compile": ("interpreter",),
@@ -480,6 +494,8 @@ class Ledger:
         profile = copy.deepcopy(profile or PROFILE_DEFAULT)
         if operation not in OPERATIONS:
             raise LedgerError("unknown-operation")
+        if not isinstance(profile, dict) or profile.get("toolProfiles") != TOOL_PROFILES:
+            raise LedgerError("profile-invalid")
         if not admissions:
             raise LedgerError("admission-required")
         if (not isinstance(manifest, dict) or set(manifest) != {"ref", "hash"}
@@ -672,13 +688,16 @@ class Ledger:
     def _service_binding(self, job, receipt, attempt, stages):
         """Stage-specific service, task, session and outcome association; returns the compact binding or None."""
         service, stage, status = receipt["service"], receipt["stage"], receipt.get("status", "ok")
-        if (not isinstance(service, dict) or set(service) - {"kind", "sessionId", "taskId", "exitCode"}
+        if (not isinstance(service, dict) or set(service) - {"kind", "sessionId", "taskId", "exitCode", "profile"}
                 or service.get("kind") not in STAGE_SERVICES.get(stage, ()) or not isinstance(service.get("sessionId"), str)
                 or "exitCode" in service and type(service["exitCode"]) is not int):
             return None
         kind, exit_code = service["kind"], service.get("exitCode")
         if status == "ok" and exit_code not in (None, 0):
             return None
+        pinned = (job["profileBody"].get("toolProfiles") or {}).get(kind)
+        if (service.get("profile") != pinned if kind in ("interpreter", "browser") else "profile" in service):
+            return None                     # Interpreter/Browser evidence names the pinned tool profile
         if kind == "runtime":
             if service["sessionId"] != attempt["sessionId"] or "taskId" in service:
                 return None
@@ -696,7 +715,7 @@ class Ledger:
             return None
         if status == "ok" and call.get("status") != "completed":
             return None
-        return {key: service[key] for key in ("kind", "sessionId", "taskId", "exitCode") if key in service}
+        return {key: service[key] for key in ("kind", "sessionId", "taskId", "exitCode", "profile") if key in service}
 
     def _verified_receipt(self, owner, job, receipt, *, attempt=None):
         """Receipt schema v1 checks; returns the stage entry or raises receipt-invalid without writing."""
@@ -755,6 +774,7 @@ class Ledger:
                     or not entry["key"].startswith(prefix)
                     or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
+        self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages)
         return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
                 "attemptId": attempt["id"], "status": receipt.get("status", "ok"), "service": binding,
                 "result": copy.deepcopy(receipt.get("result", {})),
@@ -802,6 +822,28 @@ class Ledger:
                     or receipt.get("nonce") != row["nonce"] or receipt.get("previous") != previous):
                 raise LedgerError("receipt-invalid")
             previous = row["receiptHash"]
+
+    def _check_evidence_graph(self, job, stage, inputs, outputs, stages):
+        """Stage-specific input/output relationships (review 2): no stage verifies an unrelated object."""
+        if stage == "compile" and len([entry for entry in outputs if entry.get("role") == "bundle"]) != 1:
+            raise LedgerError("receipt-invalid")            # a compile receipt produces exactly one bundle
+        predecessor = STAGE_INPUTS.get(job["operation"], {}).get(stage)
+        if predecessor is None:
+            return
+        rows = [row for row in stages if row["stage"] == predecessor]
+        if not rows:
+            raise LedgerError("receipt-invalid")            # out of order: the predecessor evidence is missing
+        produced = rows[-1].get("outputs", [])
+        if predecessor == "compile":
+            produced = [entry for entry in produced if entry.get("role") == "bundle"]
+        consumed = {(entry["key"], entry["sha256"]) for entry in inputs}
+        required = {(entry["key"], entry["sha256"]) for entry in produced}
+        if predecessor == "compile":
+            ok = bool(required) and required <= consumed   # Browser/verify name the exact compiled bundle
+        else:
+            ok = bool(required & consumed)
+        if not ok:
+            raise LedgerError("receipt-invalid")
 
     def _stage(self, owner, job_id, attempt_id, fence, receipt, *, operation_id=None):
         job = self._get(owner, job_id)

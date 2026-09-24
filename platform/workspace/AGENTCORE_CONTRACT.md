@@ -646,10 +646,19 @@ the attempt's `sessionId` and no `taskId`. Any other kind carries `taskId`, the
 `callId` of a recorded call of the same attempt, stage and kind that no other
 receipt of the attempt used. A `model` service carries the attempt's
 `sessionId` and no `exitCode`; an `interpreter`/`browser` service carries the
-call's recorded `serviceSessionId` and an integer `exitCode`. A receipt with
+call's recorded `serviceSessionId`, an integer `exitCode` and `profile`, which
+must equal the pinned tool profile (`TOOL_PROFILES`, frozen in
+`profileBody.toolProfiles`; admission refuses any other with `profile-invalid`). A receipt with
 `status: ok` requires `exitCode` 0 (when present) and a `completed` call. The
 `profileHash` must equal the job's profile hash. Any mismatch is
-`receipt-invalid`. The
+`receipt-invalid`.
+
+Receipts follow the operation's evidence graph (`STAGE_INPUTS`): each stage's
+`inputs` must include an output of the latest receipt of its predecessor stage
+(`generate` ← `context`, `compile` ← `generate` or `context`, `browser` ←
+`compile`, `verify` ← `browser` or `generate`, `analyze` ← `context`), so stages
+are staged in order. A `compile` receipt produces exactly one output with role
+`bundle`, and a `browser` receipt must consume exactly that bundle. The
 receipt hash is SHA-256 over sorted-key JSON.
 
 Completion (`finish`, and `reconcile` through the same path) re-reads every
@@ -734,7 +743,7 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
 `completion-contention`, `completion-obligations`, `completion-unavailable`,
-`completion-invalid`, `calls-unresolved`,
+`completion-invalid`, `calls-unresolved`, `profile-invalid`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
 
