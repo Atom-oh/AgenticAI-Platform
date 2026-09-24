@@ -25,6 +25,11 @@ def fail(status, code, message):
 _TIMED_AUTHORITY = {
     "capability": ("publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다."),
     "adm_sharing": ("source-upstream-revoked", "원본의 조직 공유 정책이 만료되었거나 회수되었습니다."),
+    # Admission lineage observed by the shared source reader: expiry changes no version.
+    "adm_decision": ("source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다."),
+    "adm_policy": ("source-upstream-revoked", "원본 반입 정책이 만료되었거나 회수되었습니다."),
+    "adm_provenance": ("source-upstream-revoked", "원본 출처 등록이 만료되었거나 회수되었습니다."),
+    "adm_grant": ("source-upstream-revoked", "원본 검토 권한이 만료되었거나 회수되었습니다."),
 }
 
 
@@ -32,8 +37,8 @@ def check_source_deadlines(storage, checks, claims=None):
     """Recheck the aggregate deadline after reads and transaction preparation.
 
     IAM-administered authority records whose validity is time-bound (organization
-    publication capabilities and sharing policies) expire without a version
-    change, so their currency is rechecked here, immediately before every
+    publication capabilities, sharing policies and admission lineage) expire
+    without a version change, so their currency is rechecked here, immediately before every
     transaction submission, in addition to the version fence.
     """
     deadlines = []

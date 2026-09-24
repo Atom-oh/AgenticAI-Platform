@@ -745,3 +745,17 @@ def test_listings_use_opaque_cursors_that_skip_hidden_rows(env, bound):
     assert status == 200 and {r["id"] for r in second["runs"]}.isdisjoint({r["id"] for r in first["runs"]})
     assert call(env.api, "GET", "/runs", actor="bob", project=env.pid,
                 query={"limit": "2", "cursor": first["cursor"]})[0] == 409
+
+
+def test_commit_attempt_guard_rechecks_admission_expiry(env, design, monkeypatch):
+    """Review 2 #7: retained admission observations are rechecked inside every commit attempt."""
+    from workbench.service import check_source_deadlines
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)])
+    reader = Sources(ctx(env))
+    reader.resolve(run_round_reference(run, 1))
+    checks = reader.recheck()
+    check_source_deadlines(env.api.storage, checks)
+    stored = env.api.storage.get(f"project:{env.pid}", "adm_decision", decision["id"])
+    monkeypatch.setattr(env.api.storage, "clock", lambda: stored["expiresAt"] + 1)
+    assert code(check_source_deadlines, env.api.storage, checks) == (409, "source-upstream-revoked")
