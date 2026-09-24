@@ -291,7 +291,10 @@ def request(host, scope, source_ref, *, data_class, claims=None, kind="document-
         return _blocked(["denylist-unavailable"])
     resolved = inspect.resolve(host, scope, source_ref, claims=claims)
     receipt = inspect.inspect(resolved["pages"], denylist=denylist)
-    derived = derivative.normalize(resolved["pages"], denylist)
+    try:
+        derived = derivative.normalize(resolved["pages"], denylist)
+    except derivative.NormalizationInvariant as error:
+        return _blocked([error.code])
     rest = derivative.residual(derived["pages"], denylist)
     blocking = (["residual-identifiers"] if rest["identifiers"] else []) + (
         ["redaction-required"] if rest["pii"] else [])

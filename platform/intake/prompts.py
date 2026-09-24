@@ -52,6 +52,8 @@ def admit_prompt_text(host, scope, text, *, purpose, claims=None):
         if set(blocked.types) - {"IDENTIFIER"}:
             reasons.append("redaction-required")
         return admission._blocked(reasons)  # nothing, not even the original, is stored
+    except derivative.NormalizationInvariant as error:
+        return admission._blocked([error.code])
     reader = Sources(inspect.context(host, scope, claims))
     project = reader.ctx.scope["project"]
     instruction_id = "instr-" + secrets.token_hex(20)

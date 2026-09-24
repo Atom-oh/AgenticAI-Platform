@@ -183,8 +183,11 @@ def _collection_terms(entries, profile, denylist):
 def _rename(value, terms, denylist):
     """Apply the collection mapping; internal URLs in text become the link alias."""
     value = unicodedata.normalize("NFC", value)
-    value, _ = derivative._replace_links(value, denylist)
-    value, _ = derivative._replace_terms(value, terms)
+    try:
+        value, _ = derivative._replace_links(value, denylist)
+        value, _ = derivative._replace_terms(value, terms)
+    except derivative.NormalizationInvariant as error:
+        raise AdmissionError(error.code, 422) from None
     return value
 
 

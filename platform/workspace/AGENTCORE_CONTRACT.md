@@ -663,7 +663,11 @@ live evidence and the privacy redaction adapter remain outstanding.
   blocks (`denylist-unavailable`). Replacement is longest-term-first,
   NFC-normalized and ASCII case-insensitive (default aliases `고객사 A` for names
   and `[내부 링크]` for internal URLs and deny-listed hosts); numbers are
-  untouched. Admission requires a clean residual scan (no deny-list term,
+  untouched. Spans are found and applied on one NFC buffer of the joined pages
+  (a composition across a page boundary belongs to the following page), and a
+  hard invariant requires the output to equal that buffer with only the spans
+  substituted and every numeric token outside them unchanged; any violation
+  blocks (`normalization-invariant`). Admission requires a clean residual scan (no deny-list term,
   internal URL or `pii.scan_rules` hit). Code collections use one neutral
   identifier-safe alias per matched term (`neutral_<n>`) consistently across
   file text, path segments, package scopes and the derived resolver.

@@ -159,3 +159,27 @@ def test_normalize_text_blocks_a_phone_number_with_counts_only():
 def test_normalize_text_requires_a_deny_list():
     with pytest.raises(derivative.DenylistUnavailable):
         derivative.normalize_text("text", None)
+
+
+# PR #28 review round 6 ----------------------------------------------------------
+
+def test_composition_across_pages_is_normalized_on_one_buffer():
+    term = fake()
+    raw = pages("가" * 10 + "ᄒ", "ᅡ" + f" 월 한도: 1000 {term} 안내")
+    result = derivative.normalize(raw, [{"term": term, "kind": "org"}])
+    joined = "".join(page["text"] for page in result["pages"])
+    assert joined == "가" * 10 + "하 월 한도: 1000 고객사 A 안내"
+    assert [page["page"] for page in result["pages"]] == [1, 2]
+
+
+def test_numeric_tokens_must_survive_normalization(monkeypatch):
+    """The hard invariant: a numeric/financial token changed by normalization blocks."""
+    term = fake()
+    original = derivative._apply
+
+    def corrupting(texts, spans):
+        return [text.replace("1000", "100") for text in original(texts, spans)]
+
+    monkeypatch.setattr(derivative, "_apply", corrupting)
+    with pytest.raises(derivative.NormalizationInvariant):
+        derivative.normalize(pages(f"한도 1000원 {term}"), [{"term": term, "kind": "org"}])

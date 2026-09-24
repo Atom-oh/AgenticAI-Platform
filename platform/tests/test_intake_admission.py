@@ -537,3 +537,35 @@ def test_fresh_admission_generation_after_provenance_registration_keeps_history(
         with pytest.raises(AdmissionError) as error:
             admission.request(env.api, env.scope(), ref, data_class="public", generation=bad)
         assert error.value.status == 400
+
+
+# PR #28 review round 6 ----------------------------------------------------------
+
+def test_hangul_composition_across_the_page_boundary_keeps_financial_values(env):
+    """Review 6, finding 1: replacements are computed and applied on one NFC buffer, so a
+    Hangul syllable composed across the 4 000-character boundary cannot shift offsets."""
+    policy = env.policy()
+    # Page 1 ends with the leading jamo U+1112; page 2 starts with the vowel U+1161.
+    text = "가" * 3999 + "ᄒ" + "ᅡ" + f" 월 한도: 1000 {env.term} 안내.\n"
+    ref = guide(env, text=text, name="split-jamo.txt")
+    env.provenance(ref, policy)
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision["status"] == "admitted"
+    batch = admission.pages_for(env.api, env.scope(), decision["id"])
+    joined = "".join(entry["text"] for entry in batch["pages"])
+    assert "월 한도: 1000 고객사 A 안내.\n" in joined
+    assert env.term not in joined and "하" in joined
+    assert [entry["page"] for entry in batch["pages"]] == [1, 2]
+
+
+def test_normalization_invariant_violation_blocks_the_admission(env, monkeypatch):
+    """Review 6, finding 1: a changed numeric token blocks with a normalization error code."""
+    from intake import derivative
+    policy = env.policy()
+    ref = guide(env)
+    env.provenance(ref, policy)
+    original = derivative._apply
+    monkeypatch.setattr(derivative, "_apply",
+                        lambda texts, spans: [t.replace("12", "1") for t in original(texts, spans)])
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision == {"status": "blocked", "blocking": ["normalization-invariant"]}
