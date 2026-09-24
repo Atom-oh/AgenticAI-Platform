@@ -733,7 +733,8 @@ bound the watchdog marks them `unknown`, charges their reservations as used
 records the outcome of an `intent` call from a recovered signed adapter
 observation, after the Runtime lost the attempt: the job must be
 `recovery_required` within its recovery bound, or terminal before
-`settlementDueAt` (otherwise `recovery-window`); a live attempt uses `outcome`
+`settlementDueAt` (otherwise `recovery-window`, checked on entry and again by
+the write's `before_attempt` guard immediately before submission); a live attempt uses `outcome`
 (`stale-attempt`). The observation is `{schemaVersion: 1, type: "call-outcome",
 executionId, attemptId, fence, callId, stage, kind, status: completed|failed,
 service: {kind, sessionId, profile?}, usage?, nonce, iat?/exp?, keyId,

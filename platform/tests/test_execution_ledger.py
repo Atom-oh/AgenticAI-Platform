@@ -2642,3 +2642,27 @@ def test_production_requires_a_key_registry_revision(monkeypatch):
     with pytest.raises(PermissionError):
         Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True),
                           verifier=NoRevision())
+
+
+@pytest.mark.parametrize("state", ["recovery_required", "terminal"])
+def test_settlement_enforces_its_recovery_bound_at_submission(xfer, state):
+    """Review 4 finding 7: the bound is rechecked by before_attempt, after the observation is verified."""
+    storage, ledger, now, _ = xfer
+    job, call, _ = lost_model_call(xfer)
+    if state == "terminal":
+        ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+        job = storage.get(OWNER, "job", job["id"])
+        bound = job["settlementDueAt"]
+    else:
+        bound = min(job["recoveryAt"] + PROFILE_DEFAULT["recoveryWindowMs"], job["deadlineAt"])
+    obs = observation(job, call, usage={"inputTokens": 1, "outputTokens": 1})
+    verify = ledger.verifier.verify
+
+    def slow(value):
+        now[0] = bound
+        return verify(value)
+    ledger.verifier.verify = slow
+    with pytest.raises(LedgerError) as error:
+        ledger.reconciler().settle(OWNER, job["id"], call, obs)
+    assert error.value.code == "recovery-window"
+    assert next(c for c in storage.get(OWNER, "job", job["id"])["calls"] if c["callId"] == call)["status"] == "intent"

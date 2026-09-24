@@ -1449,15 +1449,19 @@ class Ledger:
                                                                "observation": observation})
         if replay:
             return replay["job"]
-        now = self.storage.clock()
-        if job["status"] == "recovery_required":
-            if now >= job["deadlineAt"] or now >= job["recoveryAt"] + job["profileBody"]["recoveryWindowMs"]:
-                raise LedgerError("recovery-window")
-        elif job["status"] in TERMINAL:
-            if not self._outstanding(job) or now >= (job.get("settlementDueAt") or 0):
-                raise LedgerError("recovery-window")
-        else:
+        if job["status"] not in TERMINAL and job["status"] != "recovery_required":
             raise LedgerError("stale-attempt")          # a live attempt records its own outcome
+        if job["status"] in TERMINAL and not self._outstanding(job):
+            raise LedgerError("recovery-window")
+        bound = (min(job["deadlineAt"], job["recoveryAt"] + job["profileBody"]["recoveryWindowMs"])
+                 if job["status"] == "recovery_required" else (job.get("settlementDueAt") or 0))
+
+        def within_bound():
+            # Checked on entry and again by before_attempt immediately before submission (review 4, #7).
+            if self.storage.clock() >= bound:
+                raise LedgerError("recovery-window")
+        within_bound()
+        now = self.storage.clock()
         index = next((i for i, row in enumerate(job["calls"]) if row.get("callId") == call_id), None)
         if index is None or job["calls"][index].get("status") != "intent":
             raise LedgerError("call-invalid")
@@ -1495,7 +1499,8 @@ class Ledger:
             None if call["kind"] == "model" else service["sessionId"], settled_by="reconciler")
         saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget,
                                           "accounting": self._obligations(job, [(call, charge)]),
-                                          "nonces": [*job.get("nonces", []), observation["nonce"]]}, op=op)
+                                          "nonces": [*job.get("nonces", []), observation["nonce"]]}, op=op,
+                             before_attempt=within_bound)
         return self._settle_accounting(owner, saved)
 
     def _op_any(self, job, method, operation_id, args):
