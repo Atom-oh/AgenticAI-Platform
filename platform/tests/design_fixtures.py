@@ -33,12 +33,12 @@ def _rescope(value, project_id):
     return {**value, "scope": {"kind": "project", "projectId": project_id}} if project_id else value
 
 
-def raw_graph_with(source_ref, *, project_id=None):
+def raw_graph_with(source_ref, *, project_id=None, raw=None):
     """Publishable candidate graph: sealed nodes/edges, local ids, the given source ref everywhere.
 
     `project_id` re-scopes the synthetic seed to the test project, because publication accepts only
-    nodes of the current project."""
-    raw = raw_graph()
+    nodes of the current project. `raw` replaces the seed file with an (edited) raw graph."""
+    raw = raw_graph() if raw is None else raw
     nodes = [schema.seal({**_rescope(n, project_id), "sourceRefs": [source_ref], "reviewState": "candidate"})
              for n in raw["nodes"]]
     rev = {n["id"]: n["revision"] for n in nodes}
@@ -92,6 +92,19 @@ def review_all(ontology, identities, decisions=("reviewed", "approved")):
             ontology.review_node(identities[local], expected_generation=ontology.current()["generation"],
                                  revision=node["revision"], decision=decision, reason="seed",
                                  request_id=f"{decision}-{local}")
+
+
+def published_knowledge(wb, *, raw=None, request_id="seed-1"):
+    """Publish the (optionally edited) seed through the real `publish_candidate`, review every node, and return
+    `(Knowledge, identities)` read through `procedure_snapshot` + `from_snapshot`: canonical ids throughout."""
+    from test_ontology_sources import context
+    from workspace.ontology_store import Ontology
+    from design_loop.knowledge import from_snapshot
+    ontology = Ontology(context(wb))
+    graph = raw_graph_with(seed_document_ref(wb), project_id=wb.project["id"], raw=raw)
+    ids = ontology.publish_candidate("design-seed", graph, expected_generation=None, request_id=request_id)["identities"]
+    review_all(ontology, ids)
+    return from_snapshot(ontology.procedure_snapshot(ids["savings-signup"])), ids
 
 
 def pages():
