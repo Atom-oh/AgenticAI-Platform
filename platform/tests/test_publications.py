@@ -374,3 +374,23 @@ def test_capability_expiry_is_rechecked_immediately_before_commit(org, monkeypat
     assert denied(publications.approve, ctx(org.api, "carol", org.origin), pub["id"]) == (
         403, "publication-capability-required")
     assert storage.get(publications.PUBLICATION_OWNER, "publication", pub["id"])["status"] == "proposed"
+
+
+def test_historical_resolution_returns_the_authorized_revision_not_the_current_record(org):
+    """Finding 5: metadata comes from the granted revision's snapshot and approval history."""
+    pub = published(org)
+    grant = granted(org, pub)
+    old = publications.published_asset_reference(pub, grant)
+    first = {n["id"]: (n["revision"], n["contentHash"]) for n in pub["nodes"]}
+    nodes = revise_node(org)
+    pub2 = publications.propose(ctx(org.api, "carol", org.origin), kind="design", node_ids=sorted(nodes),
+                                revision_bindings=bindings(nodes))
+    assert pub2["revision"] == 2 and pub2["hash"] != pub["hash"]
+    for stage in ("proposed", "published"):
+        record = Sources(ctx(org.api, "gina", org.dest)).resolve(old, historical=True)["record"]
+        assert record["revision"] == 1 and record["hash"] == pub["hash"]
+        assert {n["id"]: (n["revision"], n["contentHash"]) for n in record["nodes"]} == first
+        assert record["approvedBy"] == "carol" and record["status"] == "superseded"
+        assert pub2["hash"] not in json.dumps(record)
+        if stage == "proposed":
+            pub2 = publications.approve(ctx(org.api, "carol", org.origin), pub2["id"])

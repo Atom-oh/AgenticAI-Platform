@@ -215,10 +215,13 @@ def approve(ctx, publication_id):
                                  "hash": record["hash"], "nodes": nodes})
     key = ctx.storage.key_for(PUBLICATION_OWNER, "publication", record["id"], f"revisions/{record['revision']}.json")
     info = ctx.storage.put_blob_once(key, snapshot, "application/json")
+    approved_at = ctx.storage.clock()
+    # Revision-specific approval history: historical resolution never reads the current record's metadata.
     entry = {"revision": record["revision"], "hash": record["hash"], "snapshotKey": key,
-             "snapshotSha256": info["sha256"]}
+             "snapshotSha256": info["sha256"], "approvedBy": ctx.actor, "approvedAt": approved_at,
+             "capability": {"id": capability["id"], "revision": capability["revision"]}}
     updated = {**{k: v for k, v in record.items() if k not in ("version", "createdAt", "updatedAt")},
-               "status": "published", "approvedBy": ctx.actor, "approvedAt": ctx.storage.clock(),
+               "status": "published", "approvedBy": ctx.actor, "approvedAt": approved_at,
                "capability": {"id": capability["id"], "revision": capability["revision"]},
                "snapshotKey": key, "snapshotSha256": info["sha256"],
                "history": [*record.get("history", []), entry][-MAX_HISTORY:]}
@@ -375,7 +378,28 @@ def _snapshot(storage, entry):
     raw = storage.get_blob(key, length=4_000_000)
     if hashlib.sha256(raw).hexdigest() != expected:
         fail(409, "ontology-source-integrity", "게시 스냅샷 바이트를 확인하지 못했습니다.")
-    return raw, json.loads(raw)
+    snapshot = json.loads(raw)
+    if (not isinstance(snapshot, dict) or snapshot.get("revision") != entry.get("revision")
+            or snapshot.get("hash") != entry.get("hash") or not isinstance(snapshot.get("nodes"), list)):
+        fail(409, "ontology-source-integrity", "게시 스냅샷이 리비전 기록과 다릅니다.")
+    return raw, snapshot
+
+
+def _revision_view(record, entry, snapshot):
+    """Public metadata of exactly one published revision, built from its snapshot and approval entry."""
+    revision = entry["revision"]
+    if record["revision"] == revision and record["status"] == "published":
+        status = "published"
+    elif record["status"] == "withdrawn":
+        status = "withdrawn"
+    else:
+        status = "superseded"
+    nodes = [{"id": n["id"], "revision": n["revision"], "contentHash": n["contentHash"], "type": n["type"],
+              "sourceRefs": n["sourceRefs"]} for n in snapshot["nodes"]]
+    return public({"id": record["id"], "originProject": record["originProject"], "kind": record["kind"],
+                   "revision": revision, "hash": entry["hash"], "nodes": nodes, "status": status,
+                   "approvedBy": entry.get("approvedBy"), "approvedAt": entry.get("approvedAt"),
+                   "recallNeeded": bool(record.get("recallNeeded"))})
 
 
 def resolve_published(sources, ref, *, historical=False, text=False):
@@ -400,6 +424,8 @@ def resolve_published(sources, ref, *, historical=False, text=False):
     sources._remember("pub_grant", row)
     sources._remember_owned(PUBLICATION_OWNER, "publication", record)
     raw, snapshot = _snapshot(storage, entry)
+    if snapshot.get("publicationId") != record["id"]:
+        fail(409, "ontology-source-integrity", "게시 스냅샷이 게시물과 다릅니다.")
     for node in snapshot.get("nodes", []):
         for source in node.get("sourceRefs", []):
             upstream = _upstream(storage, record["originProject"], schema.source_ref(source))
@@ -416,8 +442,7 @@ def resolve_published(sources, ref, *, historical=False, text=False):
             fail(409, "source-superseded", "새 게시 리비전으로 대체되었습니다. 새 수락이 필요합니다.")
         if record["hash"] != ref["sha256"]:
             fail(409, "source-changed", "게시물 리비전의 해시가 다릅니다.")
-    return {"record": view(record) | {"revision": revision, "hash": entry["hash"]},
-            "text": raw.decode("utf-8") if text else None}
+    return {"record": _revision_view(record, entry, snapshot), "text": raw.decode("utf-8") if text else None}
 
 
 def route(host, scope, claims, method, parts, body, query):

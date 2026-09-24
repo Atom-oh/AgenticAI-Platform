@@ -197,6 +197,11 @@ live sharing or release evidence.
   revoked upstream beats the grant: `409 source-upstream-revoked`). Withdrawal is
   `409 source-withdrawn` and a newer revision `409 source-superseded` for current
   use; historical metadata stays readable while the grant and upstream remain.
+  Returned metadata (current and historical) is built only from the granted
+  revision's immutable snapshot and its revision-specific approval history entry
+  (`revision`, `hash`, `nodes`, `approvedBy`, `approvedAt`, derived `status`
+  `published`/`superseded`/`withdrawn`), never from a newer proposed or published
+  revision of the current record.
   See `platform/docs/CONTRACTS.md` "Shared publications".
 
 ## APIs
