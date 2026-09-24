@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 
 from workbench.service import fail
@@ -70,6 +71,14 @@ def run_round_reference(run, number):
         raise ValueError("The run has no generated source for this round")
     return {"sourceKind": "run-round", "sourceId": run["id"], "revision": str(number),
             "sha256": row["sourceHash"], "audienceRevision": PROJECT_AUDIENCE}
+
+
+def contract_reference(contract):
+    approval = contract.get("approval") or {}
+    if contract.get("status") != "approved" or not approval.get("hash"):
+        raise ValueError("Only an approved contract is a ux-contract source")
+    return {"sourceKind": "ux-contract", "sourceId": contract["id"], "revision": str(contract["version"]),
+            "sha256": approval["hash"], "audienceRevision": PROJECT_AUDIENCE}
 
 
 def workbench_reference(reference):
@@ -173,6 +182,13 @@ class Sources:
                 except UnicodeError:
                     fail(422, "ontology-source-format", "텍스트로 분석할 수 없는 원본입니다.")
             return {"ref": ref, "kind": kind, "record": row, "text": content}
+        if kind == "ux-contract":
+            contract, _ = self._contract(ref, historical=False)
+            content = None
+            if text:
+                normalized = self._rules().validate_contract(contract)
+                content = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            return {"ref": ref, "kind": kind, "record": contract, "text": content}
         if kind == "asset":
             asset = self._remember("asset", self.ctx.get("asset", ref["sourceId"]))
             if (asset.get("archived") or asset.get("accessRevoked") or asset.get("tombstone")
@@ -311,6 +327,8 @@ class Sources:
         elif kind == "run-round":
             run, record = self._round(ref)
             self._round_upstream_historical(run, record)
+        elif kind == "ux-contract":
+            record, _ = self._contract(ref, historical=True)
         else:
             self.resolve(ref)
         if remember:

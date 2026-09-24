@@ -6,6 +6,7 @@ Acceptance: ONT-04 (source kinds), AUTH-08 (upstream revocation), HAND-02-05
 from __future__ import annotations
 
 import io
+import json
 import sys
 import time
 import zipfile
@@ -22,7 +23,8 @@ from intake import admission  # noqa: E402
 from workbench.service import Service  # noqa: E402
 from workspace import rules  # noqa: E402
 from workspace.collaboration import CollaborationError  # noqa: E402
-from workspace.ontology_sources import PROJECT_AUDIENCE, Sources, run_round_reference  # noqa: E402
+from workspace.ontology_sources import (PROJECT_AUDIENCE, Sources, contract_reference,  # noqa: E402
+                                        run_round_reference)
 from workspace.react_artifacts import files_hash  # noqa: E402
 from workspace.storage import key_for  # noqa: E402
 
@@ -284,3 +286,77 @@ def test_round_reference_cannot_carry_its_own_audience(env, design):
     run = react_run(env, design[1])
     ref = {**run_round_reference(run, 1), "allowedRoles": ["planner"]}
     assert code(Sources(ctx(env)).resolve, ref) == (403, "ontology-source-audience")
+
+
+# H2: ux-contract -------------------------------------------------------------
+
+def test_approved_contract_resolves_for_any_current_reader(env, design):
+    _, contract = design
+    ref = contract_reference(contract)
+    assert ref == {"sourceKind": "ux-contract", "sourceId": contract["id"], "revision": str(contract["version"]),
+                   "sha256": contract["approval"]["hash"], "audienceRevision": PROJECT_AUDIENCE}
+    for actor in ("alice", "bob", "carol", "dana"):
+        value = Sources(ctx(env, actor)).resolve(ref, text=True)
+        assert value["kind"] == "ux-contract" and value["record"]["id"] == contract["id"]
+        assert json.loads(value["text"]) == rules.validate_contract(contract)
+
+
+def test_draft_contract_is_not_found(env, design):
+    product, _ = design
+    status, payload = http(env, "POST", "/contracts", {**CONTRACT, "productId": product["id"]}, actor="carol")
+    assert status == 201
+    draft = payload["contract"]
+    ref = {"sourceKind": "ux-contract", "sourceId": draft["id"], "revision": str(draft["version"]),
+           "sha256": "a" * 64, "audienceRevision": PROJECT_AUDIENCE}
+    assert code(Sources(ctx(env)).resolve, ref) == (404, "not-found")
+    assert code(Sources(ctx(env)).resolve, {**ref, "sourceId": "absent"}) == (404, "not-found")
+    assert code(Sources(ctx(env)).resolve, ref, historical=True) == (404, "not-found")
+
+
+def test_contract_wrong_hash_or_tampered_content_is_source_changed(env, design):
+    _, contract = design
+    ref = contract_reference(contract)
+    assert code(Sources(ctx(env)).resolve, {**ref, "sha256": "0" * 64}) == (409, "source-changed")
+    owner = f"project:{env.pid}"
+    record = env.api.storage.get(owner, "contract", contract["id"])
+    env.api.storage.put(owner, "contract", {**record, "title": "tampered"}, record["version"])
+    # The stored record version moved on, so the approval no longer names this revision.
+    assert code(Sources(ctx(env)).resolve, ref) == (409, "source-changed")
+    # A forged approval that names the tampered revision fails the recomputed contract hash.
+    record = env.api.storage.get(owner, "contract", contract["id"])
+    forged = env.api.storage.put(owner, "contract", {**record, "approval": {
+        **record["approval"], "version": record["version"] + 1}}, record["version"])
+    assert code(Sources(ctx(env)).resolve, {**ref, "revision": str(forged["version"])}) == (409, "source-changed")
+
+
+def test_changed_product_publication_supersedes_contract_but_history_remains(env, design):
+    product, contract = design
+    ref = contract_reference(contract)
+    republish(env, product)
+    assert code(Sources(ctx(env)).resolve, ref) == (409, "source-superseded")
+    value = Sources(ctx(env)).resolve(ref, historical=True)
+    assert value["historical"] is True and value["text"] is None and value["record"]["id"] == contract["id"]
+    assert Sources(ctx(env)).authorize(ref) is True
+    assert code(Sources(ctx(env)).resolve, ref, text=True, historical=True)[0] == 422
+
+
+def test_edited_contract_is_superseded_and_only_historically_readable(env, design):
+    _, contract = design
+    ref = contract_reference(contract)
+    status, payload = http(env, "PUT", f"/contracts/{contract['id']}",
+                           {"title": "edited", "version": contract["version"]}, actor="carol")
+    assert status == 200, payload
+    assert code(Sources(ctx(env)).resolve, ref) == (409, "source-superseded")
+    assert Sources(ctx(env, "bob")).resolve(ref, historical=True)["historical"] is True
+
+
+def test_foreign_project_contract_is_not_found(env, design):
+    _, contract = design
+    status, other, _ = call(env.api, "POST", "/projects", {"name": "Other", "requestId": "other"}, actor="alice")
+    assert status == 201
+    foreign = f"project:{other['project']['id']}"
+    env.api.storage.put(foreign, "contract", {**{k: v for k, v in contract.items()
+                        if k not in ("version", "createdAt", "updatedAt")}, "id": "foreign-contract",
+                        "projectId": other["project"]["id"]})
+    ref = {**contract_reference(contract), "sourceId": "foreign-contract", "revision": "1"}
+    assert code(Sources(ctx(env)).resolve, ref) == (404, "not-found")
