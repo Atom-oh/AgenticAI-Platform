@@ -630,8 +630,12 @@ receipt hash is SHA-256 over sorted-key JSON.
 
 `Ledger.production` requires a registered verifier type and single-attempt
 storage (`Storage(single_attempt=True)`). It uses the fail-closed
-`common.costguard` gate. `Ledger.offline` requires pytest and the
-`execution_fakes` verifier. The production operation IDs are mandatory. Offline
+`common.costguard` gate. `register_verifier` accepts only a class defined by,
+and registered from, the reviewed verifier module `workspace.execution_verifier`
+(B1). Independently of registry membership, production rejects offline verifier
+types: any `execution_fakes` class, any class exposing `sign`, or one marked
+`offline`. `Ledger.offline` requires pytest and the `execution_fakes` verifier,
+and `TestKeyVerifier` is constructible only under pytest. The production operation IDs are mandatory. Offline
 tests may omit them.
 
 Error codes: `request-changed`, `admission-required`, `authority-changed`,

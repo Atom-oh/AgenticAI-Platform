@@ -1309,3 +1309,48 @@ def test_production_requires_a_registered_verifier_and_single_attempt_storage(mo
     ledger = Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True),
                                verifier=ReviewedVerifier())
     assert isinstance(ledger.cost_gate, module.CostGuardGate) and ledger.input_resolver is None
+
+
+# === PR #27 review round 1 regressions ===============================================================
+
+def test_offline_verifier_is_rejected_by_production_outside_pytest_and_registration_is_restricted():
+    """Finding 4: a process without pytest cannot register or use the offline test verifier."""
+    import subprocess
+    script = (
+        "import sys\n"
+        "sys.path[:0] = [%r, %r]\n"
+        "import execution_fakes\n"
+        "from workspace import execution_ledger as m\n"
+        "from workspace.storage import Storage\n"
+        "outcomes = []\n"
+        "try:\n"
+        "    m.register_verifier(execution_fakes.TestKeyVerifier); outcomes.append('registered')\n"
+        "except PermissionError: outcomes.append('register-refused')\n"
+        "try:\n"
+        "    v = execution_fakes.TestKeyVerifier(); outcomes.append('constructed')\n"
+        "except PermissionError: outcomes.append('construct-refused'); v = object.__new__(execution_fakes.TestKeyVerifier)\n"
+        "m._REGISTERED.add(execution_fakes.TestKeyVerifier)\n"
+        "try:\n"
+        "    m.Ledger.production(Storage(single_attempt=True), verifier=v); outcomes.append('production')\n"
+        "except PermissionError: outcomes.append('production-refused')\n"
+        "print(','.join(outcomes))\n") % (str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent))
+    done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+    assert done.stdout.strip() == "register-refused,construct-refused,production-refused", done.stderr
+
+
+def test_production_rejects_offline_verifier_types_even_when_registered(monkeypatch):
+    from workspace import execution_ledger as module
+    monkeypatch.setattr(module, "_REGISTERED", {TestKeyVerifier})
+    with pytest.raises(PermissionError):
+        Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True),
+                          verifier=TestKeyVerifier())
+
+    class Signing:                       # anything able to sign receipts is not a verify-only production verifier
+        def sign(self, body): return "x"
+        def verify(self, receipt): return True
+    monkeypatch.setattr(module, "_REGISTERED", {Signing})
+    with pytest.raises(PermissionError):
+        Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True),
+                          verifier=Signing())
+    with pytest.raises(PermissionError):
+        module.register_verifier(type("Other", (), {"verify": lambda self, r: True}))

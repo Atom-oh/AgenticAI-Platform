@@ -1,5 +1,5 @@
 """Offline-only execution fakes. Not packaged into any Lambda or Runtime image."""
-import hashlib, hmac, json
+import hashlib, hmac, json, sys
 
 _KEY = b"offline-test-key-not-a-secret"
 
@@ -7,6 +7,11 @@ _KEY = b"offline-test-key-not-a-secret"
 class TestKeyVerifier:
     __test__ = False     # not a pytest test class
     key_id = "offline-test"
+    offline = True
+
+    def __init__(self):
+        if "pytest" not in sys.modules:
+            raise PermissionError("the offline test verifier is constructible only under pytest")
 
     def sign(self, body):
         return hmac.new(_KEY, json.dumps(body, sort_keys=True, ensure_ascii=False).encode(), hashlib.sha256).hexdigest()

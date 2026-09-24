@@ -46,6 +46,9 @@ CHUNK_BYTES, MAX_TRANSFER_CHUNKS, MAX_TRANSFER_BYTES = 256 * 1024, 512, 128 * 10
 _OUTPUT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}\Z")
 _OPERATION_ID = re.compile(r"[A-Za-z0-9_-]{22,128}\Z")
 _REGISTERED: set[type] = set()
+# The reviewed KMS verifier module (B1) is the only trusted registrant; offline verifiers are never production ones.
+_TRUSTED_VERIFIER_MODULE = "workspace.execution_verifier"
+_OFFLINE_VERIFIER_MODULES = frozenset({"execution_fakes", "tests.execution_fakes"})
 
 
 def supported_execution(job):
@@ -61,8 +64,17 @@ class LedgerError(ValueError):
         self.details = details
 
 
+def _offline_verifier(cls):
+    """An offline type: defined by the test fakes, or able to sign receipts (production verifiers only verify)."""
+    return (getattr(cls, "__module__", None) in _OFFLINE_VERIFIER_MODULES or callable(getattr(cls, "sign", None))
+            or getattr(cls, "offline", False) is True)
+
+
 def register_verifier(cls):
-    """Called only by the reviewed KMS verifier module (B1)."""
+    """Called only by the reviewed KMS verifier module (B1), for a class that module defines."""
+    if (sys._getframe(1).f_globals.get("__name__") != _TRUSTED_VERIFIER_MODULE
+            or not isinstance(cls, type) or cls.__module__ != _TRUSTED_VERIFIER_MODULE or _offline_verifier(cls)):
+        raise PermissionError("only the reviewed receipt verifier module may register its verifier")
     _REGISTERED.add(cls)
     return cls
 
@@ -243,6 +255,8 @@ class Ledger:
 
     @classmethod
     def production(cls, storage, *, verifier):
+        if _offline_verifier(type(verifier)):          # independent of registry membership
+            raise PermissionError("offline receipt verifiers are not production verifiers")
         if type(verifier) not in _REGISTERED:
             raise PermissionError("unregistered receipt verifier")
         if getattr(storage, "single_attempt", False) is not True:
