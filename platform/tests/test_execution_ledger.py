@@ -2122,3 +2122,20 @@ def test_retried_chunk_read_runs_the_final_authority_and_temporal_fence(xfer, ra
         storage.get_blob = original
     assert error.value.code in ("conflict", "stale-attempt")
     assert storage.get(OWNER, "job", job["id"])["transferUsage"]["chunks"] == 1
+
+
+def test_a_completed_model_call_without_usage_keeps_its_conservative_reservation(env):
+    """Review 3 finding 4: missing usage is charged at the full reservation and marked estimated."""
+    storage, ledger, _ = env
+    job = running(env)
+    budget = PROFILE_DEFAULT["tokenBudget"]
+    call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                max_tokens=budget)["callId"]
+    done = ledger.tool().outcome(*ids(job), call, status="completed")
+    assert done["budget"]["tokensUsed"] == budget and done["budget"]["tokensReserved"] == 0
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["calls"][-1]["usageEstimated"] is True
+    assert ledger.cost_gate.recorded == [budget]
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0, max_tokens=budget)
+    assert error.value.code == "token-budget"

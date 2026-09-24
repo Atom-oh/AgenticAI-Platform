@@ -968,21 +968,36 @@ class Ledger:
                 raise LedgerError("call-invalid")
         elif service_session_id is not None:
             raise LedgerError("call-invalid")
+        calls, budget, charge = self._settled_call(job, index, status, usage, service_session_id)
+        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget}, reindex=False)
+        if charge:
+            self.cost_gate.record(charge)
+        return saved
+
+    def _settled_call(self, job, index, status, usage, service_session_id, *, settled_by=None):
+        """The call's recorded outcome and budget effect: returns (calls, budget, daily charge).
+
+        A model call without measured usage keeps its full reservation as used tokens (and daily charge) and is
+        marked ``usageEstimated`` until a verified settlement supplies the measurement (RUN-03).
+        """
+        call = job["calls"][index]
         if usage is not None and (not isinstance(usage, dict) or set(usage) != {"inputTokens", "outputTokens"}
                                   or any(type(v) is not int or v < 0 for v in usage.values())):
             raise LedgerError("call-invalid")
-        actual = sum(usage.values()) if usage else 0
+        estimated = call["kind"] == "model" and usage is None
+        actual = call.get("reserved", 0) if estimated else (sum(usage.values()) if usage else 0)
         budget = dict(job["budget"])
         budget.update(tokensReserved=budget["tokensReserved"] - call.get("reserved", 0),
                       tokensUsed=budget["tokensUsed"] + actual)
         calls = list(job["calls"])
         calls[index] = {**call, "status": status, "usage": usage, "doneAt": self.storage.clock()}
+        if estimated:
+            calls[index]["usageEstimated"] = True
         if service_session_id is not None:
             calls[index]["serviceSessionId"] = service_session_id
-        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget}, reindex=False)
-        if call["kind"] == "model" and actual:
-            self.cost_gate.record(actual)
-        return saved
+        if settled_by is not None:
+            calls[index]["settledBy"] = settled_by
+        return calls, budget, actual if call["kind"] == "model" else 0
 
     # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
     def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None):

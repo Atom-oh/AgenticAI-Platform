@@ -610,8 +610,11 @@ module-private ledger writer token):
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
 heartbeatAt, startedAt, completionSubmissions?}`. Call: `{callId, stage, kind, status: intent|completed|
-failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?}`; usage
-holds only `{inputTokens, outputTokens}`. `outcome` for an `interpreter` or
+failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?,
+usageEstimated?, settledBy?}`; usage holds only `{inputTokens, outputTokens}`.
+A model call recorded without usage is charged its full reservation as used
+tokens and daily cost-gate usage and marked `usageEstimated: true`; the
+reservation is never released to zero. `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
 stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
 receiptHash, receiptRef, nonce, attemptId, status, service, result, outputs}`.
