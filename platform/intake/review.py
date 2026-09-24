@@ -131,7 +131,11 @@ def list_pending(host, scope, *, claims=None):
             except (AdmissionError, CollaborationError):
                 continue
             pages = json.loads(data)
-            preview = pages[0]["text"][:PREVIEW_CHARS] if pages and "text" in pages[0] else ""
+            if isinstance(pages, dict):  # a code-collection index: derivative paths only
+                preview = "\n".join(f["path"] for f in pages.get("files", [])[:50])[:PREVIEW_CHARS]
+                pages = pages.get("files", [])
+            else:
+                preview = pages[0]["text"][:PREVIEW_CHARS] if pages and "text" in pages[0] else ""
             items.append({"id": decision["id"], "revision": decision["revision"],
                           "source": {k: decision["source"][k] for k in ("sourceKind", "sourceId", "revision")},
                           "title": _title(host, scope, decision), "dataClass": decision["dataClass"],

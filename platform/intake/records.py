@@ -13,7 +13,7 @@ from workspace import ontology_schema as schema
 from workspace.ontology_schema import _fields
 
 INTAKE_OWNER = "intake:deployment"
-KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit")
+KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver")
 DATA_CLASSES = ("synthetic", "public", "internal-non-sensitive")
 DECISION_CLASSES = DATA_CLASSES + ("sensitive",)
 INSPECTION_PROFILE = "inspect-1"
@@ -23,7 +23,10 @@ ARTIFACT_KINDS = ("document-pages", "image", "code-collection", "prompt-text")
 PROVENANCE_SOURCE_KINDS = ("document-revision", "asset", "product-guideline")
 DECISION_SOURCE_KINDS = PROVENANCE_SOURCE_KINDS + ("prompt-text",)
 AUDIT_OPS = ("put_policy", "activate_policy", "retire_policy", "register_provenance",
-             "revoke_provenance", "grant_reviewer", "revoke_grant")
+             "revoke_provenance", "grant_reviewer", "revoke_grant", "put_resolver_profile",
+             "retire_resolver_profile")
+_PACKAGE = re.compile(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+(?:/[a-zA-Z0-9._/-]+)?\Z")
+_JSON_FIELD = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{0,63}\Z")
 # Storage.put owns these; they are never part of the sealed content hash.
 STORAGE_FIELDS = ("version", "createdAt", "updatedAt")
 MAX_TIME = 2 ** 53 - 1
@@ -162,6 +165,29 @@ def _grant(record):
     _choice(record["status"], ("active", "revoked"))
 
 
+def _resolver(record):
+    """IAM-administered code-collection resolver profile (I6a; review round 8, AB2)."""
+    _closed(record, {"id", "revision", "aliases", "packages", "jsonAssetFields", "status", "expiresAt", "hash"})
+    aliases, packages = record["aliases"], record["packages"]
+    if not isinstance(aliases, dict) or len(aliases) > 30 or not isinstance(packages, dict) or len(packages) > 30:
+        _bad("Invalid resolver profile")
+    for alias, target in aliases.items():
+        if (not alias or len(alias) > 150 or alias.count("*") > 1 or not isinstance(target, str)
+                or not target or len(target) > 500 or target.count("*") > 1 or ("*" in alias) != ("*" in target)
+                or target.startswith("/") or any(part in ("", ".", "..") for part in target.split("/"))
+                or re.search(r"[\\:\x00-\x1f\x7f?#]", target)):
+            _bad("Invalid resolver alias")
+    for name, spec in packages.items():
+        if not _PACKAGE.fullmatch(name):
+            _bad("Invalid resolver package")
+        _closed(spec, {"version", "sha256"})
+        if not isinstance(spec["version"], str) or not spec["version"] or len(spec["version"]) > 80:
+            _bad("Invalid resolver package")
+        _hash(spec["sha256"])
+    _unique_list(record["jsonAssetFields"], lambda x: _label(x, _JSON_FIELD), minimum=0, maximum=20)
+    _choice(record["status"], ("active", "retired"))
+
+
 def _artifact(value):
     _closed(value, {"kind", "key", "sha256"}, {"pages", "files", "resolver", "vision", "region"})
     kind = _choice(value["kind"], ARTIFACT_KINDS)
@@ -256,7 +282,7 @@ def _decision(record):
 def _audit(record):
     _closed(record, {"id", "op", "kind", "recordId", "revision", "operator", "at"}, {"status"})
     _choice(record["op"], AUDIT_OPS)
-    _choice(record["kind"], ("adm_policy", "adm_provenance", "adm_grant"))
+    _choice(record["kind"], ("adm_policy", "adm_provenance", "adm_grant", "adm_resolver"))
     _identifier(record["recordId"])
     _label(record["operator"])
     _int(record["at"])
@@ -266,7 +292,7 @@ def _audit(record):
 
 
 _VALIDATORS = {"adm_policy": _policy, "adm_provenance": _provenance, "adm_grant": _grant,
-               "adm_decision": _decision, "adm_audit": _audit}
+               "adm_decision": _decision, "adm_audit": _audit, "adm_resolver": _resolver}
 
 
 def _content(record):

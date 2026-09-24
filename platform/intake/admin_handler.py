@@ -19,15 +19,20 @@ _TRANSPORT_FIELDS = ("requestContext", "headers", "routeKey", "rawPath", "multiV
                      "httpMethod", "path", "pathParameters", "queryStringParameters", "body")
 _EVENT_FIELDS = frozenset({"op", "record", "id", "expectedRevision", "operator"})
 _CREATE = {"put_policy": "adm_policy", "register_provenance": "adm_provenance",
-           "grant_reviewer": "adm_grant"}
+           "grant_reviewer": "adm_grant", "put_resolver_profile": "adm_resolver"}
 # op -> (kind, required current status, new status)
 _TRANSITIONS = {
     "activate_policy": ("adm_policy", ("draft",), "active"),
     "retire_policy": ("adm_policy", ("draft", "active"), "retired"),
     "revoke_provenance": ("adm_provenance", ("active",), "revoked"),
     "revoke_grant": ("adm_grant", ("active",), "revoked"),
+    "retire_resolver_profile": ("adm_resolver", ("active",), "retired"),
 }
-_INITIAL_STATUS = {"adm_policy": "draft", "adm_provenance": "active", "adm_grant": "active"}
+_INITIAL_STATUS = {"adm_policy": "draft", "adm_provenance": "active", "adm_grant": "active",
+                   "adm_resolver": "active"}
+# Kinds whose content may be replaced by a new revision (a changed resolver
+# profile hash makes every dependent collection decision a new decision).
+_EDITABLE = ("adm_policy", "adm_resolver")
 
 
 def storage_factory():
@@ -93,7 +98,7 @@ def _create(storage, op, event, operator):
     previous = storage.get(INTAKE_OWNER, kind, body.get("id")) if isinstance(body.get("id"), str) else None
     if (previous is None) != (expected is None) or previous and previous.get("revision") != expected:
         raise _Refusal("conflict")
-    if previous and kind != "adm_policy":
+    if previous and kind not in _EDITABLE:
         # Registrations and grants are revoked and reissued, never edited in place.
         raise _Refusal("conflict")
     record = {**copy.deepcopy(body), "status": _INITIAL_STATUS[kind],

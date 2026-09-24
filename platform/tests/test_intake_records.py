@@ -62,8 +62,22 @@ def audit(**extra):
             "revision": 2, "operator": "security-operator", "at": NOW, **extra}
 
 
+def resolver(**extra):
+    return {"id": "resolver-1", "revision": 1, "aliases": {"@parts/*": "src/parts/*"},
+            "packages": {"@synthetic/ui": {"version": "1.0.0", "sha256": SHA}}, "jsonAssetFields": [],
+            "status": "active", "expiresAt": NOW + DAY, **extra}
+
+
 BUILDERS = {"adm_policy": policy, "adm_provenance": provenance, "adm_grant": grant,
-            "adm_decision": decision, "adm_audit": audit}
+            "adm_decision": decision, "adm_audit": audit, "adm_resolver": resolver}
+
+
+@pytest.mark.parametrize("change", [{"aliases": {"@x/*": "../escape/*"}}, {"aliases": {"@x/*": "src/x"}},
+                                    {"packages": {"Bad Name": {"version": "1", "sha256": SHA}}},
+                                    {"packages": {"@s/ui": {"version": "1", "sha256": "short"}}}])
+def test_resolver_profile_rejects_unsafe_aliases_and_package_identities(change):
+    with pytest.raises(ValueError):
+        records.seal("adm_resolver", resolver(**change))
 
 
 @pytest.mark.parametrize("kind", sorted(BUILDERS))

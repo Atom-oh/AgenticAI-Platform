@@ -154,7 +154,7 @@ def _expiry(now, *records_):
 
 
 def decide(host, scope, *, reader, source, data_class, policy, artifact, derivation, receipt, receipt_bytes,
-           payload, blocking=(), identity=(), extra_checks=()):
+           payload, blocking=(), identity=(), extra_checks=(), extra_blobs=None):
     """Seal and commit one decision after the current policy/provenance checks.
 
     `payload` is the canonical derivative object whose sha256 is the derivative
@@ -174,6 +174,8 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
             "inspection": storage.key_for(owner, "adm_decision", identifier, "inspection.json")}
     info = storage.put_blob_once(keys["pages"], payload, "application/json")
     receipt_info = storage.put_blob_once(keys["inspection"], receipt_bytes, "application/json")
+    for suffix, data in (extra_blobs or {}).items():
+        storage.put_blob_once(storage.key_for(owner, "adm_decision", identifier, suffix), data, "application/json")
     if info["sha256"] != derivation["derivativeHash"]:
         raise AdmissionError("artifact-changed")
     record = {"id": identifier, "revision": 1, "projectId": project_id, "source": source,
@@ -342,7 +344,7 @@ def pages_for(host, scope, decision_id, *, cursor=None, max_bytes=400_000, claim
                 or saved.get("expiresAt", 0) <= storage.clock() or type(saved.get("nextPage")) is not int):
             raise AdmissionError("admission-cursor-stale")
         start = saved["nextPage"]
-    if decision["artifact"]["kind"] != "document-pages":
+    if decision["artifact"]["kind"] not in ("document-pages", "prompt-text"):
         raise AdmissionError("artifact-kind-unsupported", 422)
     pages = json.loads(data)
     source = dict(decision["source"])
