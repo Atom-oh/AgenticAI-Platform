@@ -939,3 +939,86 @@ def test_queued_release_rebuild_is_gated_by_lineage(env, design, monkeypatch):
     with pytest.raises(ValueError):
         releases.process_release(Worker(storage=storage), owner, job)
     assert reached == []
+
+
+# Fix round 4 (PR #29 review 4) ----------------------------------------------
+
+def _grant_revoked(env):
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+
+
+def test_revoked_round_is_never_approved_and_creation_replay_omits_it(env, bound, monkeypatch):
+    """Review 4 #1: the round gate runs before approval; replays serialize the authorized view."""
+    from workspace.http import WorkspaceAPI
+    asset, contract, _ = bound
+    decision = internal_admitted(env)
+    body = {"contractId": contract["id"], "contractVersion": contract["version"], "outputType": "react",
+            "variant": "baseline", "generationMode": "guided", "maxRounds": 1, "requestId": "round-4-replay"}
+    status, created = http(env, "POST", "/runs", body, actor="carol")
+    assert status == 202, created
+    owner = f"project:{env.pid}"
+    stored = env.api.storage.get(owner, "run", created["run"]["id"])
+    row = {**react_run(env, contract, run_id="run-template")["rounds"][0],
+           "designManifestInput": {"admissions": [admission.admission_ref(decision)]}}
+    env.api.storage.put(owner, "run", {**stored, "status": "completed", "rounds": [row], "bestRound": 1},
+                        stored["version"])
+    approvals = []
+    monkeypatch.setattr(WorkspaceAPI, "_run_approve",
+                        lambda self, owner_, run, body_, scope=None: approvals.append(run["id"]) or
+                        {"statusCode": 200, "headers": {"Content-Type": "application/json"},
+                         "body": json.dumps({"run": run})})
+    _grant_revoked(env)
+    status, payload = http(env, "GET", f"/runs/{stored['id']}", actor="carol")
+    assert status == 200 and payload["run"]["rounds"] == []
+    missing = http(env, "POST", "/runs/run-absent/approve", {"round": 1}, actor="carol")
+    status, payload = http(env, "POST", f"/runs/{stored['id']}/approve",
+                           {"round": 1, "contractVersion": contract["version"],
+                            "artifactSha256": "0" * 64}, actor="carol")
+    assert (status, payload) == missing and approvals == []
+    assert "approval" not in env.api.storage.get(owner, "run", stored["id"])
+    status, replay = http(env, "POST", "/runs", body, actor="carol")
+    assert status == 202 and replay["run"]["rounds"] == [], replay
+    assert decision["id"] not in json.dumps(replay)
+
+
+def test_revoked_asset_metadata_previews_listing_and_every_chunk_are_missing(env):
+    """Review 4 #4: current asset permission applies to metadata, previews, listings and chunks."""
+    owner = f"project:{env.pid}"
+    asset = input_asset(env, "input-r", b"x" * 64)
+    preview_key = key_for(owner, "asset", asset["id"], "preview-1.png")
+    env.api.storage.put_blob_once(preview_key, b"\x89PNG synthetic", "image/png")
+    asset = env.api.storage.put(owner, "asset", {**asset, "previews": [
+        {"page": 1, "key": preview_key, "mime": "image/png"}]}, asset["version"])
+    assert http(env, "GET", f"/assets/{asset['id']}")[0] == 200
+    assert call(env.api, "GET", f"/assets/{asset['id']}/blob", actor="alice", project=env.pid)[0] == 200
+    env.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    missing = http(env, "GET", "/assets/asset-absent")
+    assert http(env, "GET", f"/assets/{asset['id']}") == missing
+    for query in ({}, {"offset": "1"}, {"kind": "original", "offset": "0"}, {"kind": "preview", "page": "1"}):
+        status, payload, _ = call(env.api, "GET", f"/assets/{asset['id']}/blob", actor="alice", project=env.pid,
+                                  query=query)
+        assert (status, payload) == missing, query
+    status, listed = http(env, "GET", "/assets")
+    assert status == 200 and asset["id"] not in json.dumps(listed)
+
+
+def test_baseline_rechecks_authority_after_its_artifact_reads(env, design, monkeypatch):
+    """Review 4 #7: the baseline response is released only after a final aggregate recheck."""
+    import workspace.react_artifacts as artifacts
+    import workspace.releases as releases
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)], approval=True)
+    row = run["rounds"][0]
+    armed = {"on": True}
+
+    def reading(storage, owner, record, number):
+        if armed["on"]:
+            armed["on"] = False
+            _grant_revoked(env)
+        return row, {"files": {}}, None
+    monkeypatch.setattr(releases, "approved_artifacts", reading)
+    monkeypatch.setattr(artifacts, "generated_files", lambda project: {"src/App.tsx": "x"})
+    status, payload, _ = call(env.api, "GET", f"/runs/{run['id']}/baseline", actor="alice", project=env.pid,
+                              query={"round": "1"})
+    assert status in (404, 409) and row["sourceHash"] not in json.dumps(payload), payload
+    assert http(env, "GET", f"/runs/{run['id']}/baseline")[0] == 404

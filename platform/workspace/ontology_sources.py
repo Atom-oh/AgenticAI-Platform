@@ -741,6 +741,21 @@ class Sources:
         self.recheck()
         return contract
 
+    def asset_access(self, asset):
+        """Current permission to read an asset record, its previews and its original bytes.
+
+        A revoked, tombstoned or deleted asset is `404 not-found`, exactly like a
+        missing one; the record joins this reader's final recheck.
+        """
+        self._fresh()
+        if (not isinstance(asset, dict) or asset.get("accessRevoked") or asset.get("tombstone")
+                or asset.get("status") == "deleted"
+                or self.ctx.project_id and asset.get("projectId") not in (None, self.ctx.project_id)):
+            _not_found()
+        self._remember("asset", asset)
+        self.recheck()
+        return asset
+
     def inputs_access(self, value):
         """Historical permission for a job's supplied inputs (exact `assetSnapshots`, baselines)."""
         self._fresh()

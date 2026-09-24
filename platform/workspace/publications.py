@@ -411,6 +411,34 @@ def _granted_view(ctx, row, aggregate=None):
     return result["record"] if _passes(check) else None
 
 
+def _destination_view(ctx, record, aggregate=None):
+    """The latest active grant naming the caller's role, intersected with current upstream; or None."""
+    revisions = sorted({record["revision"], *(entry["revision"] for entry in record.get("history", []))},
+                       reverse=True)
+    for revision in revisions:
+        row = ctx.storage.get(ctx.owner, "pub_grant", grant_id(record["id"], revision))
+        if row and row.get("status") == "active" and ctx.scope["role"] in row.get("roles", []):
+            return _granted_view(ctx, row, aggregate)
+    return None
+
+
+def publication_visible(ctx, record, aggregate=None):
+    """Response-gate view: origin members with current source access, or an effective destination grant."""
+    if not isinstance(record, dict):
+        return False
+    if record.get("originProject") == ctx.project_id:
+        return _origin_readable(ctx, record, aggregate)
+    return _destination_view(ctx, record, aggregate) is not None
+
+
+def grant_visible(ctx, row, aggregate=None):
+    """Response-gate view of an accepted grant of this destination project."""
+    if (not isinstance(row, dict) or row.get("projectId") != ctx.project_id or row.get("status") != "active"):
+        return False
+    record = _publication(ctx.storage, row.get("publicationId"))
+    return bool(record) and record.get("originProject") == row.get("originProject") != ctx.project_id
+
+
 def _detail(ctx, identifier):
     """Origin members with current source access, or a destination role an active grant names."""
     ctx.fresh()
@@ -421,20 +449,18 @@ def _detail(ctx, identifier):
         if _origin_readable(ctx, record):
             return view(record)
         _not_found()
-    revisions = sorted({record["revision"], *(entry["revision"] for entry in record.get("history", []))},
-                       reverse=True)
-    for revision in revisions:
-        row = ctx.storage.get(ctx.owner, "pub_grant", grant_id(record["id"], revision))
-        if row and row.get("status") == "active" and ctx.scope["role"] in row.get("roles", []):
-            value = _granted_view(ctx, row)
-            if value is None:
-                break
-            return value
-    _not_found()
+    value = _destination_view(ctx, record)
+    if value is None:
+        _not_found()
+    return value
 
 
-def impact(ctx, publication_id):
-    """Cross-project dependents the caller may read; hidden projects add no IDs or counts (AUTH-07)."""
+def impact(ctx, publication_id, retain=None):
+    """Cross-project dependents the caller may read; hidden projects add no IDs or counts (AUTH-07).
+
+    `retain(projectId, recheck)` hands every contributing destination reader to
+    the response gate, whose final recheck covers all of them.
+    """
     from workspace.ontology_store import Ontology
     record = _origin_publication(ctx, publication_id)
     dependents = []
@@ -453,12 +479,15 @@ def impact(ctx, publication_id):
                      "revision": str(grant_row["publicationRevision"]), "sha256": grant_row["publicationHash"],
                      "audienceRevision": str(grant_row["revision"])}
         try:
-            nodes = Ontology(Service(ctx.host, scope, ctx.claims)).source_nodes(reference)
+            ontology = Ontology(Service(ctx.host, scope, ctx.claims))
+            nodes = ontology.source_nodes(reference)
         except CollaborationError as error:
             if error.status == 401:
                 raise
             continue
         if nodes:
+            if retain is not None:
+                retain(row["destinationProject"], ontology.sources.recheck)
             dependents.append({"projectId": row["destinationProject"], "nodeIds": nodes})
     ctx.fresh()
     return {"publicationId": record["id"], "dependents": dependents,
@@ -704,8 +733,12 @@ def _authorized_page(ctx, query, view_name, owner, kind, prefix, include, reader
                            token="pubcur", stale_code="publication-cursor-stale", reader=reader)
 
 
-def route(host, scope, claims, method, parts, body, query):
-    ctx = Service(host, scope, claims)
+def route(host, scope, claims, method, parts, body, query, gate=None):
+    """Publication routes; `gate` is the workspace response gate (single aggregate and final recheck)."""
+    ctx = gate.context if gate is not None and gate.context is not None else Service(host, scope, claims)
+
+    def response_reader():
+        return gate.aggregate if gate is not None and gate.aggregate is not None else aggregate_reader(ctx)
     if parts == [] and method == "POST":
         fields(body, {"kind", "nodeIds", "revisionBindings"})
         return 201, {"publication": propose(ctx, kind=body.get("kind"), node_ids=body.get("nodeIds"),
@@ -713,14 +746,14 @@ def route(host, scope, claims, method, parts, body, query):
     if parts == [] and method == "GET":
         ctx.fresh()
         if query.get("view", "origin") == "granted":
-            aggregate = aggregate_reader(ctx)
+            aggregate = response_reader()
             page = _authorized_page(
                 ctx, query, "granted", ctx.owner, "pub_grant", "",
                 lambda row: public(row) if _granted_view(ctx, row, aggregate) is not None else None, aggregate)
             return 200, {"grants": page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
         if query.get("view", "origin") != "origin":
             fail(400, "invalid-input", "view는 origin 또는 granted입니다.")
-        aggregate = aggregate_reader(ctx)
+        aggregate = response_reader()
         page = _authorized_page(
             ctx, query, "origin", PUBLICATION_OWNER, "publication", origin_prefix(ctx.project_id),
             lambda row: (view(row) if row.get("originProject") == ctx.project_id
@@ -729,7 +762,7 @@ def route(host, scope, claims, method, parts, body, query):
     if len(parts) == 1 and method == "GET":
         return 200, {"publication": _detail(ctx, parts[0])}
     if len(parts) == 2 and method == "GET" and parts[1] == "impact":
-        return 200, impact(ctx, parts[0])
+        return 200, impact(ctx, parts[0], retain=gate.retain if gate is not None else None)
     if len(parts) == 2 and method == "POST":
         if parts[1] == "approve":
             fields(body, set())

@@ -174,16 +174,24 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   rows with an opaque `pagecur-…` cursor (5-minute `ontology_cursor` record bound
   to actor, role, project, authority epoch, listing and `limit`, default 100;
   `409 list-cursor-stale` otherwise).
-- Write and replay responses (`POST /runs`, `/contracts`, `/contracts/propose`,
-  `/contracts/:id/approve`, `/runs/:id/approve`, `/releases`, `/releases/:id/git`,
-  `/batches`, `PUT /contracts/:id`) pass one output gate (`WorkspaceAPI._gate_response`):
-  every embedded contract, run, release and job is authorized through one aggregate
-  reader with a final recheck, and an inaccessible embedded record makes the
-  response the same `404` as a missing resource. Contract/run sub-routes authorize
-  the resource before processing. `GET /jobs/:id` authorizes content-bearing jobs
-  like their resource (`propose` inputs, `run` → run lineage, `release`/`git` →
-  round delivery); upload, workbench, document and intake jobs keep their own
-  authority.
+- One response gate (`workspace.http.ResponseGate`) serves every project-scoped
+  workspace and publication route. `workspace.http.ROUTES` is the complete route
+  inventory; `match_route` dispatches nothing else, and every route declares the
+  authorized views its JSON fields or blob bytes are serialized through
+  (`tests/test_response_gate.py` fails for an unregistered route or view). Before
+  processing, the addressed resource (asset, contract, run, release, job, batch)
+  and any run-round target (`/runs/:id/blob`, `/runs/:id/baseline`,
+  `/runs/:id/approve`, `POST /releases`) are authorized; afterwards every embedded
+  record is re-read and serialized through its view (`asset_access`,
+  `contract_access`, `run_access` with revoked rounds omitted, round delivery,
+  job inputs, publication/grant visibility), each on a probe reader absorbed into
+  one aggregate reader. ONE final aggregate recheck (plus retained destination
+  readers for publication impact) runs after all storage reads, including each
+  blob chunk, immediately before the response is returned. An inaccessible
+  singular record is the same `404` as a missing one, inaccessible list rows are
+  omitted, and an undeclared response field fails closed (`503`). Upload, workbench,
+  document and intake jobs keep their own module authority; the delegated prefixes
+  (`http.DELEGATED`) are listed by name.
 - Queued `propose`/`run` generation and `release` rebuild jobs are gated at
   execution by `ontology_sources.job_lineage` (recorded actor's current authority and
   the same lineage checks) before any model call or rebuild, and the same reader is
