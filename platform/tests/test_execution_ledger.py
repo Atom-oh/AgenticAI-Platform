@@ -2291,3 +2291,105 @@ def test_reverification_of_the_new_bundle_completes(xfer):
     done = finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
                                              "receipts": hashes})
     assert done["status"] == "succeeded"
+
+
+# === PR #27 review round 4 regressions ===============================================================
+
+def uploaded(ledger, job, data, *, stage, name):
+    """Upload bytes through the real transfer facade; returns the closed output entry."""
+    handle = open_out(ledger, job, data, name=name, stage=stage)
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=op_id())
+    closed = ledger.tool().close_output(*ids(job), handle["handleId"], operation_id=op_id())
+    output = next(row for row in closed["transfers"] if row["handleId"] == handle["handleId"])
+    return closed, {"key": output["key"], "sha256": output["sha256"], "size": output["size"]}
+
+
+def final_verify(xfer, job, previous, extra_outputs, files, nonce="n-verify-4"):
+    storage, ledger = xfer[0], xfer[1]
+    verify_out = put_output(storage, job, "verify", "verify-4.out", b"verify-4")
+    manifest = put_output(storage, job, "verify", "result-manifest-4.json", _json.dumps({"files": files}).encode())
+    r = chained(job, "verify", nonce, previous=previous, status="ok", result=GOOD["verify"][1],
+                outputs=[verify_out, *extra_outputs, manifest], inputs=required_inputs(job, "verify"))
+    return r, manifest
+
+
+@pytest.mark.parametrize("stage,role", [("verify", "bundle"), ("browser", "bundle"), ("verify", "source"),
+                                        ("compile", "source"), ("verify", "deliverable")])
+def test_output_roles_are_restricted_per_stage(xfer, stage, role):
+    """Review 4 finding 2: only compile emits a bundle and only generate a source; roles are a closed set."""
+    storage, ledger, _, _ = xfer
+    job, previous = staged_through(xfer, stage)
+    out = {**put_output(storage, job, stage, "replacement.js", b"replacement"), "role": role}
+    kind = STAGE_SERVICES[stage][0]
+    service = {} if kind == "runtime" else {"service": service_call(ledger, job, stage, kind)}
+    r = chained(job, stage, "n-role", previous=previous, status="ok", result=GOOD[stage][1], outputs=[out],
+                inputs=required_inputs(job, stage), **service)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(*ids(job), r)
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["stages"] == job["stages"]
+
+
+def test_completion_refuses_a_deliverable_bundle_that_was_not_compiled_and_browser_verified(xfer):
+    """Review 4 finding 2 (reviewed scenario): replacement bytes uploaded after verification are not the bundle."""
+    storage, ledger, _, _ = xfer
+    job, previous = staged_through(xfer, "verify")
+    job, replacement = uploaded(ledger, job, b"unverified replacement bundle", stage="verify", name="bundle.js")
+    files = [{"key": replacement["key"], "sha256": replacement["sha256"]}]        # only the replacement
+    r, manifest = final_verify(xfer, job, previous, [{**replacement, "role": "artifact"}], files)
+    job = ledger.tool().stage(*ids(job), r)
+    hashes = [row["receiptHash"] for row in job["stages"]]
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
+                                          "receipts": hashes})
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def test_manifest_roles_must_match_the_recorded_output_role(xfer):
+    storage, ledger, _, _ = xfer
+    job, previous = staged_through(xfer, "verify")
+    bundle = next(row for row in job["stages"] if row["stage"] == "compile")["outputs"][0]
+    context_out = next(row for row in job["stages"] if row["stage"] == "context")["outputs"][0]
+    files = [{"key": bundle["key"], "sha256": bundle["sha256"]},
+             {"key": context_out["key"], "sha256": context_out["sha256"], "role": "bundle"}]
+    r, manifest = final_verify(xfer, job, previous, [], files)
+    job = ledger.tool().stage(*ids(job), r)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
+                                          "receipts": [row["receiptHash"] for row in job["stages"]]})
+    assert error.value.code == "receipt-invalid"
+
+
+def test_completion_binds_the_deliverable_bundle_and_source_to_their_evidence(xfer):
+    storage, ledger, _, _ = xfer
+    job, previous = staged_through(xfer, "generate")
+    source = {**put_output(storage, job, "generate", "page.tsx", b"export default () => null"), "role": "source"}
+    job = ledger.tool().stage(*ids(job), chained(job, "generate", "n-g4", previous=previous, status="ok",
+                                                 outputs=[source], inputs=required_inputs(job, "generate"),
+                                                 service=service_call(ledger, job, "generate", "model")))
+    rows = {}
+    for stage in ("compile", "browser"):
+        out = put_output(storage, job, stage, f"{stage}-4.out", f"{stage}-4".encode())
+        if stage == "compile":
+            out["role"] = "bundle"
+        r = chained(job, stage, f"n-{stage}-4", previous=job["stages"][-1]["receiptHash"], status="ok",
+                    outputs=[out], inputs=required_inputs(job, stage), result=GOOD[stage][1],
+                    service=service_call(ledger, job, stage, STAGE_SERVICES[stage][0]))
+        job = ledger.tool().stage(*ids(job), r)
+        rows[stage] = (receipt_hash(r), out)
+    bundle = rows["compile"][1]
+    files = [{"key": bundle["key"], "sha256": bundle["sha256"], "role": "bundle"},
+             {"key": source["key"], "sha256": source["sha256"], "role": "source"}]
+    r, manifest = final_verify(xfer, job, job["stages"][-1]["receiptHash"], [], files)
+    job = ledger.tool().stage(*ids(job), r)
+    done = finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
+                                             "receipts": [row["receiptHash"] for row in job["stages"]]})
+    assert done["status"] == "succeeded"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["deliverables"]["bundle"] == {"key": bundle["key"], "sha256": bundle["sha256"],
+                                                "compileReceipt": rows["compile"][0],
+                                                "browserReceipt": rows["browser"][0]}
+    assert stored["deliverables"]["sources"] == [{"key": source["key"], "sha256": source["sha256"],
+                                                  "generateReceipt": job["stages"][1]["receiptHash"],
+                                                  "compileReceipt": rows["compile"][0]}]

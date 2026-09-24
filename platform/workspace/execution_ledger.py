@@ -54,6 +54,11 @@ STAGE_INPUTS = {"design.extract": {"generate": "context", "verify": "generate"},
 # service is a ledger-recorded call of the same attempt, stage and kind; the Runtime session is the attempt's.
 STAGE_SERVICES = {"context": ("runtime",), "generate": ("model",), "compile": ("interpreter",),
                   "browser": ("browser",), "verify": ("runtime",), "analyze": ("runtime", "interpreter")}
+# Output roles each stage may emit (review 4, RUN-04): only a compile receipt produces the deliverable bundle and
+# only a generate receipt (of an operation that compiles) its deliverable source. An output without a role is an
+# "artifact" (evidence, reports, result manifests), which is never a deliverable.
+STAGE_OUTPUT_ROLES = {"context": ("artifact",), "generate": ("artifact", "source"), "compile": ("artifact", "bundle"),
+                      "browser": ("artifact",), "verify": ("artifact",), "analyze": ("artifact",)}
 _SERVICE_SESSION = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 # Operations whose coupled publication adapter is not available yet: completion is refused explicitly.
 _COMPLETION_UNAVAILABLE = {"source.analyze": "source-staging-adapter"}
@@ -782,9 +787,11 @@ class Ledger:
         if not isinstance(receipt.get("outputs", []), list) or not isinstance(receipt.get("objects", []), list) \
                 or len(outputs) > 100:
             raise LedgerError("receipt-invalid")
+        roles = STAGE_OUTPUT_ROLES.get(receipt["stage"], ())
         for entry in outputs:
             if (not isinstance(entry, dict) or not isinstance(entry.get("key"), str)
-                    or not entry["key"].startswith(prefix)
+                    or not entry["key"].startswith(prefix) or entry.get("role", "artifact") not in roles
+                    or entry.get("role") == "source" and "compile" not in OPERATIONS[job["operation"]]
                     or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
         self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages)
@@ -1529,7 +1536,16 @@ class Ledger:
         return [stages[index] for index in sorted(latest[name] for name in OPERATIONS[job["operation"]])]
 
     def _check_result_manifest(self, job, stages, result):
+        """Validates the result manifest against the current chain; returns the bound deliverables (review 4).
+
+        A listed ``bundle`` must be the current compile receipt's bundle that the current Browser receipt consumed;
+        a listed ``source`` must be an output of the current generate receipt that the current compile consumed. An
+        operation that compiles must list exactly that one bundle. A manifest entry's ``role``, if given, must equal
+        the role recorded for that output.
+        """
         chain = {entry["key"]: entry for row in stages for entry in row.get("outputs", [])}
+        producer = {entry["key"]: row for row in stages for entry in row.get("outputs", [])}
+        by_stage = {row["stage"]: row for row in stages}
         outputs = {key: entry["sha256"] for key, entry in chain.items()}
         ref, digest = result.get("manifestRef"), result.get("manifestHash")
         if not isinstance(ref, str) or not isinstance(digest, str) or not _SHA256.fullmatch(digest) \
@@ -1551,14 +1567,45 @@ class Ledger:
                     or not isinstance(entry.get("sha256"), str) or not _SHA256.fullmatch(entry["sha256"])
                     or entry["key"] not in outputs or outputs[entry["key"]] != entry["sha256"]
                     or "size" in entry and entry["size"] != chain[entry["key"]].get("size")
+                    or "role" in entry and entry["role"] != chain[entry["key"]].get("role", "artifact")
                     or not self._verify_object(None, chain[entry["key"]], ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
+        deliverables = self._deliverables(job, listed, chain, producer, by_stage)
         # RUN-04: every chain output (hence every listed result/evidence object) still exists with its
         # server-computed hash and size before any terminal pointer is published.
         for row in stages:
             for entry in row.get("outputs", []):
                 if not self._verify_object(None, entry, ("key", "sha256", "size", "role")):
                     raise LedgerError("receipt-invalid")
+        return deliverables
+
+    @staticmethod
+    def _deliverables(job, listed, chain, producer, by_stage):
+        def consumed(stage, entry):
+            row = by_stage.get(stage)
+            return row is not None and {"key": entry["key"], "sha256": entry["sha256"]} in row.get("inputs", [])
+
+        bundles, sources = [], []
+        for entry in listed:
+            role, row = chain[entry["key"]].get("role", "artifact"), producer[entry["key"]]
+            if role == "bundle":
+                if row is not by_stage.get("compile") or not consumed("browser", entry):
+                    raise LedgerError("receipt-invalid")
+                bundles.append({"key": entry["key"], "sha256": entry["sha256"], "compileReceipt": row["receiptHash"],
+                                "browserReceipt": by_stage["browser"]["receiptHash"]})
+            elif role == "source":
+                if row is not by_stage.get("generate") or not consumed("compile", entry):
+                    raise LedgerError("receipt-invalid")
+                sources.append({"key": entry["key"], "sha256": entry["sha256"], "generateReceipt": row["receiptHash"],
+                                "compileReceipt": by_stage["compile"]["receiptHash"]})
+        if "compile" in OPERATIONS[job["operation"]]:
+            compiled = [entry for entry in by_stage["compile"].get("outputs", []) if entry.get("role") == "bundle"]
+            if len(bundles) != 1 or [(b["key"], b["sha256"]) for b in bundles] != [
+                    (entry["key"], entry["sha256"]) for entry in compiled]:
+                raise LedgerError("receipt-invalid")        # exactly the compiled, Browser-verified bundle
+        elif bundles or sources:
+            raise LedgerError("receipt-invalid")
+        return {"bundle": bundles[0] if bundles else None, "sources": sources}
 
     def _temporal_guard(self, before, *, recovery=False, min_remaining_ms=None, cost=False):
         """Final temporal and budget checks, run by put_many immediately before each wire submission (RUN-02/03)."""
@@ -1655,11 +1702,12 @@ class Ledger:
         current = self._current_chain(job, stages)
         if self._terminal_status(job, stages) != status:
             raise LedgerError("status-inconsistent")
-        self._check_result_manifest(job, current, result)
+        deliverables = self._check_result_manifest(job, current, result)
         self._reverify_chain(owner, job, stages, attempt)
         self._fresh_obligations(owner, before)
         protected, guard = self._protect(owner, before, recovery=recovery)
-        after = {**job, "status": status, "result": copy.deepcopy(result), "completedAt": self.storage.clock()}
+        after = {**job, "status": status, "result": copy.deepcopy(result), "deliverables": deliverables,
+                 "completedAt": self.storage.clock()}
         after["cleanup"] = self._cleanup_for(after)
         quotas = self._quota_writes(owner, job["actor"], job["projectId"], remove=job["id"])
         prepared_job, ledger_writes = self._prepare(owner, before, after, extra_writes=quotas, op=op)

@@ -611,6 +611,7 @@ module-private ledger writer token):
 | `obligations` | Frozen `{sourceChecks: [{owner, kind, id, version}], sourceBindings: [...]}` taken from the validated input manifest |
 | `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate` |
 | `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
+| `deliverables` | Set at completion: the result manifest's bundle and sources bound to their compile, Browser and generate receipt hashes |
 | `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
@@ -674,7 +675,11 @@ Receipts follow the operation's evidence graph (`STAGE_INPUTS`): each stage's
 (`generate` ← `context`, `compile` ← `generate` or `context`, `browser` ←
 `compile`, `verify` ← `browser` or `generate`, `analyze` ← `context`), so stages
 are staged in order. A `compile` receipt produces exactly one output with role
-`bundle`, and a `browser` receipt must consume exactly that bundle.
+`bundle`, and a `browser` receipt must consume exactly that bundle. Output roles
+are a closed per-stage set (`STAGE_OUTPUT_ROLES`): every stage may emit
+`artifact` (the default when `role` is absent), only `compile` emits `bundle`,
+and only `generate` of an operation that compiles emits `source`; any other
+role is `receipt-invalid`.
 Completion validates one complete, current chain: for every required stage its
 latest receipt must be recorded after the latest receipt of its predecessor and
 consume that receipt's outputs (for `browser`, exactly the latest compile's
@@ -693,7 +698,14 @@ terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
 Every `files`/`objects` entry of the result manifest must be an object with a
 string `key` and a 64-hex `sha256` (and, if given, the recorded `size`) that
 names a chain output of the attempt; a malformed or non-member entry is
-`receipt-invalid`.
+`receipt-invalid`. A manifest entry's optional `role` must equal the recorded
+output role. Deliverables are bound to their evidence: a listed `bundle` must
+be the current compile receipt's bundle consumed by the current Browser
+receipt, a listed `source` an output of the current generate receipt consumed
+by the current compile receipt, and an operation that compiles must list
+exactly that one bundle (otherwise `receipt-invalid`). The terminal job records
+`deliverables: {bundle: {key, sha256, compileReceipt, browserReceipt} | null,
+sources: [{key, sha256, generateReceipt, compileReceipt}]}`.
 Every terminal transition (cancel, fail, revocation, expiry, contention
 failure) that leaves `intent` calls sets `unknownOutcome: true` and
 `settlementDueAt`, and keeps a due entry for it. The execution is not revived:
