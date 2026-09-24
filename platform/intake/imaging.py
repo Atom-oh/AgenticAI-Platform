@@ -139,6 +139,13 @@ def descriptor(host, scope, decision_id, *, claims=None):
 
 def vision_input(host, scope, decision_id, *, claims=None):
     """Trusted server path only: the exact `generate_with_images` image entry."""
+    decision, image, _ = vision_input_authority(host, scope, decision_id, claims=claims)
+    return decision, image
+
+
+def vision_input_authority(host, scope, decision_id, *, claims=None):
+    """`vision_input` plus the retained Authority, for callers that do more I/O
+    before the model call (they must `recheck()` immediately before invoking)."""
     decision, _, authority = admission.authorized(host, scope, decision_id, claims=claims)
     if decision["artifact"]["kind"] != "image":
         raise AdmissionError("artifact-kind-unsupported", 422)
@@ -147,7 +154,7 @@ def vision_input(host, scope, decision_id, *, claims=None):
     value = _ocr(host, scope, decision)
     authority.recheck()
     return decision, {"format": vision["format"], "bytes": data, "ocrStatus": value["ocrStatus"],
-                      "ocrText": value["ocrText"]}
+                      "ocrText": value["ocrText"]}, authority
 
 
 CHUNK_BYTES = 256 * 1024

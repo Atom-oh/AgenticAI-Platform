@@ -234,9 +234,15 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     extra = completion(sealed) if completion else []
     for write in extra:
         unique.pop((write["owner"], write["kind"], write["item"]["id"]), None)
+    # Final authority recheck immediately before the commit and before every
+    # transaction attempt: policy, provenance, upstream (`extra_checks`, e.g. a
+    # transcription's image lineage) and source fences, including expiry.
+    guard = Authority(host, reader, checks)
+    guard.recheck()
     try:
         return storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed}, *extra],
-                                checks=list(unique.values()), retry_conflicts=False)[0]
+                                checks=list(unique.values()), retry_conflicts=False,
+                                before_attempt=guard.recheck)[0]
     except Conflict:
         existing = storage.get(owner, "adm_decision", identifier)
         if existing and records.digest_record(existing) == sealed["hash"]:

@@ -532,3 +532,58 @@ def test_transcription_approval_and_library_publication_are_atomic(env, monkeypa
     assert revision["status"] == "in_review"
     assert revision["transcriptionOf"]["transcription"]["decisionId"] == transcribed["id"]
     assert revision["transcriptionOf"]["transcription"]["decisionRevision"] == payload["decision"]["revision"]
+
+
+# PR #28 review round 3 ----------------------------------------------------------
+
+def _transcription_request(env, monkeypatch, reply=None):
+    env.policy()
+    env.grant("bob", "grant-bob")
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(reply or json.dumps({"kind": "table", "text": "표 전사", "tables": [["a", "b"]]},
+                                                ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    return ref, image, request, adapter
+
+
+def _transcriptions(env):
+    return [row for row in env.api.storage.list(f"project:{env.pid}", "adm_decision")
+            if row["artifact"]["kind"] == "diagram-transcription"]
+
+
+def test_image_revoked_during_the_denylist_read_never_reaches_the_model(env, monkeypatch):
+    """Review 3, finding 1: image authority is rechecked immediately before `generate`."""
+    _, _, request, adapter = _transcription_request(env, monkeypatch)
+    loader = env.api.intake_denylist_loader
+
+    def revoking():
+        env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+        return loader()
+
+    env.api.intake_denylist_loader = revoking
+    with pytest.raises(AdmissionError) as error:
+        transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert error.value.status == 409
+    assert adapter.calls == [] and _transcriptions(env) == []
+
+
+def test_image_revoked_during_generation_publishes_no_transcription(env, monkeypatch):
+    """Review 3, finding 1: image authority is rechecked again before the result is recorded."""
+    _, _, request, adapter = _transcription_request(env, monkeypatch)
+    converse = adapter.converse_with_tools
+
+    def revoking(*args, **kwargs):
+        result = converse(*args, **kwargs)
+        env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+        return result
+
+    adapter.converse_with_tools = revoking
+    with pytest.raises(AdmissionError) as error:
+        transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert error.value.status == 409
+    assert len(adapter.calls) == 1 and _transcriptions(env) == []

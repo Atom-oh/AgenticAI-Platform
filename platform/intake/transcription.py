@@ -106,7 +106,8 @@ def transcribe(host, scope, pending, *, model_id, generate=None, claims=None, tr
         raise AdmissionError("invalid-request", 400)
     project_id = admission._project(scope)
     # context: the image decision must still be admitted, unchanged and current.
-    decision, image = imaging.vision_input(host, scope, pending["imageDecisionId"], claims=claims)
+    decision, image, authority = imaging.vision_input_authority(host, scope, pending["imageDecisionId"],
+                                                               claims=claims)
     if decision["revision"] != pending["imageDecisionRevision"]:
         raise AdmissionError("source-changed")
     region = pending["region"]
@@ -122,6 +123,9 @@ def transcribe(host, scope, pending, *, model_id, generate=None, claims=None, tr
         from engine.gate import generate_with_images as generate
     user = (f"영역: left={region['left']}, top={region['top']}, width={region['width']}, "
             f"height={region['height']} (정규화 이미지 기준 픽셀). 이 영역의 도식 또는 표를 전사하세요.")
+    # The policy and deny-list reads above are I/O after `vision_input`: recheck the
+    # image's full authority immediately before invoking the model.
+    authority.recheck()
     output, _, _ = generate(SYSTEM, user, [image], model_id=model_id, purpose=OPERATION, trace_id=trace_id)
     # verify: closed output schema, identifier normalization and residual scan.
     raw = _parse(output)
@@ -147,7 +151,9 @@ def transcribe(host, scope, pending, *, model_id, generate=None, claims=None, tr
         derivation={"profile": derivative.PROFILE, "originalHash": decision["derivation"]["derivativeHash"],
                     "derivativeHash": hashlib.sha256(payload).hexdigest()},
         receipt=receipt, receipt_bytes=schema.canonical(receipt), payload=payload, blocking=blocking,
-        identity=[lineage, placed], lineage=lineage)
+        identity=[lineage, placed], lineage=lineage,
+        # The image lineage joins the commit fences and the final/attempt recheck.
+        extra_checks=list(authority.checks))
 
 
 def read(host, scope, decision):
