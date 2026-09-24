@@ -2,7 +2,7 @@
 
 > **For agentic workers:** This is the index for a plan series. Execute the unit plans in the order below with superpowers:subagent-driven-development or superpowers:executing-plans. Each unit plan uses checkbox (`- [ ]`) steps.
 
-**Goal:** Build a PoC that covers the customer goals in [`REQUIREMENTS.md`](../../../REQUIREMENTS.md) v0.7:
+**Goal:** Build a PoC that covers the customer goals in `REQUIREMENTS.md` v0.7:
 - a design ontology built from the customer's requirements
 - AI generation of UX flow and GUI
 - verification and human approval
@@ -10,7 +10,7 @@
 
 The PoC runs on the platform's AgentCore execution architecture from the start.
 
-**Decision (2026-09-24):** The user chose to build the AgentCore platform first. The B0–B2 execution units from [`platform/docs/ARCHITECTURE.md`](../../../platform/docs/ARCHITECTURE.md) ("Implementation ownership and delivery sequence") land and pass their gates first. The design PoC is then delivered as the first **C (application cutover) vertical slice**. The PoC does not run as a legacy Lambda `design` job.
+**Decision (2026-09-24):** The user chose to build the AgentCore platform first. The B0–B2 execution units from `platform/docs/ARCHITECTURE.md` ("Implementation ownership and delivery sequence") land and pass their gates first. The design PoC is then delivered as the first **C (application cutover) vertical slice**. The PoC does not run as a legacy Lambda `design` job.
 
 **Why this replaces the 2026-09-23 plan:** An independent Codex (`openai.gpt-6-astra`) review of the single-file plan returned *rework*, with 22 Major findings and 1 Minor. The findings were spot-checked against the code. The main causes were:
 - bypassing the execution contract
