@@ -728,9 +728,13 @@ security operator owns its IAM-administered policy/provenance/grant approval.
 The privacy/infra maintainer owns any source-document redaction adapter, caller
 authorization and private network route. Existing MyData relay/gateway support
 does not imply that source-document intake is covered by its current contract.
-Until that separate integration is reviewed, only eligible synthetic/public
-inputs with complete required inspection and no redaction dependency can pass;
-inputs requiring unavailable redaction stay blocked.
+Until that separate integration is reviewed, only inputs with complete required
+inspection, a clean residual scan and no redaction dependency can pass: eligible
+synthetic/public inputs through registered provenance, and internal non-sensitive
+inputs only through local identifier normalization plus approval by a reviewer
+holding a current IAM-administered grant and current source access (SRC-06).
+Inputs requiring unavailable redaction, sensitive or unclassified inputs stay
+blocked.
 The implementation record names the responsible reviewer before a gate runs.
 Each gate saves its configured limits, fixture hashes, observed measurements,
 negative-case outcomes and stop/go decision. Production integration cannot

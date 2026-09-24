@@ -68,7 +68,8 @@ Resolution rules:
   - the round's `designManifestInput.admissions`: each admission decision through `intake.admission.verify(host, scope, decisionId)`
   - the guideline/product publication in the run's criteria: through `resolve_generation_context`, as `process_release` already does
 
-  Any revoked or superseded upstream → `409 source-upstream-revoked`, and the round cannot be used as current evidence. Historical reads are unaffected.
+  Any revoked or superseded upstream → `409 source-upstream-revoked`, and the round cannot be used as current evidence.
+- Historical reads (PR #26 review): the `run-round` historical `authorize` also rechecks upstream **permission**. A superseded but still accessible upstream admits historical diagnostics; a revoked upstream (contract audience, admission `grant-revoked`/`decision-not-current`, publication withdrawal) denies the historical read with the same not-found error, so `ontology_store` historical paths cannot expose round-derived content after upstream revocation (`ONTOLOGY_CONTRACT.md:102-105`, `AGENTCORE_CONTRACT.md:348-355`). Test: revoke an upstream admission → historical read of a round-derived node is denied; supersede it while still readable → historical diagnostics remain.
 - Current resolution always uses `Sources.resolve`. `authorize` admits historical metadata and is not used for reuse authority.
 
 Failure codes:
