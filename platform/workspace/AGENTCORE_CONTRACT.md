@@ -8,6 +8,11 @@ An absent requirement remains a gap. Production admission requires the applicabl
 gates below. The dated implementation plan records sequencing and review history;
 changing that plan does not change this contract.
 
+The [cross-module architecture](../docs/ARCHITECTURE.md) assigns implementation
+ownership and delivery order for this contract. Its offline protocol unit
+precedes service activation; the capability gates and A/B/C boundaries below
+continue to govern integration and admission.
+
 ### platform-ontology/1
 
 `Foundation` is one level; `Icon` is its resource subtype. The other seven
@@ -136,6 +141,7 @@ root plus an explicit file manifest and resolver configuration, not a basename.
 | Relative modules | Resolve against the collection manifest; reject path escape and ambiguous extension/case/Unicode matches. |
 | Aliases/packages | Use an approved versioned alias/workspace/package-exports map; never execute configuration or invent an unsupplied SDK. |
 | CSS/SCSS | Parse literal imports and `url()` references with locations. SCSS evaluation, interpolation and loader execution remain unresolved. |
+| HTML | Parse static structure and literal resource references with source locations. Inline scripts/styles, active behavior and unconfigured URL bases remain unresolved; do not execute or fetch them. |
 | JSON | Parse approved manifest reference fields; arbitrary strings are not assumed to be paths. |
 | Generated files | Record generator/tool version and source mapping; missing mappings stay unknown. |
 | Dynamic imports/URLs and framework transforms | Preserve unresolved references; no automatic network/package lookup. |
@@ -191,7 +197,9 @@ Report measured usage per job instead of assuming a fixed upload cost.
 The authenticated API admits a job after checking user identity, membership and
 operation scope. The dispatcher obtains a short-lived signed execution capability
 from the platform authorization service. Use a dedicated asymmetric signing key:
-the API/dispatcher can request capability signing; Runtime/Gateway/tools can
+only the IAM-only dispatcher requests capability signing for an allocated
+attempt; the user-facing API admits/cancels jobs but never requests signing.
+Runtime/Gateway/tools can
 verify but cannot mint capabilities.
 
 Required claims are issuer, audience, verified actor reference, project ID,
@@ -263,7 +271,7 @@ only to the new ontology Gateway, never the existing IAM bank Gateway.
 The capability issuer is a new IAM-only `execution-authority` backend module.
 It derives claims from an admitted job and current authorization, never arbitrary
 Runtime arguments. A managed asymmetric KMS key signs capabilities; only the
-API/dispatcher role may request signing. Runtime evidence uses a separate key
+dispatcher role may request signing after attempt allocation. Runtime evidence uses a separate key
 and cannot mint capabilities. A versioned key registry fixes algorithm, key ID,
 purpose, public-key fingerprint, validity and active/retired/revoked state.
 Verifiers obtain keys only from configured KMS/registry entries, never token URLs.
@@ -282,10 +290,10 @@ authorization envelope; the model sees only authorized read tools.
 |---|---|---|
 | `ontology.context` | Selected IDs/cursor → nodes, edges, source refs, context hash | Read; ≤50 nodes/100 edges per page |
 | `ontology.source` | Exact source ref/range → bytes or text, hash and range metadata | Read; ≤256 KiB, no arbitrary URL |
-| `ontology.impact` | Change ID/expected graph revision → witness paths, coverage, work-item refs | Authorized change-analysis operation |
-| `ontology.publish` | Candidate artifact ref/hash/expected generation → published generation | Trusted ingestion only; not model-visible |
+| `ontology.impact` | Change ID/expected graph revision → witness paths, coverage and existing authorized work-item refs | Model-visible read-only analysis; no work-item creation |
+| `ontology.publish` | Candidate artifact ref/hash/expected generation → immutable staged publication-plan ref/hash; no current manifest update | Trusted ingestion staging only; not model-visible |
 | `execution.stage` | Attempt/stage/operation ID/receipt ref → transition | Trusted Runtime control only |
-| `execution.finish` | Final manifest ref/hash/expected ledger version → terminal state | Trusted Runtime; independent receipt validation |
+| `execution.finish` | Final manifest/staged publication-plan refs and hashes/expected ledger version → one coupled completion | Trusted Runtime; independent receipt and transaction validation |
 
 Responses are ≤512 KiB. Cursors bind actor, project, resource selection, graph
 generation and audience revisions. Authority/generation changes invalidate them.
@@ -293,6 +301,30 @@ A job has at most 60 tool calls and 4 MiB retrieved text, also subject to existi
 smaller model-context limits. Errors disclose no unauthorized resource details
 or upstream response bodies. Models cannot select endpoints, credential providers,
 accounts or roles.
+
+For source-analysis executions, `ontology.publish` stages immutable objects and
+a bounded publication plan; it cannot advance current graph/artifact/job state.
+`execution.finish` is the only publication/completion operation. The ledger
+prepares conditional terminal-job and related execution writes/checks without
+committing independently. The ontology coordinator combines them with its
+manifest/request-marker and artifact writes and current source/authority checks
+in one `Storage.put_many`/`TransactWriteItems` call. This extends the existing
+trusted `_completion_writes` composition point; it does not introduce a second
+writer. The validated receipt pointer is stored in the terminal job/artifact
+records. A failed transaction advances none of those pointers or states.
+Human mapping/publication APIs retain their own existing transactions.
+Work-item creation/routing is performed only by the authorized IAM-only routing
+worker, not by a model-visible `ontology.impact` call.
+
+The trusted Lambda completion facade submits the coupled transaction once per
+attempted completion. Proven transaction contention permits at most two retries
+within the same execution deadline, with fresh actor/source/deadline/attempt
+checks before each submission and no SDK-level hidden retry. Changed predicates
+are not refreshed away. Exhausted proven contention fails completion with
+`completion-contention` through a fenced metadata failure transition; a
+cancelled/expired/superseded state is preserved. Unknown transport outcome first
+reconciles durable job/artifact/request markers and otherwise enters bounded
+`recovery_required`; it is not presumed to be a failed or successful commit.
 
 Authority-only changes increment membership/grant/audience versions even when
 graph content does not change. Cursors bind those versions independently from
@@ -437,10 +469,54 @@ never read from model/user arguments. Runtime has no direct ledger write IAM
 permission. Backend roles retain only their reviewed datastore/control rights.
 Transport acceptance is not success.
 
+New execution jobs use the immutable discriminator
+`task="agentcore-execution", executionSchemaVersion=1`. A reserved task or any
+presence of `executionSchemaVersion`, including unknown/malformed values, must
+never be treated as a legacy job. New dispatch/reconciliation accepts only its
+exact supported discriminator and otherwise rejects without mutation.
+B0 implements both sides of this exclusion in actual legacy claim/expiry paths
+and new-ledger paths, with conditional version/discriminator fences. Its offline
+tests must import the real legacy code. Before any probe creates new records
+in a shared table, verify that the deployed legacy guard is installed.
+B0's review inventories every legacy job-status writer, including failure,
+cancellation, repair and helper paths, and applies the same conditional
+exclusion wherever a new job could otherwise be mutated.
+The inventory also covers every linked artifact/receipt completion writer,
+including `_mark_failed` and analysis-read reconciliation. New artifacts carry
+the immutable execution discriminator and exact execution/job linkage.
+Legacy code must refuse mutation if the artifact is marked for new execution
+or its linked job has a reserved/new discriminator. A missing job never makes
+a marked artifact legacy. Mismatched/unknown linkage is reported for the
+IAM-only new reconciler; legacy code does not fail or complete that artifact.
+
+One platform-runtime deployment owner installs the reviewed guard change and
+records worker/API revision or image hashes and RUN-01 live guard/legacy-control
+results in the B1/G0-RUNTIME stop/go record. Before that, probes use an isolated
+disposable table or do not create new-schema jobs. Guard rollback first stops
+new-schema admission/probes and drains or quarantines those jobs; it must not
+expose them to an older unguarded writer.
+After matching deployed revisions to the reviewed guard, the deployment owner
+may create one inert synthetic control record for the live refusal/legacy
+control check, quarantine if needed and clean it up. General shared-table probes
+remain blocked until that narrowly scoped installation check passes.
+
+Source analysis using AgentCore is a new-ledger Runtime execution, not a cloud
+analyzer injected into legacy `ontology_jobs.process`. B0 retires the obsolete
+cloud-factory comment as documentation-only cleanup. Existing legacy jobs drain
+unchanged; C wires the already guarded dispatch/read/reconciliation paths into
+the application and verifies them live.
+
 Invocation fields are schema version, execution/attempt IDs, Runtime session ID,
 signed capability, immutable input-manifest ref/hash, selected model, absolute
 deadline and backend-config revision. Queue messages contain no raw source
 documents or reusable credentials.
+The backend configuration references a versioned execution profile containing
+the deadline, heartbeat, lease and recovery limits. Invocation/ledger/evidence
+records retain that profile's revision/hash. Initial values below remain the
+defaults until a reviewed profile revision passes the capability probes.
+Attempts and transfer/completion receipts bind the exact consumed
+source-admission decision IDs/revisions and artifact hashes; revalidation
+cannot rely only on broker logs.
 
 | State | Transition owner / condition |
 |---|---|
@@ -457,6 +533,8 @@ evidence or alter terminal results. Initial deadline is 14 minutes, heartbeat
 30 seconds and lease 90 seconds, subject to Phase 0 proving service compatibility.
 Each stage reserves remaining budget; do not start a round that cannot finish.
 Earlier authorization expiry shortens the deadline.
+The immutable input manifest enumerates the exact admission-decision
+IDs/revisions and admitted artifact hashes consumed by the attempt.
 
 Retry idempotent reads/transfer chunks at most twice within budget. Record model
 call intent and budget reservation before invocation. Unknown model outcomes
@@ -469,6 +547,17 @@ stops Interpreter/Browser sessions. Late receipts are non-current diagnostics.
 A crash retains verified partial evidence and last stage; the watchdog cannot
 fabricate success. Correlate execution, attempt, capability digest, model call
 and service sessions using allowlisted metadata logs, never source text/tokens.
+
+The Runtime and model-boundary maintainers verify this exclusion in application
+instrumentation, Runtime/service spans, exporters and configured destinations.
+Synthetic source/prompt/tool-content and capability canaries must be absent from
+those sinks. Missing capture controls or unverified destinations block activation.
+SPEC §11-4's Tier 2 exclusion also applies to optional insights/Evaluations/Policy;
+these checks do not require enabling optional observability products.
+The same exclusion covers Interpreter/Browser service-session logs and
+exporters, while authorized private compiler/browser evidence artifacts retain
+their separately governed access. Verify the configured sinks in those service
+gates as well as the Runtime gate.
 
 All recovery transitions use the same ledger writer. The watchdog may request
 `recovery_required`, failed, expired or cancelled, but cannot request generation
@@ -485,6 +574,35 @@ It creates a new fenced attempt, not an automatic model replay. Changed inputs
 or criteria require a new approved request. Late results from superseded attempts
 are quarantined diagnostics and cannot update current graph, Memory decisions,
 approval or release. Retain metadata/evidence under the stated retention policy.
+
+An injected test-key verifier requires explicit offline test opt-in. Production
+construction rejects test verifiers, unregistered adapters and unregistered
+keys; it requires the reviewed KMS/key-registry verifier. A callable's label or
+caller-supplied test flag is not a trust basis.
+
+### source-admission/1
+
+Private intake owns the following closed, versioned record schemas. Unknown
+fields/versions fail closed. Records have immutable revision/hash, status and
+expiry; policy/grant changes invalidate affected decisions before transfer.
+Their administration belongs to an IAM-only private administrative entry point.
+Project/workspace APIs, model tools and workload identities cannot create,
+edit or activate policies, provenance registrations or reviewer grants.
+The in-app `platform-operators`/`admin` group alone is not IAM authorization.
+The same IAM-only write/current-actor record-verification pattern applies to
+the `design_publish`/`policy_publish` capabilities used by shared publications.
+
+| Record | Required bindings and authority |
+|---|---|
+| Admission policy | Policy ID/revision/hash, deployment/project scope, eligible data classes, inspection/normalization profiles, expiry and trusted provenance rules. Cannot override mandatory privacy/source-access checks. IAM-only administration. |
+| Provenance registration | Policy revision, server-owned fixture registry entry or policy-approved public source reference, exact revision/byte hash and scope. Filenames, project labels and uploader claims are not registrations. IAM-only administration. |
+| Reviewer grant | Grant ID/revision, verified actor reference, policy/scope, allowed review operation and expiry/revocation. Does not grant source-read access. IAM-only administration; private APIs verify current grants on review. |
+| Admission decision | Project/source reference and audience revision, exact admitted artifact/hash, original-to-derivative linkage, policy/provenance refs, inspection receipt/hash, applicable human actor/grant revision, status and expiry. Produced only by private intake after current checks; no raw originals or credentials in the record. |
+
+These are administrative/internal contracts, not newly public workspace routes.
+The implementation must record the concrete private module/storage/entry-point
+bindings before installation. Source admission reads revalidate current policy,
+grant where required, source audience and the exact artifact/inspection hashes.
 
 ## Phase 0: mandatory capability gates
 
@@ -527,6 +645,18 @@ and produces a separately hashed derivative. Original mappings remain private.
 The model boundary independently checks the final outgoing model payload.
 Source permission and non-sensitive classification are separate requirements.
 
+Private intake owns inspection, image normalization and admission records.
+A platform security operator administers the versioned policy and names its
+eligible source-admission reviewers. For required human decisions, including
+internal-non-sensitive review, a reviewer needs that policy grant and current
+source access; project ownership or workload identity alone
+does not grant admission-review authority or a source-read bypass. Bind each
+decision to policy revision, applicable reviewer revision and exact
+source/derivative hashes. Synthetic/public inputs may use policy-approved
+trusted provenance checks; caller-supplied class labels are not such evidence.
+Missing policy, inspection, required reviewer authority or privacy-service
+redaction blocks admission and transfer.
+
 Canonical source bytes reach Runtime only through scoped artifact handles issued
 by the new source-broker Lambda after current access/admission checks.
 Transfers use 256 KiB chunks with offset, total size, chunk hash and whole-object
@@ -557,7 +687,13 @@ stop with explicit budget-exhausted/needs-changes evidence. Never weaken checks
 or claim all requested rounds ran. These timing assumptions are measured in
 Phase 0 rather than treated as a service guarantee.
 
-These bounded spikes are the first implementation work. Use synthetic inputs
+Minimal offline protocol/admission code and bounded spikes are the first
+implementation work. Disposable probes transfer only server-registered synthetic
+fixtures with exact hashes under a versioned probe-scope policy and private
+format/PII inspection. They do not require complete customer-intake/sharing APIs,
+but cannot bypass `source-admission/1` or its administration/access rules.
+The private-intake owner validates this prerequisite before each transfer probe.
+Use synthetic inputs
 and disposable resources in an explicitly verified deployment account/region.
 Plan statements are not passing receipts. Feature integration and production
 cutover wait for every applicable gate.
@@ -565,10 +701,11 @@ cutover wait for every applicable gate.
 | Gate | Measurable pass evidence | Failure decision |
 |---|---|---|
 | Offline ontology/analyzer | Fixed expected eight-level mappings, code/image references, witness paths and blocked/revoked/ambiguous/truncated cases all pass | Correct schema or implementation before enabling canonical projection |
-| Code Interpreter | Fetch exact-version S3 archive ≤64 MiB compressed/256 MiB expanded and verify hash within 120s; record OS/architecture/Node; compile with matching native dependencies in ≤60s without package install; deny source-bucket access; two rebuilds have identical hashes | Stop; revise archive/runtime strategy and repeat. No relabelled local compiler. |
-| Browser | Authenticated automation, exact-bundle fulfillment in no-egress VPC, blocked external HTTP/WebSocket, behavior/a11y/Korean fonts verified in ≤120s, actual profile/screenshots | Stop; resolve service/network/profile constraints. No public-network fallback. |
-| Identity/Gateway | Identity-brokered credential accepted by dedicated audience/scope; valid capability invokes Lambda; swapped execution/project, expired token and revoked membership rejected | Stop until chosen topology is proven. No decorative Identity or anonymous Gateway. |
-| Runtime/ledger | Duplicate dispatch has one current attempt; crash after evidence enters recovery-required; cancellation fences late publication | Fix protocol before real job integration. |
+| Private source admission | Current policy/provenance/reviewer/source bindings; private image normalization and inspection; required redaction derivative; source-readable but inadmissible inputs and unauthorized policy/grant writes denied | Stop transfers until the private-intake gate passes. Probe-scope synthetic approval cannot admit unreviewed source material. |
+| Code Interpreter | Fetch exact-version S3 archive ≤64 MiB compressed/256 MiB expanded and verify hash within 120s; record OS/architecture/Node; compile with matching native dependencies in ≤60s without package install; deny source-bucket access; identical rebuilds; source/token canaries absent from session logs/exporters | Stop; revise archive/runtime/logging strategy and repeat. No relabelled local compiler. |
+| Browser | Authenticated exact-bundle automation in no-egress VPC; blocked external HTTP/WebSocket; behavior/a11y/Korean fonts in ≤120s; actual profile/screenshots; source/token canaries absent from session logs/exporters | Stop; resolve service/network/profile/logging constraints. No public-network fallback. |
+| Identity/Gateway | Brokered credential accepted by dedicated audience/scope; allocated-attempt capability invokes Lambda; swapped/expired/revoked requests deny; capability canaries absent from Gateway/Identity logs/spans/exporters | Stop until topology and credential exclusion are proven. No decorative Identity or anonymous Gateway. |
+| Runtime/ledger | Legacy/new writers reject incompatible job discriminators before mutation; duplicates have one attempt; crash recovery/cancellation fence late publication; execution-profile timing and metadata-only telemetry verified | Fix protocol, deployed guards and telemetry before real job integration. |
 | Memory | Structured scoped event storage/retrieval without extraction; another actor/project denied; stale references excluded; deletion recorded | Block selected-backend admission until isolation/retention pass. |
 | Models/region/quotas | Resolve enabled provider IDs, boundary-routed synthetic calls, region/network compatibility and measured quotas/budgets | Mark requested model unavailable; no silent substitution. |
 
@@ -584,14 +721,25 @@ Runtime region alone is not a data-residency guarantee.
 
 Gate owners are the platform-runtime maintainer (Runtime/Interpreter), verifier
 maintainer (Browser), platform-identity maintainer (Identity/Gateway), ontology
-maintainer (Memory/source bindings), and model-boundary maintainer (models).
+maintainer (offline ontology/analyzer and Memory/source bindings), and
+model-boundary maintainer (models).
+The private-intake maintainer owns the source-admission gate; the platform
+security operator owns its IAM-administered policy/provenance/grant approval.
+The privacy/infra maintainer owns any source-document redaction adapter, caller
+authorization and private network route. Existing MyData relay/gateway support
+does not imply that source-document intake is covered by its current contract.
+Until that separate integration is reviewed, only eligible synthetic/public
+inputs with complete required inspection and no redaction dependency can pass;
+inputs requiring unavailable redaction stay blocked.
 The implementation record names the responsible reviewer before a gate runs.
 Each gate saves its configured limits, fixture hashes, observed measurements,
 negative-case outcomes and stop/go decision. Production integration cannot
 proceed with an unowned or unmeasured gate.
 Interpreter/Browser gates govern generation and handoff rows; Identity/Runtime
 govern every protected execution; Memory governs reuse; ontology/code fixtures
-govern classification and impact; all gates govern deployment admission.
+govern classification and impact; private admission governs data transfers;
+all gates govern deployment admission. The ontology owner coordinates the
+SRC-05/06 offline portions with the private-intake owner.
 
 ## Vertical acceptance case and rollout
 
@@ -628,6 +776,9 @@ attempt. Display actual backend/service evidence. Rollback pauses AgentCore
 admission and deliberately selects a compatible previous backend for new work,
 labelled legacy execution. Existing AgentCore jobs fail or reconcile explicitly;
 no per-call automatic fallback.
+For source analysis there is no production legacy analyzer: rollback blocks
+new analyses until a verified backend is restored, never enabling the offline
+test adapter.
 
 Deliver at least three independently reviewed PRs: **A**, canonical ontology,
 vocabulary mappings, analyzer and reverse-impact contracts with offline tests;
@@ -635,3 +786,11 @@ vocabulary mappings, analyzer and reverse-impact contracts with offline tests;
 infrastructure and Phase 0 receipts; **C**, cohort cutover, actual job/UI wiring
 and end-to-end acceptance. PR A does not claim AgentCore execution, PR B does not
 enable the production default, and PR C does not bypass A/B reviews or gates.
+
+The B chain contains independently reviewed offline execution protocol,
+private admission/normalization, publication/source-authority adapters, durable
+execution authority/key registry, disposable capability probes and service
+adapter/IaC units. B0/B1/B2 in the architecture register subdivide these units;
+they do not change A/B/C gate or review obligations. C cannot complete sharing,
+source-analysis or handoff acceptance without the corresponding B authority
+adapters and private-admission evidence.
