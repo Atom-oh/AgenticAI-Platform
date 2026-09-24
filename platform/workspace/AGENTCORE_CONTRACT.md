@@ -691,10 +691,16 @@ live evidence and the privacy redaction adapter remain outstanding.
   and uses only the verified index), each `GET /intake/reviews` item and the
   whole response after all reads (pending decision, policy, the actor's grants,
   transcription image lineage and source fences). Model calls and commits use
-  the same recheck: `transcription.transcribe` immediately before `generate`,
+  the same recheck: `transcription.transcribe` immediately before `generate`
+  and again before its commit, keeping the original `Sources` reader so the
+  pre-generation source observations fence the commit,
   `admission.decide` (every admission path) before and on each commit attempt,
-  `request_image` before queueing, and review approval/publication on each
-  attempt: the source fences (`Sources.recheck`) and the exact decision,
+  `request_image` before queueing (the job freezes the project
+  `authorityRevision`; its id and request hash exclude the token deadline, so a
+  refreshed token replays it while the job keeps its deadline), the Worker's
+  `intake-image` commit (the scope keeps the job's authorization deadline and
+  the frozen epoch is required on every attempt), and review
+  approval/publication on each attempt: the source fences (`Sources.recheck`) and the exact decision,
   policy, provenance and grant versions must still be current, schema-valid and
   unexpired. Grants and provenance pass `records.validate` on every use; a
   grant must name `review-internal` for the reviewing actor and provenance must

@@ -673,3 +673,26 @@ def test_image_decision_binds_a_hashed_normalization_receipt(env):
     with pytest.raises(AdmissionError) as error:
         admission.verify(env.api, env.scope(), image["id"])
     assert error.value.code == "artifact-changed"
+
+
+# PR #28 review round 4 ----------------------------------------------------------
+
+def test_image_access_revoked_and_restored_during_generation_records_nothing(env, monkeypatch):
+    """Review 4, finding 3: the original source observations are carried through generation and commit."""
+    ref, image, request, adapter = _transcription_request(env, monkeypatch)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    converse = adapter.converse_with_tools
+
+    def revoke_and_restore(*args, **kwargs):
+        result = converse(*args, **kwargs)
+        asset = storage.get(owner, "asset", ref["sourceId"])
+        stored = {k: v for k, v in asset.items() if k not in ("createdAt", "updatedAt", "version")}
+        revoked = storage.put(owner, "asset", {**stored, "accessRevoked": True}, asset["version"])
+        storage.put(owner, "asset", stored, revoked["version"])
+        return result
+
+    adapter.converse_with_tools = revoke_and_restore
+    with pytest.raises(AdmissionError) as error:
+        transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert error.value.code == "source-changed"
+    assert len(adapter.calls) == 1 and _transcriptions(env) == []

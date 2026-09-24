@@ -24,7 +24,6 @@ import re
 from intake import admission, derivative, images, imaging, inspect, records
 from intake.admission import AdmissionError
 from workspace import ontology_schema as schema
-from workspace.ontology_sources import Sources
 
 OPERATION = "intake.transcribe"
 MAX_TEXT = 20_000
@@ -141,8 +140,11 @@ def transcribe(host, scope, pending, *, model_id, generate=None, claims=None, tr
     placed = {"page": pending["page"], **{k: region[k] for k in ("left", "top", "width", "height")},
               "normalizedImageHash": region["normalizedImageHash"]}
     payload = schema.canonical({"page": pending["page"], "region": placed, **normalized})
-    reader = Sources(inspect.context(host, scope, claims))
-    reader.resolve(dict(decision["source"]))
+    # Keep the ORIGINAL reader: its source observations (asset record versions,
+    # authority snapshot) from before generation fence the final check and the
+    # commit, so revoke+restore during generation is `source-changed`.
+    reader = authority.reader
+    authority.recheck()  # the final check after generation, before the commit
     lineage = {"decisionId": decision["id"], "decisionRevision": decision["revision"]}
     return admission.decide(
         host, scope, reader=reader, source=dict(decision["source"]), data_class="internal-non-sensitive",
