@@ -700,9 +700,11 @@ live evidence and the privacy redaction adapter remain outstanding.
   verified scope's `authorizationExpiresAt` or the token `exp`, never extended
   by the five-minute fallback used only when neither is known; its id and
   request hash exclude the token deadline, so a refreshed token replays it
-  while the job keeps its deadline), the Worker's
-  `intake-image` commit (the scope keeps the job's authorization deadline and
-  the frozen epoch is required on every attempt), and review
+  while the job keeps its deadline; the job also persists every observed
+  source record version, part of its id, so a revoked and restored asset is a
+  new request), the Worker's `intake-image` processing and commit (the scope
+  keeps the job's authorization deadline; the frozen epoch and the observed
+  source versions are required before processing and on every attempt), and review
   approval/publication on each attempt: the source fences (`Sources.recheck`) and the exact decision,
   policy, provenance and grant versions must still be current, schema-valid and
   unexpired. Grants and provenance pass `records.validate` on every use; a

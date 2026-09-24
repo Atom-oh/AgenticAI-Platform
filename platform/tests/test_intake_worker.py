@@ -339,3 +339,37 @@ def test_expired_scope_deadline_queues_no_image_job(env):
     assert getattr(error.value, "status", None) == 401
     assert env.api.storage.list(f"project:{env.pid}", "job") == []
 
+
+
+def _revoke_and_restore_asset(env, identifier):
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    asset = storage.get(owner, "asset", identifier)
+    stored = {k: v for k, v in asset.items() if k not in ("createdAt", "updatedAt", "version")}
+    revoked = storage.put(owner, "asset", {**stored, "accessRevoked": True}, asset["version"])
+    storage.put(owner, "asset", stored, revoked["version"])
+
+
+@pytest.mark.parametrize("moment", ["before-processing", "during-ocr"])
+def test_asset_revoked_and_restored_after_queueing_cannot_complete_the_job(env, moment):
+    """Review 5, finding 2: the job persists the observed source versions and enforces them."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    worker = worker_for(env)
+    if moment == "before-processing":
+        _revoke_and_restore_asset(env, "flow")
+    else:
+        ocr = worker.ocr
+
+        def racing(data):
+            _revoke_and_restore_asset(env, "flow")
+            return ocr(data)
+        worker.ocr = racing
+    outcome = worker.handle(invoked)
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+    job = storage.get(owner, "job", queued["job"]["id"])
+    assert job["status"] == "failed"
+    assert job["input"]["observed"] == [{"owner": owner, "kind": "asset", "id": "flow", "version": 1}]

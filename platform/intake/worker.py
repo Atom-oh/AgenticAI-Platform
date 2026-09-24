@@ -39,15 +39,25 @@ def process_image(worker, owner, job):
     if scope["owner"] != owner or job.get("task") != "intake-image":
         raise ValueError("작업 범위가 반입 요청과 다릅니다.")
     frozen = data.get("authorityRevision")
+    observed = data.get("observed")
+    if (not isinstance(observed, list) or not observed
+            or any(not isinstance(check, dict) or set(check) != {"owner", "kind", "id", "version"}
+                   or check["owner"] != owner or type(check["version"]) is not int for check in observed)):
+        raise IntakeBlocked(["source-changed"])
 
     def current_authority():
-        """The membership epoch observed at queueing must still hold: a removed and
-        restored member (a later epoch) cannot resurrect the queued request."""
+        """The membership epoch and every source record version observed at queueing
+        must still hold: a removed and restored member (a later epoch) or a revoked
+        and restored asset (a later version) cannot resurrect the queued request."""
         if storage.clock() >= deadline:
             raise IntakeBlocked(["authorization-expired"])
         fresh = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
         if type(frozen) is not int or fresh["project"].get("authorityRevision", 0) != frozen:
             raise IntakeBlocked(["authority-changed"])
+        for check in observed:
+            row = storage.get(check["owner"], check["kind"], check["id"])
+            if not row or row.get("version") != check["version"]:
+                raise IntakeBlocked(["source-changed"])
 
     current_authority()
     current = storage.get(owner, "job", job["id"])

@@ -356,18 +356,24 @@ def request_image(host, scope, source_ref, *, data_class, claims=None):
     reader.resolve(ref)
     # Final recheck (policy version/status/expiry and source fences) after the
     # last read, immediately before the job is queued.
-    Authority(host, reader, [_check(INTAKE_OWNER, "adm_policy", policy)]).recheck()
+    fences = Authority(host, reader, [_check(INTAKE_OWNER, "adm_policy", policy)]).recheck()
     source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
     authorization = _authorization_deadline(storage, scope, claims)
     # The membership authority epoch is frozen on the job: a removed and restored
     # member (a later epoch) is a different request that the old job cannot serve.
     epoch = reader.ctx.scope["project"].get("authorityRevision", 0)
+    # So are the observed source record versions: a revoked and restored asset
+    # (a later version) is a different request that the old job cannot serve.
+    observed = sorted(({key: check[key] for key in ("owner", "kind", "id", "version")} for check in fences),
+                      key=lambda check: (check["owner"], check["kind"], check["id"]))
+    if not observed or any(check["owner"] != scope["owner"] for check in observed):
+        raise AdmissionError("source-changed")
     request_id = schema.digest([project_id, scope["actor"], source, data_class, policy["id"], policy["revision"],
-                                epoch])
+                                epoch, observed])
     job_id = "intake-image-" + request_id[:40]
     data = {"actorId": scope["actor"], "projectId": project_id, "sourceRef": source, "dataClass": data_class,
             "policy": {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]},
-            "decisionId": "adm-img-" + request_id[:40], "authorityRevision": epoch,
+            "decisionId": "adm-img-" + request_id[:40], "authorityRevision": epoch, "observed": observed,
             "authorizationExpiresAt": authorization}
     # Stable request identity excludes the token deadline: a refreshed token replays
     # the same job (current access was rechecked above; the job keeps its deadline).
