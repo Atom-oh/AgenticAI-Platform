@@ -729,3 +729,27 @@ def test_publication_listing_rechecks_every_rows_observations_before_responding(
     status, listed, _ = call(org.api, "GET", "/publications", actor="carol", project=org.origin)
     assert calls["n"] >= 2
     assert status == 409 or not any(ref["sourceId"] in json.dumps(listed) for ref in org.refs), listed
+
+
+
+# Fix round 4 (PR #29 review 4) ----------------------------------------------
+
+def test_grant_for_an_inaccessible_publication_equals_a_missing_one(org):
+    """Review 4 #5: creation and replay require current upstream sharing eligibility."""
+    pub = published(org)
+    body = {"roles": ["designer"]}
+    status, created, _ = call(org.api, "POST", f"/publications/{pub['id']}/grants", body, actor="erin",
+                              project=org.dest)
+    assert status == 201, created
+    restrict(org, ["owner", "designer"])
+    missing = call(org.api, "POST", "/publications/pub-absent/grants", body, actor="erin", project=org.dest)[:2]
+    # Replay of the accepted grant and a new acceptance for other roles are both missing.
+    for roles in (["designer"], ["designer", "planner"]):
+        status, payload, _ = call(org.api, "POST", f"/publications/{pub['id']}/grants", {"roles": roles},
+                                  actor="erin", project=org.dest)
+        assert (status, payload) == missing, payload
+        assert org.origin not in json.dumps(payload) and pub["hash"] not in json.dumps(payload)
+    assert denied(granted, org, pub) == (404, "not-found")
+    rows = org.api.storage.list(f"project:{org.hidden}", "pub_grant")
+    assert denied(granted, org, pub, dest=org.hidden, owner="hank") == (404, "not-found")
+    assert org.api.storage.list(f"project:{org.hidden}", "pub_grant") == rows == []

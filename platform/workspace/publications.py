@@ -310,6 +310,9 @@ def grant(ctx, publication_id, *, roles):
     record = _publication(ctx.storage, publication_id)
     if not record or record.get("status") != "published" or record.get("originProject") == ctx.project_id:
         _not_found()
+    # Inaccessible equals missing: the upstream sharing eligibility of this exact
+    # revision is authorized before creation or replay, and fences the commit.
+    checks = _eligible(ctx, record, record["revision"]).recheck()
     identifier = grant_id(record["id"], record["revision"])
     previous = ctx.storage.get(ctx.owner, "pub_grant", identifier)
     roles = sorted(roles)
@@ -328,7 +331,8 @@ def grant(ctx, publication_id, *, roles):
     publication = {**{k: v for k, v in record.items() if k not in ("version", "createdAt", "updatedAt")},
                    "grants": destinations}
     saved = ctx.commit([ctx.write("pub_grant", item, previous["version"] if previous else None),
-                        _write(PUBLICATION_OWNER, "publication", publication, record["version"])])[0]
+                        _write(PUBLICATION_OWNER, "publication", publication, record["version"])],
+                       checks=checks)[0]
     return public(saved)
 
 
@@ -432,11 +436,14 @@ def publication_visible(ctx, record, aggregate=None):
 
 
 def grant_visible(ctx, row, aggregate=None):
-    """Response-gate view of an accepted grant of this destination project."""
+    """Response-gate view of an accepted grant: this destination's active grant of an eligible revision."""
     if (not isinstance(row, dict) or row.get("projectId") != ctx.project_id or row.get("status") != "active"):
         return False
     record = _publication(ctx.storage, row.get("publicationId"))
-    return bool(record) and record.get("originProject") == row.get("originProject") != ctx.project_id
+    if not record or record.get("originProject") != row.get("originProject") or record["originProject"] == ctx.project_id:
+        return False
+    _eligible(ctx, record, row.get("publicationRevision"), aggregate)
+    return True
 
 
 def _detail(ctx, identifier):
@@ -694,10 +701,24 @@ def resolve_published(sources, ref, *, historical=False, text=False):
     raw, snapshot = _snapshot(storage, entry)
     if snapshot.get("publicationId") != record["id"]:
         fail(409, "ontology-source-integrity", "게시 스냅샷이 게시물과 다릅니다.")
-    bound = {item.get("policyId"): item.get("revision") for item in entry.get("sharing", [])
-             if isinstance(item, dict)}
     if entry.get("sharing") != snapshot.get("sharing"):
         fail(409, "ontology-source-integrity", "게시 스냅샷의 공유 정책 기록이 다릅니다.")
+    _revision_upstream(sources, record, entry, snapshot, historical=historical)
+    if not historical:
+        if record["status"] == "withdrawn":
+            fail(409, "source-withdrawn", "철회된 게시물입니다.")
+        if record["revision"] != revision or record["status"] != "published":
+            fail(409, "source-superseded", "새 게시 리비전으로 대체되었습니다. 새 수락이 필요합니다.")
+        if record["hash"] != ref["sha256"]:
+            fail(409, "source-changed", "게시물 리비전의 해시가 다릅니다.")
+    return {"record": _revision_view(record, entry, snapshot), "text": raw.decode("utf-8") if text else None}
+
+
+def _revision_upstream(sources, record, entry, snapshot, *, historical):
+    """Every published source's current origin audience and bound sharing policy (fenced into `sources`)."""
+    storage = sources.storage
+    bound = {item.get("policyId"): item.get("revision") for item in entry.get("sharing", [])
+             if isinstance(item, dict)}
     for node in snapshot.get("nodes", []):
         for source in node.get("sourceRefs", []):
             upstream_ref = schema.source_ref(source)
@@ -717,14 +738,33 @@ def resolve_published(sources, ref, *, historical=False, text=False):
                 fail(409, "source-upstream-revoked", "원본 프로젝트의 읽기 범위가 변경되어 게시물을 사용할 수 없습니다.")
             for owner, kind, item in upstream:
                 sources._remember_owned(owner, kind, item)
-    if not historical:
-        if record["status"] == "withdrawn":
-            fail(409, "source-withdrawn", "철회된 게시물입니다.")
-        if record["revision"] != revision or record["status"] != "published":
-            fail(409, "source-superseded", "새 게시 리비전으로 대체되었습니다. 새 수락이 필요합니다.")
-        if record["hash"] != ref["sha256"]:
-            fail(409, "source-changed", "게시물 리비전의 해시가 다릅니다.")
-    return {"record": _revision_view(record, entry, snapshot), "text": raw.decode("utf-8") if text else None}
+
+
+def _eligible(ctx, record, revision, aggregate=None):
+    """Upstream sharing eligibility of one published revision for grant acceptance.
+
+    The revision's approval entry and snapshot must verify and every source's
+    current origin audience and bound sharing policy must hold; otherwise the
+    publication is indistinguishable from a missing one (`404`). Returns the
+    reader whose observations fence the acceptance commit.
+    """
+    sources = Sources(ctx, max_records=4 * MAX_NODES + 20, max_sources=MAX_NODES * 4)
+    try:
+        entry = next((item for item in record.get("history", []) if item.get("revision") == revision), None)
+        if not entry or (revision == record.get("revision") and entry.get("hash") != record.get("hash")):
+            _not_found()
+        _, snapshot = _snapshot(ctx.storage, entry)
+        if snapshot.get("publicationId") != record["id"] or entry.get("sharing") != snapshot.get("sharing"):
+            _not_found()
+        _revision_upstream(sources, record, entry, snapshot, historical=True)
+        sources.recheck()
+    except CollaborationError as error:
+        if error.status == 401 or error.code in _AUTHORITY_CODES:
+            raise
+        _not_found()
+    if aggregate is not None:
+        aggregate.absorb(sources)
+    return sources
 
 
 def _authorized_page(ctx, query, view_name, owner, kind, prefix, include, reader):

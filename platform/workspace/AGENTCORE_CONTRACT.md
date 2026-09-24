@@ -118,8 +118,11 @@ Project roles remain the authoritative owner/planner/designer/developer roles.
 Organization-level `design_publish` and `policy_publish` capabilities are
 separate grants assigned through IAM-only administration (`intake/admin_handler.py`
 `grant_capability`/`revoke_capability`); project owners cannot self-grant them. Origin source authority is also required. Destination acceptance
-requires destination ownership. Explicit deny, upstream restriction, expiry and
-revocation override allows.
+requires destination ownership and the revision's current upstream sharing
+eligibility (every source's origin audience and bound `adm_sharing` policy), checked
+before creation or replay and fenced into the acceptance commit; an ineligible
+publication is the same `404` as a missing one. Explicit deny, upstream restriction,
+expiry and revocation override allows.
 
 Withdrawal is prospective enforcement, not recall of delivered bytes. At the
 next access/stage boundary, fence affected attempts, quarantine derivatives,
