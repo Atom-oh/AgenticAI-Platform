@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import io
+import re as _re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -68,9 +69,59 @@ def condition_matches(condition, item):
         return name in item
     if op == "=":
         return item.get(name) == values[1]
+    if op == "<>":
+        return item.get(name) != values[1]
     if op == "begins_with":
         return str(item.get(name, "")).startswith(values[1])
     raise AssertionError(f"Unsupported fake condition: {op}")
+
+
+_TOKEN = _re.compile(r"\s*(\(|\)|AND\b|OR\b|attribute_not_exists\(#\w+\)|attribute_exists\(#\w+\)|#\w+\s*(?:=|<>)\s*:\w+)")
+
+
+def _eval(expression, names, values, current):
+    tokens, pos = [], 0
+    while pos < len(expression):
+        match = _TOKEN.match(expression, pos)
+        if not match:
+            raise AssertionError(f"Unsupported fake transaction condition: {expression}")
+        tokens.append(match.group(1).strip())
+        pos = match.end()
+
+    def atom(tok):
+        if tok.startswith("attribute_not_exists("):
+            return names[tok[21:-1]] not in current
+        if tok.startswith("attribute_exists("):
+            return names[tok[17:-1]] in current
+        op = "<>" if "<>" in tok else "="
+        name, value = (part.strip() for part in tok.split(op))
+        equal = current.get(names[name]) == values[value]
+        return equal if op == "=" else not equal
+
+    def parse_or(i):
+        left, i = parse_and(i)
+        while i < len(tokens) and tokens[i] == "OR":
+            right, i = parse_and(i + 1)
+            left = left or right
+        return left, i
+
+    def parse_and(i):
+        left, i = parse_term(i)
+        while i < len(tokens) and tokens[i] == "AND":
+            right, i = parse_term(i + 1)
+            left = left and right
+        return left, i
+
+    def parse_term(i):
+        if tokens[i] == "(":
+            value, i = parse_or(i + 1)
+            assert tokens[i] == ")"
+            return value, i + 1
+        return atom(tokens[i]), i + 1
+
+    result, end = parse_or(0)
+    assert end == len(tokens)
+    return result
 
 
 class FakeTable:
@@ -103,12 +154,7 @@ class FakeTable:
                 assert isinstance(expression, str)
                 names = entry["ExpressionAttributeNames"]
                 current = self.items.get(key, {})
-                if expression.startswith("attribute_not_exists("):
-                    field = names[expression[len("attribute_not_exists("):-1]]
-                    matches = field not in current
-                else:
-                    name, value = expression.split(" = ")
-                    matches = current.get(names[name]) == entry["ExpressionAttributeValues"][value]
+                matches = _eval(expression, names, entry.get("ExpressionAttributeValues", {}), current)
                 if not matches:
                     raise TransactionFailure()
             for entry, key in zip(writes, keys):
@@ -414,6 +460,27 @@ def test_transaction_throttling_is_not_reported_as_version_conflict(storage):
     with pytest.raises(TransactionFailure):
         storage.put_many([{"owner": "alice", "kind": "asset", "item": {"id": "new"},
                            "expected_version": None}])
+
+
+def test_fake_transaction_evaluates_compound_builder_conditions(storage):
+    from boto3.dynamodb.conditions import Attr
+    from workspace.storage import Conflict
+    storage.put("alice", "job", {"id": "j1", "task": "run"})
+    table = storage.table()
+    cond = Attr("version").eq(1) & Attr("executionSchemaVersion").not_exists()
+    from boto3.dynamodb.conditions import ConditionExpressionBuilder
+    built = ConditionExpressionBuilder().build_expression(cond)
+    item = dict(table.items[next(iter(table.items))], version=2)
+    put = {"TableName": table.name, "Item": item, "ConditionExpression": built.condition_expression,
+           "ExpressionAttributeNames": built.attribute_name_placeholders,
+           "ExpressionAttributeValues": built.attribute_value_placeholders}
+    table.transact_write_items(TransactItems=[{"Put": put}])          # passes
+    reserved = dict(item, executionSchemaVersion=1, version=3)
+    table.items[next(iter(table.items))] = reserved
+    put["Item"] = dict(reserved, version=4)
+    put["ExpressionAttributeValues"] = {":v0": 3}
+    with pytest.raises(TransactionFailure):
+        table.transact_write_items(TransactItems=[{"Put": put}])
 
 
 def test_transaction_boto3_wire_conditions_are_nested_and_values_marshaled_once():
