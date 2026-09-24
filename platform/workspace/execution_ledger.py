@@ -472,6 +472,173 @@ class Ledger:
         after = {**job, "status": "dispatched", "fence": fence, "attempt": attempt, "ops": {}}
         return self._commit(owner, job, after, checks=[check], op=op)
 
+    # --- tool role: attempts, leases and receipts ------------------------------
+    def _current(self, job, attempt_id, fence, *, statuses=("dispatched", "running"), lease=True):
+        attempt = job.get("attempt") or {}
+        now = self.storage.clock()
+        if (not attempt or attempt.get("id") != attempt_id or type(fence) is not int
+                or fence != job["fence"] or attempt.get("fence") != fence or job["status"] not in statuses
+                or not now < job["deadlineAt"] or lease and not now < attempt.get("leaseExpiresAt", 0)):
+            raise LedgerError("stale-attempt")
+        return attempt
+
+    def _claim(self, owner, job_id, attempt_id, fence, *, operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "claim", operation_id, {"jobId": job_id, "attemptId": attempt_id, "fence": fence})
+        if replay:
+            return replay["job"]
+        self._current(job, attempt_id, fence)
+        if job["status"] != "dispatched":
+            raise LedgerError("already-claimed")
+        check = self._check_authority(owner, job)
+        return self._commit(owner, job, {**job, "status": "running"}, checks=[check], op=op)
+
+    def _heartbeat(self, owner, job_id, attempt_id, fence):
+        """Not an op entry: idempotent by nature. Extending a lease never re-indexes (a due sweep rechecks)."""
+        job = self._get(owner, job_id)
+        attempt = self._current(job, attempt_id, fence)
+        now = self.storage.clock()
+        extended = {**attempt, "heartbeatAt": now,
+                    "leaseExpiresAt": min(now + job["profileBody"]["leaseMs"], job["deadlineAt"])}
+        return self._commit(owner, job, {**job, "attempt": extended}, reindex=False)
+
+    def _fail(self, owner, job_id, attempt_id, fence, *, code, operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "fail", operation_id, {"jobId": job_id, "attemptId": attempt_id,
+                                                          "fence": fence, "code": code})
+        if replay:
+            return replay["job"]
+        self._current(job, attempt_id, fence)
+        if not isinstance(code, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", code):
+            raise LedgerError("code-invalid")
+        return self._terminal(owner, job, "failed", error={"code": code}, bump_fence=True, op=op)
+
+    def _allowed_inputs(self, owner, job):
+        allowed = {job["manifest"]["ref"]: job["manifest"]["hash"]}
+        for row in job.get("stages", []):
+            for output in row.get("outputs", []):
+                allowed[output["key"]] = output["sha256"]
+        for handle in (job.get("handles") or {}).values():
+            if handle.get("direction") == "in" and handle.get("attemptId") == (job.get("attempt") or {}).get("id"):
+                allowed[handle["key"]] = handle["sha256"]
+        return allowed
+
+    def _manifest_priors(self, owner, job):
+        ref = job["manifest"]["ref"]
+        try:
+            if not self.storage.owns_key(owner, ref):
+                return []
+            data = self.storage.get_blob(ref)
+        except (ValueError, FileNotFoundError, RuntimeError):
+            return []
+        if hashlib.sha256(data).hexdigest() != job["manifest"]["hash"]:
+            return []
+        try:
+            priors = json.loads(data).get("priors", [])
+        except (ValueError, AttributeError):
+            return []
+        return [prior for prior in priors if isinstance(prior, dict)] if isinstance(priors, list) else []
+
+    def _verify_object(self, owner, entry, fields):
+        if not isinstance(entry, dict) or set(entry) - set(fields) or {"key", "sha256", "size"} - set(entry):
+            return False
+        try:
+            info = self.storage.blob_info(entry["key"])
+            if info["sha256"] != entry["sha256"] or info["size"] != entry["size"]:
+                return False
+            data = self.storage.get_blob(entry["key"])       # server re-hash of the stored bytes
+        except (ValueError, FileNotFoundError, RuntimeError):
+            return False
+        return hashlib.sha256(data).hexdigest() == entry["sha256"] and len(data) == entry["size"]
+
+    _RECEIPT_REQUIRED = frozenset({"schemaVersion", "executionId", "attemptId", "fence", "sessionId", "stage", "nonce",
+                                   "profileHash", "admissions", "keyId", "signature"})
+    _RECEIPT_OPTIONAL = frozenset({"operationId", "objects", "inputs", "outputs", "service", "iat", "exp",
+                                   "status", "result", "previous"})
+
+    def _verified_receipt(self, owner, job, receipt, *, attempt=None):
+        """Receipt schema v1 checks; returns the stage entry or raises receipt-invalid without writing."""
+        attempt = attempt or job["attempt"]
+        now = self.storage.clock()
+        try:
+            valid = (isinstance(receipt, dict) and self._RECEIPT_REQUIRED <= set(receipt)
+                     and not set(receipt) - self._RECEIPT_REQUIRED - self._RECEIPT_OPTIONAL
+                     and self.verifier.verify(receipt) is True)
+        except Exception:  # noqa: BLE001 - a verifier failure is an invalid receipt
+            valid = False
+        if not valid:
+            raise LedgerError("receipt-invalid")
+        stages = [row for row in job.get("stages", []) if row.get("attemptId") == attempt["id"]]
+        previous = stages[-1]["receiptHash"] if stages else None
+        nonce = receipt["nonce"]
+        checks = [
+            type(receipt["schemaVersion"]) is int and receipt["schemaVersion"] == 1,
+            receipt["executionId"] == job["id"], receipt["attemptId"] == attempt["id"],
+            type(receipt["fence"]) is int and receipt["fence"] == attempt["fence"] == job["fence"],
+            receipt["sessionId"] == attempt["sessionId"], receipt["profileHash"] == job["profile"]["hash"],
+            receipt["admissions"] == job["admissions"],
+            receipt["stage"] in OPERATIONS[job["operation"]],
+            isinstance(nonce, str) and 1 <= len(nonce) <= 128 and nonce not in job.get("nonces", []),
+            receipt.get("previous") == previous,
+            receipt.get("status", "ok") in ("ok", "failed", "incomplete"),
+            len(stages) < 64,
+        ]
+        if "iat" in receipt or "exp" in receipt:
+            iat, exp = receipt.get("iat"), receipt.get("exp")
+            checks.append(type(iat) is int and type(exp) is int and iat <= now < exp <= job["deadlineAt"])
+        if "result" in receipt:
+            checks.append(isinstance(receipt["result"], dict)
+                          and len(json.dumps(receipt["result"], ensure_ascii=False, default=str).encode()) <= 8192)
+        if "service" in receipt:
+            service = receipt["service"]
+            checks.append(isinstance(service, dict)
+                          and service.get("kind") in ("runtime", "interpreter", "browser", "model")
+                          and not set(service) - {"kind", "sessionId", "taskId", "exitCode"})
+        if not all(checks):
+            raise LedgerError("receipt-invalid")
+        allowed = self._allowed_inputs(owner, job)
+        inputs = receipt.get("inputs", [])
+        if not isinstance(inputs, list) or len(inputs) > 100:
+            raise LedgerError("receipt-invalid")
+        for entry in inputs:
+            if not isinstance(entry, dict) or set(entry) != {"key", "sha256", "size"}:
+                raise LedgerError("receipt-invalid")
+            if allowed.get(entry["key"]) != entry["sha256"]:
+                priors = {prior.get("key"): prior.get("sha256") for prior in self._manifest_priors(owner, job)}
+                if priors.get(entry["key"]) != entry["sha256"]:
+                    raise LedgerError("receipt-invalid")
+        prefix = self.storage.key_for(owner, "job", job["id"], f"out/{attempt['id']}/x")[:-1]
+        outputs = [*receipt.get("outputs", []), *receipt.get("objects", [])]
+        if not isinstance(receipt.get("outputs", []), list) or not isinstance(receipt.get("objects", []), list) \
+                or len(outputs) > 100:
+            raise LedgerError("receipt-invalid")
+        for entry in outputs:
+            if (not isinstance(entry, dict) or not isinstance(entry.get("key"), str)
+                    or not entry["key"].startswith(prefix)
+                    or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
+                raise LedgerError("receipt-invalid")
+        return {"stage": receipt["stage"], "receiptHash": schema.digest(receipt), "nonce": nonce,
+                "attemptId": attempt["id"], "status": receipt.get("status", "ok"),
+                "result": copy.deepcopy(receipt.get("result", {})),
+                "outputs": [{key: entry[key] for key in ("key", "sha256", "size", "role") if key in entry}
+                            for entry in outputs]}
+
+    def _stage(self, owner, job_id, attempt_id, fence, receipt, *, operation_id=None):
+        job = self._get(owner, job_id)
+        operation_id = operation_id if operation_id is not None else (
+            receipt.get("operationId") if isinstance(receipt, dict) else None)
+        op, replay = self._op(job, "stage", operation_id, {"jobId": job_id, "attemptId": attempt_id, "fence": fence,
+                                                           "receipt": receipt})
+        if replay:
+            return replay["job"]
+        self._current(job, attempt_id, fence)
+        if isinstance(receipt, dict) and "operationId" in receipt and receipt["operationId"] != operation_id:
+            raise LedgerError("receipt-invalid")
+        entry = self._verified_receipt(owner, job, receipt)
+        check = self._check_authority(owner, job)
+        after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
+        return self._commit(owner, job, after, checks=[check], op=op, reindex=False)
+
     # --- reconciler role -----------------------------------------------------
     def _resolve_orphan(self, due):
         return _resolve_orphan(self.storage, due)

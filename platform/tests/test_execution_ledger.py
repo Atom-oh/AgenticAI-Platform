@@ -196,3 +196,221 @@ def test_unknown_operation_is_refused(env):
     with pytest.raises(LedgerError) as error:
         admit(env[1], operation="design.deploy")
     assert error.value.code == "unknown-operation"
+
+
+# === Task 5: attempts, leases, heartbeats and stage receipts (RUN-01, RUN-02, RUN-04) ================
+
+import hashlib  # noqa: E402
+import secrets  # noqa: E402
+
+
+def running(env):
+    storage, ledger, now = env
+    job = admit(ledger)
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    return job
+
+
+def op_id():
+    return secrets.token_hex(16)
+
+
+def test_one_current_attempt_and_superseded_fence_rejected(env):
+    storage, ledger, now = env
+    job = running(env)
+    old = dict(job["attempt"])
+    ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().heartbeat(OWNER, job["id"], old["id"], old["fence"])
+    assert error.value.code == "stale-attempt"
+
+
+def test_double_allocate_cannot_create_second_attempt(env):
+    _, ledger, _ = env
+    job = admit(ledger)
+    ledger.dispatcher().allocate(OWNER, job["id"])
+    with pytest.raises(LedgerError):
+        ledger.dispatcher().allocate(OWNER, job["id"])
+
+
+def test_lease_loss_blocks_stage_writes(env):
+    storage, ledger, now = env
+    job = running(env)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"],
+                            receipt(TestKeyVerifier(), job=job, stage="context", nonce="n1"))
+    assert error.value.code == "stale-attempt"
+
+
+@pytest.mark.parametrize("tamper", [
+    lambda r: {**r, "attemptId": "att-other"},
+    lambda r: {**r, "admissions": [{"decisionId": "adm-2", "revision": "1", "artifactHash": "a" * 64}]},
+    lambda r: {**r, "profileHash": "c" * 64},
+    lambda r: {**r, "signature": "0" * 64},
+    lambda r: {**r, "stage": "deploy"},
+])
+def test_invalid_receipts_are_rejected_without_writes(env, tamper):
+    storage, ledger, _ = env
+    job = running(env)
+    bad = tamper(receipt(TestKeyVerifier(), job=job, stage="context", nonce="n1"))
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], bad)
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["version"] == job["version"]
+
+
+def resign(body):
+    body = {k: v for k, v in body.items() if k != "signature"}
+    return {**body, "signature": TestKeyVerifier().sign(body)}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("admissions", [{"decisionId": "adm-2", "revision": "1", "artifactHash": "a" * 64}]),
+    ("attemptId", "att-other"),
+    ("fence", 99), ("sessionId", "rt-" + "0" * 40), ("executionId", "exec-" + "0" * 32),
+])
+def test_binding_checks_are_independent_of_the_signature(env, field, value):
+    storage, ledger, _ = env
+    job = running(env)
+    forged = resign({**receipt(TestKeyVerifier(), job=job, stage="context", nonce="n1"), field: value})
+    assert TestKeyVerifier().verify(forged)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], forged)
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["version"] == job["version"]
+
+
+def test_replayed_nonce_is_rejected(env):
+    _, ledger, _ = env
+    job = running(env)
+    r = receipt(TestKeyVerifier(), job=job, stage="context", nonce="n1")
+    job = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], r)
+    with pytest.raises(LedgerError):
+        ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], r)
+
+
+def put_output(storage, job, stage, name, data):
+    key = storage.key_for(OWNER, "job", job["id"], f"out/{job['attempt']['id']}/{stage}/{name}")
+    storage.put_blob_once(key, data, "application/octet-stream")
+    return {"key": key, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "role": "artifact"}
+
+
+def chained(job, stage, nonce, previous=None, **extra):
+    return receipt(TestKeyVerifier(), job=job, stage=stage, nonce=nonce, extra={"previous": previous, **extra})
+
+
+def test_stage_records_a_verified_chain_with_server_checked_outputs(env):
+    storage, ledger, _ = env
+    job = running(env)
+    out = put_output(storage, job, "context", "context.json", b'{"ok":true}')
+    first = chained(job, "context", "n1", outputs=[out], status="ok", result={"summary": "x"})
+    job = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], first)
+    assert job["stages"][-1]["stage"] == "context" and job["stages"][-1]["outputs"] == [out]
+    second = chained(job, "generate", "n2", previous=schema.digest(first),
+                     inputs=[{"key": out["key"], "sha256": out["sha256"], "size": out["size"]}], status="ok")
+    job = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], second)
+    assert [row["stage"] for row in job["stages"]] == ["context", "generate"]
+
+
+@pytest.mark.parametrize("case", ["missing-output", "hash-mismatch", "outside-prefix", "broken-chain",
+                                  "unknown-input", "unknown-field", "expired-receipt"])
+def test_receipt_evidence_failures_are_rejected(env, case):
+    storage, ledger, now = env
+    job = running(env)
+    out = put_output(storage, job, "context", "c.json", b"context")
+    extra = {"outputs": [out]}
+    if case == "missing-output":
+        extra["outputs"] = [{**out, "key": out["key"].replace("c.json", "absent.json")}]
+    if case == "hash-mismatch":
+        extra["outputs"] = [{**out, "sha256": "f" * 64}]
+    if case == "outside-prefix":
+        foreign = storage.key_for(OWNER, "asset", "x", "c.json")
+        storage.put_blob_once(foreign, b"context", "application/octet-stream")
+        extra["outputs"] = [{**out, "key": foreign}]
+    if case == "broken-chain":
+        extra["previous"] = "e" * 64
+    if case == "unknown-input":
+        extra["inputs"] = [{"key": storage.key_for(OWNER, "asset", "y", "z"), "sha256": "1" * 64, "size": 1}]
+    if case == "unknown-field":
+        extra["model"] = "unexpected"
+    if case == "expired-receipt":
+        extra.update(iat=now[0] - 10, exp=now[0] - 1)
+    bad = receipt(TestKeyVerifier(), job=job, stage="context", nonce="n1", extra=extra)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], bad)
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["version"] == job["version"]
+
+
+def test_retried_stage_with_the_same_operation_id_returns_the_same_result(env):
+    storage, ledger, _ = env
+    job = running(env)
+    r = receipt(TestKeyVerifier(), job=job, stage="context", nonce="n1")
+    operation = op_id()
+    first = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], r, operation_id=operation)
+    again = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], r, operation_id=operation)
+    assert again["stages"] == first["stages"] and again["version"] == first["version"]
+    other = receipt(TestKeyVerifier(), job=job, stage="context", nonce="n2")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], other, operation_id=operation)
+    assert error.value.code == "operation-changed"
+
+
+def test_heartbeat_extends_the_lease_but_never_past_the_deadline(env):
+    storage, ledger, now = env
+    job = running(env)
+    now[0] += 60_000
+    beat = ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    assert beat["attempt"]["leaseExpiresAt"] == now[0] + PROFILE_DEFAULT["leaseMs"]
+    assert beat["attempt"]["heartbeatAt"] == now[0]
+    while now[0] + 60_000 < job["deadlineAt"] - 30_000:
+        now[0] += 60_000
+        beat = ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    now[0] = job["deadlineAt"] - 30_000
+    beat = ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    assert beat["attempt"]["leaseExpiresAt"] == job["deadlineAt"]
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1          # lease lost: a late heartbeat is stale
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    assert error.value.code == "stale-attempt"
+
+
+def test_claim_requires_a_dispatched_attempt_and_is_single(env):
+    _, ledger, _ = env
+    job = running(env)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    assert error.value.code == "already-claimed"
+
+
+def test_fail_releases_quota_and_fences(env):
+    storage, ledger, _ = env
+    job = running(env)
+    failed = ledger.tool().fail(OWNER, job["id"], job["attempt"]["id"], job["fence"], code="runtime-error")
+    assert failed["status"] == "failed" and failed["error"]["code"] == "runtime-error"
+    assert quota(storage, job) == ([], [])
+    with pytest.raises(LedgerError):
+        ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+
+
+def test_allocate_exhausts_attempts(env):
+    storage, ledger, _ = env
+    job = admit(ledger)
+    from workspace.execution_ledger import _seed_for_tests
+    stored = storage.get(OWNER, "job", job["id"])
+    _seed_for_tests(storage, OWNER, "job", {**stored, "attempts": [{"id": "a"}, {"id": "b"}, {"id": "c"}]},
+                    stored["version"])
+    with pytest.raises(LedgerError) as error:
+        ledger.dispatcher().allocate(OWNER, job["id"])
+    assert error.value.code == "attempts-exhausted"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+    assert quota(storage, job) == ([], [])
+
+
+def test_attempt_and_session_identifiers(env):
+    _, ledger, _ = env
+    job = ledger.dispatcher().allocate(OWNER, admit(ledger)["id"])
+    assert job["status"] == "dispatched" and job["fence"] == 1 and job["attempt"]["fence"] == 1
+    assert len(job["attempt"]["sessionId"]) >= 33 and job["attempt"]["id"].startswith("att-")
