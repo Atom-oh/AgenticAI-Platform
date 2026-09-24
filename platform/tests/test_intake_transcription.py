@@ -468,3 +468,26 @@ def test_grant_revoked_during_the_review_queue_read_hides_the_item(env, monkeypa
         {"op": "revoke_grant", "id": "grant-bob", "expectedRevision": 1}))
     status, listed = env.http("GET", "/intake/reviews", actor="bob")
     assert fired and (status == 403 or listed["reviews"] == [])
+
+
+@pytest.mark.parametrize("path", ["download", "approval"])
+def test_admission_expiring_during_the_original_read_blocks_download_and_approval(chain, monkeypatch, path):
+    """Review 2, finding 2: library fences revalidate upstream status and expiry at the final read/commit."""
+    revision = chain.chain["revision"]
+    storage = chain.api.storage
+    clock = storage.clock
+
+    def expire():
+        storage.clock = lambda: clock() + 31 * DAY
+
+    fired = revoke_during_read(chain, monkeypatch, revision["originalKey"], expire)
+    if path == "download":
+        base = f"/documents/{revision['documentId']}/revisions/{revision['id']}"
+        status, payload, _ = call(chain.api, "GET", base + "/blob", project=chain.pid, query={"offset": "0"})
+    else:
+        status, payload = library_review(chain, "bob")
+    assert fired and status == 409, payload
+    assert payload["code"] == "source-upstream-revoked"
+    storage.clock = clock
+    saved = storage.get(chain.chain["owner"], "docrevision", revision["id"])
+    assert saved["status"] == "in_review"

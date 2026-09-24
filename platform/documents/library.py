@@ -366,13 +366,35 @@ class Library:
                     raise Conflict("Authority write must match the authorized version")
             else:
                 remaining.append(check)
-        return self.storage.put_many(writes, checks=remaining)
+        return self.storage.put_many(writes, checks=remaining, **self._guard())
 
     def assert_current(self, documents=()):
         """A read has a linearization point after bytes were read, without a write."""
         checks = self.checks(documents)
         if checks:
-            self.storage.put_many([], checks=checks)
+            self.storage.put_many([], checks=checks, **self._guard())
+
+    def _guard(self):
+        """Transcription lineage adds an upstream-expiry guard to every commit attempt."""
+        return {"before_attempt": self._upstream_current} if self._upstream else {}
+
+    def _upstream_current(self):
+        """Version fences cannot see expiry: before every commit attempt (including
+        retries) each upstream admission record must still be schema-valid, current
+        (status and expiry at the present clock) and at its observed version."""
+        from intake import records
+        kinds = ("adm_decision", "adm_policy", "adm_provenance", "adm_grant")
+        for check in self._upstream:
+            if check["kind"] not in kinds:
+                continue
+            row = self.storage.get(check["owner"], check["kind"], check["id"])
+            try:
+                row = records.validate(check["kind"], row) if row else None
+            except ValueError:
+                row = None
+            if not row or row.get("version") != check["version"] or not records.is_current(row, self.storage.clock()):
+                raise DocumentError(409, "source-upstream-revoked",
+                                    "The transcription's original image or its admission is no longer current")
 
     def write(self, kind, item, expected_version=None):
         return {"owner": self.owner, "kind": kind, "item": item, "expected_version": expected_version}

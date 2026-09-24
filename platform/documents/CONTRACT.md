@@ -194,7 +194,12 @@ a revision without the `transcription` binding fails closed. The records that
 check read (the image asset, both `adm_decision` records and their
 `adm_policy`/`adm_provenance`/`adm_grant` records) are kept in `Library._upstream` as `{owner, kind, id, version}` in
 their actual owner partitions and join `checks()`, so `commit()` and
-`assert_current()` fence upstream authority atomically with the library write.
+`assert_current()` fence upstream authority atomically with the library write. Version fences
+cannot see expiry, so `commit()` and `assert_current()` also pass a
+`before_attempt` guard that, before every transaction attempt (including
+retries), revalidates each upstream admission record's schema, version, status
+and expiry at the present clock; an admission that expired during the blob read
+returns `409 source-upstream-revoked` and nothing is written.
 `Sources.resolve` propagates the same observations with
 `Sources._remember_owned(owner, kind, record)`.
 
