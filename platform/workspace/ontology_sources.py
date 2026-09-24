@@ -454,6 +454,7 @@ class Sources:
             if self._rules().contract_hash(run.get("contract") or {}) != run["contractHash"]:
                 fail(409, "source-changed", "라운드의 규칙 사본이 승인본과 다릅니다.")
             resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read")
+            self._fence_criteria(run)
             self._inputs(self._snapshot_refs(run), historical=False)
         except CollaborationError as error:
             if _authority_error(error):
@@ -591,7 +592,25 @@ class Sources:
             superseded = read_catalog()["hash"] != contract["catalogHash"]
         if superseded:
             fail(409, "source-superseded", "승인 규칙의 상품·가이드 기준이 현재 게시본이 아닙니다.")
+        self._fence_criteria(contract)
         return contract, current
+
+    def _fence_criteria(self, value):
+        """Retain every consulted criteria record and catalog hash for the final recheck/commit.
+
+        A later republication changes the product (and guideline) record version,
+        and a catalog change leaves the package recheck set, so `recheck()` and
+        the commit fence reject an answer built on superseded criteria.
+        """
+        if value.get("productId"):
+            self._remember("product", self.ctx.get("product", value["productId"]))
+            if value.get("guidelineId"):
+                self._remember("guideline", self.ctx.get("guideline", value["guidelineId"]))
+        if value.get("catalogHash"):
+            from workspace.component_catalog import read_catalog
+            if read_catalog()["hash"] != value["catalogHash"]:
+                fail(409, "source-superseded", "React 컴포넌트 기준이 현재 게시본이 아닙니다.")
+            self.package_hashes.add(value["catalogHash"])
 
     def _retained_contract(self, contract, version, digest):
         """The exact retained approved revision (immutable blob whose recomputed hash matches)."""

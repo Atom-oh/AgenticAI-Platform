@@ -471,3 +471,33 @@ def test_run_asset_snapshot_must_match_the_bound_input(env, bound):
     run = env.api.storage.put(owner, "run", {**run, "assetSnapshots": forged}, run["version"])
     assert code(Sources(ctx(env)).resolve, run_round_reference(run, 1)) == (409, "source-upstream-revoked")
     assert code(Sources(ctx(env)).authorize, run_round_reference(run, 1)) == (404, "not-found")
+
+
+def test_republished_criteria_after_resolution_fail_the_final_recheck(env, design):
+    """Finding 6: consulted product/guideline records are fenced through recheck/commit."""
+    product, contract = design
+    run = react_run(env, contract)
+    readers = []
+    for ref in (contract_reference(contract), run_round_reference(run, 1)):
+        reader = Sources(ctx(env))
+        reader.resolve(ref)
+        assert {"product", "guideline"} <= {check["kind"] for check in reader.recheck()}
+        readers.append(reader)
+    republish(env, product)
+    for reader in readers:
+        with pytest.raises(CollaborationError):
+            reader.recheck()
+
+
+def test_changed_catalog_after_resolution_fails_the_final_recheck(env, design, monkeypatch):
+    """Finding 6: the consulted catalog hash joins the package recheck set."""
+    from workspace import component_catalog
+    _, contract = design
+    run = react_run(env, contract)
+    readers = [Sources(ctx(env)), Sources(ctx(env))]
+    readers[0].resolve(contract_reference(contract))
+    readers[1].resolve(run_round_reference(run, 1))
+    original = component_catalog.read_catalog()
+    monkeypatch.setattr(component_catalog, "read_catalog", lambda: {**original, "hash": "f" * 64})
+    for reader in readers:
+        assert code(reader.recheck) == (409, "ontology-package-stale")
