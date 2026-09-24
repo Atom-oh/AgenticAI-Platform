@@ -247,6 +247,7 @@ class Worker:
 
     def handle(self, event, context=None):
         owner, identifier = event.get("owner"), event.get("jobId")
+        # platform-execution/1: reserved execution jobs are never claimed here (storage chokepoint).
         job = self.storage.claim_job(owner, identifier)
         if not job:
             return {"status": "duplicate-or-unavailable"}

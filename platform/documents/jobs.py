@@ -1,14 +1,22 @@
 """Fenced terminal-state reconciliation for private asynchronous document work."""
 from documents.errors import DocumentError
 from documents.library import Library
+from workspace.storage import ReservedRecord, is_reserved
 
 STALE_MS = 16 * 60_000
 MESSAGE = "작업 응답이 만료되어 종료했습니다. 원문 상태를 확인하고 새 요청으로 다시 실행하세요."
 
 
+def _refuse(storage, owner, kind, record):
+    storage._report(owner, ReservedRecord(kind, record.get("id"), "marked-artifact"))
+
+
 def reconcile(host, scope, kind, target, *, library=None, documents=None):
     library = library or Library(host, scope)
     library.fresh()
+    if is_reserved(target):
+        _refuse(library.storage, library.owner, kind, target)
+        return target
     if target.get("status") not in ("queued", "running", "processing") or not target.get("jobId"):
         return target
     if documents is None:
@@ -17,6 +25,9 @@ def reconcile(host, scope, kind, target, *, library=None, documents=None):
         document = library.document(target["documentId"])
         documents = [document]
     job = library.storage.get(library.owner, "job", target["jobId"])
+    if is_reserved(job) or (job is None and target.get("executionId")):
+        _refuse(library.storage, library.owner, "job" if job else kind, job or target)
+        return target
     expected_task, id_field = ("document-analysis", "analysisId") if kind == "docanalysis" else ("document-finalize", "revisionId")
     now = library.storage.clock()
     if job:
@@ -50,7 +61,6 @@ def reconcile(host, scope, kind, target, *, library=None, documents=None):
     if not job:
         checks.append({"owner": library.owner, "kind": "job", "id": target["jobId"], "version": None})
     # Target/job CAS and current source/project authority are one transaction.
-    from workspace.storage import ReservedRecord
     try:
         return library.storage.put_many(writes, checks=checks)[0]
     except ReservedRecord:
@@ -68,6 +78,9 @@ def reconcile_analysis(host, scope, identifier):
 
 def expire_raw_job(host, scope, job):
     from documents.library import authorize_job
+    if is_reserved(job):
+        _refuse(host.storage, scope["owner"], "job", job)
+        return job
     authorize_job(host, scope, job)
     data = job["input"]
     if job["task"] == "document-analysis":
@@ -86,6 +99,9 @@ def expire_raw_job(host, scope, job):
 
 def fail_work(host, owner, job, message):
     """Record a worker failure only while its current authority still permits it."""
+    if is_reserved(job):
+        _refuse(host.storage, owner, "job", job)
+        return False
     from workspace.collaboration import Collaboration
     data = job.get("input", {})
     collaboration = getattr(host, "collaboration", None) or Collaboration(host.storage)

@@ -563,6 +563,9 @@ class WorkspaceAPI:
             return self._get(owner, "job", job["id"])
 
     def _new_job(self, owner, identifier, task, data, request_hash=None):
+        from workspace.storage import RESERVED_TASKS
+        if task in RESERVED_TASKS:
+            raise HTTPError(400, "reserved-task", "이 작업 유형은 별도 실행 경로에서만 생성됩니다.")
         record = {"id": identifier, "task": task, "input": data, "status": "queued", "progress": 0}
         if request_hash:
             record["requestHash"] = request_hash

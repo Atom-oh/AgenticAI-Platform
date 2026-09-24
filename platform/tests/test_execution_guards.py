@@ -285,3 +285,271 @@ def test_orphan_resolution_aborts_when_the_job_is_recreated_before_submission(st
     assert storage.get("project:p1", "wb_artifact", "orph")["version"] == art["version"]
     assert storage.get("project:p1", "job", "ontology-job-x")["status"] == "queued"
     assert [row["status"] for row in due_entries(storage)] == ["pending"]
+
+
+# === Task 3: RUN-01 legacy writer inventory (W1-W12), each driving the REAL legacy function ===========
+
+from test_workspace_http import FakeLambda, FakeRules  # noqa: E402
+from test_workbench_core import wb  # noqa: E402,F401  (fixture)
+from workspace.http import WorkspaceAPI  # noqa: E402
+from workspace.worker import Worker  # noqa: E402
+
+MARKED = {"id": "art-1", "projectId": "p1", "status": "processing", "jobId": "exec-1",
+          "executionSchemaVersion": 1, "executionId": "exec-1"}
+
+
+def api_for(storage):
+    return WorkspaceAPI(storage=storage, lambda_client=FakeLambda(), worker_fn="worker", rules=FakeRules)
+
+
+def unchanged(storage, kind, record, owner="project:p1"):
+    assert storage.get(owner, kind, record["id"])["version"] == record["version"]
+
+
+def test_w1_w3_worker_handle_never_runs_or_fails_a_reserved_job(storage):
+    job = seed(storage, dict(NEW))
+    worker = Worker(storage=storage)
+    assert worker.handle({"owner": "project:p1", "jobId": "exec-1"})["status"] == "duplicate-or-unavailable"
+    unchanged(storage, "job", job)
+    assert reports(storage)
+
+
+def test_w2_w4_worker_update_and_progress_writers_refuse_a_reserved_job(storage):
+    job = seed(storage, {**NEW, "status": "running"})
+    worker = Worker(storage=storage)
+    with pytest.raises(Conflict):
+        worker._update("project:p1", "job", "exec-1", progress={"stage": "x", "percent": 10})
+    with pytest.raises(Conflict):
+        worker._update("project:p1", "job", "exec-1", status="completed", progress=100)
+    unchanged(storage, "job", job)
+
+
+def test_w8_stale_expiry_skips_reserved_jobs(storage):
+    job = seed(storage, {**NEW, "status": "running"})
+    api = api_for(storage)
+    storage.clock = lambda: job["updatedAt"] + 17 * 60 * 1000
+    assert api._expire_job("project:p1", job)["status"] == "running"
+    unchanged(storage, "job", job)
+    assert reports(storage)
+
+
+def test_w9_dispatch_failure_and_retry_skip_reserved_jobs(storage):
+    job = seed(storage, dict(NEW))
+    api = api_for(storage)
+    api.lambda_client.fail = True       # FakeLambda raising on invoke
+    with pytest.raises(Exception):
+        api._invoke("project:p1", job)
+    unchanged(storage, "job", job)
+    failed = seed(storage, {**NEW, "id": "exec-2", "status": "failed", "errorCode": "dispatch-failed"})
+    assert api._retry_dispatch("project:p1", failed)["status"] == "failed"
+    unchanged(storage, "job", failed)
+    assert reports(storage)
+
+
+def test_w9_dispatch_failure_does_not_fail_a_reserved_target(storage):
+    job = storage.put("project:p1", "job", {"id": "finalize-x", "task": "finalize", "input": {"assetId": "x"}})
+    target = seed(storage, {"id": "x", "status": "processing", "uploadStatus": "processing",
+                            "executionId": "exec-1"}, kind="asset")
+    api = api_for(storage)
+    api.lambda_client.fail = True
+    with pytest.raises(Exception):
+        api._invoke("project:p1", job)
+    unchanged(storage, "asset", target)
+    unchanged(storage, "job", job)
+
+
+def test_w10_new_job_rejects_reserved_task(storage):
+    from workspace.http import HTTPError
+    with pytest.raises(HTTPError) as error:
+        api_for(storage)._new_job("project:p1", "x1", "agentcore-execution", {}, "h" * 64)
+    assert error.value.code == "reserved-task"
+    assert storage.get("project:p1", "job", "x1") is None
+
+
+def test_w5_mark_failed_refuses_marked_artifact_even_without_a_job(storage):
+    from workbench.worker import _mark_failed
+    art = seed(storage, MARKED, kind="wb_artifact")
+    _mark_failed(Worker(storage=storage), "project:p1",
+                 {"id": "exec-1", "input": {"operation": "ontology-analyze", "artifactId": "art-1"}}, "job-timeout")
+    unchanged(storage, "wb_artifact", art)
+    assert [row["reason"] for row in reports(storage)] == ["marked-artifact"]
+
+
+def test_w5_mark_failed_returns_for_a_reserved_job_dict(storage):
+    from workbench.worker import _mark_failed
+    art = seed(storage, MARKED, kind="wb_artifact")
+    _mark_failed(Worker(storage=storage), "project:p1",
+                 {**NEW, "input": {"operation": "ontology-analyze", "artifactId": "art-1"}}, "job-timeout")
+    unchanged(storage, "wb_artifact", art)
+
+
+def test_w5_service_dispatch_failure_cannot_fail_a_marked_artifact(wb):
+    from workbench.worker import _mark_failed
+    art = seed(wb.storage, {**MARKED, "projectId": wb.project["id"]}, kind="wb_artifact", owner=wb.owner)
+    _mark_failed(wb.api, wb.owner, {"id": "exec-1", "input": {"operation": "skill-execute", "artifactId": "art-1"}},
+                 "dispatch-failed")
+    unchanged(wb.storage, "wb_artifact", art, owner=wb.owner)
+
+
+@pytest.fixture
+def wb_context():
+    from test_ontology_sources import context
+
+    def build(target):
+        return context(target)
+    return build
+
+
+def test_w6_analysis_read_repair_leaves_marked_artifact_for_the_reconciler(wb, wb_context):
+    from workspace import ontology_jobs
+    art = seed(wb.storage, {**MARKED, "projectId": wb.project["id"], "jobInput": {"authorizationExpiresAt": 0}},
+               kind="wb_artifact", owner=wb.owner)
+    assert ontology_jobs.reconcile(wb_context(wb), art)["version"] == art["version"]
+    unchanged(wb.storage, "wb_artifact", art, owner=wb.owner)
+    assert reports(wb.storage, wb.owner)
+
+
+def test_w6_analysis_read_repair_of_a_reserved_job_changes_nothing(wb, wb_context):
+    from workspace import ontology_jobs
+    job = seed(wb.storage, {**NEW, "status": "queued"}, owner=wb.owner)
+    art = seed(wb.storage, {"id": "art-2", "projectId": wb.project["id"], "status": "queued", "jobId": "exec-1",
+                            "jobInput": {"authorizationExpiresAt": 0, "operation": "ontology-analyze",
+                                         "artifactId": "art-2"}}, kind="wb_artifact", owner=wb.owner)
+    ontology_jobs.reconcile(wb_context(wb), art)
+    unchanged(wb.storage, "wb_artifact", art, owner=wb.owner)
+    unchanged(wb.storage, "job", job, owner=wb.owner)
+    assert reports(wb.storage, wb.owner)
+
+
+def test_w7_analysis_completion_with_a_reserved_job_publishes_nothing(wb, wb_context):
+    from test_ontology_analysis import collection
+    from workbench.worker import process
+    from workspace.ontology_analysis import local_analyze
+    from workspace.ontology_jobs import submit
+    from workspace.ontology_store import Ontology
+    from types import SimpleNamespace
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(wb_context(wb), {"requestId": "reserved", "name": "example", "files": collection(wb)})
+    job = wb.storage.get(wb.owner, "job", queued["job"]["id"])
+    job = seed(wb.storage, {**job, "executionId": "exec-1"}, owner=wb.owner, expected_version=job["version"])
+    before = Ontology(wb_context(wb)).current()
+    worker = SimpleNamespace(storage=wb.storage, collaboration=wb.collab, ontology_analyzer=local_analyze,
+                             allow_offline_ontology_analysis=True)
+    with pytest.raises(Exception):
+        process(worker, wb.owner, job)
+    assert Ontology(wb_context(wb)).current() == before
+    unchanged(wb.storage, "job", job, owner=wb.owner)
+    artifact = wb.storage.get(wb.owner, "wb_artifact", queued["artifact"]["id"])
+    assert artifact["status"] == "queued" and "generation" not in artifact
+    assert reports(wb.storage, wb.owner)
+
+
+# --- W11 document jobs ---------------------------------------------------------------------------
+
+@pytest.fixture
+def docs():
+    from test_documents_library import api as build  # noqa: F401
+    from test_documents_library import DocumentHost
+    from graph.store import LocalGraphStore
+    host = DocumentHost(storage=Storage(table=FakeTable(), s3=FakeS3(), bucket="private-test"),
+                        lambda_client=FakeLambda(), worker_fn="worker",
+                        directory=lambda q: [{"sub": "alice", "displayName": "alice"}])
+    host.graph_store = LocalGraphStore()
+    return host
+
+
+def _doc_upload(host):
+    from test_documents_library import upload
+    result = upload(host)
+    scope = host.collaboration.resolve_scope("alice", None)
+    revision = host.storage.get("alice", "docrevision", result["revision"]["id"])
+    job = host.storage.get("alice", "job", result["job"]["id"])
+    return scope, revision, job
+
+
+def test_w11_document_reconcile_leaves_a_marked_target(docs):
+    from documents.jobs import reconcile
+    scope, revision, job = _doc_upload(docs)
+    marked = seed(docs.storage, {**revision, "executionId": "exec-1"}, kind="docrevision", owner="alice",
+                  expected_version=revision["version"])
+    docs.storage.clock = lambda: job["updatedAt"] + 17 * 60_000
+    assert reconcile(docs, scope, "docrevision", marked)["version"] == marked["version"]
+    unchanged(docs.storage, "docrevision", marked, owner="alice")
+    unchanged(docs.storage, "job", job, owner="alice")
+    assert reports(docs.storage, "alice")
+
+
+def test_w11_document_reconcile_leaves_a_target_of_a_reserved_job(docs):
+    from documents.jobs import reconcile
+    scope, revision, job = _doc_upload(docs)
+    reserved = seed(docs.storage, {**job, "executionId": "exec-1"}, owner="alice", expected_version=job["version"])
+    docs.storage.clock = lambda: reserved["updatedAt"] + 17 * 60_000
+    assert reconcile(docs, scope, "docrevision", revision)["version"] == revision["version"]
+    unchanged(docs.storage, "docrevision", revision, owner="alice")
+    unchanged(docs.storage, "job", reserved, owner="alice")
+    assert reports(docs.storage, "alice")
+
+
+def test_w11_document_reconcile_of_an_ordinary_stale_job_is_unchanged(docs):
+    from documents.jobs import reconcile
+    scope, revision, job = _doc_upload(docs)
+    docs.storage.clock = lambda: job["updatedAt"] + 17 * 60_000
+    assert reconcile(docs, scope, "docrevision", revision)["status"] == "failed"
+    assert docs.storage.get("alice", "job", job["id"])["errorCode"] == "job-timeout"
+
+
+def test_w11_expire_raw_job_and_fail_work_skip_a_reserved_job(docs):
+    from documents.jobs import expire_raw_job, fail_work
+    scope, revision, job = _doc_upload(docs)
+    reserved = seed(docs.storage, {**job, "executionId": "exec-1", "status": "running"}, owner="alice",
+                    expected_version=job["version"])
+    docs.storage.clock = lambda: reserved["updatedAt"] + 17 * 60_000
+    assert expire_raw_job(docs, scope, reserved)["version"] == reserved["version"]
+    assert fail_work(docs, "alice", reserved, "failed") is False
+    unchanged(docs.storage, "job", reserved, owner="alice")
+    unchanged(docs.storage, "docrevision", revision, owner="alice")
+    assert reports(docs.storage, "alice")
+
+
+def test_w11_fail_work_of_an_ordinary_running_job_is_unchanged(docs):
+    from documents.jobs import fail_work
+    _, revision, job = _doc_upload(docs)
+    running = docs.storage.claim_job("alice", job["id"])
+    assert fail_work(docs, "alice", running, "synthetic failure") is True
+    assert docs.storage.get("alice", "docrevision", revision["id"])["status"] == "failed"
+
+
+# --- W12 skill execution completion --------------------------------------------------------------
+
+def test_w12_skill_execution_completion_refuses_a_marked_artifact(wb, wb_context, monkeypatch):
+    from workbench import knowledge, skills
+    from workbench.service import Service
+    ctx = wb_context(wb)
+    skill = wb.storage.put(wb.owner, "wb_skill", {"id": "skill-1", "projectId": wb.project["id"],
+                                                  "status": "APPROVED"})
+    key, digest = ctx.put_json("wb_artifact", "art-3", "input.json", {"input": {"q": "x"}})
+    art = seed(wb.storage, {**MARKED, "id": "art-3", "projectId": wb.project["id"], "status": "queued",
+                            "inputHash": digest, "inputKey": key, "skillVersion": 1, "sourceRefs": []},
+               kind="wb_artifact", owner=wb.owner)
+    monkeypatch.setattr(skills, "resolve_approved", lambda *a: {"skill": wb.storage.get(wb.owner, "wb_skill", "skill-1")})
+    monkeypatch.setattr(knowledge, "verify_refs", lambda *a: [])
+    monkeypatch.setattr(Service, "gate", lambda self, *a, **k: None)
+    wb.api.workbench_executor = lambda **k: {"status": "ok", "answer": "a", "evidenceIds": []}
+    with pytest.raises(Exception):
+        skills.process_execution(ctx, {"artifactId": "art-3", "inputHash": digest, "skillVersion": 1,
+                                       "skillId": skill["id"], "contentHash": "c"})
+    unchanged(wb.storage, "wb_artifact", art, owner=wb.owner)
+    assert reports(wb.storage, wb.owner)
+
+
+# --- Out of scope: the studio store is a separate table -------------------------------------------
+
+def test_studio_store_is_a_separate_table_and_handler_never_imports_workspace_storage(monkeypatch):
+    from studio.store import StudioStore
+    monkeypatch.setenv("STUDIO_TABLE", "studio-table")
+    monkeypatch.setenv("WORKSPACE_TABLE", "workspace-table")
+    assert StudioStore()._table_name != Storage().table_name
+    source = (Path(__file__).resolve().parents[1] / "api" / "handlers" / "studio.py").read_text()
+    assert "workspace.storage" not in source and "WORKSPACE_TABLE" not in source
+    store_source = (Path(__file__).resolve().parents[1] / "studio" / "store.py").read_text()
+    assert "WORKSPACE_TABLE" not in store_source
