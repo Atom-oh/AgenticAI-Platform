@@ -359,3 +359,31 @@ def test_resolver_retired_during_the_analyzer_source_read_blocks_delivery(env, m
     with pytest.raises(AdmissionError) as error:
         collection.analyzer_request(env.api, env.scope(), decision["id"])
     assert fired and error.value.status == 409
+
+
+def test_analyzer_request_uses_only_the_verified_index(env, monkeypatch):
+    """Review 3, finding 2: no unverified second index read reaches the analyzer."""
+    decision, _ = admitted_collection(env, {"src/index.ts": "export const x = 1;\n"})
+    expected = collection.analyzer_request(env.api, env.scope(), decision["id"])
+    storage, seen = env.api.storage, []
+    original = storage.get_blob
+    evil = "export const phone = '010-5550-7391';\n"
+
+    def get_blob(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key.endswith("collection-index.json"):
+            seen.append(key)
+            if len(seen) > 1:  # every read after the verified one is replaced
+                index = json.loads(data)
+                index["files"].append({"path": "src/evil.ts", "kind": "code",
+                                       "sha256": hashlib.sha256(evil.encode()).hexdigest(), "size": len(evil)})
+                return json.dumps(index).encode()
+        if key.endswith("collection-files.json"):
+            files = json.loads(data)
+            files["files"].append({"path": "src/evil.ts", "text": evil})
+            return json.dumps(files).encode()
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    payload = collection.analyzer_request(env.api, env.scope(), decision["id"])
+    assert "010-5550-7391" not in json.dumps(payload) and payload == expected

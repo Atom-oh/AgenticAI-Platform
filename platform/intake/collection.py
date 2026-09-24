@@ -309,9 +309,12 @@ def _private(host, scope, decision, suffix):
         raise AdmissionError("artifact-changed") from None
 
 
-def check_resolver(host, scope, decision, authority=None):
+def check_resolver(host, scope, decision, authority, index):
     """`source.analyze` recheck: the profile is current and unchanged, and re-applying
-    the private mapping to it yields exactly the derivative resolver."""
+    the private mapping to it yields exactly the derivative resolver.
+
+    `index` is the collection index already verified against the decision's
+    derivative hash; it is never re-read (review round 3)."""
     binding = decision["artifact"].get("resolver")
     if decision["artifact"]["kind"] != "code-collection" or not binding:
         raise AdmissionError("artifact-kind-unsupported", 422)
@@ -321,9 +324,7 @@ def check_resolver(host, scope, decision, authority=None):
         raise AdmissionError("resolver-changed") from None
     if profile["revision"] != binding["profile"]["revision"] or profile["hash"] != binding["profile"]["hash"]:
         raise AdmissionError("resolver-changed")
-    if authority is not None:
-        authority.observe(INTAKE_OWNER, "adm_resolver", profile)
-    index = _private(host, scope, decision, "collection-index.json")
+    authority.observe(INTAKE_OWNER, "adm_resolver", profile)
     mapping = _private(host, scope, decision, "collection-mapping.json")["packages"]
     derived = index["resolver"]
     if schema.digest(derived) != binding["derivativeHash"] or set(mapping) != set(profile["packages"]):
@@ -345,8 +346,11 @@ def check_resolver(host, scope, decision, authority=None):
 
 def analyzer_request(host, scope, decision_id, *, claims=None):
     """Build the analyzer request from the verified private objects (derivative only)."""
-    decision, _, authority = admission.authorized(host, scope, decision_id, claims=claims)
-    index = check_resolver(host, scope, decision, authority)
+    decision, data, authority = admission.authorized(host, scope, decision_id, claims=claims)
+    if decision["artifact"]["kind"] != "code-collection":
+        raise AdmissionError("artifact-kind-unsupported", 422)
+    # The verified derivative bytes ARE the collection index (hash-bound to the decision).
+    index = check_resolver(host, scope, decision, authority, json.loads(data))
     contents = {f["path"]: f["text"] for f in _private(host, scope, decision, "collection-files.json")["files"]}
     files = []
     for entry in index["files"]:
