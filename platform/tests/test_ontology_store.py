@@ -237,3 +237,26 @@ def test_index_tampering_is_not_accepted_as_an_empty_graph(wb):
     wb.storage.put_blob(key, b"{}", "application/json")
     with pytest.raises(CollaborationError, match="해시"):
         Ontology(context(wb)).read(list(result["identities"].values()))
+
+
+def test_publication_rewrites_ux_model_references_to_canonical_ids(wb):
+    """Task E3: slot allow-lists and condition targets follow the same identities map as usageIds/slots."""
+    body, tpl = asset(wb, "org-local"), asset(wb, "tpl")
+    ux = {"slots": {"body": {"required": True, "allowed": ["org-local"]}},
+          "conditions": [{"id": "c1", "when": "cond:auto", "effect": "include", "target": "org-local"}],
+          "layers": {"code": {"importPath": "@studio/approved-ui", "exportName": "Screen", "childrenProp": None,
+                              "props": {"body": {"type": "node", "required": True},
+                                        "tone": {"type": "enum", "required": False, "values": ["a", "b"]}}}}}
+    nodes = [node("org-local", "Organism", project=wb.project["id"], sourceRefs=[asset_reference(body)]),
+             node("tpl", "PageTemplate", project=wb.project["id"], sourceRefs=[asset_reference(tpl)],
+                  properties={"uxModel": ux})]
+    result = publish(wb, {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": nodes, "edges": []})
+    ids = result["identities"]
+    stored = Ontology(context(wb)).read([ids["tpl"]])["nodes"][0]
+    model = stored["properties"]["uxModel"]
+    assert model["slots"]["body"]["allowed"] == [ids["org-local"]] and ids["org-local"] != "org-local"
+    assert model["conditions"][0]["target"] == ids["org-local"]
+    current = wb.storage.get(wb.owner, "ontology", CURRENT)
+    ontology = Ontology(context(wb))
+    part = ontology._part(current, result["partitionId"])
+    schema.validate_graph(part["graph"])

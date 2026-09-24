@@ -84,6 +84,9 @@ Schema migration requires explicit version mapping, collision checks and
 compatibility tests. Tombstoning creates a new revision and immediately
 excludes the resource from new use. Historical evidence is not rewritten.
 
+Design-level `properties.uxModel` and the PolicyRule `severity`/`citation`/`extraction`/`appliesWhen`
+properties are defined in [ONTOLOGY_CONTRACT.md, uxModel property (v1)](ONTOLOGY_CONTRACT.md#uxmodel-property-v1).
+
 ### Shared-publication authority
 
 Cross-team work in one project uses current membership and source audiences.

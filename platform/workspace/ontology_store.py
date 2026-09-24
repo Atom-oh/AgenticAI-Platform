@@ -277,6 +277,9 @@ class Ontology:
                     properties[field] = [identities.get(item, item) for item in properties[field]]
             if "fileId" in properties:
                 properties["fileId"] = identities.get(properties["fileId"], properties["fileId"])
+            if "uxModel" in properties:
+                from workspace.ontology_ux import rewrite
+                properties["uxModel"] = rewrite(properties["uxModel"], identities)
             aliases = list({schema.digest(alias): alias for alias in [
                 *(old.get("aliases", []) if old else []), *value.get("aliases", [])]}.values())
             if not old:
