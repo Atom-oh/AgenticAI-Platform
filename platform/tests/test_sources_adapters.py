@@ -759,3 +759,37 @@ def test_commit_attempt_guard_rechecks_admission_expiry(env, design, monkeypatch
     stored = env.api.storage.get(f"project:{env.pid}", "adm_decision", decision["id"])
     monkeypatch.setattr(env.api.storage, "clock", lambda: stored["expiresAt"] + 1)
     assert code(check_source_deadlines, env.api.storage, checks) == (409, "source-upstream-revoked")
+
+
+# Fix round 3 (PR #29 review 3) ----------------------------------------------
+
+def test_historical_admitted_round_rechecks_without_recursion(env, design):
+    """Review 3 #6: admission verification is separate from historical-reference replay."""
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)])
+    ref = run_round_reference(run, 1)
+    reader = Sources(ctx(env))
+    assert reader.authorize(ref) is True
+    kinds = {check["kind"] for check in reader.recheck()}
+    assert {"adm_decision", "adm_grant"} <= kinds
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+
+
+def test_ontology_impact_with_an_admitted_round_source(env, design):
+    """Review 3 #6: historical diagnostics over an admitted-round source work."""
+    from test_ontology_schema import node
+    from workspace.ontology_api import route
+    from workspace.ontology_store import Ontology
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)])
+    ref = run_round_reference(run, 1)
+    graph = {"schemaVersion": 1, "projectId": env.pid, "edges": [],
+             "nodes": [node("screen-r", "Screen", project=env.pid, sourceRefs=[ref])]}
+    published = Ontology(ctx(env)).publish_candidate("rounds", graph, expected_generation=None, request_id="rounds")
+    service = ctx(env)
+    status, result = route(env.api, service.scope, service.claims, "POST", ["impact"], {
+        "changeId": "round-change", "kind": "design", "oldSource": ref,
+        "expectedGeneration": published["generation"]}, {})
+    assert status == 200 and result["coverage"]["complete"] is False

@@ -222,6 +222,25 @@ class Sources:
             fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
         return record
 
+    def absorb(self, other):
+        """Retain every observation of another reader for this reader's single final recheck.
+
+        Used for probes (admission verification, per-row listing checks): the probe
+        does its own reads, and this reader rechecks all of them together later.
+        """
+        if other.authority != self.authority:
+            fail(409, "ontology-authority-changed", "조회 중 프로젝트 역할 또는 권한이 변경되었습니다.")
+        for (owner, kind, _), check in list(other.observed.items()):
+            self._remember_owned(owner, kind, check)
+        self.package_hashes |= other.package_hashes
+        self.workbench_refs.update(other.workbench_refs)
+        self.historical_refs.update(other.historical_refs)
+        return self
+
+    def _probe(self):
+        """A reader for one nested verification whose own `recheck` never replays this reader."""
+        return Sources(self.ctx, max_records=self.max_records, max_sources=self.max_sources)
+
     def _blob(self, key, expected, maximum=2_000_000):
         if not self.storage.owns_key(self.ctx.owner, key):
             fail(403, "ontology-source-forbidden", "이 프로젝트에서 읽을 수 없는 원본입니다.")
@@ -567,10 +586,13 @@ class Sources:
     def _round_admissions_current(self, row):
         from intake import admission
         for binding in self._admission_refs(row):
-            observed = []
+            observed, probe = [], self._probe()
             try:
+                # A probe reader: admission's own final recheck must not replay this
+                # reader's historical references (re-entrancy); all its observations
+                # are absorbed below for this reader's final recheck.
                 decision = admission.verify(self.ctx.host, self.ctx.scope, binding["decisionId"],
-                                            claims=self.ctx.claims, sources=self, observe=observed)
+                                            claims=self.ctx.claims, sources=probe, observe=observed)
             except admission.AdmissionError:
                 fail(409, "source-upstream-revoked", "라운드 입력의 반입 승인이 회수되었거나 현재가 아닙니다.")
             except CollaborationError as error:
@@ -579,6 +601,7 @@ class Sources:
                 fail(409, "source-upstream-revoked", "라운드 입력의 반입 승인이 회수되었거나 현재가 아닙니다.")
             if not self._admission_matches(decision, binding):
                 fail(409, "source-upstream-revoked", "라운드 입력의 반입 승인 리비전이 다릅니다.")
+            self.absorb(probe)
             for check in observed:
                 self._remember_owned(check["owner"], check["kind"], check)
 
@@ -618,12 +641,14 @@ class Sources:
         from intake import admission
         try:
             for binding in self._admission_refs(row):
-                observed = []
+                observed, probe = [], self._probe()
                 try:
-                    # This reader verifies the source, and every decision/policy/grant/
-                    # provenance version it observed joins this reader's final recheck.
+                    # A probe verifies the source (no re-entrant replay of this reader's
+                    # historical references); every decision/policy/grant/provenance and
+                    # source version it observed joins this reader's final recheck.
                     decision = admission.verify(self.ctx.host, self.ctx.scope, binding["decisionId"],
-                                                claims=self.ctx.claims, sources=self, observe=observed)
+                                                claims=self.ctx.claims, sources=probe, observe=observed)
+                    self.absorb(probe)
                 except admission.AdmissionError as error:
                     if error.code != "source-changed":
                         _not_found()

@@ -177,7 +177,10 @@ live sharing or release evidence.
   admits metadata; a revoked upstream denies with `404 not-found`. Historical
   checks verify admissions with the same reader, and every decision, policy,
   reviewer-grant/provenance and source version observed (including the
-  superseded-source fallback) joins that reader's final `recheck()`.
+  superseded-source fallback) joins that reader's final `recheck()`. Admission
+  verification runs on a probe reader (`Sources._probe`) whose observations are
+  absorbed (`Sources.absorb`), so its own final recheck never re-enters the parent
+  reader's historical-reference replay.
 - `ux-contract` `{sourceId: contractId, revision: str(contract.version), sha256:
   contract.approval.hash, audienceRevision: "current-project-members-v1"}`. The
   contract is `approved` at that version, the approval hash matches and
