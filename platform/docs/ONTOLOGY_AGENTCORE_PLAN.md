@@ -6,6 +6,18 @@ AgentCore Code Interpreter, Browser, Memory, Gateway with Lambda MCP targets,
 and Identity. This document is the implementation plan; a completed checklist
 requires current test and deployment evidence.
 
+Documentation update, 2026-09-23: use
+[the completion validation document](ONTOLOGY_AGENTCORE_VALIDATION.md) as the
+acceptance specification. Copy its tables into a private dated assessment,
+including disposable Phase 0 probes, staging acceptance and the final decision.
+This navigation update does not change revision 4's implementation requirements.
+
+Implementation entry point, 2026-09-23:
+[the platform architecture](ARCHITECTURE.md) connects this plan and its contracts
+to the overall platform, incorporates the acceptance-review outcomes, and names
+the next implementation units. Its existence does not satisfy the service gates
+or replace the review history below.
+
 Revision 4 addresses three independent plan-review rounds by
 `claude-fable-5.1` and `gpt-5.6-sol`. Both agreed with the direction and requested
 more precise contracts. The revised plan requires a new review before consensus

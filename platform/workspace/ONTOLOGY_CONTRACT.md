@@ -29,6 +29,25 @@ Read pages and dependency closures remain bounded and disclose incomplete scope.
 Source verification admits at most 90 distinct authority records; publication
 also checks the complete DynamoDB transaction against its 100-operation limit.
 Oversized operations fail with a split-scope error before publication.
+For AgentCore source-analysis completion, reserve at least ten transaction
+operations for non-source work: manifest/request marker, terminal ledger job
+with inline receipt pointer, artifact completion, required quota/operation
+records and control fences. The planner computes the actual complete operation
+set; its effective source-check budget is
+`min(90, 100 - max(10, nonSourceOperationCount))`. The existing 50-source-binding
+limit still applies. Extra execution writes reduce source capacity rather than
+raising the transaction limit; preflight rejects oversized scope before paid
+execution and rechecks the final operation count before commit.
+Admission never trims the requested inputs: reject an over-budget request
+unchanged with `execution-completion-scope` and its applicable limits. Only the
+requester may submit a new smaller authorized request with a new request ID.
+The frozen manifest and canonical input hash derive solely from that accepted
+request; rejected requests do not create a partially scoped execution.
+If required fences exceed that budget, return `execution-completion-scope`
+before submitting the completion transaction. Never omit a condition or shrink
+the frozen input scope at finish; a smaller scope needs a newly authorized
+request. Graph/artifact/receipt publication remains unchanged. Only a separate
+fenced failure/expiry transition may record execution failure metadata.
 Each publication accepts at most 50 distinct source authority bindings: source
 kind/ID, exact revision/hash and audience, plus a workbench document ID where
 applicable. Location-only annotations within that same source share a binding
@@ -118,8 +137,8 @@ returning data or committing a mutation.
 Opaque pagination cursors use the separate `ontology_cursor` record kind,
 with an application expiry and DynamoDB TTL of at most five minutes.
 
-The v1 schema reserves publication, UX-contract and run-round reference kinds
-for later adapters. Until those adapters are installed, reads fail unavailable.
+The v1 schema reserves `published-asset`, `ux-contract` and `run-round` source
+kinds for later authority adapters. Until those adapters are installed, reads fail unavailable.
 This is explicit staging, not completed sharing or release integration.
 
 ## APIs
@@ -145,6 +164,11 @@ owner-only. Analyzer availability and source-authority checks precede dispatch.
 | `POST /ontology/analyses` | `{requestId,name,files:[{assetId,path}],resolverProfileId?,expectedGeneration?}` queues source analysis |
 | `GET /ontology/analyses` | Source-authorized, paginated accepted analysis metadata, including its original request/artifact/job IDs |
 | `GET /ontology/analyses/:id` | Authorized analysis artifact, coverage and actual execution receipt |
+
+For legacy import, omitted or `null` `nodeIds` uses the existing bounded import
+without an explicit node selection. A non-null value must be an array of 1–20
+entries; an empty or oversized array fails with `422 legacy-import-scope`.
+The existing source-index, owner and source-access prerequisites still apply.
 
 Manual candidate writes cannot claim parser provenance or approval. Only the
 trusted analysis path records parser-extracted provenance and initially sets
@@ -186,7 +210,16 @@ before invocation. Terminal durable-job state, artifact completion, execution
 receipt pointers, the partition and request marker commit atomically; an artifact
 or job conflict publishes none of them. The worker does not append a separate
 terminal-state write after this publication.
-The AgentCore adapter is a separate deployment milestone.
+AgentCore source analysis is a separate deployment milestone using Runtime and
+the new `execution_ledger.py` protocol. The legacy `ontology_jobs.process`
+path remains offline-only; do not install a cloud analyzer in that legacy
+writer. C dispatches newly admitted AgentCore analyses through the new ledger,
+with source/artifact/graph publication retaining the same atomic fences.
+For those jobs, `ontology.publish` stages only. `execution.finish` combines the
+ledger's conditional completion writes with ontology/artifact/request-marker
+publication using the trusted completion-write composition point and one
+transaction. Receipt pointers are inline in the job/artifact records. No
+independent graph publication or later terminal-state update is permitted.
 Manual partitions always retain incomplete, declared coverage. Source deadlines
 are rechecked immediately before submitting the version-fenced transaction;
 source validity is never extended by publication. Reads, reuse and approval
@@ -205,8 +238,23 @@ Returning to that URL or selecting a saved analysis resumes reads/polling of the
 existing job. Project changes clear the URL selection; the authorized analysis
 list remains available for recovery without another POST.
 This foundation accepts only the exact offline adapter with explicit test opt-in
-and verifies its input/code/lock hashes. Cloud adapter installation belongs to
-the separate adapter PR; a callable's backend label is insufficient.
+and verifies its input/code/lock hashes. The B adapter PR provides the trusted
+Runtime/Interpreter transport; C connects it through mutually exclusive new-ledger
+routing. B0 first adds and tests conditional discriminator guards in the actual
+legacy claim/16-minute expiry paths and new-ledger paths, before any shared-table
+probe records. It retires obsolete cloud-factory comments in `ontology_jobs.py`.
+C owns live application routing and repeats the already implemented exclusion
+tests against the deployed paths. Source-analysis rollback blocks new production
+analyses until a verified backend is restored; the offline adapter is not a
+production rollback target.
+A callable's backend label is insufficient authorization or execution evidence.
+
+B0 also guards artifact-linked repair and read reconciliation, including
+`_mark_failed`: new artifacts retain an immutable execution discriminator and
+job/execution linkage. A marked artifact, or an artifact linked to a new/reserved
+job, is never failed/completed by legacy repair, even if the job is missing or
+uses a new state such as `dispatched`/`recovery_required`. Unknown linkage is
+reported for the new reconciler without changing completion state.
 
 ## Workbench compatibility
 

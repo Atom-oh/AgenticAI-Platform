@@ -15,6 +15,10 @@ The internal library and source-bound S1 HTTP workflow are specified in
 are separate from ordinary workspace assets, and their analyses never use the
 legacy shared WebSocket event cache.
 
+The [platform architecture](ARCHITECTURE.md) assigns cross-module implementation
+ownership and staged delivery. Follow the owning contract for exact schemas and
+permissions; update both when an integration boundary changes.
+
 ## 1. WebSocket handlers
 
 `api/ws_handler.py` authenticates connections and dispatches `ROUTES` from
@@ -273,3 +277,17 @@ interfaces are defined in [`workspace/ONTOLOGY_CONTRACT.md`](../workspace/ONTOLO
 The data foundation is distinct from AgentCore execution readiness. Existing
 bank Gateway/Harness contracts are retained; the planned ontology Gateway is
 a separate target and permission boundary.
+
+The required execution extension is specified in
+[`workspace/AGENTCORE_CONTRACT.md`](../workspace/AGENTCORE_CONTRACT.md).
+Its required new durable writer is `workspace/execution_ledger.py`; the authenticated API,
+dispatcher, trusted Lambda facade and reconciler have distinct transition roles.
+Runtime uses signed capabilities and scoped tools rather than direct ledger/
+canonical-store writes. Interpreter, Browser and Memory have their own bounded
+responsibilities and evidence. These are implementation requirements, not
+installed endpoints or an alternate approval system.
+
+Extend existing run/round/release/Git interfaces with exact context and observed
+service receipts. The [design](ARCHITECTURE.md) maps the integration sequence;
+the [acceptance cases](ONTOLOGY_AGENTCORE_VALIDATION.md) define its verification.
+The default backend and graph mode remain legacy until their applicable gates.
