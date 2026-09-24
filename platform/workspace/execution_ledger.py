@@ -1372,6 +1372,9 @@ class Ledger:
         if any(h.get("direction") == "out" and h.get("status") == "open" and h.get("attemptId") == attempt["id"]
                for h in job["handles"].values()):
             raise LedgerError("transfers-incomplete")
+        if any(call.get("attemptId") == attempt["id"] and call.get("status") == "intent" for call in job["calls"]):
+            # RUN-02/03: a call without a recorded outcome may have been billed; it stays for recovery/accounting.
+            raise LedgerError("calls-unresolved")
         if self._terminal_status(job, stages) != status:
             raise LedgerError("status-inconsistent")
         self._check_result_manifest(job, stages, result)

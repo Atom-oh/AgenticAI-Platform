@@ -652,6 +652,10 @@ Completion (`finish`, and `reconcile` through the same path) re-reads every
 chain output of the current attempt, including the result manifest and every
 object it lists, and requires the stored hash and size to match before any
 terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
+Completion is refused with `calls-unresolved` while any call of the attempt is
+still `intent` (no recorded outcome): the attempt stays open, the watchdog moves
+it to `recovery_required` with `unknownOutcome`, and `retry` marks such calls
+`unknown`.
 The frozen `completionScope` is enforced as an obligation. `stage_completion`
 returns `{writes, checks, sourceChecks, sourceBindings}`: `sourceChecks` must
 list exactly `completionScope.sourceChecks` distinct transactional version
@@ -720,7 +724,7 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
 `completion-contention`, `completion-obligations`, `completion-unavailable`,
-`completion-invalid`,
+`completion-invalid`, `calls-unresolved`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
 

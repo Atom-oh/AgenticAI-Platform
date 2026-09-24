@@ -1834,3 +1834,23 @@ def test_admission_authority_is_a_transaction_predicate(xfer):
     with pytest.raises(LedgerError):
         ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
     assert len(storage.get(OWNER, "job", job["id"])["calls"]) == 1
+
+
+def test_unresolved_model_calls_block_successful_completion(xfer):
+    """Review 2 finding 6: a possibly billed call without an outcome keeps the attempt open for recovery."""
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer)
+    call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)["callId"]
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "calls-unresolved"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "running" and stored["calls"][-1]["status"] == "intent"
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    swept = ledger.reconciler().sweep(OWNER, job["id"])
+    assert swept["status"] == "recovery_required" and swept["unknownOutcome"] is True
+    with pytest.raises(LedgerError) as error:
+        ledger.reconciler().reconcile(OWNER, job["id"], job["attempt"]["id"], receipts=[], status="succeeded",
+                                      result=result)
+    assert error.value.code == "calls-unresolved"
+    assert call
