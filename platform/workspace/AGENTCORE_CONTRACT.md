@@ -652,6 +652,10 @@ Completion (`finish`, and `reconcile` through the same path) re-reads every
 chain output of the current attempt, including the result manifest and every
 object it lists, and requires the stored hash and size to match before any
 terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
+Every `files`/`objects` entry of the result manifest must be an object with a
+string `key` and a 64-hex `sha256` (and, if given, the recorded `size`) that
+names a chain output of the attempt; a malformed or non-member entry is
+`receipt-invalid`.
 Completion is refused with `calls-unresolved` while any call of the attempt is
 still `intent` (no recorded outcome): the attempt stays open, the watchdog moves
 it to `recovery_required` with `unknownOutcome`, and `retry` marks such calls

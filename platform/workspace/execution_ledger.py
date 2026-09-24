@@ -51,6 +51,7 @@ MAX_SOURCE_CHECKS, MAX_SOURCE_BINDINGS, TRANSACTION_LIMIT = 90, 50, 100
 DEFAULT_COMPLETION_SCOPE = {"nonSourceOperations": 10, "sourceChecks": 0, "sourceBindings": 0}
 CHUNK_BYTES, MAX_TRANSFER_CHUNKS, MAX_TRANSFER_BYTES = 256 * 1024, 512, 128 * 1024 * 1024
 _OUTPUT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _OPERATION_ID = re.compile(r"[A-Za-z0-9_-]{22,128}\Z")
 _REGISTERED: set[type] = set()
 # The reviewed KMS verifier module (B1) is the only trusted registrant; offline verifiers are never production ones.
@@ -1278,9 +1279,11 @@ class Ledger:
         return document if isinstance(document, dict) else {}
 
     def _check_result_manifest(self, job, stages, result):
-        outputs = {entry["key"]: entry["sha256"] for row in stages for entry in row.get("outputs", [])}
+        chain = {entry["key"]: entry for row in stages for entry in row.get("outputs", [])}
+        outputs = {key: entry["sha256"] for key, entry in chain.items()}
         ref, digest = result.get("manifestRef"), result.get("manifestHash")
-        if not isinstance(ref, str) or outputs.get(ref) != digest:
+        if not isinstance(ref, str) or not isinstance(digest, str) or not _SHA256.fullmatch(digest) \
+                or ref not in outputs or outputs[ref] != digest:
             raise LedgerError("receipt-invalid")
         try:
             data = self.storage.get_blob(ref)
@@ -1293,7 +1296,12 @@ class Ledger:
         if not isinstance(document.get("files", []), list) or not isinstance(document.get("objects", []), list):
             raise LedgerError("receipt-invalid")
         for entry in listed:
-            if not isinstance(entry, dict) or outputs.get(entry.get("key")) != entry.get("sha256"):
+            # A valid key and SHA-256, explicit membership in the chain outputs, and a verified stored object.
+            if (not isinstance(entry, dict) or not isinstance(entry.get("key"), str)
+                    or not isinstance(entry.get("sha256"), str) or not _SHA256.fullmatch(entry["sha256"])
+                    or entry["key"] not in outputs or outputs[entry["key"]] != entry["sha256"]
+                    or "size" in entry and entry["size"] != chain[entry["key"]].get("size")
+                    or not self._verify_object(None, chain[entry["key"]], ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
         # RUN-04: every chain output (hence every listed result/evidence object) still exists with its
         # server-computed hash and size before any terminal pointer is published.

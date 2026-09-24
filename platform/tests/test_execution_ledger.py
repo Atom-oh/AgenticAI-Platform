@@ -1854,3 +1854,27 @@ def test_unresolved_model_calls_block_successful_completion(xfer):
                                       result=result)
     assert error.value.code == "calls-unresolved"
     assert call
+
+
+@pytest.mark.parametrize("entry", [
+    "key-only", "null-hash", "short-hash", "non-string-key", "not-a-dict"])
+def test_malformed_result_manifest_entries_are_refused(xfer, entry):
+    """Review 2 finding 4: every manifest entry needs a valid key and SHA-256 that is a verified chain output."""
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer, "design.extract", skip=("verify",))
+    missing = storage.key_for(OWNER, "job", job["id"], f"out/{job['attempt']['id']}/verify/missing.bin")
+    listed = {"key-only": {"key": missing}, "null-hash": {"key": missing, "sha256": None},
+              "short-hash": {"key": missing, "sha256": "ab"}, "non-string-key": {"key": 7, "sha256": "0" * 64},
+              "not-a-dict": "missing.bin"}[entry]
+    body = _json.dumps({"files": [listed]}).encode()
+    outputs = [put_output(storage, job, "verify", "verify.out", b"verify"),
+               put_output(storage, job, "verify", "result-manifest.json", body)]
+    r = chained(job, "verify", "n-verify", previous=result["receipts"][-1], outputs=outputs, status="ok",
+                result=GOOD["verify"][1])
+    job = ledger.tool().stage(*ids(job), r)
+    manifest = job["stages"][-1]["outputs"][-1]
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
+                                          "receipts": [*result["receipts"], receipt_hash(r)]})
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
