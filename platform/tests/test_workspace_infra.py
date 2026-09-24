@@ -60,3 +60,60 @@ def test_worker_reads_exactly_the_configured_intake_deny_list_parameter():
     missing = _worker(template())
     del missing["Resources"]["DesignerWorkspaceWorkerRoleDefaultPolicyABC"]
     assert any("without its read grant" in item for item in audit_template(missing))
+
+
+INTAKE_KEYS = ["owner#" + __import__("hashlib").sha256(b"intake:deployment").hexdigest()]
+
+
+def _intake_admin(template):
+    resources = template["Resources"]
+    resources["IntakeAdminFnABC"] = {"Type": "AWS::Lambda::Function", "Properties": {
+        "Handler": "intake.admin_handler.handler", "Role": {"Fn::GetAtt": ["IntakeAdminRoleABC", "Arn"]}}}
+    resources["IntakeAdminRoleDefaultPolicyABC"] = {"Type": "AWS::IAM::Policy", "Properties": {"PolicyDocument": {
+        "Statement": [{"Effect": "Allow", "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
+                       "Resource": {"Fn::GetAtt": ["DesignerWorkspaceRecords", "Arn"]},
+                       "Condition": {"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": INTAKE_KEYS}}}]}}}
+    return template
+
+
+def test_intake_admin_function_is_iam_invoke_only():
+    good = _intake_admin(template())
+    assert audit_template(good) == []
+    api = _intake_admin(template())
+    api["Resources"]["IntakeAdminApiPermission"] = {"Type": "AWS::Lambda::Permission", "Properties": {
+        "Action": "lambda:InvokeFunction", "FunctionName": {"Fn::GetAtt": ["IntakeAdminFnABC", "Arn"]},
+        "Principal": "apigateway.amazonaws.com"}}
+    assert any("API Gateway" in item for item in audit_template(api))
+    url = _intake_admin(template())
+    url["Resources"]["IntakeAdminUrl"] = {"Type": "AWS::Lambda::Url", "Properties": {
+        "AuthType": "AWS_IAM", "TargetFunctionArn": {"Fn::GetAtt": ["IntakeAdminFnABC", "Arn"]}}}
+    assert any("Function URL" in item for item in audit_template(url))
+    route = _intake_admin(template())
+    route["Resources"]["DesignerWorkspaceIntakeIntegration"] = {"Type": "AWS::ApiGatewayV2::Integration",
+        "Properties": {"IntegrationUri": {"Fn::GetAtt": ["IntakeAdminFnABC", "Arn"]}}}
+    assert any("API route" in item for item in audit_template(route))
+    invoke = _intake_admin(template())
+    invoke["Resources"]["IntakeAdminRoleDefaultPolicyABC"]["Properties"]["PolicyDocument"]["Statement"].append(
+        {"Effect": "Allow", "Action": "lambda:InvokeFunction", "Resource": "arn:aws:lambda:x:1:function:Other"})
+    assert any("invoke other functions" in item for item in audit_template(invoke))
+    broad = _intake_admin(template())
+    broad["Resources"]["IntakeAdminRoleDefaultPolicyABC"]["Properties"]["PolicyDocument"]["Statement"][0].pop("Condition")
+    assert any("intake:deployment" in item for item in audit_template(broad))
+
+
+def test_synthesized_template_with_the_intake_flag_passes(tmp_path):
+    """Opt-in offline synth (the CI infra job runs the same command)."""
+    import json
+    import os
+    from pathlib import Path
+    import pytest
+    template = os.environ.get("INTAKE_SYNTH_TEMPLATE")
+    if not template:
+        pytest.skip("Set INTAKE_SYNTH_TEMPLATE to a template synthesized with -c intakeAdmin=true")
+    data = json.loads(Path(template).read_text())
+    resources = data["Resources"]
+    functions = [k for k, v in resources.items() if k.startswith("IntakeAdmin") and v["Type"] == "AWS::Lambda::Function"]
+    assert len(functions) == 1
+    assert resources[functions[0]]["Properties"]["Handler"] == "intake.admin_handler.handler"
+    assert resources[functions[0]]["Properties"]["Runtime"] == "python3.12"
+    assert audit_template(data) == []

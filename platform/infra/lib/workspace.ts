@@ -27,6 +27,8 @@ export interface StudioWorkspaceProps {
 }
 
 export class StudioWorkspace extends Construct {
+  public readonly recordsTable: dynamodb.Table;
+
   constructor(scope: Construct, id: string, props: StudioWorkspaceProps) {
     super(scope, id);
     const stack = cdk.Stack.of(this);
@@ -96,6 +98,7 @@ export class StudioWorkspace extends Construct {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+    this.recordsTable = table;
     const renderVpc = new ec2.Vpc(this, 'RenderVpc', {
       ipAddresses: ec2.IpAddresses.cidr('10.79.0.0/24'),
       maxAzs: 2, natGateways: 0, createInternetGateway: false,
