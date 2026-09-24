@@ -170,6 +170,14 @@ class WorkspaceAPI:
                 result = route(self, scope, claims, method, segments[1:],
                                _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
                 return _json(result[0], result[1])
+            if segments[0] == "intake":
+                # Reviewer routes only: JWT + a current IAM-administered grant.
+                # Policy/provenance/grant administration is never reachable here.
+                from intake.review import route
+                scope = self.collaboration.require(scope, "read")
+                result = route(self, scope, claims, method, segments[1:],
+                               _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
+                return _json(result[0], result[1])
             if segments[0] == "workbench":
                 from workbench.api import route
                 scope = self.collaboration.require(scope, "read")

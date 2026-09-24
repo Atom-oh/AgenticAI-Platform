@@ -65,12 +65,14 @@ def _logical(paragraphs):
 
     def close():
         if current:
-            pages.append({"page": len(pages) + 1, "text": "\n\n".join(p["text"] for p in current),
+            # Projection paragraphs keep their literal delimiters; joining with ""
+            # reproduces the extracted text exactly.
+            pages.append({"page": len(pages) + 1, "text": "".join(p["text"] for p in current),
                           "paragraphIds": [current[0]["id"], current[-1]["id"]], "logical": True})
             current.clear()
 
     for paragraph in paragraphs:
-        size = sum(len(p["text"]) + 2 for p in current) + len(paragraph["text"])
+        size = sum(len(p["text"]) for p in current) + len(paragraph["text"])
         if current and size > LOGICAL_PAGE_CHARS:
             close()
         current.append(paragraph)
@@ -84,20 +86,22 @@ def _physical(paragraphs):
         grouped.setdefault(paragraph["page"], []).append(paragraph)
     if list(grouped) != sorted(grouped):
         fail(409, "source-integrity", "원본 페이지 순서를 확인하지 못했습니다.")
-    return [{"page": page, "text": "\n\n".join(p["text"] for p in items),
+    return [{"page": page, "text": "".join(p["text"] for p in items),
              "paragraphIds": [items[0]["id"], items[-1]["id"]], "logical": False}
             for page, items in grouped.items()]
 
 
 def _text_pages(text):
     """Guideline/code text: paragraphs of at most one logical page each."""
-    paragraphs, index = [], 0
-    for block in (text or "").split("\n\n"):
-        while block:
-            index += 1
-            paragraphs.append({"id": f"p{index:06d}", "text": block[:LOGICAL_PAGE_CHARS]})
-            block = block[LOGICAL_PAGE_CHARS:]
-    return _logical([p for p in paragraphs if p["text"]])
+    import re
+    paragraphs, start = [], 0
+    bounds = [match.end() for match in re.finditer(r"\r?\n[ \t]*\r?\n", text or "")]
+    for end in [*bounds, len(text or "")]:
+        for offset in range(start, end, LOGICAL_PAGE_CHARS):
+            paragraphs.append({"id": f"p{len(paragraphs) + 1:06d}",
+                               "text": text[offset:min(end, offset + LOGICAL_PAGE_CHARS)]})
+        start = end
+    return _logical(paragraphs)
 
 
 def pages_hash(pages):
