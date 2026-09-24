@@ -305,6 +305,31 @@ def request(host, scope, source_ref, *, data_class, claims=None, kind="document-
                   payload=schema.canonical(derived["pages"]), blocking=blocking, generation=generation)
 
 
+def _authorization_deadline(storage, scope, claims):
+    """The earliest applicable authorization deadline for deferred work.
+
+    The verified scope's `authorizationExpiresAt` and the claims' `exp` both
+    bound the request; the job keeps the earlier one. The bounded fallback is used
+    only when neither is known, so it can never extend a known deadline.
+    """
+    known = []
+    bound = scope.get("authorizationExpiresAt")
+    if bound is not None:
+        if type(bound) is not int:
+            raise AdmissionError("authorization-expired", 401)
+        known.append(bound)
+    expiry = claims.get("exp") if isinstance(claims, dict) else None
+    if expiry is not None:
+        try:
+            known.append(int(expiry) * 1000)
+        except (TypeError, ValueError, OverflowError):
+            raise AdmissionError("authorization-expired", 401) from None
+    deadline = min(known) if known else storage.clock() + CURSOR_MS
+    if deadline <= storage.clock():
+        raise AdmissionError("authorization-expired", 401)
+    return deadline
+
+
 def request_image(host, scope, source_ref, *, data_class, claims=None):
     """Queue the Worker `intake-image` task (Pillow runs only in the Worker image).
 
@@ -333,8 +358,7 @@ def request_image(host, scope, source_ref, *, data_class, claims=None):
     # last read, immediately before the job is queued.
     Authority(host, reader, [_check(INTAKE_OWNER, "adm_policy", policy)]).recheck()
     source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
-    expiry = claims.get("exp") if isinstance(claims, dict) else None
-    authorization = int(expiry) * 1000 if expiry is not None else storage.clock() + CURSOR_MS
+    authorization = _authorization_deadline(storage, scope, claims)
     # The membership authority epoch is frozen on the job: a removed and restored
     # member (a later epoch) is a different request that the old job cannot serve.
     epoch = reader.ctx.scope["project"].get("authorityRevision", 0)

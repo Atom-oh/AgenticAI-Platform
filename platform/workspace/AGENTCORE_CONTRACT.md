@@ -696,8 +696,11 @@ live evidence and the privacy redaction adapter remain outstanding.
   pre-generation source observations fence the commit,
   `admission.decide` (every admission path) before and on each commit attempt,
   `request_image` before queueing (the job freezes the project
-  `authorityRevision`; its id and request hash exclude the token deadline, so a
-  refreshed token replays it while the job keeps its deadline), the Worker's
+  `authorityRevision` and the earliest known authorization deadline, the
+  verified scope's `authorizationExpiresAt` or the token `exp`, never extended
+  by the five-minute fallback used only when neither is known; its id and
+  request hash exclude the token deadline, so a refreshed token replays it
+  while the job keeps its deadline), the Worker's
   `intake-image` commit (the scope keeps the job's authorization deadline and
   the frozen epoch is required on every attempt), and review
   approval/publication on each attempt: the source fences (`Sources.recheck`) and the exact decision,

@@ -301,3 +301,41 @@ def test_refreshed_token_replays_the_same_image_request(env):
     assert second["job"]["id"] == first["job"]["id"] and second["decisionId"] == first["decisionId"]
     job = env.api.storage.get(f"project:{env.pid}", "job", first["job"]["id"])
     assert job["input"]["authorizationExpiresAt"] == (now + 600) * 1000  # the existing deadline is kept
+
+
+# PR #28 review round 5 ----------------------------------------------------------
+
+@pytest.mark.parametrize("claims_offset", [None, 600])
+def test_queued_image_job_keeps_the_scope_authorization_deadline(env, claims_offset):
+    """Review 5, finding 1: queueing never extends the verified scope's deadline (no 5-minute fallback)."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    now = storage.clock()
+    scope = {**env.scope(), "authorizationExpiresAt": now + 2000}
+    claims = None if claims_offset is None else {"sub": "alice", "exp": now // 1000 + claims_offset}
+    queued = admission.request(env.api, scope, ref, data_class="synthetic", kind="image", claims=claims)
+    job = storage.get(owner, "job", queued["job"]["id"])
+    assert job["input"]["authorizationExpiresAt"] == now + 2000  # the earliest applicable deadline
+    invoked = json.loads(env.api.lambda_client.calls[-1]["Payload"])
+    clock = storage.clock
+    storage.clock = lambda: clock() + 10_000
+    try:
+        outcome = worker_for(env).handle(invoked)
+    finally:
+        storage.clock = clock
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+
+
+def test_expired_scope_deadline_queues_no_image_job(env):
+    """Review 5, finding 1: an already expired scope deadline is refused before queueing."""
+    env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    scope = {**env.scope(), "authorizationExpiresAt": env.api.storage.clock() - 1}
+    with pytest.raises(Exception) as error:
+        admission.request(env.api, scope, ref, data_class="synthetic", kind="image")
+    assert getattr(error.value, "status", None) == 401
+    assert env.api.storage.list(f"project:{env.pid}", "job") == []
+
