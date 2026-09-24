@@ -33,7 +33,7 @@ def test_rotated_jpeg_is_transposed_and_exif_is_removed():
     exif[0x010F] = "SyntheticCamera"
     data = jpeg(source, exif=exif.tobytes())
     result = images.normalize_image(data)
-    assert result["exifTransposed"] is True
+    assert result["exifTransposed"] is True and result["exifOrientation"] == 6
     assert (result["width"], result["height"]) == (20, 40)
     assert result["mode"] == "RGBA" and result["iccProfile"] == "none"
     out = Image.open(io.BytesIO(result["bytes"]))
@@ -102,7 +102,7 @@ def test_unsupported_or_corrupt_inputs_are_rejected(data):
 def test_embedded_srgb_profile_is_accepted():
     profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
     result = images.normalize_image(png(Image.new("RGB", (4, 4), (9, 9, 9)), icc_profile=profile))
-    assert result["iccProfile"] == "srgb"
+    assert result["iccProfile"] == "srgb" and result["iccConverted"] is False
     assert "icc_profile" not in Image.open(io.BytesIO(result["bytes"])).info
 
 
@@ -114,7 +114,7 @@ def test_non_srgb_profile_is_converted_to_srgb_or_rejected():
     except images.ImageRejected as error:
         assert error.code == "unsupported-color-profile"
     else:
-        assert result["iccProfile"] == "srgb"
+        assert result["iccProfile"] == "srgb" and result["iccConverted"] is True
 
 
 def test_unparseable_color_profile_is_rejected():

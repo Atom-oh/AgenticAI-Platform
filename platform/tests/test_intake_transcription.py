@@ -646,3 +646,30 @@ def test_reviewer_grant_expiring_during_publication_commits_nothing(env, monkeyp
     storage.clock = clock
     assert storage.get(owner, "adm_decision", transcribed["id"])["status"] == "pending-review"
     assert storage.list(owner, "document") == []
+
+
+def test_image_decision_binds_a_hashed_normalization_receipt(env):
+    """Review 3, finding 8 (Minor): EXIF/ICC normalization evidence is persisted and verified."""
+    from intake import records
+    env.policy()
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    binding = image["artifact"]["normalization"]
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    key = storage.key_for(owner, "adm_decision", image["id"], "normalization.json")
+    data = storage.get_blob(key)
+    assert hashlib.sha256(data).hexdigest() == binding["sha256"]
+    receipt = records.validate_normalization(json.loads(data))
+    assert receipt["profile"] == "image-normalization-1" and receipt["sha256"] == image["artifact"]["sha256"]
+    assert receipt["exifTransposed"] is False and receipt["exifOrientation"] == 1
+    assert receipt["iccProfile"] == "none" and receipt["iccConverted"] is False
+    assert receipt["metadataStripped"] is True and receipt["visionTransform"] == []
+    with pytest.raises(ValueError):
+        records.validate_normalization({**receipt, "extra": 1})
+    assert admission.verify(env.api, env.scope(), image["id"])["id"] == image["id"]
+    storage.put_blob(key, data.replace(b'"exifTransposed":false', b'"exifTransposed":true'), "application/json")
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(env.api, env.scope(), image["id"])
+    assert error.value.code == "artifact-changed"

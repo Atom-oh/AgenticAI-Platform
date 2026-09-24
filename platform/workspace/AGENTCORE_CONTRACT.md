@@ -699,6 +699,12 @@ live evidence and the privacy redaction adapter remain outstanding.
   100 KiB per text file, 2 MiB of text and 8 MiB expanded in total including
   assets; reads are then bounded by each member's declared size and the
   remaining budget (`collection-too-large` / `collection-format`).
+- **Image normalization evidence.** Every image decision binds
+  `artifact.normalization.sha256`, the hash of a closed
+  `image-normalization-1` receipt blob (`normalization.json`:
+  original/normalized hashes, dimensions, mode, EXIF orientation and
+  transposition, ICC handling and conversion, metadata stripping, vision
+  transform), validated by `records.validate_normalization` on every `verify`.
 - **Redaction.** PII redaction is `unavailable`: an input whose inspection or
   residual scan finds PII is `blocked: redaction-required` until the privacy
   adapter for source documents is reviewed. Sanitized SVG is blocked

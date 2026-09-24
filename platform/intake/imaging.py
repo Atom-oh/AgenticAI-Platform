@@ -102,10 +102,18 @@ def admit_image(host, scope, source_ref, *, data_class, ocr, claims=None, prepar
     blocking = (["residual-identifiers"] if rest["identifiers"] else []) + (
         ["redaction-required"] if rest["pii"] else [])
     ocr_bytes = schema.canonical({"ocrStatus": "complete", "ocrText": text})
+    # SRC-05: the EXIF/ICC handling and vision transform are persisted evidence.
+    normalization = schema.canonical(records.validate_normalization({
+        "profile": images.PROFILE, "originalSha256": normalized["originalSha256"], "sha256": normalized["sha256"],
+        "width": normalized["width"], "height": normalized["height"], "mode": normalized["mode"],
+        "exifOrientation": normalized["exifOrientation"], "exifTransposed": normalized["exifTransposed"],
+        "iccProfile": normalized["iccProfile"], "iccConverted": normalized["iccConverted"],
+        "metadataStripped": True, "visionTransform": list(transform)}))
     source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
     return admission.decide(
         host, scope, reader=reader, source=source, data_class=data_class, policy=policy,
         artifact={"kind": "image", "pages": 1, "width": normalized["width"], "height": normalized["height"],
+                  "normalization": {"sha256": hashlib.sha256(normalization).hexdigest()},
                   "suffix": "normalized.png",
                   "vision": {"suffix": "vision.png", "sha256": hashlib.sha256(vision).hexdigest(), "format": "png",
                              "size": len(vision), "ocrSha256": hashlib.sha256(ocr_bytes).hexdigest(),
@@ -114,7 +122,8 @@ def admit_image(host, scope, source_ref, *, data_class, ocr, claims=None, prepar
                     "derivativeHash": normalized["sha256"]},
         receipt=receipt, receipt_bytes=schema.canonical(receipt), payload=normalized["bytes"],
         content_type="image/png", blocking=blocking, identifier=identifier, completion=completion,
-        extra_blobs={"vision.png": (vision, "image/png"), "ocr.json": ocr_bytes})
+        extra_blobs={"vision.png": (vision, "image/png"), "ocr.json": ocr_bytes,
+                     "normalization.json": normalization})
 
 
 def _ocr(host, scope, decision):

@@ -188,8 +188,35 @@ def _resolver(record):
     _choice(record["status"], ("active", "retired"))
 
 
+def validate_normalization(value) -> dict:
+    """The closed `image-normalization-1` receipt persisted for every image decision (SRC-05)."""
+    _closed(value, {"profile", "originalSha256", "sha256", "width", "height", "mode", "exifOrientation",
+                    "exifTransposed", "iccProfile", "iccConverted", "metadataStripped", "visionTransform"})
+    _choice(value["profile"], ("image-normalization-1",))
+    _hash(value["originalSha256"])
+    _hash(value["sha256"])
+    _int(value["width"])
+    _int(value["height"])
+    _choice(value["mode"], ("RGBA",))
+    if type(value["exifOrientation"]) is not int or not 1 <= value["exifOrientation"] <= 8:
+        _bad("Invalid EXIF orientation")
+    for key in ("exifTransposed", "iccConverted"):
+        if type(value[key]) is not bool:
+            _bad("Invalid normalization flag")
+    if value["exifTransposed"] != (value["exifOrientation"] != 1):
+        _bad("EXIF transposition must match the recorded orientation")
+    _choice(value["iccProfile"], ("none", "srgb"))
+    if value["iccConverted"] and value["iccProfile"] != "srgb":
+        _bad("A converted colour profile ends as sRGB")
+    if value["metadataStripped"] is not True:
+        _bad("Normalized images carry no metadata")
+    _unique_list(value["visionTransform"], lambda x: _label(x), minimum=0, maximum=20)
+    return value
+
+
 def _artifact(value):
-    _closed(value, {"kind", "key", "sha256"}, {"pages", "files", "resolver", "vision", "region", "width", "height"})
+    _closed(value, {"kind", "key", "sha256"}, {"pages", "files", "resolver", "vision", "region", "width", "height",
+                                               "normalization"})
     kind = _choice(value["kind"], ARTIFACT_KINDS)
     if not isinstance(value["key"], str) or not value["key"].startswith("workspace/") or len(value["key"]) > 1024:
         _bad("Invalid private artifact key")
@@ -222,6 +249,13 @@ def _artifact(value):
         _choice(vision["format"], ("png", "jpeg"))
         _int(vision["size"])
         _unique_list(vision["transform"], lambda x: _label(x), minimum=0, maximum=20)
+    if "normalization" in value:
+        if kind != "image":
+            _bad("Only an image binds a normalization receipt")
+        _closed(value["normalization"], {"sha256"})
+        _hash(value["normalization"]["sha256"])
+    elif kind == "image":
+        _bad("An image decision binds its normalization receipt")
     for key in ("width", "height"):
         if key in value:
             if kind != "image":

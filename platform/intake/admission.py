@@ -464,6 +464,18 @@ def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=No
         _read_verified(storage, owner, vision["key"], vision["sha256"], "artifact-changed")
         _read_verified(storage, owner, storage.key_for(owner, "adm_decision", decision["id"], "ocr.json"),
                        vision["ocrSha256"], "artifact-changed", maximum=1024 * 1024)
+    if "normalization" in decision["artifact"]:
+        receipt = _read_verified(storage, owner,
+                                 storage.key_for(owner, "adm_decision", decision["id"], "normalization.json"),
+                                 decision["artifact"]["normalization"]["sha256"], "artifact-changed",
+                                 maximum=64 * 1024)
+        try:
+            receipt = records.validate_normalization(json.loads(receipt))
+        except ValueError:
+            raise AdmissionError("artifact-changed") from None
+        if (receipt["sha256"] != decision["artifact"]["sha256"]
+                or receipt["originalSha256"] != decision["derivation"]["originalHash"]):
+            raise AdmissionError("artifact-changed")
     checks = [_check(owner, "adm_decision", decision),
               *(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)]
     if decision["artifact"]["kind"] == "diagram-transcription":
