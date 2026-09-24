@@ -603,3 +603,14 @@ def test_grant_revoked_during_a_later_item_read_returns_no_earlier_preview(env, 
     status, listed = env.http("GET", "/intake/reviews", actor="bob")
     assert fired and (status == 403 or listed["reviews"] == []), listed
 
+
+def test_pending_transcription_preview_requires_its_image_admission(env, monkeypatch):
+    """Review 3, finding 4: pending transcription previews verify the image lineage."""
+    _, _, request, _ = _transcription_request(env, monkeypatch)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert transcribed["status"] == "pending-review"
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert [r["id"] for r in listed["reviews"]] == [transcribed["id"]]
+    env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert status == 200 and listed["reviews"] == []

@@ -189,13 +189,17 @@ def list_pending(host, scope, *, claims=None):
             try:
                 preview = _preview(host, scope, decision, data)
                 title = _title(host, scope, decision)
+                # A pending transcription is reviewable only while its admitted image
+                # decision is (recursively) current; its records join this item's fence.
+                lineage = (admission._lineage_checks(host, scope, decision, reader, claims)
+                           if decision["artifact"]["kind"] == "diagram-transcription" else [])
                 # After the last read: the pending decision, its policy, the actor's
-                # grants for that policy and the source fences must all still hold.
+                # grants for that policy, the lineage and the source fences must hold.
                 authority = admission.Authority(host, reader, [
                     admission._check(owner, "adm_decision", decision),
                     admission._check(INTAKE_OWNER, "adm_policy", policy),
                     *(admission._check(INTAKE_OWNER, "adm_grant", g) for g in grants
-                      if g["policyId"] == decision["policy"]["id"])], pending={decision["id"]})
+                      if g["policyId"] == decision["policy"]["id"]), *lineage], pending={decision["id"]})
                 authority.recheck()
             except (AdmissionError, CollaborationError, ValueError, KeyError, TypeError, IndexError):
                 continue  # one unreadable or revoked item never breaks the whole queue
