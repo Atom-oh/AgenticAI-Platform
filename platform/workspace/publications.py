@@ -17,6 +17,7 @@ caller cannot use is indistinguishable from a missing one.
 from __future__ import annotations
 
 import re
+import secrets
 
 from intake.records import INTAKE_OWNER
 from workbench.service import Service, fail, fields, public
@@ -40,10 +41,17 @@ MAX_CAPABILITIES = 1000
 # destination actor holding origin membership. Everything else is unpublishable.
 PUBLISHABLE_SOURCES = frozenset({"asset", "document-revision", "product-guideline", "package"})
 _REVISION = re.compile(r"[1-9][0-9]{0,8}\Z")
+CURSOR_MS = 300_000
+MAX_SCANNED = 200
 
 
 def _not_found():
     fail(404, "not-found", "공유 게시물을 찾을 수 없거나 읽을 권한이 없습니다.")
+
+
+def origin_prefix(project_id):
+    """Publication IDs start with a per-origin prefix so an origin listing never scans other projects."""
+    return "pub-" + schema.digest(["publication-origin", project_id])[:12] + "-"
 
 
 def grant_id(publication_id, revision):
@@ -142,7 +150,7 @@ def propose(ctx, *, kind, node_ids, revision_bindings):
     nodes, checks = _origin_nodes(ctx, kind, node_ids, revision_bindings, denied=denied)
     summary = [{"id": n["id"], "revision": n["revision"], "contentHash": n["contentHash"],
                 "type": n["type"], "sourceRefs": n["sourceRefs"]} for n in nodes]
-    identifier = "pub-" + schema.digest([ctx.project_id, kind, node_ids])[:40]
+    identifier = origin_prefix(ctx.project_id) + schema.digest([ctx.project_id, kind, node_ids])[:32]
     previous = ctx.storage.get(PUBLICATION_OWNER, "publication", identifier)
     if previous:
         if previous["status"] == "withdrawn":
@@ -504,6 +512,61 @@ def resolve_published(sources, ref, *, historical=False, text=False):
     return {"record": _revision_view(record, entry, snapshot), "text": raw.decode("utf-8") if text else None}
 
 
+def _authorized_page(ctx, query, view_name, owner, kind, prefix, include):
+    """Page over authorized rows only, with an opaque, scope-bound, expiring cursor.
+
+    Storage continuation keys stay server-side in an `ontology_cursor` record of
+    the caller's project partition; the returned cursor is a random ID bound to
+    actor, role, project, authority epoch, view and page size (ONT-09). A hidden
+    record never supplies a public continuation identifier.
+    """
+    from workbench.service import limit as page_limit
+    size = page_limit(query)
+    project = ctx.scope["project"]
+    fingerprint = schema.digest(["publications", view_name, ctx.actor, ctx.scope["role"], ctx.project_id,
+                                 project.get("authorityRevision", 0), size])
+    position = None
+    cursor = query.get("cursor")
+    if cursor:
+        saved = None
+        if isinstance(cursor, str) and re.fullmatch(r"pubcur-[a-f0-9]{48}", cursor):
+            saved = ctx.storage.get(ctx.owner, "ontology_cursor", cursor)
+        if (not saved or saved.get("purpose") != "publications" or saved.get("fingerprint") != fingerprint
+                or saved.get("expiresAt", 0) <= ctx.storage.clock() or not isinstance(saved.get("position"), str)):
+            fail(409, "publication-cursor-stale", "조회 범위 또는 권한이 변경되었습니다. 처음부터 다시 조회하세요.")
+        position = saved["position"]
+    items, scanned, next_position = [], 0, None
+    while True:
+        page = ctx.storage.list_page(owner, kind, limit=min(100, MAX_SCANNED - scanned), cursor=position,
+                                     prefix=prefix)
+        rows = page["items"]
+        for index, row in enumerate(rows):
+            scanned += 1
+            value = include(row)
+            if value is not None:
+                items.append(value)
+            if len(items) == size or scanned >= MAX_SCANNED:
+                more = index + 1 < len(rows) or bool(page.get("cursor"))
+                next_position = ctx.storage.cursor_after(owner, kind, row["id"], prefix=prefix) if more else None
+                break
+        else:
+            next_position = page.get("cursor")
+            if next_position and scanned < MAX_SCANNED:
+                position = next_position
+                continue
+        break
+    ctx.fresh()
+    result = {"items": items}
+    if next_position:
+        identifier = "pubcur-" + secrets.token_hex(24)
+        ctx.storage.put(ctx.owner, "ontology_cursor", {
+            "id": identifier, "projectId": ctx.project_id, "purpose": "publications",
+            "fingerprint": fingerprint, "position": next_position,
+            "expiresAt": ctx.storage.clock() + CURSOR_MS})
+        result["cursor"] = identifier
+    return result
+
+
 def route(host, scope, claims, method, parts, body, query):
     ctx = Service(host, scope, claims)
     if parts == [] and method == "POST":
@@ -512,18 +575,16 @@ def route(host, scope, claims, method, parts, body, query):
                                             revision_bindings=body.get("revisionBindings"))}
     if parts == [] and method == "GET":
         ctx.fresh()
-        from workbench.service import limit
         if query.get("view", "origin") == "granted":
-            page = ctx.storage.list_page(ctx.owner, "pub_grant", limit=limit(query), cursor=query.get("cursor"))
-            items = [public(row) for row in page["items"] if _granted_view(ctx, row) is not None]
-            return 200, {"grants": items, **({"cursor": page["cursor"]} if page.get("cursor") else {})}
+            page = _authorized_page(ctx, query, "granted", ctx.owner, "pub_grant", "",
+                                    lambda row: public(row) if _granted_view(ctx, row) is not None else None)
+            return 200, {"grants": page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
         if query.get("view", "origin") != "origin":
             fail(400, "invalid-input", "view는 origin 또는 granted입니다.")
-        page = ctx.storage.list_page(PUBLICATION_OWNER, "publication", limit=limit(query),
-                                     cursor=query.get("cursor"))
-        items = [view(row) for row in page["items"]
-                 if row.get("originProject") == ctx.project_id and _origin_readable(ctx, row)]
-        return 200, {"publications": items, **({"cursor": page["cursor"]} if page.get("cursor") else {})}
+        page = _authorized_page(
+            ctx, query, "origin", PUBLICATION_OWNER, "publication", origin_prefix(ctx.project_id),
+            lambda row: view(row) if row.get("originProject") == ctx.project_id and _origin_readable(ctx, row) else None)
+        return 200, {"publications": page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
     if len(parts) == 1 and method == "GET":
         return 200, {"publication": _detail(ctx, parts[0])}
     if len(parts) == 2 and method == "GET" and parts[1] == "impact":

@@ -442,3 +442,57 @@ def test_granted_view_omits_grants_that_exclude_the_callers_role(org):
     status, listed, _ = call(org.api, "GET", "/publications", actor="gina", project=org.dest,
                              query={"view": "granted"})
     assert status == 200 and [g["publicationId"] for g in listed["grants"]] == [pub["id"]]
+
+
+@pytest.fixture
+def org_two(api, monkeypatch):
+    monkeypatch.setattr(admin_handler, "storage_factory", lambda: api.storage)
+    people = ("alice", "bob", "carol", "dana", "erin", "frank", "gina", "hank", "ivy")
+    api.collaboration.directory = lambda q: [{"sub": x, "displayName": x} for x in people if q in x]
+    origin = new_project(api, "origin", MEMBERS)
+    dest = new_project(api, "dest", {"erin": "owner", "frank": "planner", "gina": "designer"})
+    hidden = new_project(api, "hidden", {"hank": "owner", "ivy": "designer"})
+    nodes, refs = approved_nodes(api, origin, documents=2)
+    return SimpleNamespace(api=api, origin=origin, dest=dest, hidden=hidden, nodes=nodes, refs=refs)
+
+
+def leaks(cursor, *secrets):
+    """True if a returned cursor exposes storage keys or any record identifier."""
+    import base64
+    import binascii
+    texts = [cursor]
+    try:
+        texts.append(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode("utf-8", "replace"))
+    except (binascii.Error, ValueError):
+        pass
+    return any(marker in text for text in texts for marker in ("publication#", "pub_grant#", "pk", *secrets))
+
+
+def test_publication_pagination_uses_opaque_scope_bound_cursors(org_two):
+    """Finding 4: continuation never embeds record keys and is bound to caller and view."""
+    org = org_two
+    capability(org.api, "carol")
+    pubs = []
+    for identifier in sorted(org.nodes):
+        pub = publications.propose(ctx(org.api, "carol", org.origin), kind="design", node_ids=[identifier],
+                                   revision_bindings={identifier: bindings(org.nodes)[identifier]})
+        pubs.append(publications.approve(ctx(org.api, "carol", org.origin), pub["id"]))
+        granted(org, pubs[-1])
+    ids = {p["id"] for p in pubs}
+    # An unrelated project sees nothing and receives no continuation derived from hidden records.
+    status, listed, _ = call(org.api, "GET", "/publications", actor="ivy", project=org.hidden, query={"limit": "1"})
+    assert status == 200 and listed["publications"] == [] and not leaks(listed.get("cursor", ""), *ids)
+    for actor, pid, view, field in (("carol", org.origin, "origin", "publications"),
+                                    ("gina", org.dest, "granted", "grants")):
+        status, first, _ = call(org.api, "GET", "/publications", actor=actor, project=pid,
+                                query={"view": view, "limit": "1"})
+        assert status == 200 and len(first[field]) == 1 and first.get("cursor"), first
+        assert not leaks(first["cursor"], *ids)
+        status, second, _ = call(org.api, "GET", "/publications", actor=actor, project=pid,
+                                 query={"view": view, "limit": "1", "cursor": first["cursor"]})
+        assert status == 200 and len(second[field]) == 1 and second[field] != first[field]
+        # The cursor is bound to actor, project, view and limit.
+        assert call(org.api, "GET", "/publications", actor=actor, project=pid,
+                    query={"view": view, "limit": "2", "cursor": first["cursor"]})[0] == 409
+        assert call(org.api, "GET", "/publications", actor="hank", project=org.hidden,
+                    query={"view": view, "limit": "1", "cursor": first["cursor"]})[0] == 409
