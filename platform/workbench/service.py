@@ -22,10 +22,28 @@ def fail(status, code, message):
     raise CollaborationError(status, code, message)
 
 
+_TIMED_AUTHORITY = {
+    "capability": ("publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다."),
+}
+
+
 def check_source_deadlines(storage, checks, claims=None):
-    """Recheck the aggregate deadline after reads and transaction preparation."""
+    """Recheck the aggregate deadline after reads and transaction preparation.
+
+    IAM-administered authority records whose validity is time-bound (organization
+    publication capabilities and sharing policies) expire without a version
+    change, so their currency is rechecked here, immediately before every
+    transaction submission, in addition to the version fence.
+    """
     deadlines = []
     for check in checks:
+        if check["kind"] in _TIMED_AUTHORITY:
+            from intake.records import is_current
+            row = storage.get(check["owner"], check["kind"], check["id"])
+            if not row or row["version"] != check["version"] or not is_current(row, storage.clock()):
+                code, message = _TIMED_AUTHORITY[check["kind"]]
+                fail(403 if check["kind"] == "capability" else 409, code, message)
+            continue
         if check["kind"] != "wb_source":
             continue
         source = storage.get(check["owner"], check["kind"], check["id"])

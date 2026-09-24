@@ -352,3 +352,25 @@ def test_capability_records_are_closed_and_iam_only(org):
     assert shaped == {"error": "forbidden-transport"}
     audits = {(a["op"], a["kind"]) for a in org.api.storage.list(INTAKE_OWNER, "adm_audit")}
     assert ("grant_capability", "capability") in audits
+
+
+# Fix round 1 (PR #29 review) ------------------------------------------------
+
+def test_capability_expiry_is_rechecked_immediately_before_commit(org, monkeypatch):
+    """Finding 7: expiry changes no version, so the commit guard rechecks currency itself."""
+    pub = proposed(org)
+    storage = org.api.storage
+    now = [storage.clock()]
+    monkeypatch.setattr(storage, "clock", lambda: now[0])
+    admin(org.api, {"op": "grant_capability", "record": {
+        "id": "cap-carol-short", "actor": "carol", "name": "design_publish", "expiresAt": now[0] + 60_000}})
+    original = storage.put_blob_once
+
+    def slow_snapshot(*args, **kwargs):
+        result = original(*args, **kwargs)
+        now[0] += 120_000  # the capability expires while the snapshot is stored
+        return result
+    monkeypatch.setattr(storage, "put_blob_once", slow_snapshot)
+    assert denied(publications.approve, ctx(org.api, "carol", org.origin), pub["id"]) == (
+        403, "publication-capability-required")
+    assert storage.get(publications.PUBLICATION_OWNER, "publication", pub["id"])["status"] == "proposed"
