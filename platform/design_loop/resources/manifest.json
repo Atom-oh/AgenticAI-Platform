@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "resources": {
+    "checklists.json": {
+      "sha256": "8ccd4e4ca92e260f9ef136226e9be443b121b73e0fe2c36a46199df845554be5",
+      "copiedFrom": "seed/design/checklists.json"
+    }
+  }
+}

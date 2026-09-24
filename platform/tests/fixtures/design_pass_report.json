@@ -1,0 +1,1928 @@
+{
+ "contract": {
+  "assetIds": [],
+  "bindings": {},
+  "brief": "",
+  "catalogHash": "e1fd0dd11181b040ed4b3d1e726014f285b9f0e00077d18ea4521de203203de3",
+  "rules": [
+   {
+    "id": "page-k1",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "기본금리 연 2.0%"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:intro:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "intro",
+      "targetLabel": "intro",
+      "value": true
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k1-n3",
+      "targetLabel": "k1-n3",
+      "value": "연 2.0%"
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k1-n3",
+      "targetLabel": "k1-n3",
+      "value": "12개월"
+     },
+     {
+      "action": "click",
+      "target": "k1-cta",
+      "targetLabel": "k1-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "eligibility",
+      "targetLabel": "eligibility",
+      "value": true
+     }
+    ],
+    "title": "상품 소개 화면 확인 (default)"
+   },
+   {
+    "id": "page-k2",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:eligibility:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "eligibility",
+      "targetLabel": "eligibility",
+      "value": true
+     },
+     {
+      "action": "click",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "terms",
+      "targetLabel": "terms",
+      "value": true
+     }
+    ],
+    "title": "가입 자격 확인 화면 확인 (default)"
+   },
+   {
+    "id": "page-k2-ineligible",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "2:eligibility:ineligible"
+     },
+     {
+      "action": "expectVisible",
+      "target": "k2--ineligible",
+      "targetLabel": "k2--ineligible",
+      "value": true
+     }
+    ],
+    "title": "가입 자격 확인 화면 확인 (ineligible)"
+   },
+   {
+    "id": "page-k3",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:terms:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "terms",
+      "targetLabel": "terms",
+      "value": true
+     },
+     {
+      "action": "click",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "amount",
+      "targetLabel": "amount",
+      "value": true
+     }
+    ],
+    "title": "약관 동의 화면 확인 (default)"
+   },
+   {
+    "id": "page-k4",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "2:ineligible:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "ineligible",
+      "targetLabel": "ineligible",
+      "value": true
+     },
+     {
+      "action": "click",
+      "target": "k4-cta",
+      "targetLabel": "k4-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "flow-finished",
+      "targetLabel": "flow-finished",
+      "value": true
+     }
+    ],
+    "title": "가입 불가 안내 화면 확인 (default)"
+   },
+   {
+    "id": "page-k4-ineligible",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "2:ineligible:ineligible"
+     },
+     {
+      "action": "expectVisible",
+      "target": "k4--ineligible",
+      "targetLabel": "k4--ineligible",
+      "value": true
+     }
+    ],
+    "title": "가입 불가 안내 화면 확인 (ineligible)"
+   },
+   {
+    "id": "page-k5",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:amount:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "amount",
+      "targetLabel": "amount",
+      "value": true
+     },
+     {
+      "action": "click",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "preferential",
+      "targetLabel": "preferential",
+      "value": true
+     }
+    ],
+    "title": "납입 금액 화면 확인 (default)"
+   },
+   {
+    "id": "page-k6",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "기본금리 연 2.0%"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:preferential:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "preferential",
+      "targetLabel": "preferential",
+      "value": true
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k6-n3",
+      "targetLabel": "k6-n3",
+      "value": "연 2.0%"
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k6-n3",
+      "targetLabel": "k6-n3",
+      "value": "12개월"
+     },
+     {
+      "action": "click",
+      "target": "k6-cta",
+      "targetLabel": "k6-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "evidence-auto",
+      "targetLabel": "evidence-auto",
+      "value": true
+     }
+    ],
+    "title": "우대 조건 화면 확인 (default)"
+   },
+   {
+    "id": "page-k7",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:evidence-auto:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "evidence-auto",
+      "targetLabel": "evidence-auto",
+      "value": true
+     },
+     {
+      "action": "click",
+      "target": "k7-cta",
+      "targetLabel": "k7-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "confirm",
+      "targetLabel": "confirm",
+      "value": true
+     }
+    ],
+    "title": "자동이체 확인 화면 확인 (default)"
+   },
+   {
+    "id": "page-k8",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 3,
+     "quote": "이 예금은 예금자보호법에 따라 보호됩니다."
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:confirm:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "confirm",
+      "targetLabel": "confirm",
+      "value": true
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k8-n3",
+      "targetLabel": "k8-n3",
+      "value": "연 2.0%"
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k8-n3",
+      "targetLabel": "k8-n3",
+      "value": "12개월"
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k8-n5",
+      "targetLabel": "k8-n5",
+      "value": "예금자보호법에 따라 보호됩니다"
+     },
+     {
+      "action": "click",
+      "target": "k8-cta",
+      "targetLabel": "k8-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "complete",
+      "targetLabel": "complete",
+      "value": true
+     }
+    ],
+    "title": "가입 내용 확인 화면 확인 (default)"
+   },
+   {
+    "id": "page-k9",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "기본금리 연 2.0%"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:done:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "complete",
+      "targetLabel": "complete",
+      "value": true
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k9-n3",
+      "targetLabel": "k9-n3",
+      "value": "연 2.0%"
+     },
+     {
+      "action": "expectText",
+      "match": "contains",
+      "target": "k9-n3",
+      "targetLabel": "k9-n3",
+      "value": "12개월"
+     },
+     {
+      "action": "click",
+      "target": "k9-cta",
+      "targetLabel": "k9-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "flow-finished",
+      "targetLabel": "flow-finished",
+      "value": true
+     }
+    ],
+    "title": "가입 완료 화면 확인 (default)"
+   },
+   {
+    "id": "branch-k2-1",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 3,
+     "quote": "만 19세 이상 34세 이하 개인만"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:eligibility:default"
+     },
+     {
+      "action": "click",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "terms",
+      "targetLabel": "terms",
+      "value": true
+     },
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "1:eligibility:default"
+     },
+     {
+      "action": "click",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "terms",
+      "targetLabel": "terms",
+      "value": true
+     },
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "2:eligibility:default"
+     },
+     {
+      "action": "click",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "ineligible",
+      "targetLabel": "ineligible",
+      "value": true
+     },
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "3:eligibility:default"
+     },
+     {
+      "action": "click",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "ineligible",
+      "targetLabel": "ineligible",
+      "value": true
+     }
+    ],
+    "title": "가입 자격 확인 분기 결과"
+   },
+   {
+    "id": "branch-k6-1",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "자동이체 시 연 0.5%p"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:preferential:default"
+     },
+     {
+      "action": "click",
+      "target": "k6-cta",
+      "targetLabel": "k6-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "evidence-auto",
+      "targetLabel": "evidence-auto",
+      "value": true
+     },
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "1:preferential:default"
+     },
+     {
+      "action": "click",
+      "target": "k6-cta",
+      "targetLabel": "k6-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "confirm",
+      "targetLabel": "confirm",
+      "value": true
+     }
+    ],
+    "title": "우대 조건 분기 결과"
+   },
+   {
+    "id": "visible-k7-1",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "자동이체 시 연 0.5%p"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:evidence-auto:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "k7-n3",
+      "targetLabel": "k7-n3",
+      "value": true
+     },
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "1:evidence-auto:default"
+     },
+     {
+      "action": "expectVisible",
+      "target": "k7-n3",
+      "targetLabel": "k7-n3",
+      "value": false
+     }
+    ],
+    "title": "자동이체 확인 조건부 표시"
+   },
+   {
+    "id": "input-k3",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:terms:default:empty"
+     },
+     {
+      "action": "expectEnabled",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta",
+      "value": false
+     },
+     {
+      "action": "check",
+      "target": "k3-f1",
+      "targetLabel": "k3-f1",
+      "value": true
+     },
+     {
+      "action": "expectChecked",
+      "target": "k3-f1",
+      "targetLabel": "k3-f1",
+      "value": true
+     },
+     {
+      "action": "expectEnabled",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta",
+      "value": true
+     },
+     {
+      "action": "click",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "amount",
+      "targetLabel": "amount",
+      "value": true
+     }
+    ],
+    "title": "약관 동의 입력 동작"
+   },
+   {
+    "id": "input-k5",
+    "required": true,
+    "source": {
+     "kind": "inferred",
+     "page": 1,
+     "quote": "상품명: 데모 청년 적금"
+    },
+    "steps": [
+     {
+      "action": "select",
+      "target": "case-select",
+      "targetLabel": "case-select",
+      "value": "0:amount:default:empty"
+     },
+     {
+      "action": "expectEnabled",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta",
+      "value": false
+     },
+     {
+      "action": "fill",
+      "target": "k5-f1",
+      "targetLabel": "k5-f1",
+      "value": "10000"
+     },
+     {
+      "action": "expectValue",
+      "target": "k5-f1",
+      "targetLabel": "k5-f1",
+      "value": "10000"
+     },
+     {
+      "action": "expectEnabled",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta",
+      "value": true
+     },
+     {
+      "action": "click",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta"
+     },
+     {
+      "action": "expectVisible",
+      "target": "preferential",
+      "targetLabel": "preferential",
+      "value": true
+     }
+    ],
+    "title": "납입 금액 입력 동작"
+   }
+  ],
+  "schemaVersion": 1,
+  "title": "데모 적금 가입 동작 검증",
+  "unresolved": [],
+  "viewport": {
+   "height": 844,
+   "width": 390
+  }
+ },
+ "report": {
+  "accessibility": {
+   "checkedStates": [
+    "initial",
+    "page-k1:final",
+    "page-k2:final",
+    "page-k2-ineligible:final",
+    "page-k3:final",
+    "page-k4:final",
+    "page-k4-ineligible:final",
+    "page-k5:final",
+    "page-k6:final",
+    "page-k7:final",
+    "page-k8:final",
+    "page-k9:final",
+    "branch-k2-1:final",
+    "branch-k6-1:final",
+    "visible-k7-1:final",
+    "input-k3:final",
+    "input-k5:final"
+   ],
+   "evidenceTruncated": false,
+   "incomplete": [],
+   "status": "pass",
+   "totalViolations": 0,
+   "violations": []
+  },
+  "artifactSha256": "92f0458b784592c3dfb0cf51eda5d735dc0bc5dcc344729a16ba5e3c6edd4222",
+  "blockingFindings": [],
+  "build": {
+   "bundleHash": "c84c857f4b1f6ed7cdfc5059e10eacfa5160a4f10f475bdeb35031c5b19f0ec4",
+   "catalogHash": "e1fd0dd11181b040ed4b3d1e726014f285b9f0e00077d18ea4521de203203de3",
+   "components": [
+    "Alert",
+    "Button",
+    "Checkbox",
+    "Input",
+    "Panel",
+    "Screen",
+    "Select",
+    "Stack",
+    "Summary",
+    "Text"
+   ],
+   "diagnostics": [],
+   "gates": {
+    "build": {
+     "status": "pass"
+    },
+    "components": {
+     "status": "pass"
+    },
+    "policy": {
+     "status": "pass"
+    },
+    "types": {
+     "status": "pass"
+    }
+   },
+   "ok": true,
+   "pageSources": [
+    {
+     "pageId": "amount",
+     "path": "src/pages/amount.tsx"
+    },
+    {
+     "pageId": "complete",
+     "path": "src/pages/complete.tsx"
+    },
+    {
+     "pageId": "confirm",
+     "path": "src/pages/confirm.tsx"
+    },
+    {
+     "pageId": "eligibility",
+     "path": "src/pages/eligibility.tsx"
+    },
+    {
+     "pageId": "evidence-auto",
+     "path": "src/pages/evidence-auto.tsx"
+    },
+    {
+     "pageId": "ineligible",
+     "path": "src/pages/ineligible.tsx"
+    },
+    {
+     "pageId": "intro",
+     "path": "src/pages/intro.tsx"
+    },
+    {
+     "pageId": "k2--ineligible",
+     "path": "src/pages/k2--ineligible.tsx"
+    },
+    {
+     "pageId": "k4--ineligible",
+     "path": "src/pages/k4--ineligible.tsx"
+    },
+    {
+     "pageId": "preferential",
+     "path": "src/pages/preferential.tsx"
+    },
+    {
+     "pageId": "terms",
+     "path": "src/pages/terms.tsx"
+    }
+   ],
+   "sourceHash": "78089b704050e23cebaf30d4f34d6d1865d48403767577a2767348687dd1fac3"
+  },
+  "bundleHash": "c84c857f4b1f6ed7cdfc5059e10eacfa5160a4f10f475bdeb35031c5b19f0ec4",
+  "catalogHash": "e1fd0dd11181b040ed4b3d1e726014f285b9f0e00077d18ea4521de203203de3",
+  "checks": [
+   {
+    "caseId": "page-k1",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:intro:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "intro",
+      "targetLabel": "intro"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "연 2.0%",
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k1-n3",
+      "targetLabel": "k1-n3"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "12개월",
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "k1-n3",
+      "targetLabel": "k1-n3"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k1-cta",
+      "targetLabel": "k1-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "eligibility",
+      "targetLabel": "eligibility"
+     }
+    ],
+    "title": "상품 소개 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 자격 확인\n\n화면 제목\n\n가입 자격 확인\n다음 버튼"
+   },
+   {
+    "caseId": "page-k2",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:eligibility:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "eligibility",
+      "targetLabel": "eligibility"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "terms",
+      "targetLabel": "terms"
+     }
+    ],
+    "title": "가입 자격 확인 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n약관 동의\n\n화면 제목\n\n동의 체크\n\n본문 텍스트\n\n다음 버튼"
+   },
+   {
+    "caseId": "page-k2-ineligible",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "2:eligibility:ineligible",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "k2--ineligible",
+      "targetLabel": "k2--ineligible"
+     }
+    ],
+    "title": "가입 자격 확인 화면 확인 (ineligible)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 자격 확인\n\n화면 제목\n\n가입 자격 확인\n다음 버튼"
+   },
+   {
+    "caseId": "page-k3",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:terms:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "terms",
+      "targetLabel": "terms"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "amount",
+      "targetLabel": "amount"
+     }
+    ],
+    "title": "약관 동의 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n납입 금액\n\n화면 제목\n\n금액 입력\n\n본문 텍스트\n\n다음 버튼"
+   },
+   {
+    "caseId": "page-k4",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "2:ineligible:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "ineligible",
+      "targetLabel": "ineligible"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k4-cta",
+      "targetLabel": "k4-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "flow-finished",
+      "targetLabel": "flow-finished"
+     }
+    ],
+    "title": "가입 불가 안내 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 불가 안내\n\n화면 제목\n\n가입 자격 확인\n다음 버튼\n완료:\n\n절차를 완료했습니다."
+   },
+   {
+    "caseId": "page-k4-ineligible",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "2:ineligible:ineligible",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "k4--ineligible",
+      "targetLabel": "k4--ineligible"
+     }
+    ],
+    "title": "가입 불가 안내 화면 확인 (ineligible)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 불가 안내\n\n화면 제목\n\n가입 자격 확인\n다음 버튼"
+   },
+   {
+    "caseId": "page-k5",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:amount:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "amount",
+      "targetLabel": "amount"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "preferential",
+      "targetLabel": "preferential"
+     }
+    ],
+    "title": "납입 금액 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n우대 조건\n\n화면 제목\n\n기본금리\n연 2.0%\n가입기간\n12개월\n\n본문 텍스트\n\n다음 버튼"
+   },
+   {
+    "caseId": "page-k6",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:preferential:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "preferential",
+      "targetLabel": "preferential"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "연 2.0%",
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k6-n3",
+      "targetLabel": "k6-n3"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "12개월",
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "k6-n3",
+      "targetLabel": "k6-n3"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k6-cta",
+      "targetLabel": "k6-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "evidence-auto",
+      "targetLabel": "evidence-auto"
+     }
+    ],
+    "title": "우대 조건 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n자동이체 확인\n\n화면 제목\n\n자동이체 설정\n\n본문 텍스트\n\n다음 버튼"
+   },
+   {
+    "caseId": "page-k7",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:evidence-auto:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "evidence-auto",
+      "targetLabel": "evidence-auto"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k7-cta",
+      "targetLabel": "k7-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "confirm",
+      "targetLabel": "confirm"
+     }
+    ],
+    "title": "자동이체 확인 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 내용 확인\n\n화면 제목\n\n기본금리\n연 2.0%\n가입기간\n12개월\n\n본문 텍스트\n\n안내:\n\n예금자보호법에 따라 보호됩니다\n\n다음 버튼"
+   },
+   {
+    "caseId": "page-k8",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:confirm:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "confirm",
+      "targetLabel": "confirm"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "연 2.0%",
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k8-n3",
+      "targetLabel": "k8-n3"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "12개월",
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "k8-n3",
+      "targetLabel": "k8-n3"
+     },
+     {
+      "action": "expectText",
+      "actual": "안내:\n\n예금자보호법에 따라 보호됩니다",
+      "actualComponent": "Alert",
+      "actualTruncated": false,
+      "expected": "예금자보호법에 따라 보호됩니다",
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k8-n5",
+      "targetLabel": "k8-n5"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "k8-cta",
+      "targetLabel": "k8-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 6,
+      "property": null,
+      "status": "pass",
+      "target": "complete",
+      "targetLabel": "complete"
+     }
+    ],
+    "title": "가입 내용 확인 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 완료\n\n화면 제목\n\n기본금리\n연 2.0%\n가입기간\n12개월\n\n본문 텍스트\n\n다음 버튼"
+   },
+   {
+    "caseId": "page-k9",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:done:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "complete",
+      "targetLabel": "complete"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "연 2.0%",
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k9-n3",
+      "targetLabel": "k9-n3"
+     },
+     {
+      "action": "expectText",
+      "actual": "기본금리\n연 2.0%\n가입기간\n12개월",
+      "actualComponent": "Summary",
+      "actualTruncated": false,
+      "expected": "12개월",
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "k9-n3",
+      "targetLabel": "k9-n3"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k9-cta",
+      "targetLabel": "k9-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "flow-finished",
+      "targetLabel": "flow-finished"
+     }
+    ],
+    "title": "가입 완료 화면 확인 (default)",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 완료\n\n화면 제목\n\n기본금리\n연 2.0%\n가입기간\n12개월\n\n본문 텍스트\n\n다음 버튼\n완료:\n\n절차를 완료했습니다."
+   },
+   {
+    "caseId": "branch-k2-1",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:eligibility:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "terms",
+      "targetLabel": "terms"
+     },
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "1:eligibility:default",
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "terms",
+      "targetLabel": "terms"
+     },
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "2:eligibility:default",
+      "index": 6,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 7,
+      "property": null,
+      "status": "pass",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 8,
+      "property": null,
+      "status": "pass",
+      "target": "ineligible",
+      "targetLabel": "ineligible"
+     },
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "3:eligibility:default",
+      "index": 9,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 10,
+      "property": null,
+      "status": "pass",
+      "target": "k2-cta",
+      "targetLabel": "k2-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 11,
+      "property": null,
+      "status": "pass",
+      "target": "ineligible",
+      "targetLabel": "ineligible"
+     }
+    ],
+    "title": "가입 자격 확인 분기 결과",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 불가 안내\n\n화면 제목\n\n가입 자격 확인\n다음 버튼"
+   },
+   {
+    "caseId": "branch-k6-1",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:preferential:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "k6-cta",
+      "targetLabel": "k6-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "evidence-auto",
+      "targetLabel": "evidence-auto"
+     },
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "1:preferential:default",
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k6-cta",
+      "targetLabel": "k6-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "confirm",
+      "targetLabel": "confirm"
+     }
+    ],
+    "title": "우대 조건 분기 결과",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n가입 내용 확인\n\n화면 제목\n\n기본금리\n연 2.0%\n가입기간\n12개월\n\n본문 텍스트\n\n안내:\n\n예금자보호법에 따라 보호됩니다\n\n다음 버튼"
+   },
+   {
+    "caseId": "visible-k7-1",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:evidence-auto:default",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "k7-n3",
+      "targetLabel": "k7-n3"
+     },
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "1:evidence-auto:default",
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectVisible",
+      "actual": false,
+      "actualTruncated": false,
+      "expected": false,
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "k7-n3",
+      "targetLabel": "k7-n3"
+     }
+    ],
+    "title": "자동이체 확인 조건부 표시",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n자동이체 확인\n\n화면 제목\n\n자동이체 설정\n다음 버튼"
+   },
+   {
+    "caseId": "input-k3",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:terms:default:empty",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectEnabled",
+      "actual": false,
+      "actualTruncated": false,
+      "expected": false,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta"
+     },
+     {
+      "action": "check",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": true,
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k3-f1",
+      "targetLabel": "k3-f1"
+     },
+     {
+      "action": "expectChecked",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "k3-f1",
+      "targetLabel": "k3-f1"
+     },
+     {
+      "action": "expectEnabled",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "k3-cta",
+      "targetLabel": "k3-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 6,
+      "property": null,
+      "status": "pass",
+      "target": "amount",
+      "targetLabel": "amount"
+     }
+    ],
+    "title": "약관 동의 입력 동작",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n납입 금액\n\n화면 제목\n\n금액 입력\n\n본문 텍스트\n\n다음 버튼"
+   },
+   {
+    "caseId": "input-k5",
+    "required": true,
+    "status": "pass",
+    "steps": [
+     {
+      "action": "select",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "0:amount:default:empty",
+      "index": 0,
+      "property": null,
+      "status": "pass",
+      "target": "case-select",
+      "targetLabel": "case-select"
+     },
+     {
+      "action": "expectEnabled",
+      "actual": false,
+      "actualTruncated": false,
+      "expected": false,
+      "index": 1,
+      "property": null,
+      "status": "pass",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta"
+     },
+     {
+      "action": "fill",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": "10000",
+      "index": 2,
+      "property": null,
+      "status": "pass",
+      "target": "k5-f1",
+      "targetLabel": "k5-f1"
+     },
+     {
+      "action": "expectValue",
+      "actual": "10000",
+      "actualTruncated": false,
+      "expected": "10000",
+      "index": 3,
+      "property": null,
+      "status": "pass",
+      "target": "k5-f1",
+      "targetLabel": "k5-f1"
+     },
+     {
+      "action": "expectEnabled",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 4,
+      "property": null,
+      "status": "pass",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta"
+     },
+     {
+      "action": "click",
+      "actual": "조작 완료",
+      "actualTruncated": false,
+      "expected": null,
+      "index": 5,
+      "property": null,
+      "status": "pass",
+      "target": "k5-cta",
+      "targetLabel": "k5-cta"
+     },
+     {
+      "action": "expectVisible",
+      "actual": true,
+      "actualTruncated": false,
+      "expected": true,
+      "index": 6,
+      "property": null,
+      "status": "pass",
+      "target": "preferential",
+      "targetLabel": "preferential"
+     }
+    ],
+    "title": "납입 금액 입력 동작",
+    "visibleText": "검증용 케이스\n케이스 1 · 상품 소개 · default\n케이스 1 · 상품 소개 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · default\n케이스 1 · 가입 자격 확인 · default · 빈 입력\n케이스 1 · 가입 자격 확인 · ineligible\n케이스 1 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 1 · 약관 동의 · default\n케이스 1 · 약관 동의 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · default\n케이스 1 · 가입 불가 안내 · default · 빈 입력\n케이스 1 · 가입 불가 안내 · ineligible\n케이스 1 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 1 · 납입 금액 · default\n케이스 1 · 납입 금액 · default · 빈 입력\n케이스 1 · 우대 조건 · default\n케이스 1 · 우대 조건 · default · 빈 입력\n케이스 1 · 자동이체 확인 · default\n케이스 1 · 자동이체 확인 · default · 빈 입력\n케이스 1 · 가입 내용 확인 · default\n케이스 1 · 가입 내용 확인 · default · 빈 입력\n케이스 1 · 가입 완료 · default\n케이스 1 · 가입 완료 · default · 빈 입력\n케이스 2 · 상품 소개 · default\n케이스 2 · 상품 소개 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · default\n케이스 2 · 가입 자격 확인 · default · 빈 입력\n케이스 2 · 가입 자격 확인 · ineligible\n케이스 2 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 2 · 약관 동의 · default\n케이스 2 · 약관 동의 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · default\n케이스 2 · 가입 불가 안내 · default · 빈 입력\n케이스 2 · 가입 불가 안내 · ineligible\n케이스 2 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 2 · 납입 금액 · default\n케이스 2 · 납입 금액 · default · 빈 입력\n케이스 2 · 우대 조건 · default\n케이스 2 · 우대 조건 · default · 빈 입력\n케이스 2 · 자동이체 확인 · default\n케이스 2 · 자동이체 확인 · default · 빈 입력\n케이스 2 · 가입 내용 확인 · default\n케이스 2 · 가입 내용 확인 · default · 빈 입력\n케이스 2 · 가입 완료 · default\n케이스 2 · 가입 완료 · default · 빈 입력\n케이스 3 · 상품 소개 · default\n케이스 3 · 상품 소개 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · default\n케이스 3 · 가입 자격 확인 · default · 빈 입력\n케이스 3 · 가입 자격 확인 · ineligible\n케이스 3 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 3 · 약관 동의 · default\n케이스 3 · 약관 동의 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · default\n케이스 3 · 가입 불가 안내 · default · 빈 입력\n케이스 3 · 가입 불가 안내 · ineligible\n케이스 3 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 3 · 납입 금액 · default\n케이스 3 · 납입 금액 · default · 빈 입력\n케이스 3 · 우대 조건 · default\n케이스 3 · 우대 조건 · default · 빈 입력\n케이스 3 · 자동이체 확인 · default\n케이스 3 · 자동이체 확인 · default · 빈 입력\n케이스 3 · 가입 내용 확인 · default\n케이스 3 · 가입 내용 확인 · default · 빈 입력\n케이스 3 · 가입 완료 · default\n케이스 3 · 가입 완료 · default · 빈 입력\n케이스 4 · 상품 소개 · default\n케이스 4 · 상품 소개 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · default\n케이스 4 · 가입 자격 확인 · default · 빈 입력\n케이스 4 · 가입 자격 확인 · ineligible\n케이스 4 · 가입 자격 확인 · ineligible · 빈 입력\n케이스 4 · 약관 동의 · default\n케이스 4 · 약관 동의 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · default\n케이스 4 · 가입 불가 안내 · default · 빈 입력\n케이스 4 · 가입 불가 안내 · ineligible\n케이스 4 · 가입 불가 안내 · ineligible · 빈 입력\n케이스 4 · 납입 금액 · default\n케이스 4 · 납입 금액 · default · 빈 입력\n케이스 4 · 우대 조건 · default\n케이스 4 · 우대 조건 · default · 빈 입력\n케이스 4 · 자동이체 확인 · default\n케이스 4 · 자동이체 확인 · default · 빈 입력\n케이스 4 · 가입 내용 확인 · default\n케이스 4 · 가입 내용 확인 · default · 빈 입력\n케이스 4 · 가입 완료 · default\n케이스 4 · 가입 완료 · default · 빈 입력\n우대 조건\n\n화면 제목\n\n기본금리\n연 2.0%\n가입기간\n12개월\n\n본문 텍스트\n\n다음 버튼"
+   }
+  ],
+  "consoleErrors": [],
+  "contractHash": "3f2895cec47f08feddbc4bf735fc12e8e6c7526b82b8f2722889a933bc662090",
+  "elapsedMs": 9210,
+  "functionalStatus": "pass",
+  "networkRequests": [],
+  "outputType": "react",
+  "passed": true,
+  "renderer": "react-bundle",
+  "sourceHash": "78089b704050e23cebaf30d4f34d6d1865d48403767577a2767348687dd1fac3",
+  "viewport": {
+   "height": 844,
+   "width": 390
+  },
+  "visual": {
+   "status": "not-run"
+  }
+ }
+}

@@ -98,7 +98,8 @@ def from_snapshot(snapshot, *, include_candidates=False):
             k.rules[n["id"]] = {"id": n["id"], "ruleId": props.get("ruleId", n["id"]),
                                 "statement": props.get("statement", n["title"]), "required": bool(props.get("required")),
                                 "severity": props.get("severity", "major"), "targets": [], "citation": props.get("citation"),
-                                "appliesWhen": props.get("appliesWhen"), "reviewState": n["reviewState"]}
+                                "appliesWhen": props.get("appliesWhen"), "reviewState": n["reviewState"],
+                                "revision": n.get("revision"), "contentHash": n.get("contentHash")}
         elif kind == "Foundation" and props.get("token"):
             k.tokens[props.get("name", n["id"])] = props["token"]
         for ref in references(ux) if ux else []:

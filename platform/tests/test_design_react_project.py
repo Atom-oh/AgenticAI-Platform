@@ -104,7 +104,7 @@ def test_pages_emit_literal_page_id_expression_attributes_and_trusted_adapters()
     assert re.search(r'checked=\{fieldFlag\(form, "k\d+-f1"\)\}', terms)
     evidence = files["src/pages/evidence-auto.tsx"]
     assert 'visible({ when: "cond:autoTransfer", negate: false }, caseState) && (' in evidence
-    assert 'onClick={() => go("finish")}' in files["src/pages/done.tsx"]
+    assert 'onClick={() => go("finish")}' in files["src/pages/complete.tsx"]
     app = files["src/App.tsx"]
     assert 'testId={"case-select"} label={"검증용 케이스"}' in app and '"flow-finished"' in app
     assert json.loads(files["src/logic/data.ts"].split("export const data: Data = ", 1)[1].split(";\n", 1)[0]) \
