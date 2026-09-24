@@ -633,6 +633,9 @@ class Sources:
                 guideline = self.ctx.get("guideline", run.get("guidelineId") or "-")
                 if guideline.get("productId") != product["id"] or guideline.get("status") != "published":
                     _not_found()
+                # Frozen authority: both records are fenced and revalidated by the final recheck.
+                self._remember("product", product)
+                self._remember("guideline", guideline)
             self._base_lineage(run)
         except CollaborationError as error:
             self._permission_failure(error)

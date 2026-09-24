@@ -180,7 +180,9 @@ live sharing or release evidence.
   superseded-source fallback) joins that reader's final `recheck()`. Admission
   verification runs on a probe reader (`Sources._probe`) whose observations are
   absorbed (`Sources.absorb`), so its own final recheck never re-enters the parent
-  reader's historical-reference replay.
+  reader's historical-reference replay. Historical round checks also fence the product and
+  guideline records they consult, so a guideline withdrawn during delivery fails
+  that response's final recheck.
 - `ux-contract` `{sourceId: contractId, revision: str(contract.version), sha256:
   contract.approval.hash, audienceRevision: "current-project-members-v1"}`. The
   contract is `approved` at that version, the approval hash matches and

@@ -806,3 +806,26 @@ def test_historical_contract_resolution_returns_only_the_retained_revision(env, 
     assert record["title"] == contract["title"] and record["version"] == contract["version"]
     assert "edited newer content" not in json.dumps(record)
     assert record.get("approval", {}).get("hash") == ref["sha256"]
+
+
+def test_guideline_withdrawn_during_download_denies_that_chunk(env, design, monkeypatch):
+    """Review 3 #5: historical delivery fences product and guideline records."""
+    _, contract = design
+    run = react_run(env, contract)
+    row = run["rounds"][0]
+    owner = f"project:{env.pid}"
+    storage = env.api.storage
+    original = storage.get_blob
+    armed = {"on": True}
+
+    def withdrawing(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key == row["sourceKey"] and armed["on"]:
+            armed["on"] = False
+            guideline = storage.get(owner, "guideline", run["guidelineId"])
+            storage.put(owner, "guideline", {**guideline, "status": "withdrawn"}, guideline["version"])
+        return data
+    monkeypatch.setattr(storage, "get_blob", withdrawing)
+    status, payload = blob(env, run["id"], "source")
+    assert status in (404, 409) and not isinstance(payload, bytes)
+    assert blob(env, run["id"], "source")[0] == 404
