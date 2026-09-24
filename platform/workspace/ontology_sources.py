@@ -516,26 +516,67 @@ class Sources:
                 if guideline.get("productId") != product["id"] or guideline.get("status") != "published":
                     _not_found()
             for binding in self._admission_refs(row):
-                probe = Sources(self.ctx)
+                observed = []
                 try:
+                    # This reader verifies the source, and every decision/policy/grant/
+                    # provenance version it observed joins this reader's final recheck.
                     decision = admission.verify(self.ctx.host, self.ctx.scope, binding["decisionId"],
-                                                claims=self.ctx.claims, sources=probe)
+                                                claims=self.ctx.claims, sources=self, observe=observed)
                 except admission.AdmissionError as error:
                     if error.code != "source-changed":
                         _not_found()
-                    # Superseded source: the decision itself is still current and admitted.
-                    decision = self.storage.get(self.ctx.owner, "adm_decision", binding["decisionId"])
-                    if not decision or decision["source"]["sourceKind"] == "prompt-text":
-                        _not_found()
-                    Sources(self.ctx).authorize(dict(decision["source"]), remember=False)
+                    decision, observed = self._superseded_admission(binding["decisionId"])
                 if not self._admission_matches(decision, binding):
                     _not_found()
+                for check in observed:
+                    self._remember_owned(check["owner"], check["kind"], check)
         except CollaborationError as error:
             # Only expiry and frozen-authority failures pass through; every upstream
             # permission failure is indistinguishable from a missing record.
             if error.status == 401 or error.code in _AUTHORITY_CODES:
                 raise
             _not_found()
+
+    def _superseded_admission(self, decision_id):
+        """Historical fallback for an admission whose source was superseded but is still readable.
+
+        The decision itself must still be admitted and current, with its policy and
+        reviewer grant/provenance current at the recorded revisions; every record is
+        returned as an observation for this reader's final recheck, and the source
+        passes this reader's historical authorization.
+        """
+        from intake import admission, records
+        from intake.records import INTAKE_OWNER
+        storage, now = self.storage, self.storage.clock()
+        try:
+            decision = storage.get(self.ctx.owner, "adm_decision", decision_id)
+            decision = records.validate("adm_decision", decision) if decision else None
+        except ValueError:
+            decision = None
+        if (not decision or decision["projectId"] != self.ctx.project_id or decision["status"] != "admitted"
+                or not records.is_current(decision, now) or decision["source"]["sourceKind"] == "prompt-text"):
+            _not_found()
+        try:
+            policy = admission._policy_current(storage, decision, self.ctx.project_id)
+        except admission.AdmissionError:
+            _not_found()
+        observed = [admission._check(self.ctx.owner, "adm_decision", decision),
+                    admission._check(INTAKE_OWNER, "adm_policy", policy)]
+        if "provenance" in decision:
+            provenance = admission._admin_record(storage, "adm_provenance", decision["provenance"]["id"])
+            if (not provenance or provenance["revision"] != decision["provenance"]["revision"]
+                    or not admission._provenance_ok(provenance, policy, decision["source"], self.ctx.project_id,
+                                                    decision["dataClass"], now)):
+                _not_found()
+            observed.append(admission._check(INTAKE_OWNER, "adm_provenance", provenance))
+        if "review" in decision:
+            grant = admission._admin_record(storage, "adm_grant", decision["review"]["grantId"])
+            if (not grant or grant["revision"] != decision["review"]["grantRevision"]
+                    or not admission._grant_ok(grant, decision["review"]["actor"], policy, self.ctx.project_id, now)):
+                _not_found()
+            observed.append(admission._check(INTAKE_OWNER, "adm_grant", grant))
+        self._authorize(schema.source_ref(dict(decision["source"])), remember=False)
+        return decision, observed
 
     # ux-contract ----------------------------------------------------------
 

@@ -530,3 +530,32 @@ def test_criteria_republished_right_after_validation_cannot_be_fenced_as_current
             reader.recheck()
         assert code(attempt)[0] == 409
         product = env.api.storage.get(f"project:{env.pid}", "product", product["id"])
+
+
+def test_historical_delivery_retains_admission_observations(env, design):
+    """Review 2 #7: admission records observed by historical checks join the parent reader."""
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)])
+    reader = Sources(ctx(env))
+    reader.round_delivery(run["id"], 1)
+    kinds = {check["kind"] for check in reader.recheck()}
+    assert {"adm_decision", "adm_grant", "adm_policy"} <= kinds
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+
+
+def test_superseded_admission_fallback_also_retains_its_authority(env, design):
+    """Review 2 #7: the superseded-source fallback fences decision, grant and policy too."""
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)])
+    owner = f"project:{env.pid}"
+    document = env.api.storage.get(owner, "document", decision["source"]["sourceId"])
+    env.api.storage.put(owner, "document", {**document, "approvedRevisionId": document["id"] + "--r999999"},
+                        document["version"])
+    reader = Sources(ctx(env))
+    assert reader.authorize(run_round_reference(run, 1)) is True
+    assert {"adm_decision", "adm_grant", "adm_policy"} <= {check["kind"] for check in reader.observed.values()}
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    with pytest.raises(CollaborationError):
+        reader.recheck()

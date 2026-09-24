@@ -171,7 +171,10 @@ live sharing or release evidence.
   keeps diagnostic delivery. Historical authorization rechecks upstream permission: a
   superseded but still readable upstream (retained contract revision, admission
   whose source was superseded but is still readable, guideline still published)
-  admits metadata; a revoked upstream denies with `404 not-found`.
+  admits metadata; a revoked upstream denies with `404 not-found`. Historical
+  checks verify admissions with the same reader, and every decision, policy,
+  reviewer-grant/provenance and source version observed (including the
+  superseded-source fallback) joins that reader's final `recheck()`.
 - `ux-contract` `{sourceId: contractId, revision: str(contract.version), sha256:
   contract.approval.hash, audienceRevision: "current-project-members-v1"}`. The
   contract is `approved` at that version, the approval hash matches and
