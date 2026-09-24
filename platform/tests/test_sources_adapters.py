@@ -829,3 +829,17 @@ def test_guideline_withdrawn_during_download_denies_that_chunk(env, design, monk
     status, payload = blob(env, run["id"], "source")
     assert status in (404, 409) and not isinstance(payload, bytes)
     assert blob(env, run["id"], "source")[0] == 404
+
+
+def test_missing_and_inaccessible_round_artifacts_are_byte_identical(env, design):
+    """Review 3 #7: authorization precedes artifact validation; one 404 body for both."""
+    failed = react_run(env, design[1], run_id="run-failed", status="needs_changes", passed=False)
+    responses = []
+    for path, query in ((f"/runs/{failed['id']}/blob", {"kind": "source", "round": "1"}),
+                        (f"/runs/{failed['id']}/blob", {"kind": "source", "round": "3"}),
+                        ("/runs/run-absent/blob", {"kind": "source", "round": "1"}),
+                        (f"/runs/{failed['id']}/baseline", {"round": "1"}),
+                        ("/runs/run-absent/baseline", {"round": "1"})):
+        status, payload, _ = call(env.api, "GET", path, actor="bob", project=env.pid, query=query)
+        responses.append((status, json.dumps(payload, sort_keys=True)))
+    assert len(set(responses)) == 1 and responses[0][0] == 404, responses

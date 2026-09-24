@@ -316,7 +316,13 @@ class WorkspaceAPI:
         from workbench.service import Service
         from workspace.ontology_sources import Sources
         reader = Sources(Service(self, scope, claims or {}))
-        reader.round_delivery(run_id, number)
+        try:
+            reader.round_delivery(run_id, number)
+        except CollaborationError as error:
+            if error.status == 404:
+                # Inaccessible equals missing: the same body as a missing run or round.
+                raise HTTPError(404, "not-found", "Resource not found") from None
+            raise
         # The caller performs its last byte read and then `reader.recheck()` before returning.
         return reader
 
@@ -452,10 +458,16 @@ class WorkspaceAPI:
             from workspace.react_artifacts import generated_files
             try:
                 number = int(query.get("round", (record.get("approval") or {}).get("round", 0)))
+            except (ValueError, TypeError):
+                raise HTTPError(404, "not-found", "Resource not found") from None
+            if not any(isinstance(row, dict) and row.get("number") == number for row in record.get("rounds", [])):
+                raise HTTPError(404, "not-found", "Resource not found")
+            # Authorize before artifact validation: an inaccessible round is indistinguishable from a missing one.
+            self._round_delivery(scope, claims, record["id"], number)
+            try:
                 row, project, _ = approved_artifacts(self.storage, owner, record, number)
             except (ValueError, TypeError) as error:
                 raise HTTPError(409, "baseline-unavailable", "기준 시안의 현재 승인을 확인할 수 없습니다.") from error
-            self._round_delivery(scope, claims, record["id"], number)
             return _json(200, {"baseline": {"runId": record["id"], "round": number, "sourceHash": row["sourceHash"]},
                                "files": sorted(generated_files(project))})
         if len(parts) == 2 and method == "GET":
@@ -1257,7 +1269,7 @@ class WorkspaceAPI:
             number = self._query_int(query, "round", 1, 5, minimum=1)
             row = next((row for row in record.get("rounds", []) if row.get("number") == number), None)
             if not row:
-                raise HTTPError(404, "not-found", "Round artifact not available")
+                raise HTTPError(404, "not-found", "Resource not found")
             key = row.get(requested + "Key")
             declared_type = "image/png" if requested in ("screenshot", "diff") else "application/octet-stream"
             extension = ".zip" if requested in ("source", "dist") else ".json" if requested in ("candidate", "report") else ".html" if requested == "html" else ".png"

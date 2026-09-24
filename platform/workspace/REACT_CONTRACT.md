@@ -161,6 +161,10 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   permission checks; a restricted state or revoked upstream is `404 not-found`.
   The same reader rechecks every observed version and deadline after each chunk's
   bytes are read and before the chunk is returned.
+- Authorization precedes artifact validation, and missing and inaccessible runs,
+  rounds, releases and baselines return the byte-identical body
+  `404 {"code":"not-found","error":"Resource not found"}`; `409 baseline-unavailable`
+  is returned only to a caller authorized for that round.
 - Content-bearing JSON routes use the same reader in a project scope:
   `GET /contracts/:id` (`Sources.contract_access`: bound `assetIds` and baseline
   still permitted), `GET /runs/:id` (`Sources.run_access`: run-level lineage; rounds
