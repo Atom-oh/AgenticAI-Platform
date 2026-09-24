@@ -753,3 +753,53 @@ def test_grant_for_an_inaccessible_publication_equals_a_missing_one(org):
     rows = org.api.storage.list(f"project:{org.hidden}", "pub_grant")
     assert denied(granted, org, pub, dest=org.hidden, owner="hank") == (404, "not-found")
     assert org.api.storage.list(f"project:{org.hidden}", "pub_grant") == rows == []
+
+
+
+def test_cross_project_impact_rechecks_every_destination_reader(org, monkeypatch):
+    """Review 4 #6: every contributing destination scope is rechecked before responding."""
+    pub = published(org)
+    grants = {org.dest: granted(org, pub, roles=("owner", "designer")),
+              org.hidden: granted(org, pub, roles=("owner", "designer"), dest=org.hidden, owner="hank")}
+    owners = {org.dest: "erin", org.hidden: "hank"}
+    for pid, owner in owners.items():
+        project = org.api.storage.get(f"project:{pid}", "project", pid)
+        status, payload, _ = call(org.api, "PUT", f"/projects/{pid}/members", {
+            "version": project["version"], "members": {**{a: {"role": m["role"]} for a, m in project["members"].items()},
+                                                       "alice": {"role": "designer"}}}, actor=owner)
+        assert status == 200, payload
+        ref = publications.published_asset_reference(pub, grants[pid])
+        graph = {"schemaVersion": 1, "projectId": pid, "edges": [],
+                 "nodes": [node(f"screen-{pid[:8]}", "Screen", project=pid, sourceRefs=[ref])]}
+        Ontology(ctx(org.api, owner, pid)).publish_candidate("collection", graph, expected_generation=None,
+                                                             request_id=f"uses-{pid[:8]}")
+    assert len(publications.impact(ctx(org.api, "alice", org.origin), pub["id"])["dependents"]) == 2
+    original = Ontology.source_nodes
+    seen = []
+
+    def removing(self, reference, **kwargs):
+        result = original(self, reference, **kwargs)
+        seen.append(self.ctx.project_id)
+        if len(seen) == 2:
+            first = seen[0]
+            project = org.api.storage.get(f"project:{first}", "project", first)
+            members = {a: {"role": m["role"]} for a, m in project["members"].items() if a != "alice"}
+            status, payload, _ = call(org.api, "PUT", f"/projects/{first}/members",
+                                      {"version": project["version"], "members": members}, actor=owners[first])
+            assert status == 200, payload
+        return result
+    monkeypatch.setattr(Ontology, "source_nodes", removing)
+    status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}/impact", actor="alice", project=org.origin)
+    assert len(seen) == 2
+    assert status != 200 or seen[0] not in json.dumps(payload), payload
+    # Direct callers get the same guarantee: impact itself rechecks every destination reader.
+    for pid, owner in owners.items():
+        project = org.api.storage.get(f"project:{pid}", "project", pid)
+        if "alice" not in project["members"]:
+            call(org.api, "PUT", f"/projects/{pid}/members", {"version": project["version"], "members": {
+                **{a: {"role": m["role"]} for a, m in project["members"].items()}, "alice": {"role": "designer"}}},
+                actor=owner)
+    seen.clear()
+    with pytest.raises(CollaborationError):
+        publications.impact(ctx(org.api, "alice", org.origin), pub["id"])
+    assert len(seen) == 2

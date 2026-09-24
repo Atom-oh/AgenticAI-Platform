@@ -470,7 +470,7 @@ def impact(ctx, publication_id, retain=None):
     """
     from workspace.ontology_store import Ontology
     record = _origin_publication(ctx, publication_id)
-    dependents = []
+    dependents, contributing = [], []
     for row in sorted(record.get("grants", []), key=lambda item: item["destinationProject"]):
         try:
             scope = ctx.collaboration.resolve_scope(ctx.actor, row["destinationProject"],
@@ -488,15 +488,23 @@ def impact(ctx, publication_id, retain=None):
         try:
             ontology = Ontology(Service(ctx.host, scope, ctx.claims))
             nodes = ontology.source_nodes(reference)
+            # The destination grant is part of that scope's authority for this answer.
+            ontology.sources._remember("pub_grant", grant_row)
         except CollaborationError as error:
             if error.status == 401:
                 raise
             continue
         if nodes:
-            if retain is not None:
-                retain(row["destinationProject"], ontology.sources.recheck)
+            contributing.append((row["destinationProject"], ontology.sources))
             dependents.append({"projectId": row["destinationProject"], "nodeIds": nodes})
     ctx.fresh()
+    # Every contributing destination reader (membership, grant, source and ontology
+    # observations) is rechecked after all destinations were read; a destination
+    # that changed meanwhile fails the whole answer rather than leaking its IDs.
+    for project_id, reader in contributing:
+        reader.recheck()
+        if retain is not None:
+            retain(project_id, reader.recheck)
     return {"publicationId": record["id"], "dependents": dependents,
             "coverage": {"complete": False, "unknown": ["restricted-or-unmapped"]}}
 

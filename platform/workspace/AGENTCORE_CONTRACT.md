@@ -111,6 +111,10 @@ binding or explicit renewal. Withdrawal immediately invalidates downstream reuse
 Impact crosses shared boundaries only through authorized references. Return
 only authorized dependents and evidence; do not disclose hidden IDs, names or
 exact counts. Coverage says `restricted-or-unmapped`, never “no impact.”
+Every contributing destination reader (current membership, the destination grant,
+source and ontology observations) is retained and rechecked after all
+destinations were read and again by the response gate's final recheck; a
+destination whose authority changed meanwhile fails the whole answer.
 Internal routing may create work in the affected project's authorized worklist
 without exposing that project to the initiating caller.
 
