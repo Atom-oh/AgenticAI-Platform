@@ -18,6 +18,7 @@ from workspace.storage import Conflict
 
 MAX_LISTED = 50
 PREVIEW_CHARS = 1000
+MAX_ROWS_PREVIEW, MAX_CELLS_PREVIEW, MAX_CELL_PREVIEW = 20, 20, 200
 
 
 def _grant_for(storage, actor, policy, project_id):
@@ -115,6 +116,35 @@ def _title(host, scope, decision):
         return None
 
 
+def _bounded_tables(tables):
+    return [[cell[:MAX_CELL_PREVIEW] for cell in row[:MAX_CELLS_PREVIEW]] for row in tables[:MAX_ROWS_PREVIEW]]
+
+
+def _preview(host, scope, decision, data):
+    """A derivative-only preview serialized by artifact kind (never originals or bytes)."""
+    kind = decision["artifact"]["kind"]
+    if kind == "image":
+        # The normalized PNG is not decoded: the reviewer gets an authorized reference
+        # to the admitted vision derivative and its verified OCR text.
+        from intake import imaging
+        artifact, vision = decision["artifact"], decision["artifact"]["vision"]
+        admission._read_verified(host.storage, scope["owner"], vision["key"], vision["sha256"], "artifact-changed")
+        ocr = imaging._ocr(host, scope, decision)
+        return {"count": 1, "derivativePreview": ocr["ocrText"][:PREVIEW_CHARS],
+                "image": {"decisionId": decision["id"], "format": vision["format"], "width": artifact["width"],
+                          "height": artifact["height"], "sha256": artifact["sha256"],
+                          "visionSha256": vision["sha256"], "size": vision["size"]}}
+    value = json.loads(data)
+    if kind == "diagram-transcription":
+        return {"count": 1, "derivativePreview": value["text"][:PREVIEW_CHARS],
+                "tables": _bounded_tables(value.get("tables") or [])}
+    if kind == "code-collection":  # derivative paths only
+        files = value["files"]
+        return {"count": len(files), "derivativePreview": "\n".join(f["path"] for f in files[:50])[:PREVIEW_CHARS]}
+    # document-pages and prompt-text: ordered derivative pages
+    return {"count": len(value), "derivativePreview": value[0]["text"][:PREVIEW_CHARS] if value else ""}
+
+
 def list_pending(host, scope, *, claims=None):
     """Pending decisions the actor may review; derivative preview only, never originals."""
     storage, owner, project_id = host.storage, scope["owner"], admission._project(scope)
@@ -142,19 +172,18 @@ def list_pending(host, scope, *, claims=None):
                     "inspection-changed", maximum=1024 * 1024))
             except (AdmissionError, CollaborationError):
                 continue
-            pages = json.loads(data)
-            if isinstance(pages, dict):  # a code-collection index: derivative paths only
-                preview = "\n".join(f["path"] for f in pages.get("files", [])[:50])[:PREVIEW_CHARS]
-                pages = pages.get("files", [])
-            else:
-                preview = pages[0]["text"][:PREVIEW_CHARS] if pages and "text" in pages[0] else ""
+            try:
+                preview = _preview(host, scope, decision, data)
+            except (AdmissionError, ValueError, KeyError, TypeError, IndexError):
+                continue  # one unreadable derivative never breaks the whole queue
             items.append({"id": decision["id"], "revision": decision["revision"],
                           "source": {k: decision["source"][k] for k in ("sourceKind", "sourceId", "revision")},
                           "title": _title(host, scope, decision), "dataClass": decision["dataClass"],
                           "artifactKind": decision["artifact"]["kind"],
-                          "pageCount": decision["artifact"].get("pages", len(pages)),
+                          "pageCount": decision["artifact"].get("pages", preview.pop("count")),
                           "inspection": {k: receipt[k] for k in ("pages", "chars", "pii", "identifiers", "blocking")},
-                          "derivativePreview": preview, "expiresAt": decision["expiresAt"]})
+                          **{k: v for k, v in preview.items() if k != "count"},
+                          "expiresAt": decision["expiresAt"]})
             if len(items) >= MAX_LISTED:
                 break
         cursor = page.get("cursor")

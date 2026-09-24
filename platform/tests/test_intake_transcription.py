@@ -382,3 +382,41 @@ def test_transcription_reviewer_revocation_fences_the_library_revision(chain):
     assert status == 409 and payload["code"] == "source-upstream-revoked"
     with pytest.raises(CollaborationError):
         reader.recheck()
+
+
+def test_review_queue_previews_images_and_transcriptions_by_artifact_kind(env, monkeypatch):
+    """Finding 6: a pending image never breaks GET /intake/reviews; transcriptions show text/tables."""
+    env.policy()
+    env.grant("bob", "grant-bob")
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending_image = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    assert pending_image["status"] == "pending-review"
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert status == 200, listed
+    [item] = listed["reviews"]
+    assert item["artifactKind"] == "image" and item["pageCount"] == 1
+    assert item["derivativePreview"] == DIAGRAM_TEXT
+    assert item["image"] == {"decisionId": pending_image["id"], "format": "png",
+                             "width": pending_image["artifact"]["width"],
+                             "height": pending_image["artifact"]["height"],
+                             "sha256": pending_image["artifact"]["sha256"],
+                             "visionSha256": pending_image["artifact"]["vision"]["sha256"],
+                             "size": pending_image["artifact"]["vision"]["size"]}
+    assert "bytes" not in json.dumps(item)
+    image = review.decide(env.api, env.scope("dana"), pending_image["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "table", "text": f"{env.term} 표 전사",
+                                        "tables": [["조건", "화면"], ["자격 미충족", "사유 화면"]]},
+                                       ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert transcribed["status"] == "pending-review"
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert status == 200, listed
+    [item] = [r for r in listed["reviews"] if r["id"] == transcribed["id"]]
+    assert item["artifactKind"] == "diagram-transcription" and item["pageCount"] == 1
+    assert item["derivativePreview"] == "고객사 A 표 전사"
+    assert item["tables"] == [["조건", "화면"], ["자격 미충족", "사유 화면"]]
+    assert env.term not in json.dumps(listed, ensure_ascii=False)
