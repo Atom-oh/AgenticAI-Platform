@@ -761,6 +761,48 @@ class Ledger:
                 "outputs": [{key: entry[key] for key in ("key", "sha256", "size", "role") if key in entry}
                             for entry in outputs]}
 
+    @staticmethod
+    def _receipt_bytes(receipt):
+        return json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                          allow_nan=False).encode()
+
+    def _retain_receipt(self, owner, job, entry, receipt):
+        """Store the signed receipt immutably (its bytes hash to receiptHash) and reference it from the stage."""
+        data = self._receipt_bytes(receipt)
+        key = self.storage.key_for(owner, "job", job["id"], f"receipts/{entry['attemptId']}/{entry['receiptHash']}.json")
+        try:
+            self.storage.put_blob_once(key, data, "application/json")
+        except Conflict:
+            try:
+                existing = self.storage.get_blob(key)
+            except (ValueError, FileNotFoundError, RuntimeError) as error:
+                raise LedgerError("receipt-invalid") from error
+            if existing != data:
+                raise LedgerError("receipt-invalid")
+        entry["receiptRef"] = key
+
+    def _reverify_chain(self, owner, job, stages, attempt):
+        """Completion re-reads every retained signed receipt and re-verifies it with the CURRENT verifier."""
+        previous = None
+        for row in stages:
+            ref = row.get("receiptRef")
+            expected = self.storage.key_for(owner, "job", job["id"],
+                                            f"receipts/{attempt['id']}/{row.get('receiptHash')}.json")
+            try:
+                if ref != expected:
+                    raise ValueError("unexpected receipt reference")
+                data = self.storage.get_blob(ref)
+                receipt = json.loads(data)
+                valid = (hashlib.sha256(data).hexdigest() == row["receiptHash"] and isinstance(receipt, dict)
+                         and self.verifier.verify(receipt) is True)
+            except Exception:  # noqa: BLE001 - an unreadable or unverifiable receipt is invalid
+                valid = False
+            if (not valid or receipt.get("executionId") != job["id"] or receipt.get("attemptId") != attempt["id"]
+                    or receipt.get("fence") != attempt["fence"] or receipt.get("stage") != row["stage"]
+                    or receipt.get("nonce") != row["nonce"] or receipt.get("previous") != previous):
+                raise LedgerError("receipt-invalid")
+            previous = row["receiptHash"]
+
     def _stage(self, owner, job_id, attempt_id, fence, receipt, *, operation_id=None):
         job = self._get(owner, job_id)
         operation_id = operation_id if operation_id is not None else (
@@ -774,6 +816,7 @@ class Ledger:
             raise LedgerError("receipt-invalid")
         entry = self._verified_receipt(owner, job, receipt)
         checks, guard = self._protect(owner, job)
+        self._retain_receipt(owner, job, entry, receipt)
         after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
         return self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, reindex=False)
 
@@ -1386,6 +1429,7 @@ class Ledger:
         if self._terminal_status(job, stages) != status:
             raise LedgerError("status-inconsistent")
         self._check_result_manifest(job, stages, result)
+        self._reverify_chain(owner, job, stages, attempt)
         protected, guard = self._protect(owner, before, recovery=recovery)
         after = {**job, "status": status, "result": copy.deepcopy(result), "completedAt": self.storage.clock()}
         after["cleanup"] = self._cleanup_for(after)
@@ -1578,6 +1622,7 @@ class Ledger:
             staged = copy.deepcopy(job)
             for receipt in receipts:
                 entry = self._verified_receipt(owner, staged, receipt, attempt=attempt)
+                self._retain_receipt(owner, staged, entry, receipt)
                 staged["stages"].append(entry)
                 staged["nonces"].append(entry["nonce"])
             try:

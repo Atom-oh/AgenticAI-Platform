@@ -613,7 +613,11 @@ failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?}`; usage
 holds only `{inputTokens, outputTokens}`. `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
 stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
-receiptHash, nonce, attemptId, status, service, result, outputs}`. Transfer output: `{handleId, key, sha256, size,
+receiptHash, receiptRef, nonce, attemptId, status, service, result, outputs}`.
+`receiptRef` is the immutable object
+`job/{id}/receipts/{attemptId}/{receiptHash}.json` holding the signed receipt's
+canonical bytes (they hash to `receiptHash`), written once at `stage` (and at
+`reconcile` for the receipts it supplies). Transfer output: `{handleId, key, sha256, size,
 stage, attemptId}` under `out/{attemptId}/{stage}/{name}` of the job. An input
 handle (`source="input"`) is opened only when the resolved artifact hash equals
 the frozen `admissions[*].artifactHash`; it records that `decisionId`,
@@ -649,7 +653,9 @@ call's recorded `serviceSessionId` and an integer `exitCode`. A receipt with
 receipt hash is SHA-256 over sorted-key JSON.
 
 Completion (`finish`, and `reconcile` through the same path) re-reads every
-chain output of the current attempt, including the result manifest and every
+retained signed receipt of the attempt and re-verifies it with the current
+verifier (signature and key), its hash, bindings and `previous` linkage; any
+failure is `receipt-invalid`. It also re-reads every chain output of the current attempt, including the result manifest and every
 object it lists, and requires the stored hash and size to match before any
 terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
 Every `files`/`objects` entry of the result manifest must be an object with a

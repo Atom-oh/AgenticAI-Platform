@@ -1878,3 +1878,42 @@ def test_malformed_result_manifest_entries_are_refused(xfer, entry):
                                           "receipts": [*result["receipts"], receipt_hash(r)]})
     assert error.value.code == "receipt-invalid"
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+class CountingVerifier(TestKeyVerifier):
+    """The current verifier at completion: it may have rotated keys and now reject every receipt."""
+    __test__ = False
+
+    def __init__(self, accept):
+        super().__init__()
+        self.accept, self.calls = accept, 0
+
+    def verify(self, receipt):
+        self.calls += 1
+        return self.accept and super().verify(receipt)
+
+
+def test_completion_reverifies_the_retained_signed_chain_with_the_current_verifier(xfer):
+    """Review 2 finding 3: signed receipts are retained immutably and re-verified at finish."""
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    refs = [row["receiptRef"] for row in storage.get(OWNER, "job", job["id"])["stages"]]
+    assert all(storage.get_blob(ref) for ref in refs)
+    ledger.verifier = CountingVerifier(accept=False)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "receipt-invalid" and ledger.verifier.calls >= 1
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+    ledger.verifier = CountingVerifier(accept=True)
+    assert finish(ledger, job, "succeeded", result)["status"] == "succeeded"
+    assert ledger.verifier.calls == len(refs)
+
+
+def test_completion_refuses_a_missing_retained_receipt(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    ref = storage.get(OWNER, "job", job["id"])["stages"][0]["receiptRef"]
+    storage.s3().delete_object(Bucket=storage.bucket, Key=ref)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "receipt-invalid"
