@@ -277,9 +277,18 @@ def test_missing_job_cannot_be_dispatched_after_the_pinned_authorization_expires
     monkeypatch.setattr(wb.api, "_new_job", lambda *args: pytest.fail("expired dispatch"))
     with pytest.raises(CollaborationError) as error:
         submit(context(wb), body)
+    # platform-execution/1: the orphan is not failed by legacy repair; it stays undispatched and reported.
+    assert error.value.code == "authorization-expired"
+    identifier = context(wb).identity("wb_artifact", body["requestId"])
+    assert wb.storage.get(wb.owner, "wb_artifact", identifier)["status"] == "queued"
+    assert [row["reason"] for row in wb.storage.list(wb.owner, "exec_report")] == ["unknown-linkage"]
+    from workspace.execution_ledger import _run_due
+    _run_due(wb.storage)
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), body)
     assert error.value.code == "ontology-analysis-interrupted"
-    artifact = wb.storage.get(wb.owner, "wb_artifact", context(wb).identity("wb_artifact", body["requestId"]))
-    assert artifact["status"] == "failed" and artifact["errorCode"] == "authorization-expired"
+    artifact = wb.storage.get(wb.owner, "wb_artifact", identifier)
+    assert artifact["status"] == "failed" and artifact["errorCode"] == "orphan-legacy-job"
 
 
 def test_optional_generation_pins_the_current_manifest(wb):
@@ -502,7 +511,15 @@ def test_orphaned_artifact_is_reconciled_without_dispatching_paid_work(wb, monke
     wb.now += 17 * 60 * 1000
     wb.storage.clock = lambda: wb.now
     status, result = api_call(wb, "GET", "/analyses/" + identifier)
+    # platform-execution/1 (review round 6, N2): legacy read repair leaves the orphan unchanged and reports it;
+    # the IAM-only reconciler fails it from the due index, with no supplied ids.
+    assert status == 200 and result["artifact"]["status"] == "queued"
+    assert [row["reason"] for row in wb.storage.list(wb.owner, "exec_report")] == ["unknown-linkage"]
+    from workspace.execution_ledger import _run_due
+    _run_due(wb.storage)
+    status, result = api_call(wb, "GET", "/analyses/" + identifier)
     assert status == 200 and result["artifact"]["status"] == "failed"
+    assert result["artifact"].get("errorCode", "orphan-legacy-job") == "orphan-legacy-job"
     with pytest.raises(CollaborationError) as error:
         submit(context(wb), body)
     assert error.value.code == "ontology-analysis-interrupted"

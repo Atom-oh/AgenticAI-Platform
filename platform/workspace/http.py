@@ -780,7 +780,9 @@ class WorkspaceAPI:
                 raise Conflict("Baseline changed during approval")
             unique[key] = check
         checks = list(unique.values())
-        return self.storage.put_many(writes, checks=checks)[0]
+        # Human approval may update a design-linked run; outcome statuses remain ledger-only.
+        from workspace import storage as storage_module
+        return self.storage.put_many(writes, checks=checks, _writer=storage_module._human_writer())[0]
 
     def _contract_approve(self, owner, record, body, scope=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)

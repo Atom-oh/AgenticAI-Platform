@@ -521,7 +521,9 @@ def test_transaction_boto3_wire_conditions_are_nested_and_values_marshaled_once(
     assert updated["Item"]["createdAt"] == {"N": "100"}
     assert updated["Item"]["price"] == {"N": "0.25"}
     assert list(updated["ExpressionAttributeValues"].values()) == [{"N": "1"}]
-    assert list(updated["ExpressionAttributeNames"].values()) == ["version"]
+    # platform-execution/1 DB fence: a legacy update also requires the record to stay unreserved.
+    assert list(updated["ExpressionAttributeNames"].values()) == ["version", "executionSchemaVersion", "executionId"]
+    assert "attribute_not_exists" in updated["ConditionExpression"]
     assert created["ConditionExpression"].startswith("attribute_not_exists(")
     assert result[0]["price"] == 0.25 and result[0]["createdAt"] == 100
     source_check, absent_check = [entry["ConditionCheck"] for entry in wire["TransactItems"] if "ConditionCheck" in entry]

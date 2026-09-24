@@ -771,6 +771,15 @@ def test_source_read_repairs_pending_target_after_job_expiry(api, missing):
         api.storage.put("alice", "job", {**job, "status": "failed", "errorCode": "job-timeout",
                                         "stopReason": "timeout"}, job["version"])
     status, source, _ = call(api, "GET", path(result))
+    if missing:
+        # platform-execution/1: unknown linkage is reported and failed only by the IAM-only reconciler.
+        from workspace.execution_ledger import _run_due
+        assert status == 200 and source["revision"]["status"] == "processing"
+        assert [row["reason"] for row in api.storage.list("alice", "exec_report")] == ["unknown-linkage"]
+        _run_due(api.storage)
+        status, source, _ = call(api, "GET", path(result))
+        stored = api.storage.get("alice", "docrevision", result["revision"]["id"])
+        assert stored["errorCode"] == "orphan-legacy-job" and stored["parseStatus"] == "failed"
     assert status == 200 and source["revision"]["status"] == "failed"
     if missing:
         assert call(api, "GET", "/jobs/" + job["id"])[0] == 404

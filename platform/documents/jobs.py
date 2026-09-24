@@ -50,7 +50,13 @@ def reconcile(host, scope, kind, target, *, library=None, documents=None):
     if not job:
         checks.append({"owner": library.owner, "kind": "job", "id": target["jobId"], "version": None})
     # Target/job CAS and current source/project authority are one transaction.
-    return library.storage.put_many(writes, checks=checks)[0]
+    from workspace.storage import ReservedRecord
+    try:
+        return library.storage.put_many(writes, checks=checks)[0]
+    except ReservedRecord:
+        # platform-execution/1: unknown or reserved linkage is reported by the storage chokepoint
+        # and resolved by the IAM-only reconciler; legacy read repair leaves the target unchanged.
+        return target
 
 
 def reconcile_analysis(host, scope, identifier):

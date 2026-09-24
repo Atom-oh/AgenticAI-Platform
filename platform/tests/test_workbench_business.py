@@ -214,8 +214,8 @@ def test_report_approval_rechecks_source_expiry_after_transaction_preparation(wb
         "title": "Bound source deadline", "evidenceIds": [identifier]})["report"]
     original = wb.storage._prepare
 
-    def expire(owner, kind, item, version, now):
-        prepared = original(owner, kind, item, version, now)
+    def expire(owner, kind, item, version, now, **guard):
+        prepared = original(owner, kind, item, version, now, **guard)
         if kind == "wb_report" and item.get("status") == "approved":
             wb.now += 2000
         return prepared
@@ -237,8 +237,8 @@ def test_draft_report_creation_fences_source_expiry_before_publication(wb, monke
     identifier = project_call(wb, "GET", "knowledge")["items"][0]["id"]
     original = wb.storage._prepare
 
-    def expire(owner, kind, item, version, now):
-        result = original(owner, kind, item, version, now)
+    def expire(owner, kind, item, version, now, **guard):
+        result = original(owner, kind, item, version, now, **guard)
         if kind == "wb_report":
             wb.now += 2000
         return result
