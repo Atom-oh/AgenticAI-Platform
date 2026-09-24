@@ -1,4 +1,4 @@
-"""IAM-only administration of `source-admission/1` policy, provenance and grants.
+"""IAM-only administration of `source-admission/1` records and publication capabilities.
 
 This Lambda has no API Gateway route, Function URL or resource policy for
 `apigateway.amazonaws.com` (asserted by `workspace/check_infra.py`). Authority is
@@ -19,7 +19,9 @@ _TRANSPORT_FIELDS = ("requestContext", "headers", "routeKey", "rawPath", "multiV
                      "httpMethod", "path", "pathParameters", "queryStringParameters", "body")
 _EVENT_FIELDS = frozenset({"op", "record", "id", "expectedRevision", "operator"})
 _CREATE = {"put_policy": "adm_policy", "register_provenance": "adm_provenance",
-           "grant_reviewer": "adm_grant", "put_resolver_profile": "adm_resolver"}
+           "grant_reviewer": "adm_grant", "put_resolver_profile": "adm_resolver",
+           # Organization design_publish/policy_publish capabilities: never a project API write.
+           "grant_capability": "capability"}
 # op -> (kind, required current status, new status)
 _TRANSITIONS = {
     "activate_policy": ("adm_policy", ("draft",), "active"),
@@ -27,9 +29,10 @@ _TRANSITIONS = {
     "revoke_provenance": ("adm_provenance", ("active",), "revoked"),
     "revoke_grant": ("adm_grant", ("active",), "revoked"),
     "retire_resolver_profile": ("adm_resolver", ("active",), "retired"),
+    "revoke_capability": ("capability", ("active",), "revoked"),
 }
 _INITIAL_STATUS = {"adm_policy": "draft", "adm_provenance": "active", "adm_grant": "active",
-                   "adm_resolver": "active"}
+                   "adm_resolver": "active", "capability": "active"}
 # Kinds whose content may be replaced by a new revision (a changed resolver
 # profile hash makes every dependent collection decision a new decision).
 _EDITABLE = ("adm_policy", "adm_resolver")

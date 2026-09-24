@@ -182,6 +182,10 @@ class Sources:
                 except UnicodeError:
                     fail(422, "ontology-source-format", "텍스트로 분석할 수 없는 원본입니다.")
             return {"ref": ref, "kind": kind, "record": row, "text": content}
+        if kind == "published-asset":
+            from workspace.publications import resolve_published
+            value = resolve_published(self, ref, text=text)
+            return {"ref": ref, "kind": kind, "record": value["record"], "text": value["text"]}
         if kind == "ux-contract":
             contract, _ = self._contract(ref, historical=False)
             content = None
@@ -272,8 +276,7 @@ class Sources:
                 fail(409, "ontology-package-stale", "플랫폼 컴포넌트 기준이 변경되었습니다.")
             self.package_hashes.add(catalog["hash"])
             return {"ref": ref, "kind": kind, "record": catalog, "text": None}
-        # Never substitute an ID lookup for the not-yet-configured authority
-        # adapters of publications, approved UX contracts or generated rounds.
+        # Never substitute an ID lookup for an authority adapter that is not installed.
         fail(503, "ontology-source-adapter-unavailable", "이 원본 유형의 권한 연결이 아직 준비되지 않았습니다.")
 
     def authorize(self, reference, *, remember=True):
@@ -329,6 +332,9 @@ class Sources:
             self._round_upstream_historical(run, record)
         elif kind == "ux-contract":
             record, _ = self._contract(ref, historical=True)
+        elif kind == "published-asset":
+            from workspace.publications import resolve_published
+            record = resolve_published(self, ref, historical=True)["record"]
         else:
             self.resolve(ref)
         if remember:
@@ -580,7 +586,7 @@ class Sources:
             row = self.storage.get(check["owner"], check["kind"], check["id"])
             if not row or row["version"] != check["version"]:
                 fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
-            if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision"):
+            if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "capability"):
                 from intake.records import is_current
                 if not is_current(row, self.storage.clock()):
                     fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")

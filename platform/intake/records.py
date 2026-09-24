@@ -13,7 +13,9 @@ from workspace import ontology_schema as schema
 from workspace.ontology_schema import _fields
 
 INTAKE_OWNER = "intake:deployment"
-KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver")
+KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver", "capability")
+# Organization publication capabilities (AGENTCORE_CONTRACT "Shared-publication authority").
+CAPABILITY_NAMES = ("design_publish", "policy_publish")
 DATA_CLASSES = ("synthetic", "public", "internal-non-sensitive")
 DECISION_CLASSES = DATA_CLASSES + ("sensitive",)
 INSPECTION_PROFILE = "inspect-1"
@@ -24,7 +26,7 @@ PROVENANCE_SOURCE_KINDS = ("document-revision", "asset", "product-guideline")
 DECISION_SOURCE_KINDS = PROVENANCE_SOURCE_KINDS + ("prompt-text",)
 AUDIT_OPS = ("put_policy", "activate_policy", "retire_policy", "register_provenance",
              "revoke_provenance", "grant_reviewer", "revoke_grant", "put_resolver_profile",
-             "retire_resolver_profile")
+             "retire_resolver_profile", "grant_capability", "revoke_capability")
 _PACKAGE = re.compile(r"(?:@[a-z0-9._-]+/)?[a-z0-9._-]+(?:/[a-zA-Z0-9._/-]+)?\Z")
 _JSON_FIELD = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{0,63}\Z")
 # Storage.put owns these; they are never part of the sealed content hash.
@@ -165,6 +167,14 @@ def _grant(record):
     _choice(record["status"], ("active", "revoked"))
 
 
+def _capability(record):
+    """IAM-administered `design_publish`/`policy_publish` capability of one verified actor."""
+    _closed(record, {"id", "revision", "actor", "name", "status", "expiresAt", "hash"})
+    _label(record["actor"], _ACTOR)
+    _choice(record["name"], CAPABILITY_NAMES)
+    _choice(record["status"], ("active", "revoked"))
+
+
 def _resolver(record):
     """IAM-administered code-collection resolver profile (I6a; review round 8, AB2)."""
     _closed(record, {"id", "revision", "aliases", "packages", "jsonAssetFields", "status", "expiresAt", "hash"})
@@ -297,7 +307,7 @@ def _decision(record):
 def _audit(record):
     _closed(record, {"id", "op", "kind", "recordId", "revision", "operator", "at"}, {"status"})
     _choice(record["op"], AUDIT_OPS)
-    _choice(record["kind"], ("adm_policy", "adm_provenance", "adm_grant", "adm_resolver"))
+    _choice(record["kind"], ("adm_policy", "adm_provenance", "adm_grant", "adm_resolver", "capability"))
     _identifier(record["recordId"])
     _label(record["operator"])
     _int(record["at"])
@@ -307,7 +317,8 @@ def _audit(record):
 
 
 _VALIDATORS = {"adm_policy": _policy, "adm_provenance": _provenance, "adm_grant": _grant,
-               "adm_decision": _decision, "adm_audit": _audit, "adm_resolver": _resolver}
+               "adm_decision": _decision, "adm_audit": _audit, "adm_resolver": _resolver,
+               "capability": _capability}
 
 
 def _content(record):

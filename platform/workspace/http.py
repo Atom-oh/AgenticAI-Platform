@@ -178,6 +178,13 @@ class WorkspaceAPI:
                 result = route(self, scope, claims, method, segments[1:],
                                _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
                 return _json(result[0], result[1])
+            if segments[0] == "publications":
+                # Capability grants are IAM-only (intake admin entry point); no route writes them.
+                from workspace.publications import route
+                scope = self.collaboration.require(scope, "read")
+                result = route(self, scope, claims, method, segments[1:],
+                               _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
+                return _json(result[0], result[1])
             if segments[0] == "workbench":
                 from workbench.api import route
                 scope = self.collaboration.require(scope, "read")
