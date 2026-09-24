@@ -294,10 +294,11 @@ class Ledger:
             raise LedgerError("not-an-execution")
         return job
 
-    def _put(self, owner, job, expected, *, extra_writes=(), checks=None):
+    def _put(self, owner, job, expected, *, extra_writes=(), checks=None, before_attempt=None):
         writes = [{"owner": owner, "kind": "job", "item": job, "expected_version": expected}, *extra_writes]
         try:
-            saved = self.storage.put_many(writes, checks or [], retry_conflicts=False, _writer=_WRITER)
+            saved = self.storage.put_many(writes, checks or [], retry_conflicts=False, _writer=_WRITER,
+                                          before_attempt=before_attempt)
         except Conflict as error:
             raise LedgerError("conflict") from error
         return saved[0]
@@ -379,11 +380,24 @@ class Ledger:
         return check
 
     # --- transitions ---------------------------------------------------------
-    def _commit(self, owner, before, job, *, extra_writes=(), checks=(), op=None, value=None, reindex=True):
+    def _commit(self, owner, before, job, *, extra_writes=(), checks=(), op=None, value=None, reindex=True,
+                before_attempt=None):
         """One conditional put: job CAS, op entry, due index, quota and caller writes."""
         job, writes = self._prepare(owner, before, job, extra_writes=extra_writes, op=op, value=value,
                                     reindex=reindex)
-        return self._put(owner, job, before["version"], extra_writes=writes, checks=list(checks))
+        return self._put(owner, job, before["version"], extra_writes=writes, checks=list(checks),
+                         before_attempt=before_attempt)
+
+    # --- the protected-operation guard (review 2) ---------------------------------------------------
+    def _protect(self, owner, job, *, recovery=False, min_remaining_ms=None, cost=False):
+        """Shared guard for intent, chunk reads, stage, transfers and completion.
+
+        Returns (checks, guard): the transactional authority predicates (current actor membership) and a
+        callable that put_many runs immediately before each wire submission, rechecking lease/recovery bound,
+        authorization, deadline, the per-call deadline reservation and the daily cost gate.
+        """
+        checks = [self._check_authority(owner, job)]
+        return checks, self._temporal_guard(job, recovery=recovery, min_remaining_ms=min_remaining_ms, cost=cost)
 
     def _prepare(self, owner, before, job, *, extra_writes=(), op=None, value=None, reindex=True):
         """Prepared, uncommitted ledger writes (prepare_finish): the job record plus its index writes."""
@@ -749,9 +763,9 @@ class Ledger:
         if isinstance(receipt, dict) and "operationId" in receipt and receipt["operationId"] != operation_id:
             raise LedgerError("receipt-invalid")
         entry = self._verified_receipt(owner, job, receipt)
-        check = self._check_authority(owner, job)
+        checks, guard = self._protect(owner, job)
         after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
-        return self._commit(owner, job, after, checks=[check], op=op, reindex=False)
+        return self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, reindex=False)
 
     # --- tool role: per-call intent and outcome (RUN-03) -----------------------
     def _intent(self, owner, job_id, attempt_id, fence, *, stage, kind, min_remaining_ms, max_tokens=None,
@@ -783,12 +797,12 @@ class Ledger:
             if budget["tokensUsed"] + budget["tokensReserved"] + reserve > budget["tokenBudget"]:
                 raise LedgerError("token-budget")
             self.cost_gate.check()
-        check = self._check_authority(owner, job)          # revocation stops further calls (RUN-03)
+        checks, guard = self._protect(owner, job, min_remaining_ms=min_remaining_ms, cost=kind == "model")          # revocation stops further calls (RUN-03)
         call = {"callId": "call-" + secrets.token_hex(16), "stage": stage, "kind": kind, "status": "intent",
                 "at": now, "attemptId": attempt["id"], "reserved": reserve}
         budget.update(calls=budget["calls"] + 1, tokensReserved=budget["tokensReserved"] + reserve)
         after = {**job, "calls": [*job["calls"], call], "budget": budget}
-        saved = self._commit(owner, job, after, checks=[check], op=op, value=call["callId"], reindex=False)
+        saved = self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, value=call["callId"], reindex=False)
         return {"callId": call["callId"], "job": saved}
 
     def _outcome(self, owner, job_id, attempt_id, fence, call_id, *, status, usage=None, service_session_id=None):
@@ -834,7 +848,7 @@ class Ledger:
     # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
     def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None):
         """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts."""
-        check = self._check_authority(owner, job)
+        checks, guard = self._protect(owner, job)
         try:
             if not isinstance(key, str) or not self.storage.owns_key(owner, key):
                 raise ValueError("foreign key")
@@ -848,7 +862,7 @@ class Ledger:
         handle = {"direction": "in", "source": source, "key": key, "sha256": sha256, "total": len(data),
                   "chunks": chunks, "attemptId": job["attempt"]["id"], "stage": stage, "status": "open", "read": [],
                   **(binding or {})}
-        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, checks=[check],
+        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, checks=checks, before_attempt=guard,
                              op=op, value=handle_id, reindex=False)
         return {"handleId": handle_id, "total": len(data), "sha256": sha256, "chunks": chunks, "job": saved}
 
@@ -975,7 +989,7 @@ class Ledger:
         handle = self._handle(job, handle_id, "in")
         if type(index) is not int or not 0 <= index < handle["chunks"]:
             raise LedgerError("transfer-invalid")
-        check = self._check_authority(owner, job)           # every chunk, including a retried one
+        checks, guard = self._protect(owner, job)           # every chunk, including a retried one
         self._revalidate_handle(owner, job, handle)
         offset = index * CHUNK_BYTES
         try:
@@ -990,7 +1004,7 @@ class Ledger:
             handles = {**job["handles"], handle_id: {**handle, "read": [*handle["read"], index] if first
                                                      else handle["read"],
                                                      "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
-            self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=[check],
+            self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=checks, before_attempt=guard,
                          reindex=False)
         return {"index": index, "data": base64.b64encode(data).decode(), "sha256": digest}
 
@@ -1006,7 +1020,7 @@ class Ledger:
                 or stage not in OPERATIONS[job["operation"]] or type(total) is not int or not 0 < total
                 or not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
             raise LedgerError("transfer-invalid")
-        check = self._check_authority(owner, job)
+        checks, guard = self._protect(owner, job)
         chunks = -(-total // CHUNK_BYTES)
         self._transfer_budget(job, chunks, total)          # the declared size must fit the remaining budget
         key = self.storage.key_for(owner, "job", job_id, f"out/{attempt['id']}/{stage}/{name}")
@@ -1015,7 +1029,7 @@ class Ledger:
         handle_id = "hdl-" + secrets.token_hex(16)
         handle = {"direction": "out", "key": key, "stage": stage, "name": name, "total": total, "sha256": sha256,
                   "chunks": chunks, "attemptId": attempt["id"], "status": "open", "parts": [], "partKeys": []}
-        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, checks=[check],
+        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, checks=checks, before_attempt=guard,
                              op=op, value=handle_id, reindex=False)
         return {"handleId": handle_id, "key": key, "total": total, "sha256": sha256, "chunks": chunks, "job": saved}
 
@@ -1037,13 +1051,14 @@ class Ledger:
                 raise LedgerError("transfer-invalid")
             if not bound:
                 return self._projection(job)
+            checks, guard = self._protect(owner, job)
             handles = {**job["handles"], handle_id: {**handle, "chunkOps": {**(handle.get("chunkOps") or {}), **bound}}}
-            return self._commit(owner, job, {**job, "handles": handles}, checks=[self._check_authority(owner, job)],
+            return self._commit(owner, job, {**job, "handles": handles}, checks=checks, before_attempt=guard,
                                 reindex=False)
         if index != len(handle["parts"]) or index >= handle["chunks"]:
             raise LedgerError("transfer-invalid")
         usage = self._transfer_budget(job, 1, len(raw))
-        check = self._check_authority(owner, job)
+        checks, guard = self._protect(owner, job)
         # Parts live under the job's temporary "parts/" prefix, which the bucket lifecycle expires.
         part_key = self.storage.key_for(owner, "job", job_id,
                                         f"parts/out/{handle['attemptId']}/{handle['stage']}/{handle['name']}.part{index:04d}")
@@ -1054,7 +1069,7 @@ class Ledger:
         handles = {**job["handles"], handle_id: {**handle, "parts": [*handle["parts"], digest],
                                                  "partKeys": [*handle["partKeys"], part_key],
                                                  "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
-        return self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=[check],
+        return self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=checks, before_attempt=guard,
                             reindex=False)
 
     def _close_output(self, owner, job_id, attempt_id, fence, handle_id, *, operation_id=None):
@@ -1065,7 +1080,7 @@ class Ledger:
             return replay["job"]
         self._current(job, attempt_id, fence, statuses=("running",))
         handle = self._handle(job, handle_id, "out")
-        check = self._check_authority(owner, job)
+        checks, guard = self._protect(owner, job)
         try:
             data = b"".join(self.storage.get_blob(key) for key in handle["partKeys"])
         except (ValueError, FileNotFoundError) as error:
@@ -1081,7 +1096,7 @@ class Ledger:
                   "stage": handle["stage"], "attemptId": handle["attemptId"]}
         handles = {**job["handles"], handle_id: {**handle, "status": "closed"}}
         saved = self._commit(owner, job, {**job, "handles": handles, "transfers": [*job["transfers"], output]},
-                             checks=[check], op=op, reindex=False)
+                             checks=checks, before_attempt=guard, op=op, reindex=False)
         for key in handle["partKeys"]:
             try:
                 self.storage.s3().delete_object(Bucket=self.storage.bucket, Key=key)
@@ -1243,11 +1258,13 @@ class Ledger:
                 if not self._verify_object(None, entry, ("key", "sha256", "size", "role")):
                     raise LedgerError("receipt-invalid")
 
-    def _temporal_guard(self, before, *, recovery):
-        """Final temporal checks, run by put_many immediately before each wire submission (RUN-02)."""
+    def _temporal_guard(self, before, *, recovery=False, min_remaining_ms=None, cost=False):
+        """Final temporal and budget checks, run by put_many immediately before each wire submission (RUN-02/03)."""
         attempt, profile = before["attempt"] or {}, before["profileBody"]
 
         def guard():
+            if cost:
+                self.cost_gate.check()
             now = self.storage.clock()
             if now >= before["deadlineAt"] or now >= before["authorizationExpiresAt"]:
                 raise LedgerError("deadline")
@@ -1257,6 +1274,8 @@ class Ledger:
                     raise LedgerError("recovery-window")
             elif now >= attempt.get("leaseExpiresAt", 0):
                 raise LedgerError("stale-attempt")
+            if min_remaining_ms is not None and before["deadlineAt"] - now < min_remaining_ms + profile["cleanupReserveMs"]:
+                raise LedgerError("deadline-budget")
         return guard
 
     def _check_obligations(self, job, writes, checks, staged):
@@ -1312,14 +1331,14 @@ class Ledger:
         if self._terminal_status(job, stages) != status:
             raise LedgerError("status-inconsistent")
         self._check_result_manifest(job, stages, result)
-        check = self._check_authority(owner, before)
+        protected, guard = self._protect(owner, before, recovery=recovery)
         after = {**job, "status": status, "result": copy.deepcopy(result), "completedAt": self.storage.clock()}
         after["cleanup"] = self._cleanup_for(after)
         quotas = self._quota_writes(owner, job["actor"], job["projectId"], remove=job["id"])
         prepared_job, ledger_writes = self._prepare(owner, before, after, extra_writes=quotas, op=op)
         writes = [{"owner": owner, "kind": "job", "item": prepared_job, "expected_version": before["version"]},
                   *ledger_writes]
-        checks = [check]
+        checks = list(protected)
         staged = {}
         if stage_completion is not None:
             staged = stage_completion({"job": copy.deepcopy(prepared_job), "writes": copy.deepcopy(writes),
@@ -1335,7 +1354,7 @@ class Ledger:
         self._check_obligations(job, writes, checks, staged)
         try:
             return self.storage.put_many(writes, checks, retry_conflicts=False, _writer=_WRITER,
-                                         before_attempt=self._temporal_guard(before, recovery=recovery))[0]
+                                         before_attempt=guard)[0]
         except _storage.TransactionContention:
             raise
         except Conflict as error:

@@ -664,8 +664,14 @@ and checks minus the declared source checks) above
 `source.analyze` completion (`finish` and `reconcile`) returns
 `completion-unavailable` (`reason: source-staging-adapter`) until the ontology
 staging adapter supplies its manifest, request-marker and artifact publication.
-The final temporal checks run inside the transaction attempt (`put_many`
-`before_attempt`), after `stage_completion` returns: `now < deadlineAt` and the
+Protected operations (`intent`, `stage`, `open_*`, `read_chunk`,
+`write_chunk`, `close_output`, `finish`, `reconcile`) share one guard. Its
+authority predicates are part of the transaction, and its `before_attempt`
+callable runs immediately before each wire submission: it rechecks the
+deadline and authorization expiry (`deadline`), the attempt lease
+(`stale-attempt`), for `intent` the remaining-time reservation
+(`deadline-budget`) and, for a model call, the daily cost gate. For completion
+the final temporal checks run after `stage_completion` returns: `now < deadlineAt` and the
 authorization expiry (`deadline`), the attempt lease for `finish`
 (`stale-attempt`), and for `reconcile` the recovery bound
 `now < recoveryAt + recoveryWindowMs` (`recovery-window`), which `reconcile`

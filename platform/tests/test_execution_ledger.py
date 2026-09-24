@@ -1730,3 +1730,39 @@ def test_chunk_operation_ids_are_bound_to_handle_index_and_hash(xfer):
     with pytest.raises(LedgerError) as error:
         ledger.tool().read_chunk(*ids(job), source["handleId"], 1, operation_id=read_op)
     assert error.value.code == "operation-changed"
+
+
+class ClockAdvancingGate:
+    """A daily cost gate whose probe takes time: the clock moves between the checks and the submission."""
+
+    def __init__(self, now, step):
+        self.now, self.step = now, step
+
+    def check(self):
+        self.now[0] += self.step
+
+    def record(self, tokens):
+        pass
+
+
+@pytest.mark.parametrize("case", ["lease", "deadline"])
+def test_intent_rechecks_lease_and_deadline_immediately_before_submission(env, case):
+    """Review 2 finding 7: the protected-operation guard runs inside the transaction attempt."""
+    storage, _, now = env
+    job = running(env)
+    if case == "lease":
+        now[0] = job["attempt"]["leaseExpiresAt"] - 1
+        step, expected = 2, "stale-attempt"
+    else:
+        from workspace.execution_ledger import _seed_for_tests
+        stored = storage.get(OWNER, "job", job["id"])
+        job = _seed_for_tests(storage, OWNER, "job", {**stored, "attempt": {**stored["attempt"],
+                              "leaseExpiresAt": stored["deadlineAt"]}}, stored["version"])
+        now[0] = job["deadlineAt"] - 65_000
+        step, expected = 70_000, "deadline"
+    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), cost_gate=ClockAdvancingGate(now, step),
+                            input_resolver=env[1].input_resolver)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    assert error.value.code == expected
+    assert storage.get(OWNER, "job", job["id"])["calls"] == []
