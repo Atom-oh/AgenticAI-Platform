@@ -626,9 +626,10 @@ the frozen `admissions[*].artifactHash`; it records that `decisionId`,
 `intent`, `open_*`, `read_chunk` (including a retried chunk index), `write_chunk`
 and `close_output` rechecks the requester's current project authority (a
 mismatch fails the job with `authority-changed`) and fences its mutation with
-the project version check. `read_chunk` also rechecks the handle's source: an
-input handle's admission must still resolve to the same key and hash, and a
-prior handle's `prior_authority` must still grant it, otherwise
+the project version check. Through the protected-operation guard below it also
+revalidates every consumed admission and opened prior (a withdrawn one fails
+the job with `authority-changed`); `read_chunk` additionally requires that an
+input handle's admission still resolves to the same key and hash, otherwise
 `transfer-invalid`. `read_chunk` and `write_chunk` are not `ops` entries; a supplied
 `operation_id` (mandatory in production) is bound on the handle
 (`chunkOps: {operationId: "index:chunkSha256"}`, at most `2 × chunks + 8`), and
@@ -803,8 +804,9 @@ Not yet implemented in B0:
   checks commit with the terminal job. Until the staging adapter exists,
   `source.analyze` completion is refused with `completion-unavailable`.
 - the admitted-input resolver and the run-round prior-authority adapter. They
-  come from the B0 intake and sharing units. Until then, production refuses
-  input and prior transfers.
+  come from the B0 intake and sharing units. Because every protected operation
+  revalidates the consumed admissions through the resolver, production refuses
+  protected operations (and input/prior transfers) until they are wired.
 - the 4 MiB model-visible text budget.
 
 ### source-admission/1
