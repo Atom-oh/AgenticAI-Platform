@@ -297,7 +297,7 @@ class Ledger:
     def tool(self): return _Facade(self, ("claim", "heartbeat", "intent", "outcome", "stage", "finish", "fail",
                                           "open_manifest", "open_prior", "open_input", "read_chunk",
                                           "open_output", "write_chunk", "close_output"))
-    def reconciler(self): return _Facade(self, ("sweep", "reconcile", "resolve_orphan", "run_due"))
+    def reconciler(self): return _Facade(self, ("sweep", "reconcile", "settle", "resolve_orphan", "run_due"))
 
     # --- storage helpers ---------------------------------------------------
     def _get(self, owner, job_id):
@@ -1348,6 +1348,88 @@ class Ledger:
             writes = self._due_writes(owner, job, job_after, force=True)
             return self._put(owner, {**job_after, "clock": now}, job["version"], extra_writes=writes)
         return job
+
+    _OBSERVATION_FIELDS = frozenset({"schemaVersion", "type", "executionId", "attemptId", "fence", "callId", "stage",
+                                     "kind", "status", "service", "nonce", "keyId", "signature", "usage", "iat",
+                                     "exp"})
+
+    def _settle(self, owner, job_id, call_id, observation, *, operation_id=None):
+        """IAM-only settlement of a pending call from a recovered, signed adapter observation (RUN-02/03).
+
+        Allowed only after the Runtime lost the attempt (recovery_required, within its recovery bound) or for a
+        terminal job before its ``settlementDueAt``. It records the outcome, service session and usage exactly
+        once (conditional write) and never changes the job status.
+        """
+        job = self._get(owner, job_id)
+        op, replay = self._op_any(job, "settle", operation_id, {"jobId": job_id, "callId": call_id,
+                                                               "observation": observation})
+        if replay:
+            return replay["job"]
+        now = self.storage.clock()
+        if job["status"] == "recovery_required":
+            if now >= job["deadlineAt"] or now >= job["recoveryAt"] + job["profileBody"]["recoveryWindowMs"]:
+                raise LedgerError("recovery-window")
+        elif job["status"] in TERMINAL:
+            if not self._outstanding(job) or now >= (job.get("settlementDueAt") or 0):
+                raise LedgerError("recovery-window")
+        else:
+            raise LedgerError("stale-attempt")          # a live attempt records its own outcome
+        index = next((i for i, row in enumerate(job["calls"]) if row.get("callId") == call_id), None)
+        if index is None or job["calls"][index].get("status") != "intent":
+            raise LedgerError("call-invalid")
+        call = job["calls"][index]
+        attempt = next((row for row in [job.get("attempt") or {}, *job.get("attempts", [])]
+                        if row.get("id") == call.get("attemptId")), None)
+        try:
+            valid = (isinstance(observation, dict) and set(observation) <= self._OBSERVATION_FIELDS
+                     and self.verifier.verify(observation) is True)
+        except Exception:  # noqa: BLE001 - a verifier failure is an invalid observation
+            valid = False
+        service = observation.get("service") if valid else None
+        pinned = (job["profileBody"].get("toolProfiles") or {}).get(call["kind"])
+        valid = (valid and attempt is not None and observation.get("schemaVersion") == 1
+                 and observation.get("type") == "call-outcome" and observation.get("executionId") == job["id"]
+                 and observation.get("attemptId") == attempt["id"] and observation.get("fence") == attempt["fence"]
+                 and observation.get("callId") == call_id and observation.get("stage") == call["stage"]
+                 and observation.get("kind") == call["kind"] and observation.get("status") in ("completed", "failed")
+                 and isinstance(observation.get("nonce"), str) and 1 <= len(observation["nonce"]) <= 128
+                 and observation["nonce"] not in job.get("nonces", [])
+                 and isinstance(service, dict) and service.get("kind") == call["kind"]
+                 and isinstance(service.get("sessionId"), str))
+        if valid and ("iat" in observation or "exp" in observation):
+            valid = (type(observation.get("iat")) is int and type(observation.get("exp")) is int
+                     and observation["iat"] <= now < observation["exp"])
+        if valid and call["kind"] == "model":
+            valid = service["sessionId"] == attempt["sessionId"] and set(service) == {"kind", "sessionId"}
+        elif valid:
+            valid = (bool(_SERVICE_SESSION.fullmatch(service["sessionId"])) and service.get("profile") == pinned
+                     and set(service) == {"kind", "sessionId", "profile"})
+        if not valid:
+            raise LedgerError("receipt-invalid")
+        calls, budget, charge = self._settled_call(
+            job, index, observation["status"], observation.get("usage"),
+            None if call["kind"] == "model" else service["sessionId"], settled_by="reconciler")
+        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget,
+                                          "nonces": [*job.get("nonces", []), observation["nonce"]]}, op=op)
+        if charge:
+            self.cost_gate.record(charge)
+        return saved
+
+    def _op_any(self, job, method, operation_id, args):
+        """Operation idempotency that also applies to a terminal job (settlement is accounting, not execution)."""
+        if operation_id is None:
+            if not self.offline:
+                raise LedgerError("operation-id-required")
+            return None, None
+        if not isinstance(operation_id, str) or not _OPERATION_ID.fullmatch(operation_id):
+            raise LedgerError("operation-id-invalid")
+        digest = receipt_hash({"method": method, "args": args})
+        entry = (job.get("ops") or {}).get(operation_id)
+        if entry is not None:
+            if entry["digest"] != digest:
+                raise LedgerError("operation-changed")
+            return (operation_id, digest), {"job": self._projection(job), "value": entry.get("value")}
+        return (operation_id, digest), None
 
     def _expire_calls(self, owner, job):
         """The settlement bound passed: unresolved calls become ``unknown`` with their reservation charged."""

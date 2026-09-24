@@ -689,6 +689,23 @@ until the bound, only the reconciler's `settle` may record those outcomes; at th
 bound the watchdog marks them `unknown`, charges their reservations as used
 (and to the daily cost gate) and clears the due entry.
 
+`reconciler().settle(owner, job_id, call_id, observation, *, operation_id)`
+records the outcome of an `intent` call from a recovered signed adapter
+observation, after the Runtime lost the attempt: the job must be
+`recovery_required` within its recovery bound, or terminal before
+`settlementDueAt` (otherwise `recovery-window`); a live attempt uses `outcome`
+(`stale-attempt`). The observation is `{schemaVersion: 1, type: "call-outcome",
+executionId, attemptId, fence, callId, stage, kind, status: completed|failed,
+service: {kind, sessionId, profile?}, usage?, nonce, iat?/exp?, keyId,
+signature}`, verified by the same receipt verifier. It must match the call's
+attempt (id and fence), stage and kind; a model service carries the attempt's
+`sessionId`, an Interpreter/Browser one its service session and the pinned
+`profile`; the nonce joins the job's nonces. Any mismatch is `receipt-invalid`
+(an unknown or already settled call is `call-invalid`). It records the outcome,
+`serviceSessionId`, usage (missing model usage charges the reservation) and
+`settledBy: "reconciler"` in one conditional write, never changing the job
+status; a later `reconcile` can then use the settled call.
+
 Completion is refused with `calls-unresolved` while any call of the attempt is
 still `intent` (no recorded outcome): the attempt stays open, the watchdog moves
 it to `recovery_required` with `unknownOutcome`, and `retry` marks such calls
@@ -752,7 +769,7 @@ re-read, not treated as a lost race), and returns `unknown-outcome`.
 | `api()` (authenticated API) | `admit`, `cancel`, `retry`, `read` |
 | `dispatcher()` (IAM-only dispatcher) | `allocate` |
 | `tool()` (ontology Lambda facade) | `claim`, `heartbeat`, `intent`, `outcome`, `stage`, `finish`, `fail`, `open_manifest`, `open_prior`, `open_input`, `read_chunk`, `open_output`, `write_chunk`, `close_output` |
-| `reconciler()` (IAM-only watchdog/reconciler) | `sweep`, `reconcile`, `resolve_orphan`, `run_due` |
+| `reconciler()` (IAM-only watchdog/reconciler) | `sweep`, `reconcile`, `settle`, `resolve_orphan`, `run_due` |
 
 `Ledger.production` requires a registered verifier type and single-attempt
 storage (`Storage(single_attempt=True)`). It uses the fail-closed

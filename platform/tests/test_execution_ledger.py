@@ -1401,7 +1401,7 @@ def test_every_facade_method_is_implemented(env):
                           (ledger.tool(), ("claim", "heartbeat", "intent", "outcome", "stage", "finish", "fail",
                                            "open_manifest", "open_prior", "open_input", "read_chunk",
                                            "open_output", "write_chunk", "close_output")),
-                          (ledger.reconciler(), ("sweep", "reconcile", "resolve_orphan", "run_due"))):
+                          (ledger.reconciler(), ("sweep", "reconcile", "settle", "resolve_orphan", "run_due"))):
         assert all(callable(getattr(facade, name, None)) for name in names)
 
 
@@ -2169,3 +2169,75 @@ def test_terminal_transitions_keep_outstanding_call_obligations(xfer, transition
     assert settled["status"] == stored["status"] and settled["calls"][-1]["status"] == "unknown"
     assert settled["budget"]["tokensReserved"] == 0 and settled["budget"]["tokensUsed"] == 1000
     assert settled["dueId"] is None and settled["unknownOutcome"] is True
+
+
+def observation(job, call_id, *, status="completed", usage=None, nonce="obs-1", **over):
+    body = {"schemaVersion": 1, "type": "call-outcome", "executionId": job["id"], "attemptId": job["attempt"]["id"],
+            "fence": job["attempt"]["fence"], "callId": call_id, "stage": "generate", "kind": "model",
+            "status": status, "service": {"kind": "model", "sessionId": job["attempt"]["sessionId"]},
+            "nonce": nonce, "keyId": TestKeyVerifier.key_id, **({"usage": usage} if usage else {}), **over}
+    return {**body, "signature": TestKeyVerifier().sign(body)}
+
+
+def lost_model_call(xfer):
+    """design.extract: context staged, a model call started, then the Runtime lost its lease before outcome."""
+    storage, ledger, now, _ = xfer
+    job, previous = staged_through(xfer, "generate", operation="design.extract")
+    call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                max_tokens=5000)["callId"]
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    assert ledger.reconciler().sweep(OWNER, job["id"])["status"] == "recovery_required"
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().outcome(*ids(job), call, status="completed", usage={"inputTokens": 10, "outputTokens": 20})
+    assert error.value.code == "stale-attempt"
+    return storage.get(OWNER, "job", job["id"]), call, previous
+
+
+def test_reconciler_settles_a_recovered_call_observation_then_reconciles(xfer):
+    """Review 3 finding 5: an IAM-only settlement records a verified recovered outcome before completion."""
+    storage, ledger, _, _ = xfer
+    job, call, previous = lost_model_call(xfer)
+    assert not hasattr(ledger.tool(), "settle") and not hasattr(ledger.api(), "settle")
+    usage = {"inputTokens": 10, "outputTokens": 20}
+    settled = ledger.reconciler().settle(OWNER, job["id"], call, observation(job, call, usage=usage))
+    row = next(c for c in settled["calls"] if c["callId"] == call)
+    assert row["status"] == "completed" and row["usage"] == usage and row["settledBy"] == "reconciler"
+    assert settled["budget"]["tokensUsed"] == 30 and settled["budget"]["tokensReserved"] == 0
+    gen_out = put_output(storage, job, "generate", "generate.out", b"generate")
+    generate = chained(job, "generate", "n-gen", previous=previous, status="ok", outputs=[gen_out],
+                       inputs=required_inputs(job, "generate"),
+                       service={"kind": "model", "sessionId": job["attempt"]["sessionId"], "taskId": call})
+    staged = {**job, "stages": [*job["stages"], {"stage": "generate", "outputs": [gen_out],
+                                                 "attemptId": job["attempt"]["id"]}]}
+    out = put_output(storage, job, "verify", "verify.out", b"verify")
+    files = [{"key": gen_out["key"], "sha256": gen_out["sha256"]}]
+    manifest = put_output(storage, job, "verify", "result-manifest.json", _json.dumps({"files": files}).encode())
+    verify = chained(job, "verify", "n-ver", previous=receipt_hash(generate), status="ok", outputs=[out, manifest],
+                     inputs=required_inputs(staged, "verify"), result=GOOD["verify"][1])
+    hashes = [row["receiptHash"] for row in job["stages"]] + [receipt_hash(generate), receipt_hash(verify)]
+    done = ledger.reconciler().reconcile(OWNER, job["id"], job["attempt"]["id"], receipts=[generate, verify],
+                                         status="succeeded", result={"manifestRef": manifest["key"],
+                                                                     "manifestHash": manifest["sha256"],
+                                                                     "receipts": hashes})
+    assert done["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("case", ["forged", "wrong-session", "other-call", "replayed-nonce", "wrong-attempt"])
+def test_settlement_rejects_unverified_or_mismatched_observations(xfer, case):
+    storage, ledger, _, _ = xfer
+    job, call, _ = lost_model_call(xfer)
+    obs = observation(job, call, usage={"inputTokens": 1, "outputTokens": 1})
+    if case == "forged":
+        obs = {**obs, "signature": "0" * 64}
+    if case == "wrong-session":
+        obs = resign({**obs, "service": {"kind": "model", "sessionId": "rt-" + "9" * 40}})
+    if case == "other-call":
+        obs = resign({**obs, "callId": "call-" + "0" * 32})
+    if case == "wrong-attempt":
+        obs = resign({**obs, "attemptId": "att-" + "0" * 32})
+    if case == "replayed-nonce":
+        obs = resign({**obs, "nonce": job["stages"][0]["nonce"]})
+    with pytest.raises(LedgerError) as error:
+        ledger.reconciler().settle(OWNER, job["id"], call, obs)
+    assert error.value.code in ("receipt-invalid", "call-invalid")
+    assert next(c for c in storage.get(OWNER, "job", job["id"])["calls"] if c["callId"] == call)["status"] == "intent"
