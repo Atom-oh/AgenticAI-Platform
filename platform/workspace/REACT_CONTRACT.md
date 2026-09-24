@@ -18,7 +18,7 @@ Exact versions: React/ReactDOM 18.3.1, TypeScript 5.6.3, esbuild 0.25.12,
 - `ui/tokens.css`: authoritative styles/tokens. Generated code cannot replace this file or supply CSS.
   Every `font-size` is `calc(var(--studio-text-scale, 1) * <n>px)`; unitless line-heights are unchanged, so the kit
   is identical at scale 1. Only the verifier sets `--studio-text-scale` (engine plan E12a).
-- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.1.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
+- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.2.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
   Each component has `{name,description,props,variationAxes}`. `props` is descriptive data; actual TS types are the compiler authority.
 - `manifest.cjs`: `catalog()` returns descriptor plus `{hash,files:[{path,sha256}]}` calculated from actual `ui/*` and catalog bytes.
   `hash` is SHA256 of canonical JSON of sorted file hashes. It excludes generated timestamps and node_modules.
@@ -89,6 +89,9 @@ the behavioral/a11y/image verifier checks the actual static bundle. The response
 verifier's init script and adds `largeText: {status, overflow:[testId], unscaled:[testId]}` (tagged elements that overflow,
 and tagged elements whose text did not scale). A failed or unmeasured large-text pass is a blocking finding. The 1.1.0
 catalog bump changes `catalogHash`, so runs approved under 1.0.0 become historical.
+The exported runner (`templates/flow.test.cjs`, E12b) matches the verifier for `expectVisible false`: it polls the
+target count up to the step timeout; 0 passes (a conditionally unmounted node), 1 must not be visible, more than 1
+fails with "Unique target required". The 1.2.0 catalog bump records this runner change.
 Do not silently replace a failed React build with HTML or a stub.
 
 ## Projects, scoped access and planning
