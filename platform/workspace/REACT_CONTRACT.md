@@ -174,6 +174,20 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   rows with an opaque `pagecur-…` cursor (5-minute `ontology_cursor` record bound
   to actor, role, project, authority epoch, listing and `limit`, default 100;
   `409 list-cursor-stale` otherwise).
+- Write and replay responses (`POST /runs`, `/contracts`, `/contracts/propose`,
+  `/contracts/:id/approve`, `/runs/:id/approve`, `/releases`, `/releases/:id/git`,
+  `/batches`, `PUT /contracts/:id`) pass one output gate (`WorkspaceAPI._gate_response`):
+  every embedded contract, run, release and job is authorized through one aggregate
+  reader with a final recheck, and an inaccessible embedded record makes the
+  response the same `404` as a missing resource. Contract/run sub-routes authorize
+  the resource before processing. `GET /jobs/:id` authorizes content-bearing jobs
+  like their resource (`propose` inputs, `run` → run lineage, `release`/`git` →
+  round delivery); upload, workbench, document and intake jobs keep their own
+  authority.
+- Queued `propose`/`run` generation and `release` rebuild jobs are gated at
+  execution by `ontology_sources.job_lineage` (recorded actor's current authority and
+  the same lineage checks) before any model call or rebuild, and the same reader is
+  rechecked before the outcome (job completion / release `ready`) is recorded.
 - The queued Git export worker (`git_service.process_export`) rebuilds the recorded
   actor's current `export` scope (`ontology_sources.job_reader`), reruns the same
   round-delivery lineage check at execution and rechecks that reader after reading

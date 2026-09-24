@@ -250,6 +250,10 @@ class Worker:
             return {"status": "duplicate-or-unavailable"}
         try:
             task = job["task"]
+            # Generation/release inputs are reauthorized at execution, before any model call
+            # or rebuild; the same reader is rechecked before the outcome is recorded.
+            from workspace.ontology_sources import job_lineage, recheck_job
+            lineage = job_lineage(self, owner, job) if task in ("propose", "run") else None
             if task == "finalize":
                 result = self._finalize(owner, job, context)
             elif task == "propose":
@@ -284,6 +288,7 @@ class Worker:
                 if not current_job or current_job.get("status") != "completed":
                     raise ValueError("문서 작업의 원자적 완료 기록을 확인하지 못했습니다.")
             else:
+                recheck_job(lineage)
                 self._update(owner, "job", identifier, status="completed", progress=100, result=result)
             return {"status": "completed", "jobId": identifier}
         except Exception as error:

@@ -863,3 +863,79 @@ def test_run_listing_rechecks_every_rows_observations_before_responding(env, bou
     status, payload = http(env, "GET", "/runs")
     assert calls["n"] >= 2
     assert status == 409 or asset["id"] not in json.dumps(payload), payload
+
+
+def test_replayed_run_creation_and_its_job_apply_source_authority(env, bound):
+    """Review 3 #1: a replay returns the same 404 as GET once an input is revoked."""
+    asset, contract, _ = bound
+    body = {"contractId": contract["id"], "contractVersion": contract["version"], "outputType": "react",
+            "variant": "baseline", "generationMode": "guided", "maxRounds": 1, "requestId": "replay-run"}
+    status, created = http(env, "POST", "/runs", body, actor="carol")
+    assert status == 202, created
+    run_id, job_id = created["run"]["id"], created["job"]["id"]
+    assert http(env, "GET", f"/jobs/{job_id}", actor="carol")[0] == 200
+    owner = f"project:{env.pid}"
+    current = env.api.storage.get(owner, "asset", asset["id"])
+    env.api.storage.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+    missing = http(env, "GET", "/runs/run-absent", actor="carol")
+    for method, path, payload in (("GET", f"/runs/{run_id}", None), ("POST", "/runs", body),
+                                  ("GET", f"/jobs/{job_id}", None)):
+        status, response = http(env, method, path, payload, actor="carol")
+        assert (status, response) == missing, (path, status, response)
+
+
+def test_proposal_job_and_its_replay_apply_source_authority(env, design):
+    """Review 3 #1: a content-bearing proposal job is authorized like a resource GET."""
+    product, _ = design
+    asset = input_asset(env, "input-p")
+    body = {"assetIds": [asset["id"]], "brief": "Synthetic brief for the proposal", "productId": product["id"],
+            "requestId": "replay-propose"}
+    status, created = http(env, "POST", "/contracts/propose", body, actor="carol")
+    assert status == 202, created
+    job_id = created["job"]["id"]
+    assert http(env, "GET", f"/jobs/{job_id}", actor="carol")[0] == 200
+    owner = f"project:{env.pid}"
+    current = env.api.storage.get(owner, "asset", asset["id"])
+    env.api.storage.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+    missing = http(env, "GET", "/jobs/job-absent", actor="carol")
+    assert http(env, "GET", f"/jobs/{job_id}", actor="carol") == missing
+    status, response = http(env, "POST", "/contracts/propose", body, actor="carol")
+    assert status == 404 and asset["id"] not in json.dumps(response) and "Synthetic brief" not in json.dumps(response)
+
+
+def test_queued_generation_is_gated_by_lineage_at_worker_execution(env, bound):
+    """Review 3 inventory: the run worker reauthorizes supplied inputs before any model call."""
+    from workspace.worker import Worker
+    asset, contract, _ = bound
+    body = {"contractId": contract["id"], "contractVersion": contract["version"], "outputType": "react",
+            "variant": "baseline", "generationMode": "guided", "maxRounds": 1, "requestId": "worker-gate"}
+    status, created = http(env, "POST", "/runs", body, actor="carol")
+    assert status == 202, created
+    owner = f"project:{env.pid}"
+    current = env.api.storage.get(owner, "asset", asset["id"])
+    env.api.storage.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+    calls = []
+    worker = Worker(storage=env.api.storage, model_call=lambda *args: calls.append(args))
+    result = worker.handle({"owner": owner, "jobId": created["job"]["id"]})
+    assert result["status"] != "completed" and calls == []
+    assert env.api.storage.get(owner, "job", created["job"]["id"])["status"] == "failed"
+
+
+def test_queued_release_rebuild_is_gated_by_lineage(env, design, monkeypatch):
+    """Review 3 inventory: process_release reauthorizes the round lineage at execution."""
+    import workspace.releases as releases
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)], approval=True)
+    owner = f"project:{env.pid}"
+    storage = env.api.storage
+    storage.put(owner, "release", {"id": "rel-q", "runId": run["id"], "round": 1, "status": "queued",
+                                   "actor": "alice", "approvalHash": "a" * 64, "catalogHash": run["catalogHash"]})
+    job = storage.put(owner, "job", {"id": "rel-q", "task": "release", "input": {"releaseId": "rel-q"}})
+    monkeypatch.setattr(releases, "resolve_generation_context", lambda *args, **kwargs: None)
+    reached = []
+    monkeypatch.setattr(releases, "approved_artifacts", lambda *args, **kwargs: reached.append(1) or (_ for _ in ()).throw(ValueError("stop")))
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    from workspace.worker import Worker
+    with pytest.raises(ValueError):
+        releases.process_release(Worker(storage=storage), owner, job)
+    assert reached == []

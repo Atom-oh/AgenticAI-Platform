@@ -182,6 +182,56 @@ def job_reader(host, owner, actor, action):
     return Sources(Service(host, scope, {"sub": actor}))
 
 
+def job_lineage(host, owner, job):
+    """Execution-time lineage gate for queued generation/release work; returns the reader.
+
+    The recorded actor's current authority is rebuilt (`job_reader`) and the job's
+    supplied inputs are reauthorized with the same checks as the resource GETs:
+    proposal inputs, the run's lineage, or the released round's delivery lineage.
+    The caller rechecks the returned reader before recording its outcome. Raises
+    `ValueError` (the job fails) when authority or lineage is revoked.
+    """
+    task, data = job.get("task"), job.get("input") if isinstance(job.get("input"), dict) else {}
+    storage = host.storage
+    try:
+        if task == "propose":
+            reader = job_reader(host, owner, data.get("actor"), "edit_rules")
+            if reader is not None:
+                reader.inputs_access(data)
+        elif task == "run":
+            run = storage.get(owner, "run", data.get("runId")) if isinstance(data.get("runId"), str) else None
+            if run is None:
+                raise ValueError("생성할 작업이 없습니다.")
+            reader = job_reader(host, owner, run.get("actor"), "generate")
+            if reader is not None:
+                reader.run_access(run)
+                # The job writes its own run record (status, rounds); that record is the
+                # output, not an input, so only its lineage stays in the final recheck.
+                reader.observed.pop((owner, "run", run["id"]), None)
+        elif task == "release":
+            release = storage.get(owner, "release", data.get("releaseId")) if isinstance(data.get("releaseId"), str) else None
+            if release is None:
+                raise ValueError("처리할 React 릴리스가 없습니다.")
+            reader = job_reader(host, owner, release.get("actor"), "release")
+            if reader is not None:
+                reader.round_delivery(release.get("runId"), release.get("round"))
+        else:
+            return None
+    except CollaborationError:
+        raise ValueError("작업 권한 또는 입력 원본 근거가 회수되었습니다.") from None
+    return reader
+
+
+def recheck_job(reader):
+    """Final recheck of a job's retained lineage before its outcome is recorded."""
+    if reader is None:
+        return
+    try:
+        reader.recheck()
+    except CollaborationError:
+        raise ValueError("작업 중 권한 또는 입력 원본 근거가 변경되었습니다.") from None
+
+
 class Sources:
     def __init__(self, context, *, max_records=90, max_sources=50):
         self.ctx = context
@@ -690,6 +740,17 @@ class Sources:
         self._remember("contract", contract)
         self.recheck()
         return contract
+
+    def inputs_access(self, value):
+        """Historical permission for a job's supplied inputs (exact `assetSnapshots`, baselines)."""
+        self._fresh()
+        try:
+            self._inputs(self._snapshot_refs(value), historical=True)
+            self._base_lineage(value)
+        except CollaborationError as error:
+            self._permission_failure(error)
+        self.recheck()
+        return value
 
     def run_access(self, run):
         """Run metadata under the same lineage authority as its rounds.

@@ -202,7 +202,10 @@ class WorkspaceAPI:
                 elif segments[0] == "releases":
                     action = "export" if segments[-1] == "git" else "release"
             scope = self.collaboration.require(scope, action)
-            return self._route(scope["owner"], method, segments, event, query, scope=scope, claims=claims)
+            response = self._route(scope["owner"], method, segments, event, query, scope=scope, claims=claims)
+            if method in ("POST", "PUT") and segments[0] in ("contracts", "runs", "releases", "batches"):
+                response = self._gate_response(scope, claims, response)
+            return response
         except CollaborationError as error:
             return _json(error.status, {"error": error.message, "code": error.code})
         except HTTPError as error:
@@ -360,6 +363,79 @@ class WorkspaceAPI:
             aggregate.absorb(reader)
         return value
 
+    # Tasks whose job records carry their own authority (asset upload, workbench,
+    # document and intake jobs) are authorized by their owning modules.
+    _SELF_AUTHORIZED_TASKS = ("finalize", "workbench", "document-finalize", "document-analysis", "intake-image")
+
+    def _authorized_job(self, context, owner, job, aggregate=None):
+        """A content-bearing job is authorized like its resource GET; None if inaccessible."""
+        from workspace.ontology_sources import _AUTHORITY_CODES, Sources
+        task, data = job.get("task"), job.get("input") if isinstance(job.get("input"), dict) else {}
+        if task in self._SELF_AUTHORIZED_TASKS:
+            return job
+        try:
+            reader = Sources(context)
+            if task == "propose":
+                reader.inputs_access(data)
+            elif task == "run":
+                run = self.storage.get(owner, "run", data.get("runId")) if isinstance(data.get("runId"), str) else None
+                if run is None:
+                    return None
+                reader.run_access(run)
+            elif task in ("release", "git"):
+                release_id = data.get("releaseId")
+                if task == "git":
+                    exported = (self.storage.get(owner, "gitexport", data.get("exportId"))
+                                if isinstance(data.get("exportId"), str) else None)
+                    release_id = (exported or {}).get("releaseId")
+                release = self.storage.get(owner, "release", release_id) if isinstance(release_id, str) else None
+                if release is None:
+                    return None
+                reader.round_delivery(release.get("runId"), release.get("round"))
+            else:
+                return None
+        except CollaborationError as error:
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            return None
+        if aggregate is not None:
+            aggregate.absorb(reader)
+        return job
+
+    def _gate_response(self, scope, claims, response):
+        """The single output gate for write/replay responses that embed source-bound records.
+
+        Every embedded contract, run, release and job is authorized through the shared
+        lineage reader (one aggregate, one final recheck); an inaccessible embedded
+        record makes the response the same `404` as a missing resource.
+        """
+        context = self._lineage_context(scope, claims)
+        if (context is None or not isinstance(response, dict) or not 200 <= response.get("statusCode", 0) < 300
+                or response.get("isBase64Encoded") or "application/json" not in
+                response.get("headers", {}).get("Content-Type", "")):
+            return response
+        payload = json.loads(response["body"])
+        if not isinstance(payload, dict):
+            return response
+        from workspace.ontology_sources import aggregate_reader
+        owner, aggregate, changed = scope["owner"], aggregate_reader(context), False
+        for key in ("contract", "run", "release"):
+            if isinstance(payload.get(key), dict) and payload[key].get("id"):
+                record = self.storage.get(owner, key, payload[key]["id"])
+                if record is None or self._authorized(context, key, record, {}, owner, scope, aggregate) is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+        if isinstance(payload.get("job"), dict) and payload["job"].get("id"):
+            job = self.storage.get(owner, "job", payload["job"]["id"])
+            if job is None or self._authorized_job(context, owner, job, aggregate) is None:
+                raise HTTPError(404, "not-found", "Resource not found")
+        if isinstance(payload.get("runs"), list):
+            kept = [row for row in payload["runs"] if isinstance(row, dict) and self._authorized(
+                context, "run", self.storage.get(owner, "run", row.get("id")) or {}, {}, owner, scope, aggregate)]
+            changed = len(kept) != len(payload["runs"])
+            payload["runs"] = kept
+        aggregate.recheck()
+        return _json(response["statusCode"], payload) if changed else response
+
     def _authorized_list(self, context, owner, kind, name, query, scope):
         from workspace.ontology_sources import aggregate_reader, authorized_page
         cache, aggregate = {}, aggregate_reader(context)
@@ -463,6 +539,11 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Route not found")
         kind = {"assets": "asset", "contracts": "contract", "runs": "run", "jobs": "job"}[parts[0]]
         record = self._get(owner, kind, parts[1])
+        if method != "GET" and kind in ("contract", "run"):
+            # Resource gate before any processing: an inaccessible record is a missing one.
+            context = self._lineage_context(scope, claims)
+            if context is not None and self._authorized(context, kind, record, {}, owner, scope) is None:
+                raise HTTPError(404, "not-found", "Resource not found")
         if kind == "run" and len(parts) == 3 and parts[2] == "baseline" and method == "GET":
             from workspace.releases import approved_artifacts
             from workspace.react_artifacts import generated_files
@@ -489,6 +570,9 @@ class WorkspaceAPI:
             elif kind == "run":
                 record = self._run_view(owner, record, scope)
             if kind == "job":
+                context = self._lineage_context(scope, claims)
+                if context is not None and self._authorized_job(context, owner, record) is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
                 if record.get("task") in ("document-finalize", "document-analysis"):
                     from documents.errors import DocumentError
                     from documents.library import authorize_job
