@@ -2666,3 +2666,15 @@ def test_settlement_enforces_its_recovery_bound_at_submission(xfer, state):
         ledger.reconciler().settle(OWNER, job["id"], call, obs)
     assert error.value.code == "recovery-window"
     assert next(c for c in storage.get(OWNER, "job", job["id"])["calls"] if c["callId"] == call)["status"] == "intent"
+
+def test_negative_output_chunk_indexes_are_refused(xfer):
+    """Review 4 finding 8: index -1 is not a retry of the last written part."""
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    data = b"y" * 10
+    handle = open_out(ledger, job, data)
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data))
+    for index in (-1, -2):
+        with pytest.raises(LedgerError) as error:
+            ledger.tool().write_chunk(*ids(job), handle["handleId"], index, b64(data))
+        assert error.value.code == "transfer-invalid"

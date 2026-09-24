@@ -651,7 +651,9 @@ the project version check. Through the protected-operation guard below it also
 revalidates every consumed admission and opened prior (a withdrawn one fails
 the job with `authority-changed`); `read_chunk` additionally requires that an
 input handle's admission still resolves to the same key and hash, otherwise
-`transfer-invalid`. `read_chunk` and `write_chunk` are not `ops` entries; a supplied
+`transfer-invalid`. Chunk indexes are non-negative integers below the handle's
+chunk count; a negative index is `transfer-invalid` (never a retry of a written
+part). `read_chunk` and `write_chunk` are not `ops` entries; a supplied
 `operation_id` (mandatory in production) is bound on the handle
 (`chunkOps: {operationId: "index:chunkSha256"}`, at most `2 × chunks + 8`), and
 reusing it for another index or chunk hash is `operation-changed`. Every returned

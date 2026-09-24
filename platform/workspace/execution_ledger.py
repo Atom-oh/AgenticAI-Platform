@@ -1332,8 +1332,8 @@ class Ledger:
             raw = base64.b64decode(data, validate=True) if isinstance(data, str) else None
         except ValueError:
             raw = None
-        if raw is None or not 0 < len(raw) <= CHUNK_BYTES or type(index) is not int:
-            raise LedgerError("transfer-invalid")
+        if raw is None or not 0 < len(raw) <= CHUNK_BYTES or type(index) is not int or index < 0:
+            raise LedgerError("transfer-invalid")          # a negative index never aliases a written part
         digest = hashlib.sha256(raw).hexdigest()
         bound = self._chunk_op(handle, operation_id, index, digest)
         if index < len(handle["parts"]):
