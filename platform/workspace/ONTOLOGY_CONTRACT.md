@@ -182,7 +182,11 @@ live sharing or release evidence.
   admits metadata; a revoked upstream denies with `404 not-found`. Historical
   checks verify admissions with the same reader, and every decision, policy,
   reviewer-grant/provenance and source version observed (including the
-  superseded-source fallback) joins that reader's final `recheck()`. Admission
+  superseded-source fallback) joins that reader's final `recheck()`. A
+  `document-revision` source authorized historically (directly or through that
+  fallback) also propagates the library's nested transcription lineage
+  (transcription and image admissions, policy, reviewer grants and image asset),
+  so their versions and expiry deadlines are rechecked by the parent reader. Admission
   verification runs on a probe reader (`Sources._probe`) whose observations are
   absorbed (`Sources.absorb`), so its own final recheck never re-enters the parent
   reader's historical-reference replay. Historical round checks also fence the product and

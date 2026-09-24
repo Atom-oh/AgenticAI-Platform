@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from intake_support import api, call  # noqa: F401,E402
 from test_intake_admission import env, internal_admitted  # noqa: F401,E402
+from test_intake_transcription import chain  # noqa: F401,E402
 from test_workspace_react_runtime import CONTRACT  # noqa: E402
 from intake import admission  # noqa: E402
 from workbench.service import Service  # noqa: E402
@@ -1003,6 +1004,40 @@ def test_model_is_never_called_after_revocation_inside_the_repair_loop(env, boun
     assert result["status"] == "failed"
     assert len(calls) == 1 and services == []
     assert env.api.storage.get(owner, "job", created["job"]["id"])["status"] == "failed"
+
+def test_superseded_transcription_fallback_retains_its_image_lineage(chain, design, monkeypatch):
+    """Review 4 #3: historical authorization propagates nested library observations."""
+    from intake import review
+    from test_intake_transcription import doc_ref, library_review
+    env = chain
+    assert library_review(chain, "bob")[0] == 200
+    pending = admission.request(env.api, env.scope(), doc_ref(chain), data_class="internal-non-sensitive")
+    decision = review.decide(env.api, env.scope("bob"), pending["id"], approve=True, reason="checked")
+    assert decision["status"] == "admitted"
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)], approval=True)
+    owner = f"project:{env.pid}"
+    document = env.api.storage.get(owner, "document", decision["source"]["sourceId"])
+    env.api.storage.put(owner, "document", {**document, "approvedRevisionId": document["id"] + "--r999999"},
+                        document["version"])
+    reader = Sources(ctx(env))
+    reader.round_delivery(run["id"], 1)
+    assert ("intake:deployment", "adm_grant", "grant-dana") in set(reader.observed)
+    assert {"adm_decision", "asset"} <= {check["kind"] for check in reader.observed.values()}
+    row = run["rounds"][0]
+    storage = env.api.storage
+    original = storage.get_blob
+    armed = {"on": True}
+
+    def revoking(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key == row["sourceKey"] and armed["on"]:
+            armed["on"] = False
+            env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+        return data
+    monkeypatch.setattr(storage, "get_blob", revoking)
+    status, payload = blob(env, run["id"], "source")
+    assert status in (404, 409) and not isinstance(payload, bytes)
+    assert blob(env, run["id"], "source")[0] == 404
 
 
 def test_revoked_asset_metadata_previews_listing_and_every_chunk_are_missing(env):

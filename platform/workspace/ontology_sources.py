@@ -519,6 +519,12 @@ class Sources:
                     fail(403, "ontology-source-forbidden", "과거 문서의 읽기 권한 근거가 없습니다.")
                 self._remember("document", document)
                 self._remember("docrevision", revision)
+                # Historical (and superseded-admission fallback) authorization keeps the
+                # whole transcription lineage (transcription and image admissions, their
+                # policy and reviewer grants, the image asset) in this reader, so its
+                # final recheck sees their versions and expiry deadlines.
+                for check in library._upstream:
+                    self._remember_owned(check["owner"], check["kind"], check)
             except DocumentError as error:
                 fail(error.status, error.code, error.message)
         elif kind == "workbench-document":
