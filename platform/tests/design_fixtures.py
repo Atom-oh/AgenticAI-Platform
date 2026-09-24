@@ -94,6 +94,11 @@ def review_all(ontology, identities, decisions=("reviewed", "approved")):
                                  request_id=f"{decision}-{local}")
 
 
+def pages():
+    """Admitted derivative pages of the synthetic seed (B0 intake shape; Task E7)."""
+    return json.loads((SEED / "pages.json").read_text(encoding="utf-8"))
+
+
 def knowledge(**kw):
     from design_loop.knowledge import from_snapshot
     return from_snapshot(sealed_graph(**kw))
