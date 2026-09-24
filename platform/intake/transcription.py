@@ -99,6 +99,38 @@ def _parse(text):
     return {"kind": value["kind"], "text": value["text"], "tables": tables}
 
 
+def delivered_size(decision, data):
+    """The delivered vision PNG's dimensions, cross-checked with the recorded transform."""
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        raise AdmissionError("artifact-changed")
+    width, height = int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    artifact = decision["artifact"]
+    transform = artifact["vision"].get("transform") or []
+    if not transform:
+        expected = artifact["width"], artifact["height"]
+    else:
+        match = re.fullmatch(r"downscale-(\d+)x(\d+)", transform[0]) if len(transform) == 1 else None
+        expected = (int(match.group(1)), int(match.group(2))) if match else None
+    if expected != (width, height):
+        raise AdmissionError("artifact-changed")
+    return width, height
+
+
+def scale_region(region, artifact, width, height):
+    """Map a normalized-image region onto a `width` x `height` delivered image.
+
+    Exact integer arithmetic, rounding outward, so the delivered region always
+    covers the requested one and stays inside the delivered image.
+    """
+    full_w, full_h = artifact["width"], artifact["height"]
+    left, top = region["left"] * width // full_w, region["top"] * height // full_h
+    right = -(-(region["left"] + region["width"]) * width // full_w)
+    bottom = -(-(region["top"] + region["height"]) * height // full_h)
+    left, top = min(left, width - 1), min(top, height - 1)
+    right, bottom = min(width, max(left + 1, right)), min(height, max(top + 1, bottom))
+    return {"left": left, "top": top, "width": right - left, "height": bottom - top}
+
+
 def transcribe(host, scope, pending, *, model_id, generate=None, claims=None, trace_id=""):
     """Run context -> generate -> verify and record a `pending-review` transcription decision."""
     if not isinstance(pending, dict) or pending.get("operation") != OPERATION:
@@ -120,8 +152,14 @@ def transcribe(host, scope, pending, *, model_id, generate=None, claims=None, tr
     # generate: the measured boundary applies (OCR text is checked before bytes leave).
     if generate is None:
         from engine.gate import generate_with_images as generate
-    user = (f"영역: left={region['left']}, top={region['top']}, width={region['width']}, "
-            f"height={region['height']} (정규화 이미지 기준 픽셀). 이 영역의 도식 또는 표를 전사하세요.")
+    # The model sees the vision derivative, which may be downscaled: send the region
+    # in that image's coordinates. The canonical normalized-image region stays in
+    # the decision's lineage (`placed` below).
+    width, height = delivered_size(decision, image["bytes"])
+    shown = scale_region(region, decision["artifact"], width, height)
+    user = (f"영역: left={shown['left']}, top={shown['top']}, width={shown['width']}, "
+            f"height={shown['height']} (전달된 {width}x{height} 이미지 기준 픽셀). "
+            "이 영역의 도식 또는 표를 전사하세요.")
     # The policy and deny-list reads above are I/O after `vision_input`: recheck the
     # image's full authority immediately before invoking the model.
     authority.recheck()

@@ -691,7 +691,10 @@ live evidence and the privacy redaction adapter remain outstanding.
   and uses only the verified index), each `GET /intake/reviews` item and the
   whole response after all reads (pending decision, policy, the actor's grants,
   transcription image lineage and source fences). Model calls and commits use
-  the same recheck: `transcription.transcribe` immediately before `generate`
+  the same recheck: `transcription.transcribe` (which sends the region in the
+  delivered vision image's coordinates, checking that image's PNG dimensions
+  against the recorded `downscale-WxH` transform, while the decision's
+  lineage keeps the canonical normalized-image region) immediately before `generate`
   and again before its commit, keeping the original `Sources` reader so the
   pre-generation source observations fence the commit,
   `admission.decide` (every admission path) before and on each commit attempt,

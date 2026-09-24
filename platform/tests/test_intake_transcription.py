@@ -725,3 +725,39 @@ def test_image_admission_expiring_during_the_publish_transaction_publishes_nothi
         storage.clock = clock
     assert error.value.status == 409
     assert storage.get(chain.chain["owner"], "ontology", CURRENT) is None
+
+
+def test_region_is_transformed_into_the_downscaled_vision_image(env):
+    """Review 5, finding 4: the model receives region coordinates in the delivered image's
+    coordinate system; the lineage keeps the canonical normalized-image coordinates."""
+    import os
+    env.policy()
+    env.grant("dana", "grant-dana")
+    side = 1100
+    buffer = io.BytesIO()
+    Image.frombytes("RGB", (side, side), os.urandom(side * side * 3)).save(buffer, "PNG")
+    data = buffer.getvalue()
+    owner = f"project:{env.pid}"
+    key = env.api.storage.key_for(owner, "asset", "big", "original.png")
+    env.api.storage.put_blob_once(key, data, "image/png")
+    ref = asset_reference(env.api.storage.put(owner, "asset", {
+        "id": "big", "projectId": env.pid, "name": "big.png", "uploadStatus": "stored", "parseStatus": "complete",
+        "originalKey": key, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "importRevision": 1}))
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    assert image["artifact"]["vision"]["transform"] == ["downscale-880x880"]
+    region = {"left": 1000, "top": 1000, "width": 100, "height": 100,
+              "normalizedImageHash": image["artifact"]["sha256"]}
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region=region)
+    calls = []
+
+    def generate(system, user, images, **kwargs):
+        calls.append((user, images))
+        return json.dumps({"kind": "diagram", "text": "도식 전사", "tables": []}, ensure_ascii=False), None, None
+
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL, generate=generate)
+    (user, images), = calls
+    delivered = Image.open(io.BytesIO(images[0]["bytes"]))
+    assert delivered.size == (880, 880)
+    assert "left=800, top=800, width=80, height=80" in user and "880x880" in user
+    assert transcribed["artifact"]["region"] == {"page": 1, **region}  # canonical coordinates in lineage
