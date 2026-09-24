@@ -101,6 +101,20 @@ critical findings `contract-capacity`, `published-page-missing`, `visibility-unv
 `contract-unsupported`, never a partial contract. Every compile, repair and Browser run uses that exact contract.
 Do not silently replace a failed React build with HTML or a stub.
 
+Engine handoff package (`design_loop/handoff.py`, engine plan E17; offline and unwired until C). The customer
+screen id comes from `Registry.assign` (`<area>-<num>` under the synthetic `seed/design_poc/convention.json`; the
+tenant copy is private) and is compiled into each page as `export const meta = {sid, type, dver, status, level1,
+level2, level3} as const;`. `handoff.build(release source.zip, layout, manifest_fields=...)` places every release
+`source.zip` entry byte-identical under `project/` (nothing is relocated, so the policy and relative imports hold),
+adds `convention/screens.json` (`project/src/pages/<slug>.tsx` → `{sid, type, dver, status, levels,
+conventionPath, state, sha256}`), `convention/apply.cjs`, `manifest.json` (`approvalHash`, `releaseId`,
+`sourceHash`, `bundleHash`, `sourceZipSha256`, `componentPackage: "@studio/approved-ui"`,
+`customerPackage: "not-verified"`), `CHANGES.md` and `verification-report.json`. It refuses a `sourceHash` that
+differs from the entries, an unmapped page, a page whose compiled meta sid differs from the layout, and duplicate
+convention paths. The ZIP is deterministic, at most 512 entries and 40 MiB. The customer applies the physical path
+layout after approval with `convention/apply.cjs`, which type-checks the relocated layout with its own
+`convention/tsconfig.json`; the project's `npm run typecheck` covers only `src/`.
+
 ## Projects, scoped access and planning
 
 Project endpoints use the root authenticated API. Resource endpoints use optional `X-Workspace-Project`.

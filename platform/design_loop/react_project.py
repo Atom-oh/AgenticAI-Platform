@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 
 from .composition import walk
-from .convention import PAGE_ID, VALUE_FIELD, Registry
+from .convention import META_KEYS, PAGE_ID, VALUE_FIELD, Registry
 from .local_runner import run_node
 
 KIT = Path(__file__).resolve().parents[1] / "react-kit"
@@ -164,9 +164,6 @@ def _page_source(k, registry, flow, screen, state, composition, meta):
               f'width={{"mobile"}}>',
               "      <Stack>", *body, "      </Stack>", "    </Screen>", "  );", "}", ""]
     return "\n".join(lines), page.choices
-
-
-META_KEYS = ("sid", "type", "dver", "status", "level1", "level2", "level3")
 
 
 def _meta(k, registry, flow, screen, state, meta):

@@ -45,7 +45,7 @@ def seed_screens(k, flow, values, expectation, variant="a"):
     return screens
 
 
-def chain(k=None, prd=None, *, screens=None, criteria=None):
+def chain(k=None, prd=None, *, screens=None, criteria=None, convention=None):
     """Seed knowledge -> flow -> compositions -> project -> compile -> contract -> Browser -> assembled report."""
     from design_fixtures import knowledge
     from design_loop.contract import derive
@@ -62,14 +62,19 @@ def chain(k=None, prd=None, *, screens=None, criteria=None):
     flow = build_flow(k, "savings-signup")
     expectation = expected(prd, k)
     cases = enumerate_cases(expectation["conditions"])["cases"]
-    registry = Registry(k).register_flow(flow)
+    registry = Registry(k, convention=convention).register_flow(flow)
     catalog = kit_catalog_hash()
     derived = derive(prd, flow, k, registry, [], cases=cases, criteria={"catalogHash": catalog, **(criteria or {})})
     contract = derived["contract"]
     if contract is None:
         raise RuntimeError(f"contract not derived: {derived['findings']}")
     screens = screens or seed_screens(k, flow, values, expectation)
-    files = project(flow, screens, k, values, cases=cases, registry=registry)
+    meta = None
+    if convention is not None:                       # customer screen ids in the compiled page meta (E17)
+        for s in flow["screens"]:
+            registry.assign(s)
+        meta = {key: convention.meta(k, registry, flow, key[0], key[1], c) for key, c in screens.items()}
+    files = project(flow, screens, k, values, cases=cases, registry=registry, meta=meta)
     build = compile_local(compile_request(files, catalog_hash=catalog, contract=contract))
     if not build.get("ok"):
         raise RuntimeError(f"compile failed: {build.get('diagnostics')}")
@@ -77,7 +82,7 @@ def chain(k=None, prd=None, *, screens=None, criteria=None):
     browser = evaluate_bundle(dist, contract, expected_hash=build["bundleHash"])
     report = assemble(build, browser, contract=contract)
     return {"k": k, "prd": prd, "values": values, "flow": flow, "expectation": expectation, "cases": cases,
-            "registry": registry, "contract": contract, "screens": screens, "files": files, "build": build,
+            "registry": registry, "contract": contract, "screens": screens, "files": files, "build": build, "meta": meta,
             "browser": browser, "report": report}
 
 

@@ -1,0 +1,5 @@
+{"schemaVersion": 1, "screenIdPattern": "^(?P<area>[a-z]{3})-(?P<num>[0-9]{4})$", "area": "sav",
+ "pathTemplate": "{area}/{screenId}{suffix}.tsx", "statePathTemplate": "{area}/{screenId}{suffix}.{state}.tsx",
+ "surfaceSuffix": {"page": "", "bottom-sheet": "_B01", "full-popup": "_F01", "layer": "_L01", "tab": "_T01"},
+ "typeCodes": {"page": "P", "bottom-sheet": "B", "full-popup": "F", "layer": "L", "tab": "T"},
+ "meta": ["sid", "type", "dver", "status", "level1", "level2", "level3"]}
