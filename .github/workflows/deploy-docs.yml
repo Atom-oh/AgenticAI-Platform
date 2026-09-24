@@ -15,7 +15,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Fail-closed public identifier scan of tracked files and names; Pages never deploys without it.
+  safety:
+    uses: ./.github/workflows/public-safety.yml
+    secrets: inherit
+
   build:
+    needs: safety
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +35,11 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run docs:build
+      - name: Scan the built site
+        env: { PUBLIC_DENYLIST: '${{ secrets.PUBLIC_DENYLIST }}' }
+        run: |
+          umask 077; printf '%s\n' "$PUBLIC_DENYLIST" > "$RUNNER_TEMP/denylist.txt"
+          python3 scripts/check_public_identifiers.py --patterns-file "$RUNNER_TEMP/denylist.txt" --no-tree --site docs/.vitepress/dist
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

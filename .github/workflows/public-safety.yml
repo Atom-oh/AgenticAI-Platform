@@ -1,0 +1,21 @@
+name: Public safety scan
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+    secrets:
+      PUBLIC_DENYLIST: { required: true }
+permissions: { contents: read }
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Tracked files and names
+        env: { PUBLIC_DENYLIST: '${{ secrets.PUBLIC_DENYLIST }}' }
+        run: |
+          umask 077; printf '%s\n' "$PUBLIC_DENYLIST" > "$RUNNER_TEMP/denylist.txt"
+          python3 scripts/check_public_identifiers.py --patterns-file "$RUNNER_TEMP/denylist.txt"

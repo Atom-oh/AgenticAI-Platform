@@ -1,0 +1,14 @@
+# Approved public-asset registry (review round 47, BO1). One "<sha256>  <note>" line per reviewed media file
+# or inlined media body. A media file is published only when byte-identical to an entry here; adding an entry
+# is a PR whose review is the content check (every image and video frame viewed, no forbidden identifier).
+# Seeded 2026-09-24 (Task E1): images viewed in full; videos reviewed as 3-second contact sheets of every scene
+# plus their full-resolution source screenshots under videos/ontology-workbench/assets/screens/.
+62081fd99895340c910c80d5317b44fbe95c737375cf1fbe97fc4f3701950176  docs/public/media/ontology-workbench-poster.jpg
+7907075d904b446766c8ad3ace755e3efdbd0e9a5af8448dd5db20329f10eaeb  docs/public/media/ontology-workbench.mp4
+59e795f8e3cdb036a6cfd6ba7c6dfd2215a3c865ef51350b0879119c5a17c150  docs/public/media/ontology-workbench.webm
+ff530004ef4a5b92fb9e690141134e98e50a9aabdb2793f8a0dbd06ce40a626e  docs/public/ux-validation-loop.visual-check.1440x900.dark.png
+847ea10a6739c5a8acd2642d6eb6b12d02356672df70bd3c8d3b36a7ff1e12d3  docs/public/ux-validation-loop.visual-check.1440x900.light.png
+4dbbfd7e5139d5adae6bd1f1d07af9f54c8a63d4a0fdbd8fe80ce7012ea22824  docs/public/ux-validation-loop.visual-check.2048x1320.dark.png
+341f144a757d14114ed968334b2d28e438800a94202e1c5f1f4ba36a55cc7069  docs/public/ux-validation-loop.visual-check.2048x1320.light.png
+f3ec9e14b9c085b55edc96155f7bd26b6fdeda2462f02af4e0279d8319b365e3  synthetic 1x1 PNG fixture inlined by react-kit and web tests
+6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d  one-byte image/png body fixture in platform/web/test/portal-image.test.cjs

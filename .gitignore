@@ -42,3 +42,9 @@ videos/**/.media/
 /.local/ux-guidelines/
 # Customer source archives are private inputs, never public PR artifacts.
 *.[zZ][iI][pP]
+
+# Tenant originals and tenant-only configuration (never public)
+/samples/
+/.local/
+# Bytecode of the root scanner script (the tree scan reads tracked files only; keep it untracked)
+/scripts/__pycache__/
