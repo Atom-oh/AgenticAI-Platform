@@ -132,7 +132,10 @@ def test_published_transcription_is_an_in_review_md_revision_with_server_owned_l
     assert revision["status"] == "in_review" and revision["name"] == "transcription.md"
     lineage = revision["transcriptionOf"]
     image = chain.chain["image"]
+    transcribed = chain.chain["transcription"]
     assert lineage == {"sourceRef": image["source"], "decisionId": image["id"], "decisionRevision": image["revision"],
+                       "transcription": {"decisionId": transcribed["id"], "decisionRevision": transcribed["revision"],
+                                         "artifactHash": transcribed["derivation"]["derivativeHash"]},
                        "visionSha256": image["artifact"]["vision"]["sha256"],
                        "normalizedImageHash": image["artifact"]["sha256"],
                        "region": {"left": 10, "top": 10, "width": 300, "height": 180}}
@@ -142,9 +145,9 @@ def test_published_transcription_is_an_in_review_md_revision_with_server_owned_l
 
 
 def test_publish_transcription_outside_intake_review_is_refused(chain):
-    from documents.library import publish_transcription
+    from documents.library import prepare_transcription
     with pytest.raises(PermissionError):
-        publish_transcription(chain.api, chain.scope(), chain.chain["transcription"])
+        prepare_transcription(chain.api, chain.scope(), chain.chain["transcription"])
 
 
 def test_public_document_api_cannot_supply_lineage(chain):
@@ -345,3 +348,187 @@ def test_policy_retired_immediately_before_the_publish_transaction_publishes_not
             "guide-rules", rule_graph(chain, ref), expected_generation=None, request_id="rules-2")
     assert error.value.status == 409
     assert storage.get(chain.chain["owner"], "ontology", CURRENT) is None
+
+
+# PR #28 review round 1 ----------------------------------------------------------
+
+def test_image_reviewer_revocation_invalidates_the_transcription_admission(chain):
+    """Finding 4: a transcription's verification recursively verifies its image lineage."""
+    transcribed = chain.chain["transcription"]
+    assert admission.verify(chain.api, chain.scope(), transcribed["id"])["id"] == transcribed["id"]
+    chain.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(chain.api, chain.scope(), transcribed["id"])
+    assert error.value.status == 409
+
+
+def test_transcription_reviewer_revocation_fences_the_library_revision(chain):
+    """Finding 4: the library revision binds both admissions and fences all upstream authority."""
+    revision = chain.chain["revision"]
+    lineage = revision["transcriptionOf"]
+    transcribed = chain.chain["transcription"]
+    assert lineage["transcription"] == {"decisionId": transcribed["id"], "decisionRevision": transcribed["revision"],
+                                        "artifactHash": transcribed["derivation"]["derivativeHash"]}
+    base = f"/documents/{revision['documentId']}/revisions/{revision['id']}"
+    assert chain.http("GET", base)[0] == 200
+    assert library_review(chain, "bob")[0] == 200
+    from workbench.service import Service
+    reader = Sources(Service(chain.api, chain.scope(), {"sub": "alice"}))
+    reader.resolve(doc_ref(chain), text=True)
+    assert (INTAKE_OWNER, "adm_grant", "grant-bob") in set(reader.observed)
+    assert (chain.chain["owner"], "adm_decision", transcribed["id"]) in set(reader.observed)
+    chain.admin({"op": "revoke_grant", "id": "grant-bob", "expectedRevision": 1})
+    status, payload = chain.http("GET", base)
+    assert status == 409 and payload["code"] == "source-upstream-revoked"
+    with pytest.raises(CollaborationError):
+        reader.recheck()
+
+
+def test_review_queue_previews_images_and_transcriptions_by_artifact_kind(env, monkeypatch):
+    """Finding 6: a pending image never breaks GET /intake/reviews; transcriptions show text/tables."""
+    env.policy()
+    env.grant("bob", "grant-bob")
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending_image = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    assert pending_image["status"] == "pending-review"
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert status == 200, listed
+    [item] = listed["reviews"]
+    assert item["artifactKind"] == "image" and item["pageCount"] == 1
+    assert item["derivativePreview"] == DIAGRAM_TEXT
+    assert item["image"] == {"decisionId": pending_image["id"], "format": "png",
+                             "width": pending_image["artifact"]["width"],
+                             "height": pending_image["artifact"]["height"],
+                             "sha256": pending_image["artifact"]["sha256"],
+                             "visionSha256": pending_image["artifact"]["vision"]["sha256"],
+                             "size": pending_image["artifact"]["vision"]["size"]}
+    assert "bytes" not in json.dumps(item)
+    image = review.decide(env.api, env.scope("dana"), pending_image["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "table", "text": f"{env.term} 표 전사",
+                                        "tables": [["조건", "화면"], ["자격 미충족", "사유 화면"]]},
+                                       ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert transcribed["status"] == "pending-review"
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert status == 200, listed
+    [item] = [r for r in listed["reviews"] if r["id"] == transcribed["id"]]
+    assert item["artifactKind"] == "diagram-transcription" and item["pageCount"] == 1
+    assert item["derivativePreview"] == "고객사 A 표 전사"
+    assert item["tables"] == [["조건", "화면"], ["자격 미충족", "사유 화면"]]
+    assert env.term not in json.dumps(listed, ensure_ascii=False)
+
+
+# PR #28 review round 2 ----------------------------------------------------------
+
+def revoke_during_read(env, monkeypatch, suffix, action, occurrence=1):
+    """Run `action` right after the `occurrence`-th blob read whose key ends with `suffix`."""
+    storage, fired, seen = env.api.storage, [], []
+    original = storage.get_blob
+
+    def get_blob(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key.endswith(suffix):
+            seen.append(key)
+            if len(seen) == occurrence:
+                fired.append(key)
+                action()
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    return fired
+
+
+@pytest.mark.parametrize("path, suffix", [("chunk", "vision.png"), ("vision", "ocr.json"), ("descriptor", "ocr.json")])
+def test_grant_revoked_during_the_last_read_blocks_image_delivery(chain, monkeypatch, path, suffix):
+    """Review 2, finding 1: every non-page delivery path rechecks authority after its last read."""
+    image = chain.chain["image"]
+    # The first read of `suffix` is inside `verify`; the second is the delivery read.
+    fired = revoke_during_read(chain, monkeypatch, suffix, lambda: chain.admin(
+        {"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1}), occurrence=2)
+    calls = {"chunk": lambda: imaging.read_vision_chunk(chain.api, chain.scope(), image["id"], 0),
+             "vision": lambda: imaging.vision_input(chain.api, chain.scope(), image["id"]),
+             "descriptor": lambda: imaging.descriptor(chain.api, chain.scope(), image["id"])}
+    with pytest.raises(AdmissionError) as error:
+        calls[path]()
+    assert fired and error.value.status == 409
+
+
+def test_grant_revoked_during_the_review_queue_read_hides_the_item(env, monkeypatch):
+    """Review 2, finding 1: the review queue rechecks the grant after its last read."""
+    env.policy()
+    env.grant("bob", "grant-bob")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    assert pending["status"] == "pending-review"
+    fired = revoke_during_read(env, monkeypatch, "ocr.json", lambda: env.admin(
+        {"op": "revoke_grant", "id": "grant-bob", "expectedRevision": 1}))
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert fired and (status == 403 or listed["reviews"] == [])
+
+
+@pytest.mark.parametrize("path", ["download", "approval"])
+def test_admission_expiring_during_the_original_read_blocks_download_and_approval(chain, monkeypatch, path):
+    """Review 2, finding 2: library fences revalidate upstream status and expiry at the final read/commit."""
+    revision = chain.chain["revision"]
+    storage = chain.api.storage
+    clock = storage.clock
+
+    def expire():
+        storage.clock = lambda: clock() + 31 * DAY
+
+    fired = revoke_during_read(chain, monkeypatch, revision["originalKey"], expire)
+    if path == "download":
+        base = f"/documents/{revision['documentId']}/revisions/{revision['id']}"
+        status, payload, _ = call(chain.api, "GET", base + "/blob", project=chain.pid, query={"offset": "0"})
+    else:
+        status, payload = library_review(chain, "bob")
+    assert fired and status == 409, payload
+    assert payload["code"] == "source-upstream-revoked"
+    storage.clock = clock
+    saved = storage.get(chain.chain["owner"], "docrevision", revision["id"])
+    assert saved["status"] == "in_review"
+
+
+def test_transcription_approval_and_library_publication_are_atomic(env, monkeypatch):
+    """Review 2, finding 4: a failed publication leaves the decision pending and retryable."""
+    from workspace.storage import Conflict
+    env.policy()
+    env.grant("bob", "grant-bob")
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "table", "text": "표 전사", "tables": [["a", "b"]]},
+                                       ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    original = storage.put_many
+
+    def failing(writes, checks=None, **kwargs):
+        if any(w["kind"] == "document" for w in writes):
+            raise Conflict("injected publication conflict")
+        return original(writes, checks, **kwargs)
+
+    monkeypatch.setattr(storage, "put_many", failing)
+    status, payload = env.http("POST", f"/intake/reviews/{transcribed['id']}",
+                               {"approve": True, "reason": "matches"}, actor="bob")
+    assert status == 409, payload
+    assert storage.get(owner, "adm_decision", transcribed["id"])["status"] == "pending-review"
+    assert storage.list(owner, "document") == []
+    assert [r["id"] for r in env.http("GET", "/intake/reviews", actor="bob")[1]["reviews"]] == [transcribed["id"]]
+    monkeypatch.setattr(storage, "put_many", original)
+    status, payload = env.http("POST", f"/intake/reviews/{transcribed['id']}",
+                               {"approve": True, "reason": "matches"}, actor="bob")
+    assert status == 200 and payload["decision"]["status"] == "admitted", payload
+    [document] = storage.list(owner, "document")
+    revision = storage.get(owner, "docrevision", document["id"] + "--r000001")
+    assert revision["status"] == "in_review"
+    assert revision["transcriptionOf"]["transcription"]["decisionId"] == transcribed["id"]
+    assert revision["transcriptionOf"]["transcription"]["decisionRevision"] == payload["decision"]["revision"]

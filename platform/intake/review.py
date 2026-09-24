@@ -18,6 +18,7 @@ from workspace.storage import Conflict
 
 MAX_LISTED = 50
 PREVIEW_CHARS = 1000
+MAX_ROWS_PREVIEW, MAX_CELLS_PREVIEW, MAX_CELL_PREVIEW = 20, 20, 200
 
 
 def _grant_for(storage, actor, policy, project_id):
@@ -85,24 +86,37 @@ def decide(host, scope, decision_id, *, approve, reason, claims=None):
               {"owner": owner, "kind": "project", "id": project_id, "version": scope["project"]["version"]}]
     unique = {(c["owner"], c["kind"], c["id"]): c for c in fences}
     unique.pop((owner, "adm_decision", decision["id"]), None)
+    write = {"owner": owner, "kind": "adm_decision", "item": sealed, "expected_version": decision["version"]}
+    # Expiry is invisible to version fences: recheck the pending decision, policy,
+    # grant and sources immediately before the commit.
+    admission.Authority(host, reader, [admission._check(owner, "adm_decision", decision),
+                                       admission._check(INTAKE_OWNER, "adm_policy", policy),
+                                       admission._check(INTAKE_OWNER, "adm_grant", grant)],
+                        pending={decision["id"]}).recheck()
+    if approve and sealed["artifact"]["kind"] == "diagram-transcription":
+        return _approve_transcription(host, scope, write, list(unique.values()))
     try:
-        saved = storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed,
-                                   "expected_version": decision["version"]}],
-                                 checks=list(unique.values()), retry_conflicts=False)[0]
+        return storage.put_many([write], checks=list(unique.values()), retry_conflicts=False)[0]
     except Conflict:
         raise AdmissionError("conflict") from None
-    if approve and saved["artifact"]["kind"] == "diagram-transcription":
-        publish(host, scope, saved)
-    return saved
 
 
-def publish(host, scope, decision):
-    """Publish a reviewer-validated transcription as an in-review library revision.
+def _approve_transcription(host, scope, write, checks):
+    """Admit a transcription and publish its in-review library revision in ONE transaction.
 
-    Idempotent; library approval by a planner/owner remains a separate step.
+    If the publication cannot commit, nothing is written: the decision stays
+    `pending-review` and the reviewer can retry. Library approval by a
+    planner/owner remains a separate step.
     """
-    from documents.library import publish_transcription
-    return publish_transcription(host, scope, decision)
+    from documents.errors import DocumentError
+    from documents.library import prepare_transcription
+    try:
+        library, writes = prepare_transcription(host, scope, write["item"])
+        return library.commit([write, *writes], extra_checks=checks)[0]
+    except DocumentError as error:
+        raise AdmissionError(error.code, error.status) from None
+    except Conflict:
+        raise AdmissionError("conflict") from None
 
 
 def _title(host, scope, decision):
@@ -113,6 +127,35 @@ def _title(host, scope, decision):
         return Library(host, scope).document(decision["source"]["sourceId"]).get("title")
     except Exception:  # noqa: BLE001 - a title is optional display metadata
         return None
+
+
+def _bounded_tables(tables):
+    return [[cell[:MAX_CELL_PREVIEW] for cell in row[:MAX_CELLS_PREVIEW]] for row in tables[:MAX_ROWS_PREVIEW]]
+
+
+def _preview(host, scope, decision, data):
+    """A derivative-only preview serialized by artifact kind (never originals or bytes)."""
+    kind = decision["artifact"]["kind"]
+    if kind == "image":
+        # The normalized PNG is not decoded: the reviewer gets an authorized reference
+        # to the admitted vision derivative and its verified OCR text.
+        from intake import imaging
+        artifact, vision = decision["artifact"], decision["artifact"]["vision"]
+        admission._read_verified(host.storage, scope["owner"], vision["key"], vision["sha256"], "artifact-changed")
+        ocr = imaging._ocr(host, scope, decision)
+        return {"count": 1, "derivativePreview": ocr["ocrText"][:PREVIEW_CHARS],
+                "image": {"decisionId": decision["id"], "format": vision["format"], "width": artifact["width"],
+                          "height": artifact["height"], "sha256": artifact["sha256"],
+                          "visionSha256": vision["sha256"], "size": vision["size"]}}
+    value = json.loads(data)
+    if kind == "diagram-transcription":
+        return {"count": 1, "derivativePreview": value["text"][:PREVIEW_CHARS],
+                "tables": _bounded_tables(value.get("tables") or [])}
+    if kind == "code-collection":  # derivative paths only
+        files = value["files"]
+        return {"count": len(files), "derivativePreview": "\n".join(f["path"] for f in files[:50])[:PREVIEW_CHARS]}
+    # document-pages and prompt-text: ordered derivative pages
+    return {"count": len(value), "derivativePreview": value[0]["text"][:PREVIEW_CHARS] if value else ""}
 
 
 def list_pending(host, scope, *, claims=None):
@@ -132,9 +175,10 @@ def list_pending(host, scope, *, claims=None):
             if (decision["projectId"] != project_id or decision["status"] != "pending-review"
                     or decision["expiresAt"] <= storage.clock() or decision["policy"]["id"] not in policies):
                 continue
+            reader = Sources(inspect.context(host, scope, claims))
             try:
-                admission._policy_current(storage, decision, project_id)
-                _source_access(host, scope, decision, Sources(inspect.context(host, scope, claims)))
+                policy = admission._policy_current(storage, decision, project_id)
+                _source_access(host, scope, decision, reader)
                 data = admission._read_verified(storage, owner, decision["artifact"]["key"],
                                                 decision["derivation"]["derivativeHash"], "artifact-changed")
                 receipt = json.loads(admission._read_verified(
@@ -142,19 +186,27 @@ def list_pending(host, scope, *, claims=None):
                     "inspection-changed", maximum=1024 * 1024))
             except (AdmissionError, CollaborationError):
                 continue
-            pages = json.loads(data)
-            if isinstance(pages, dict):  # a code-collection index: derivative paths only
-                preview = "\n".join(f["path"] for f in pages.get("files", [])[:50])[:PREVIEW_CHARS]
-                pages = pages.get("files", [])
-            else:
-                preview = pages[0]["text"][:PREVIEW_CHARS] if pages and "text" in pages[0] else ""
+            try:
+                preview = _preview(host, scope, decision, data)
+                title = _title(host, scope, decision)
+                # After the last read: the pending decision, its policy, the actor's
+                # grants for that policy and the source fences must all still hold.
+                authority = admission.Authority(host, reader, [
+                    admission._check(owner, "adm_decision", decision),
+                    admission._check(INTAKE_OWNER, "adm_policy", policy),
+                    *(admission._check(INTAKE_OWNER, "adm_grant", g) for g in grants
+                      if g["policyId"] == decision["policy"]["id"])], pending={decision["id"]})
+                authority.recheck()
+            except (AdmissionError, CollaborationError, ValueError, KeyError, TypeError, IndexError):
+                continue  # one unreadable or revoked item never breaks the whole queue
             items.append({"id": decision["id"], "revision": decision["revision"],
                           "source": {k: decision["source"][k] for k in ("sourceKind", "sourceId", "revision")},
-                          "title": _title(host, scope, decision), "dataClass": decision["dataClass"],
+                          "title": title, "dataClass": decision["dataClass"],
                           "artifactKind": decision["artifact"]["kind"],
-                          "pageCount": decision["artifact"].get("pages", len(pages)),
+                          "pageCount": decision["artifact"].get("pages", preview.pop("count")),
                           "inspection": {k: receipt[k] for k in ("pages", "chars", "pii", "identifiers", "blocking")},
-                          "derivativePreview": preview, "expiresAt": decision["expiresAt"]})
+                          **{k: v for k, v in preview.items() if k != "count"},
+                          "expiresAt": decision["expiresAt"]})
             if len(items) >= MAX_LISTED:
                 break
         cursor = page.get("cursor")

@@ -398,3 +398,123 @@ def test_cursor_is_bound_to_actor_and_expires(env):
     with pytest.raises(AdmissionError) as error:
         admission.pages_for(env.api, env.scope(), decision["id"], cursor=first["cursor"])
     assert error.value.code == "admission-cursor-stale"
+
+
+# PR #28 review round 1 ----------------------------------------------------------
+
+def test_phone_number_split_across_logical_pages_is_blocked(env):
+    """Finding 2: inspection and the residual scan cross logical-page boundaries."""
+    env.policy()
+    env.grant("bob")
+    ref = guide(env, text="가" * 3997 + "010-5550-7391 끝.\n", name="split-phone.txt")
+    decision = admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive")
+    assert decision["status"] == "blocked" and "redaction-required" in decision["blocking"]
+    receipt = json.loads(env.api.storage.get_blob(decision["inspection"]["receiptKey"]))
+    assert {"type": "PHONE", "count": 1} in receipt["pii"]
+    assert "7391" not in json.dumps(receipt)
+
+
+def test_deny_listed_term_split_across_logical_pages_is_normalized(env):
+    """Finding 2: a deny-listed identifier spanning two pages is replaced; page mapping kept."""
+    policy = env.policy()
+    ref = guide(env, text="가" * (4000 - len(env.term) // 2) + env.term + " 안내.\n", name="split-term.txt")
+    env.provenance(ref, policy)
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision["status"] == "admitted"
+    batch = admission.pages_for(env.api, env.scope(), decision["id"])
+    serialized = json.dumps(batch, ensure_ascii=False)
+    joined = "".join(entry["text"] for entry in batch["pages"])
+    assert env.term not in joined and env.term.lower() not in joined.lower()
+    assert "고객사 A" in joined
+    assert [entry["page"] for entry in batch["pages"]] == [1, 2]
+    assert batch["pages"][0]["text"].startswith("가") and batch["pages"][1]["text"].endswith("안내.\n")
+    assert env.term not in serialized
+
+
+def _tamper(env, kind, identifier, **fields):
+    storage = env.api.storage
+    row = storage.get(INTAKE_OWNER, kind, identifier)
+    stored = {key: value for key, value in row.items() if key not in ("createdAt", "updatedAt", "version")}
+    storage.put(INTAKE_OWNER, kind, {**stored, **fields}, expected_version=row["version"])
+
+
+@pytest.mark.parametrize("fields", [
+    {"operations": []},
+    {"schemaVersion": 2},
+    {"hash": "0" * 64},
+    {"operations": [], "schemaVersion": 2, "hash": "0" * 64},
+])
+def test_stored_grant_outside_its_closed_schema_does_not_authorize(env, fields):
+    """Finding 5: the current grant passes records.validate on every verification."""
+    decision = internal_admitted(env)
+    _tamper(env, "adm_grant", "grant-1", **fields)
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(env.api, env.scope(), decision["id"])
+    assert error.value.code == "grant-revoked"
+    with pytest.raises(AdmissionError):
+        admission.pages_for(env.api, env.scope(), decision["id"])
+
+
+@pytest.mark.parametrize("fields", [
+    {"schemaVersion": 2},
+    {"hash": "0" * 64},
+    {"kind": "fixture", "publicUrl": None},
+])
+def test_stored_provenance_outside_its_closed_schema_does_not_authorize(env, fields):
+    """Finding 5: provenance is validated and must match the decision's data class."""
+    policy = env.policy()
+    ref = guide(env)
+    env.provenance(ref, policy)
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision["status"] == "admitted"
+    if fields.get("publicUrl", 1) is None:
+        # A well-formed, re-sealed fixture registration cannot back a public decision.
+        row = env.api.storage.get(INTAKE_OWNER, "adm_provenance", "prov-1")
+        content = {k: v for k, v in row.items() if k not in records.STORAGE_FIELDS and k != "publicUrl"}
+        sealed = records.seal("adm_provenance", {**content, "kind": "fixture"})
+        env.api.storage.put(INTAKE_OWNER, "adm_provenance", sealed, expected_version=row["version"])
+    else:
+        _tamper(env, "adm_provenance", "prov-1", **fields)
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(env.api, env.scope(), decision["id"])
+    assert error.value.code == "grant-revoked"
+
+
+def test_fixture_provenance_does_not_admit_a_public_source(env):
+    """Finding 5: public data needs a public reference; synthetic data needs a fixture."""
+    policy = env.policy()
+    ref = guide(env)
+    env.provenance(ref, policy, kind="fixture")
+    decision = admission.request(env.api, env.scope(), ref, data_class="public")
+    assert decision["status"] == "blocked" and decision["blocking"] == ["provenance-required"]
+
+
+@pytest.mark.parametrize("revocation", ["grant", "policy", "source", "expiry"])
+def test_revocation_during_the_derivative_read_stops_delivery(env, monkeypatch, revocation):
+    """Finding 3: pages_for rechecks all authority immediately before delivery."""
+    decision = internal_admitted(env)
+    storage, key = env.api.storage, decision["artifact"]["key"]
+    original = storage.get_blob
+
+    def get_blob(blob_key, *args, **kwargs):
+        data = original(blob_key, *args, **kwargs)
+        if blob_key == key:
+            if revocation == "grant":
+                env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+            elif revocation == "policy":
+                policy = storage.get(INTAKE_OWNER, "adm_policy", "policy-1")
+                env.admin({"op": "retire_policy", "id": "policy-1", "expectedRevision": policy["revision"]})
+            elif revocation == "source":
+                document = storage.get(f"project:{env.pid}", "document", decision["source"]["sourceId"])
+                stored = {k: v for k, v in document.items() if k not in ("createdAt", "updatedAt", "version")}
+                storage.put(f"project:{env.pid}", "document", {**stored, "aclVersion": document["aclVersion"] + 1},
+                            expected_version=document["version"])
+            else:
+                clock = storage.clock
+                storage.clock = lambda: clock() + 31 * DAY
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    with pytest.raises((AdmissionError,)) as error:
+        admission.pages_for(env.api, env.scope(), decision["id"])
+    assert error.value.status == 409

@@ -127,45 +127,76 @@ def _hosts(denylist):
     return [entry for entry in denylist or () if entry.get("host")]
 
 
-def _replace_links(text, denylist):
-    count = 0
+def _apply(texts, spans):
+    """Replace non-overlapping joined-text `spans` while keeping the page split.
+
+    A replacement that crosses a page boundary is written on the page where it
+    starts; its remainder is removed from the following page(s). Page numbers
+    and order (the citation mapping) never change.
+    """
+    if not spans:
+        return list(texts)
+    whole, result, offset = "".join(texts), [], 0
+    for text in texts:
+        begin, finish = offset, offset + len(text)
+        parts, cursor = [], begin
+        for start, end, replacement in spans:
+            if end <= begin or start >= finish:
+                continue
+            if start >= begin:
+                parts.append(whole[cursor:start])
+                parts.append(replacement)
+            cursor = min(end, finish)
+        parts.append(whole[cursor:finish])
+        result.append("".join(parts))
+        offset = finish
+    return result
+
+
+def _link_spans(text, denylist):
+    return [(match.start(), match.end(), LINK_ALIAS) for match in INTERNAL_URL.finditer(text)]
+
+
+def _host_spans(text, denylist):
     hosts = _hosts(denylist)
+    if not hosts:
+        return []
+    return [(match.start(), match.end(), LINK_ALIAS) for match in _URL.finditer(text)
+            if find_terms(match.group(), hosts)]
 
-    def link(match):
-        nonlocal count
-        count += 1
-        return LINK_ALIAS
 
-    text = INTERNAL_URL.sub(link, text)
-    if hosts:
-        def deny_listed(match):
-            nonlocal count
-            if find_terms(match.group(), hosts):
-                count += 1
-                return LINK_ALIAS
-            return match.group()
-        text = _URL.sub(deny_listed, text)
+def _term_spans(text, denylist):
+    return [(start, end, entry["alias"]) for start, end, entry in find_terms(text, denylist)]
+
+
+def _replace_links(text, denylist):
+    """One string: internal links, then deny-listed hosts, become the link alias."""
+    count = 0
+    for finder in (_link_spans, _host_spans):
+        spans = finder(text, denylist)
+        count += len(spans)
+        text = _apply([text], spans)[0]
     return text, count
 
 
 def _replace_terms(text, denylist):
-    spans = find_terms(text, denylist)
-    if not spans:
-        return text, 0
-    parts, cursor = [], 0
-    for start, end, entry in spans:
-        parts.append(text[cursor:start])
-        parts.append(entry["alias"])
-        cursor = end
-    parts.append(text[cursor:])
-    return "".join(parts), len(spans)
+    spans = _term_spans(text, denylist)
+    return _apply([text], spans)[0], len(spans)
+
+
+def _normalize_pages(texts, denylist):
+    """Links, deny-listed hosts, then terms, each matched over the joined text."""
+    texts, total = [unicodedata.normalize("NFC", text) for text in texts], 0
+    for finder in (_link_spans, _host_spans, _term_spans):
+        spans = finder("".join(texts), denylist)
+        total += len(spans)
+        texts = _apply(texts, spans)
+    return texts, total
 
 
 def _normalize_one(text, denylist):
-    text = unicodedata.normalize("NFC", text)
-    text, links = _replace_links(text, denylist)
-    text, terms = _replace_terms(text, denylist)
-    return text, links + terms
+    texts, count = _normalize_pages([text], denylist)
+    return texts[0], count
 
 
 def derivative_hash(pages):
@@ -173,12 +204,10 @@ def derivative_hash(pages):
 
 
 def normalize(pages, denylist) -> dict:
+    """Normalize one source's ordered pages; identifiers split by a page boundary are found."""
     denylist = canonical_entries(denylist)
-    result, total = [], 0
-    for page in pages:
-        text, count = _normalize_one(page["text"], denylist)
-        result.append({"page": page["page"], "text": text})
-        total += count
+    texts, total = _normalize_pages([page["text"] for page in pages], denylist)
+    result = [{"page": page["page"], "text": text} for page, text in zip(pages, texts)]
     return {"pages": result, "replacements": {"aliasCount": total}, "derivativeHash": derivative_hash(result)}
 
 
@@ -189,11 +218,17 @@ def _scan(text, denylist, pii_counts):
     return len(find_terms(text, denylist)) + len(INTERNAL_URL.findall(text))
 
 
-def residual(pages, denylist) -> dict:
+def residual(pages, denylist, *, contiguous=True) -> dict:
+    """Residual identifiers/PII per page and, for one source's pages, across boundaries."""
     denylist = canonical_entries(denylist)
     identifiers, pii_counts = 0, {}
     for page in pages:
         identifiers += _scan(page["text"], denylist, pii_counts)
+    if contiguous and len(pages) > 1:
+        spanning = {}
+        identifiers = max(identifiers, _scan("".join(page["text"] for page in pages), denylist, spanning))
+        for kind, count in spanning.items():
+            pii_counts[kind] = max(pii_counts.get(kind, 0), count)
     return {"identifiers": identifiers,
             "pii": [{"type": kind, "count": pii_counts[kind]} for kind in sorted(pii_counts)]}
 

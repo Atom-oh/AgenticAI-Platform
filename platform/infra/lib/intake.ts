@@ -1,10 +1,45 @@
 import * as crypto from 'crypto';
 import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
+import { Construct, Node } from 'constructs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+
+/** DynamoDB partition key of the `intake:deployment` owner (workspace `Storage._key`). */
+export const INTAKE_PARTITION = 'owner#' + crypto.createHash('sha256').update('intake:deployment').digest('hex');
+
+/** Item-level write actions that must never reach the administrative partition from a workload. */
+export const INTAKE_WRITE_ACTIONS = [
+  'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem', 'dynamodb:BatchWriteItem',
+  'dynamodb:PartiQLInsert', 'dynamodb:PartiQLUpdate', 'dynamodb:PartiQLDelete',
+];
+
+/** Intake is configured once any intake context is supplied (admin function, deny-list or deployment). */
+export function intakeConfigured(node: Node): boolean {
+  const admin = node.tryGetContext('intakeAdmin');
+  return admin === true || admin === 'true' || node.tryGetContext('intakeDenylistParam') !== undefined
+    || node.tryGetContext('intakeDeployment') !== undefined;
+}
+
+/** The single deployment scope shared by the Workspace API, the Worker and IntakeAdminFn. */
+export function intakeDeploymentScope(node: Node, stack: cdk.Stack): string {
+  return String(node.tryGetContext('intakeDeployment') ?? stack.stackName);
+}
+
+/**
+ * source-admission/1: policies, provenance and reviewer grants share the workspace
+ * table, so a workload role that can write the table gets an explicit Deny on the
+ * `intake:deployment` partition. Reads and ConditionCheckItem fences stay allowed.
+ */
+export function denyIntakeAdministrationWrites(role: iam.IRole, table: dynamodb.ITable): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    effect: iam.Effect.DENY,
+    actions: INTAKE_WRITE_ACTIONS,
+    resources: [table.tableArn],
+    conditions: { 'ForAnyValue:StringEquals': { 'dynamodb:LeadingKeys': [INTAKE_PARTITION] } },
+  }));
+}
 
 export interface IntakeAdminProps {
   apiCode: lambda.Code;
@@ -24,7 +59,7 @@ export class IntakeAdmin extends Construct {
   constructor(scope: Construct, id: string, props: IntakeAdminProps) {
     super(scope, id);
     const stack = cdk.Stack.of(this);
-    const partition = 'owner#' + crypto.createHash('sha256').update('intake:deployment').digest('hex');
+    const partition = INTAKE_PARTITION;
     const logGroup = new logs.LogGroup(this, 'Logs', {
       retention: logs.RetentionDays.ONE_MONTH, removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
@@ -54,7 +89,7 @@ export class IntakeAdmin extends Construct {
       reservedConcurrentExecutions: 1, logGroup,
       environment: {
         WORKSPACE_TABLE: props.table.tableName,
-        INTAKE_DEPLOYMENT: String(this.node.tryGetContext('intakeDeployment') ?? stack.stackName),
+        INTAKE_DEPLOYMENT: intakeDeploymentScope(this.node, stack),
       },
       description: 'IAM-only source-admission administration; no API route or Function URL',
     });

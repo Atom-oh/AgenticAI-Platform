@@ -167,29 +167,44 @@ characters without splitting a paragraph; citations use those page numbers.
 
 ### Transcription revisions (`source-admission/1`, I6b)
 
-`documents.library.publish_transcription(host, scope, decision)` is a trusted
+`documents.library.prepare_transcription(host, scope, decision)` is a trusted
 server adapter callable only from `intake.review` (any other caller gets
-`PermissionError`). It turns an admitted, reviewer-validated
-`diagram-transcription` admission decision into an MD document of kind
+`PermissionError`). It returns the library writes that turn a reviewer-validated
+`diagram-transcription` admission decision (sealed as `admitted`, not yet
+stored) into an MD document of kind
 `guide-transcription` (`provenance: "intake-transcription"`, `readRoles` copied
 from the source audience; a project-wide image asset gives all four roles) with
 one revision in status `in_review`. That revision carries the **server-owned**
-field `transcriptionOf = {sourceRef, decisionId, decisionRevision, visionSha256,
-normalizedImageHash, region}`, where `sourceRef` is the original image asset
-reference and `decisionId` its admitted image decision. The public document API
-never accepts caller-supplied `provenance` or `transcriptionOf`.
+field `transcriptionOf = {sourceRef, decisionId, decisionRevision, transcription,
+visionSha256, normalizedImageHash, region}`, where `sourceRef` is the original
+image asset reference, `decisionId` its admitted image decision and
+`transcription = {decisionId, decisionRevision, artifactHash}` the
+reviewer-validated transcription decision. Both admissions are bound. The public
+document API never accepts caller-supplied `provenance` or `transcriptionOf`.
+`intake.review` commits the decision's approval and these writes in **one**
+`Library.commit` transaction (with the review's policy/grant/source fences as
+`extra_checks`), so a failed publication writes nothing: the decision stays
+`pending-review` and the reviewer can retry.
 
 Library approval stays separate: a planner/owner approves the revision through
 the existing review route; the intake grant confers no library review.
 
 `Library.revision()` (and therefore `projection()`, paragraph reads, every
 download chunk and review approval) rechecks `transcriptionOf` lineage for any
-revision that carries it through `intake.admission.verify`. A revoked or changed
-upstream returns `409 source-upstream-revoked`. The records that check read (the
-image asset, the image `adm_decision` and its `adm_policy`/`adm_provenance`/
-`adm_grant`) are kept in `Library._upstream` as `{owner, kind, id, version}` in
+revision that carries it through `intake.admission.verify` of the transcription
+decision, which recursively verifies its image decision, and of the image
+decision itself. A revoked or changed upstream (either reviewer grant, either
+decision, the policy or the image source) returns `409 source-upstream-revoked`;
+a revision without the `transcription` binding fails closed. The records that
+check read (the image asset, both `adm_decision` records and their
+`adm_policy`/`adm_provenance`/`adm_grant` records) are kept in `Library._upstream` as `{owner, kind, id, version}` in
 their actual owner partitions and join `checks()`, so `commit()` and
-`assert_current()` fence upstream authority atomically with the library write.
+`assert_current()` fence upstream authority atomically with the library write. Version fences
+cannot see expiry, so `commit()` and `assert_current()` also pass a
+`before_attempt` guard that, before every transaction attempt (including
+retries), revalidates each upstream admission record's schema, version, status
+and expiry at the present clock; an admission that expired during the blob read
+returns `409 source-upstream-revoked` and nothing is written.
 `Sources.resolve` propagates the same observations with
 `Sources._remember_owned(owner, kind, record)`.
 

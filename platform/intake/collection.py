@@ -34,6 +34,8 @@ MAX_FILE_BYTES = 102400
 MAX_TOTAL_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 3_900_000
 MAX_ZIP_BYTES = 8 * 1024 * 1024
+# Aggregate decompressed size of all selected members, assets included.
+MAX_EXPANDED_BYTES = 8 * 1024 * 1024
 MAX_PATH_CHARS = 500
 # Mirrors workspace/ontology_analysis.py KINDS (the ingestion adapter's formats).
 KINDS = {".ts": "code", ".tsx": "code", ".js": "code", ".jsx": "code",
@@ -90,18 +92,41 @@ def resolver_profile(host, profile_id):
     return profile
 
 
+def _read_member(archive, info, limit):
+    """Decompress one member, never beyond its declared size (or the remaining budget)."""
+    bound = min(info.file_size, limit)
+    try:
+        with archive.open(info) as member:
+            raw = member.read(bound + 1)
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError, RuntimeError, ValueError, OSError,
+            EOFError):
+        raise AdmissionError("collection-format", 422) from None
+    if len(raw) > bound:
+        raise AdmissionError("collection-too-large" if len(raw) > limit else "collection-format", 422)
+    if len(raw) != info.file_size:
+        raise AdmissionError("collection-format", 422)
+    return raw
+
+
 def _read_zip(data, root):
+    """Select, preflight and then read the members of a code-collection ZIP.
+
+    Every limit (member count, per-file size, text total and the aggregate
+    expanded size including assets) is checked from the central directory before
+    any member is decompressed, and again while reading, where each read is
+    bounded by the member's declared size and the remaining aggregate budget.
+    """
     if root and (not _path_ok(root.rstrip("/")) or not root.endswith("/")):
         raise AdmissionError("collection-root-invalid", 400)
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile:
         raise AdmissionError("collection-format", 422) from None
-    entries, total = [], 0
     with archive:
         infos = archive.infolist()
         if len(infos) > 5000:
             raise AdmissionError("collection-too-large", 422)
+        selected, declared_text, declared_all = [], 0, 0
         for info in infos:
             if info.is_dir():
                 continue
@@ -114,11 +139,21 @@ def _read_zip(data, root):
             kind = KINDS.get(PurePosixPath(path).suffix.lower())
             if kind is None:
                 continue  # not analyzable, never transferred
-            if info.file_size > MAX_FILE_BYTES and kind != "asset" or info.file_size > MAX_ZIP_BYTES:
+            if info.file_size > MAX_FILE_BYTES and kind != "asset" or info.file_size > MAX_EXPANDED_BYTES:
                 raise AdmissionError("collection-too-large", 422)
-            raw = archive.read(info)
-            if len(raw) != info.file_size:
-                raise AdmissionError("collection-format", 422)
+            selected.append((info, path, kind))
+            declared_all += info.file_size
+            if kind != "asset":
+                declared_text += info.file_size
+            if (len(selected) > MAX_FILES or declared_text > MAX_TOTAL_BYTES
+                    or declared_all > MAX_EXPANDED_BYTES):
+                raise AdmissionError("collection-too-large", 422)
+        if not selected:
+            raise AdmissionError("collection-empty", 422)
+        entries, total, expanded = [], 0, 0
+        for info, path, kind in selected:
+            raw = _read_member(archive, info, MAX_EXPANDED_BYTES - expanded)
+            expanded += len(raw)
             entry = {"path": path, "kind": kind, "bytes": raw}
             if kind != "asset":
                 try:
@@ -126,11 +161,9 @@ def _read_zip(data, root):
                 except UnicodeError:
                     raise AdmissionError("collection-format", 422) from None
                 total += len(raw)
+                if total > MAX_TOTAL_BYTES:
+                    raise AdmissionError("collection-too-large", 422)
             entries.append(entry)
-    if not 1 <= len(entries) <= MAX_FILES:
-        raise AdmissionError("collection-too-large" if entries else "collection-empty", 422)
-    if total > MAX_TOTAL_BYTES:
-        raise AdmissionError("collection-too-large", 422)
     return sorted(entries, key=lambda e: e["path"].encode())
 
 
@@ -233,7 +266,8 @@ def request_collection(host, scope, source_ref, *, root, resolver_profile_id, da
     resolver = derive_resolver(profile, terms, denylist)
     residual_text = [f["path"] for f in files] + [f["text"] for f in files if "text" in f] + [
         json.dumps(resolver, ensure_ascii=False)]
-    report = derivative.residual([{"page": i + 1, "text": t} for i, t in enumerate(residual_text)], denylist)
+    report = derivative.residual([{"page": i + 1, "text": t} for i, t in enumerate(residual_text)], denylist,
+                                 contiguous=False)  # separate files, not one continuous text
     identifiers, pii_counts = report["identifiers"], report["pii"]
     payload = analyzer_payload(files, resolver)
     size = request_size(payload)
@@ -247,7 +281,7 @@ def request_collection(host, scope, source_ref, *, root, resolver_profile_id, da
     private_mapping = {"paths": mapping, "packages": {name: _rename(name, terms, denylist)
                                                       for name in profile["packages"]}}
     original_pages = [{"page": i + 1, "text": e["path"] + "\n" + e.get("text", "")} for i, e in enumerate(entries)]
-    receipt = inspect.inspect(original_pages, denylist=denylist)
+    receipt = inspect.inspect(original_pages, denylist=denylist, contiguous=False)
     blocking = (["residual-identifiers"] if identifiers else []) + (["redaction-required"] if pii_counts else [])
     index_bytes = schema.canonical(index)
     resolver_binding = {"profile": {"id": profile["id"], "revision": profile["revision"], "hash": profile["hash"]},
@@ -275,7 +309,7 @@ def _private(host, scope, decision, suffix):
         raise AdmissionError("artifact-changed") from None
 
 
-def check_resolver(host, scope, decision):
+def check_resolver(host, scope, decision, authority=None):
     """`source.analyze` recheck: the profile is current and unchanged, and re-applying
     the private mapping to it yields exactly the derivative resolver."""
     binding = decision["artifact"].get("resolver")
@@ -287,6 +321,8 @@ def check_resolver(host, scope, decision):
         raise AdmissionError("resolver-changed") from None
     if profile["revision"] != binding["profile"]["revision"] or profile["hash"] != binding["profile"]["hash"]:
         raise AdmissionError("resolver-changed")
+    if authority is not None:
+        authority.observe(INTAKE_OWNER, "adm_resolver", profile)
     index = _private(host, scope, decision, "collection-index.json")
     mapping = _private(host, scope, decision, "collection-mapping.json")["packages"]
     derived = index["resolver"]
@@ -309,8 +345,8 @@ def check_resolver(host, scope, decision):
 
 def analyzer_request(host, scope, decision_id, *, claims=None):
     """Build the analyzer request from the verified private objects (derivative only)."""
-    decision, _ = admission.verified(host, scope, decision_id, claims=claims)
-    index = check_resolver(host, scope, decision)
+    decision, _, authority = admission.authorized(host, scope, decision_id, claims=claims)
+    index = check_resolver(host, scope, decision, authority)
     contents = {f["path"]: f["text"] for f in _private(host, scope, decision, "collection-files.json")["files"]}
     files = []
     for entry in index["files"]:
@@ -324,4 +360,6 @@ def analyzer_request(host, scope, decision_id, *, claims=None):
     payload = analyzer_payload(files, index["resolver"])
     if request_size(payload) > MAX_REQUEST_BYTES:
         raise AdmissionError("collection-too-large", 422)
+    # Sources, decision, policy, grant/provenance and resolver profile, after the last read.
+    authority.recheck()
     return payload

@@ -260,3 +260,102 @@ def test_prompt_text_auto_admission_is_rejected_by_policy_validation(env):
     with pytest.raises(AssertionError):
         env.policy(promptText="auto")
     assert env.api.storage.get(INTAKE_OWNER, "adm_policy", "policy-1") is None
+
+
+# PR #28 review round 1 ----------------------------------------------------------
+
+def _count_opens(monkeypatch):
+    opened = []
+    original = zipfile.ZipFile.open
+
+    def counting(self, name, *args, **kwargs):
+        opened.append(name)
+        return original(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", counting)
+    return opened
+
+
+def test_member_count_is_rejected_before_any_member_is_decompressed(monkeypatch):
+    """Finding 7: the 100-file limit is a preflight over the central directory."""
+    data = zipped({f"src/f{i:03d}.ts": "export const x = 1;\n" for i in range(101)})
+    opened = _count_opens(monkeypatch)
+    with pytest.raises(AdmissionError) as error:
+        collection._read_zip(data, "")
+    assert error.value.code == "collection-too-large" and opened == []
+
+
+def test_aggregate_expanded_size_including_assets_is_rejected_before_reads(monkeypatch):
+    """Finding 7: assets count toward the aggregate expanded size limit."""
+    blob = b"\0" * (3 * 1024 * 1024)  # compresses to a few KiB
+    data = zipped({"src/a.png": blob, "src/b.png": blob, "src/c.png": blob, "src/index.ts": "export {};\n"})
+    assert len(data) < 100_000
+    opened = _count_opens(monkeypatch)
+    with pytest.raises(AdmissionError) as error:
+        collection._read_zip(data, "")
+    assert error.value.code == "collection-too-large" and opened == []
+
+
+def test_text_total_is_rejected_before_reads(monkeypatch):
+    """Finding 7: the text aggregate is checked from declared sizes first."""
+    text = "a" * 100_000
+    data = zipped({f"src/f{i:02d}.ts": text for i in range(25)})
+    opened = _count_opens(monkeypatch)
+    with pytest.raises(AdmissionError) as error:
+        collection._read_zip(data, "")
+    assert error.value.code == "collection-too-large" and opened == []
+
+
+def test_member_expanding_beyond_its_declared_size_is_rejected_during_the_read(monkeypatch):
+    """Finding 7: reads are bounded by the declared size, not trusted."""
+    data = zipped({"src/index.ts": "export const x = 1;\n" * 10})
+    original = zipfile.ZipFile.infolist
+
+    def understated(self):
+        infos = original(self)
+        for info in infos:
+            info.file_size = 5
+        return infos
+
+    monkeypatch.setattr(zipfile.ZipFile, "infolist", understated)
+    with pytest.raises(AdmissionError) as error:
+        collection._read_zip(data, "")
+    assert error.value.code in ("collection-format", "collection-too-large")
+
+
+def test_grant_revoked_during_the_analyzer_source_read_blocks_delivery(env, monkeypatch):
+    """Review 2, finding 1: analyzer source is rechecked after its last read."""
+    decision, _ = admitted_collection(env, {"src/index.ts": "export const x = 1;\n"})
+    storage, fired = env.api.storage, []
+    original = storage.get_blob
+
+    def get_blob(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key.endswith("collection-files.json") and not fired:
+            fired.append(key)
+            env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    with pytest.raises(AdmissionError) as error:
+        collection.analyzer_request(env.api, env.scope(), decision["id"])
+    assert fired and error.value.status == 409
+
+
+def test_resolver_retired_during_the_analyzer_source_read_blocks_delivery(env, monkeypatch):
+    decision, _ = admitted_collection(env, {"src/index.ts": "export const x = 1;\n"})
+    storage, fired = env.api.storage, []
+    original = storage.get_blob
+
+    def get_blob(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key.endswith("collection-files.json") and not fired:
+            fired.append(key)
+            row = storage.get(INTAKE_OWNER, "adm_resolver", "resolver-1")
+            env.admin({"op": "retire_resolver_profile", "id": "resolver-1", "expectedRevision": row["revision"]})
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    with pytest.raises(AdmissionError) as error:
+        collection.analyzer_request(env.api, env.scope(), decision["id"])
+    assert fired and error.value.status == 409

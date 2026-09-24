@@ -196,8 +196,19 @@ def receipt_hash(receipt):
     return schema.digest({key: value for key, value in receipt.items() if key != "hash"})
 
 
-def inspect(pages, *, denylist):
-    """Metadata-only receipt. `denylist=None` means private config was unavailable."""
+def joined(pages):
+    """The contiguous text of ordered pages: page boundaries are not token boundaries."""
+    return unicodedata.normalize("NFC", "".join(page["text"] for page in pages))
+
+
+def inspect(pages, *, denylist, contiguous=True):
+    """Metadata-only receipt. `denylist=None` means private config was unavailable.
+
+    With `contiguous` (the default for logical and physical pages of one source),
+    detection also runs over the joined text, so an identifier split by a page
+    boundary is still found; each count is the larger of the two passes. Separate
+    files of a code collection pass `contiguous=False`.
+    """
     pii = _pii()
     counts, identifiers, chars = {}, 0, 0
     for page in pages:
@@ -207,6 +218,14 @@ def inspect(pages, *, denylist):
             counts[hit["type"]] = counts.get(hit["type"], 0) + 1
         if denylist:
             identifiers += count_identifiers(text, denylist)
+    if contiguous and len(pages) > 1:
+        text, spanning = joined(pages), {}
+        for hit in pii.scan_rules(text):
+            spanning[hit["type"]] = spanning.get(hit["type"], 0) + 1
+        for kind, count in spanning.items():
+            counts[kind] = max(counts.get(kind, 0), count)
+        if denylist:
+            identifiers = max(identifiers, count_identifiers(text, denylist))
     blocking = []
     if denylist is None:
         blocking.append("denylist-unavailable")

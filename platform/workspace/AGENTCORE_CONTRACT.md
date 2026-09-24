@@ -646,7 +646,18 @@ live evidence and the privacy redaction adapter remain outstanding.
   only. It has no API route, Function URL or `apigateway.amazonaws.com`
   permission, no `lambda:InvokeFunction` on other functions, and table access is
   limited by `dynamodb:LeadingKeys` to the `intake:deployment` partition
-  (asserted by `workspace/check_infra.py`).
+  (asserted by `workspace/check_infra.py`). Whenever intake is configured
+  (`intakeAdmin`, `intakeDenylistParam` or `intakeDeployment` context), the
+  Workspace API and Worker roles carry an explicit Deny of `PutItem`,
+  `UpdateItem`, `DeleteItem`, `BatchWriteItem` and PartiQL writes on that
+  partition (`ForAnyValue:StringEquals dynamodb:LeadingKeys`); reads and
+  `ConditionCheckItem` fences remain. `check_infra.py` fails any other policy
+  that can write the workspace table without that Deny. Without intake context
+  the admission path has no deployment scope (`policy-unavailable`) and the
+  main-stack template is unchanged. With intake configured, the Workspace API
+  (reviewer routes and document admission), the Worker and IntakeAdminFn all
+  receive the same `INTAKE_DEPLOYMENT` (`intakeDeployment` context, default the
+  stack name); `check_infra.py` checks each function's environment on its own.
 - **Reviewer routes.** `GET /studio-api/intake/reviews` and
   `POST /studio-api/intake/reviews/{decisionId}` require the workspace JWT, a
   current `adm_grant` covering the project with `review-internal`, **and**
@@ -666,13 +677,32 @@ live evidence and the privacy redaction adapter remain outstanding.
 - **Decisions.** Synthetic/public inputs require a current, in-scope
   `adm_provenance` matching the exact source revision and byte hash;
   internal-non-sensitive inputs, prompt text and transcriptions are
-  `pending-review` until a reviewer admits them. Expiry is
+  `pending-review` until a reviewer admits them. A `diagram-transcription`
+  decision binds its admitted image decision (`lineage`); verifying it
+  recursively verifies that image decision and fences its records, so revoking
+  either reviewer grant invalidates the transcription and its library revision. Expiry is
   `min(policy, provenance/grant, now + 30 days)`. `verify` raises
   `decision-not-current`, `policy-changed`, `grant-revoked`, `source-changed`,
   `artifact-changed` or `inspection-changed`. `pages_for` is the only text read
   for model use, in bounded batches (≤ 400 000 bytes by default, never above
   512 KiB) with a 5-minute cursor bound to decision, revision, derivative hash
-  and actor, and reruns `verify` for every batch.
+  and actor, and reruns `verify` for every batch. Every verification ends with
+  a final recheck after all reads, and every delivery path repeats it through
+  one shared `admission.Authority.recheck()` after its last read, immediately
+  before returning anything: `pages_for`, `imaging.read_vision_chunk`,
+  `imaging.vision_input`, `imaging.descriptor` (OCR text),
+  `collection.analyzer_request` (which also fences the `adm_resolver` profile)
+  and each `GET /intake/reviews` item (pending decision, policy, the actor's
+  grants and source fences): the source fences (`Sources.recheck`) and the exact decision,
+  policy, provenance and grant versions must still be current, schema-valid and
+  unexpired. Grants and provenance pass `records.validate` on every use; a
+  grant must name `review-internal` for the reviewing actor and provenance must
+  be a `fixture` for synthetic data or a `public-reference` for public data.
+- **Code-collection ZIPs.** The ZIP asset is at most 8 MiB. Before any member
+  is decompressed, the central directory must show at most 100 selected files,
+  100 KiB per text file, 2 MiB of text and 8 MiB expanded in total including
+  assets; reads are then bounded by each member's declared size and the
+  remaining budget (`collection-too-large` / `collection-format`).
 - **Redaction.** PII redaction is `unavailable`: an input whose inspection or
   residual scan finds PII is `blocked: redaction-required` until the privacy
   adapter for source documents is reviewed. Sanitized SVG is blocked

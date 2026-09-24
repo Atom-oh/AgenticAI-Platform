@@ -1,8 +1,8 @@
 """`source-admission/1` decisions, current-authority verification and derivative reads.
 
 `pages_for` is the only function that returns text for model use; it returns the
-admitted, identifier-normalized derivative only, in bounded batches, and reruns
-`verify` for every batch. Source checks always use `Sources.resolve` (current
+admitted, identifier-normalized derivative only, in bounded batches, reruns
+`verify` for every batch and rechecks all authority immediately before delivery. Source checks always use `Sources.resolve` (current
 authority), never the historical `Sources.authorize`.
 """
 from __future__ import annotations
@@ -84,12 +84,21 @@ def current_policy(storage, project_id, *, policy_id=None):
     return policies[0]
 
 
-def _policy_current(storage, decision, project_id):
-    policy = storage.get(INTAKE_OWNER, "adm_policy", decision["policy"]["id"])
+def _admin_record(storage, kind, identifier):
+    """One administration record, only if it passes its closed schema, version and hash."""
+    row = storage.get(INTAKE_OWNER, kind, identifier)
     try:
-        policy = records.validate("adm_policy", policy) if policy else None
+        return records.validate(kind, row) if row else None
     except ValueError:
-        policy = None
+        return None
+
+
+# The only provenance kind that can back each trusted data class (source-admission/1).
+PROVENANCE_KINDS = {"synthetic": "fixture", "public": "public-reference"}
+
+
+def _policy_current(storage, decision, project_id):
+    policy = _admin_record(storage, "adm_policy", decision["policy"]["id"])
     if (not policy or not records.is_current(policy, storage.clock())
             or policy["revision"] != decision["policy"]["revision"] or policy["hash"] != decision["policy"]["hash"]
             or not _in_scope(policy["scope"], project_id) or decision["dataClass"] not in policy["dataClasses"]):
@@ -101,12 +110,23 @@ def _reference_matches(reference, source):
     return all(reference[key] == source[key] for key in ("sourceKind", "sourceId", "revision", "sha256"))
 
 
-def find_provenance(storage, policy, source, project_id):
+def _provenance_ok(record, policy, source, project_id, data_class, now):
+    return (records.is_current(record, now) and record["kind"] == PROVENANCE_KINDS.get(data_class)
+            and bool(policy["trustedProvenance"].get(data_class))
+            and record["policyId"] == policy["id"] and record["policyRevision"] == policy["revision"]
+            and _reference_matches(record["reference"], source) and _in_scope(record["scope"], project_id))
+
+
+def _grant_ok(record, actor, policy, project_id, now):
+    return (records.is_current(record, now) and record["actor"] == actor and record["policyId"] == policy["id"]
+            and "review-internal" in record["operations"]
+            and _in_scope(record["scope"], project_id, deployment_bound=False))
+
+
+def find_provenance(storage, policy, source, project_id, data_class):
     now = storage.clock()
     for record in _admin_records(storage, "adm_provenance"):
-        if (records.is_current(record, now) and record["policyId"] == policy["id"]
-                and record["policyRevision"] == policy["revision"] and _reference_matches(record["reference"], source)
-                and _in_scope(record["scope"], project_id)):
+        if _provenance_ok(record, policy, source, project_id, data_class, now):
             return record
     return None
 
@@ -114,9 +134,7 @@ def find_provenance(storage, policy, source, project_id):
 def find_grant(storage, actor, policy, project_id):
     now = storage.clock()
     for record in _admin_records(storage, "adm_grant"):
-        if (records.is_current(record, now) and record["actor"] == actor and record["policyId"] == policy["id"]
-                and "review-internal" in record["operations"]
-                and _in_scope(record["scope"], project_id, deployment_bound=False)):
+        if _grant_ok(record, actor, policy, project_id, now):
             return record
     return None
 
@@ -197,7 +215,7 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     if blocking:
         record.update(status="blocked", blocking=blocking, expiresAt=_expiry(now, policy))
     elif data_class in ("synthetic", "public"):
-        provenance = (find_provenance(storage, policy, source, project_id)
+        provenance = (find_provenance(storage, policy, source, project_id, data_class)
                       if policy["trustedProvenance"].get(data_class) else None)
         if provenance is None:
             record.update(status="blocked", blocking=["provenance-required"], expiresAt=_expiry(now, policy))
@@ -325,8 +343,75 @@ def _load(host, scope, decision_id):
     return decision
 
 
+_RECHECK_CODES = {"adm_decision": "decision-not-current", "adm_policy": "policy-changed",
+                  "adm_provenance": "grant-revoked", "adm_grant": "grant-revoked",
+                  "adm_resolver": "resolver-changed"}
+
+
+def _final_recheck(host, reader, checks, *, pending=()):
+    """Re-read every admission record and source fence immediately before use.
+
+    Each record must still pass its closed schema, be current (status and expiry
+    at the present clock) and keep the exact version observed earlier; the
+    current-source fences are rechecked through `Sources.recheck`. Decision ids in
+    `pending` must still be `pending-review` and unexpired (the review queue).
+    """
+    storage = host.storage
+    for check in checks:
+        code = _RECHECK_CODES.get(check["kind"])
+        if code is None:
+            continue
+        row = storage.get(check["owner"], check["kind"], check["id"])
+        try:
+            row = records.validate(check["kind"], row) if row else None
+        except ValueError:
+            row = None
+        now = storage.clock()
+        if check["kind"] == "adm_decision" and check["id"] in pending:
+            current = bool(row) and row["status"] == "pending-review" and now < row["expiresAt"]
+        else:
+            current = records.is_current(row, now)
+        if not row or row.get("version") != check["version"] or not current:
+            raise AdmissionError(code)
+    if reader is None:
+        return []
+    try:
+        return reader.recheck()
+    except CollaborationError:
+        raise AdmissionError("source-changed") from None
+
+
+class Authority:
+    """Authority observed while verifying a decision, for one final recheck at delivery.
+
+    Every delivery path (pages, image chunks, vision input, OCR text, analyzer
+    source, review previews) performs its last read and then calls `recheck()`
+    immediately before returning anything.
+    """
+
+    def __init__(self, host, reader, checks, *, pending=()):
+        self.host, self.reader, self.checks, self.pending = host, reader, list(checks), set(pending)
+
+    def observe(self, owner, kind, record):
+        self.checks.append(_check(owner, kind, record))
+
+    def recheck(self):
+        return _final_recheck(self.host, self.reader, self.checks, pending=self.pending)
+
+
+def authorized(host, scope, decision_id, *, claims=None, sources=None):
+    """Verify an admitted decision; returns (decision, derivative bytes, Authority)."""
+    decision, data, reader, checks = _verified(host, scope, decision_id, claims=claims, sources=sources)
+    return decision, data, Authority(host, reader, checks)
+
+
 def verified(host, scope, decision_id, *, claims=None, sources=None, observe=None):
     """Recheck an admitted decision; returns (decision, derivative bytes)."""
+    decision, data, _, _ = _verified(host, scope, decision_id, claims=claims, sources=sources, observe=observe)
+    return decision, data
+
+
+def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=None):
     storage, owner, project_id = host.storage, scope["owner"], _project(scope)
     decision = _load(host, scope, decision_id)
     if not records.is_current(decision, storage.clock()) or decision["status"] != "admitted":
@@ -334,20 +419,16 @@ def verified(host, scope, decision_id, *, claims=None, sources=None, observe=Non
     policy = _policy_current(storage, decision, project_id)
     upstream = [("adm_policy", policy)]
     if "provenance" in decision:
-        provenance = storage.get(INTAKE_OWNER, "adm_provenance", decision["provenance"]["id"])
-        if (not provenance or not records.is_current(provenance, storage.clock())
-                or provenance["revision"] != decision["provenance"]["revision"]
-                or not _reference_matches(provenance["reference"], decision["source"])
-                or provenance["policyId"] != policy["id"] or provenance["policyRevision"] != policy["revision"]
-                or not _in_scope(provenance["scope"], project_id)):
+        provenance = _admin_record(storage, "adm_provenance", decision["provenance"]["id"])
+        if (not provenance or provenance["revision"] != decision["provenance"]["revision"]
+                or not _provenance_ok(provenance, policy, decision["source"], project_id, decision["dataClass"],
+                                      storage.clock())):
             raise AdmissionError("grant-revoked")
         upstream.append(("adm_provenance", provenance))
     if "review" in decision:
-        grant = storage.get(INTAKE_OWNER, "adm_grant", decision["review"]["grantId"])
-        if (not grant or not records.is_current(grant, storage.clock())
-                or grant["revision"] != decision["review"]["grantRevision"]
-                or grant["actor"] != decision["review"]["actor"] or grant["policyId"] != policy["id"]
-                or not _in_scope(grant["scope"], project_id, deployment_bound=False)):
+        grant = _admin_record(storage, "adm_grant", decision["review"]["grantId"])
+        if (not grant or grant["revision"] != decision["review"]["grantRevision"]
+                or not _grant_ok(grant, decision["review"]["actor"], policy, project_id, storage.clock())):
             raise AdmissionError("grant-revoked")
         upstream.append(("adm_grant", grant))
     reader = sources or Sources(inspect.context(host, scope, claims))
@@ -363,11 +444,36 @@ def verified(host, scope, decision_id, *, claims=None, sources=None, observe=Non
         _read_verified(storage, owner, vision["key"], vision["sha256"], "artifact-changed")
         _read_verified(storage, owner, storage.key_for(owner, "adm_decision", decision["id"], "ocr.json"),
                        vision["ocrSha256"], "artifact-changed", maximum=1024 * 1024)
+    checks = [_check(owner, "adm_decision", decision),
+              *(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)]
+    if decision["artifact"]["kind"] == "diagram-transcription":
+        checks.extend(_lineage_checks(host, scope, decision, reader, claims))
+    # Final authority recheck after every read (AUTH-08), not only for observers.
+    fences = _final_recheck(host, reader, checks)
     if observe is not None:
-        observe.append(_check(owner, "adm_decision", decision))
-        observe.extend(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)
-        observe.extend(reader.recheck())
-    return decision, data
+        observe.extend(checks)
+        observe.extend(fences)
+    return decision, data, reader, checks
+
+
+def _lineage_checks(host, scope, decision, reader, claims):
+    """A transcription is current only while its admitted image decision is (recursively) current.
+
+    The image decision is fully verified (policy, provenance/grant, current source,
+    artifact and vision hashes) and its records join this verification's fences.
+    """
+    lineage = decision["lineage"]
+    try:
+        image, _, _, checks = _verified(host, scope, lineage["decisionId"], claims=claims, sources=reader)
+    except AdmissionError:
+        raise AdmissionError("source-changed") from None
+    placed = decision["artifact"].get("region") or {}
+    if (image["artifact"]["kind"] != "image" or image["revision"] != lineage["decisionRevision"]
+            or image["source"] != decision["source"]
+            or placed.get("normalizedImageHash") != image["artifact"]["sha256"]
+            or decision["derivation"]["originalHash"] != image["derivation"]["derivativeHash"]):
+        raise AdmissionError("source-changed")
+    return checks
 
 
 def verify(host, scope, decision_id, *, claims=None, sources=None, observe=None):
@@ -390,7 +496,7 @@ def pages_for(host, scope, decision_id, *, cursor=None, max_bytes=400_000, claim
     if type(max_bytes) is not int or not 1024 <= max_bytes <= MAX_RESPONSE_BYTES:
         raise AdmissionError("invalid-batch-size", 400)
     storage, owner = host.storage, scope["owner"]
-    decision, data = verified(host, scope, decision_id, claims=claims)
+    decision, data, authority = authorized(host, scope, decision_id, claims=claims)
     binding = schema.digest([decision["id"], decision["revision"], decision["derivation"]["derivativeHash"],
                              scope["actor"]])
     start = 0
@@ -426,6 +532,9 @@ def pages_for(host, scope, decision_id, *, cursor=None, max_bytes=400_000, claim
         storage.put(owner, "ontology_cursor", {"id": next_cursor, "projectId": decision["projectId"],
                                                "purpose": "intake-pages", "binding": binding, "nextPage": index,
                                                "expiresAt": storage.clock() + CURSOR_MS})
+    # Delivery point: recheck source, decision, policy, provenance and grant
+    # versions and expiry once more after the derivative and cursor I/O.
+    authority.recheck()
     return {"pages": batch, "cursor": next_cursor, "total": len(pages),
             "derivativeHash": decision["derivation"]["derivativeHash"]}
 
