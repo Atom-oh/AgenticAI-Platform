@@ -532,3 +532,144 @@ def test_transcription_approval_and_library_publication_are_atomic(env, monkeypa
     assert revision["status"] == "in_review"
     assert revision["transcriptionOf"]["transcription"]["decisionId"] == transcribed["id"]
     assert revision["transcriptionOf"]["transcription"]["decisionRevision"] == payload["decision"]["revision"]
+
+
+# PR #28 review round 3 ----------------------------------------------------------
+
+def _transcription_request(env, monkeypatch, reply=None):
+    env.policy()
+    env.grant("bob", "grant-bob")
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(reply or json.dumps({"kind": "table", "text": "표 전사", "tables": [["a", "b"]]},
+                                                ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    return ref, image, request, adapter
+
+
+def _transcriptions(env):
+    return [row for row in env.api.storage.list(f"project:{env.pid}", "adm_decision")
+            if row["artifact"]["kind"] == "diagram-transcription"]
+
+
+def test_image_revoked_during_the_denylist_read_never_reaches_the_model(env, monkeypatch):
+    """Review 3, finding 1: image authority is rechecked immediately before `generate`."""
+    _, _, request, adapter = _transcription_request(env, monkeypatch)
+    loader = env.api.intake_denylist_loader
+
+    def revoking():
+        env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+        return loader()
+
+    env.api.intake_denylist_loader = revoking
+    with pytest.raises(AdmissionError) as error:
+        transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert error.value.status == 409
+    assert adapter.calls == [] and _transcriptions(env) == []
+
+
+def test_image_revoked_during_generation_publishes_no_transcription(env, monkeypatch):
+    """Review 3, finding 1: image authority is rechecked again before the result is recorded."""
+    _, _, request, adapter = _transcription_request(env, monkeypatch)
+    converse = adapter.converse_with_tools
+
+    def revoking(*args, **kwargs):
+        result = converse(*args, **kwargs)
+        env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+        return result
+
+    adapter.converse_with_tools = revoking
+    with pytest.raises(AdmissionError) as error:
+        transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert error.value.status == 409
+    assert len(adapter.calls) == 1 and _transcriptions(env) == []
+
+
+def test_grant_revoked_during_a_later_item_read_returns_no_earlier_preview(env, monkeypatch):
+    """Review 3, finding 3: the complete review response is rechecked after all reads."""
+    from test_intake_admission import guide
+    env.policy()
+    env.grant("bob", "grant-bob")
+    for name in ("first.txt", "second.txt"):
+        ref = guide(env, text=f"{name} 정기예금 안내.\n", name=name, request=name)
+        assert admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive")["status"] == \
+            "pending-review"
+    fired = revoke_during_read(env, monkeypatch, "inspection.json", lambda: env.admin(
+        {"op": "revoke_grant", "id": "grant-bob", "expectedRevision": 1}), occurrence=2)
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert fired and (status == 403 or listed["reviews"] == []), listed
+
+
+def test_pending_transcription_preview_requires_its_image_admission(env, monkeypatch):
+    """Review 3, finding 4: pending transcription previews verify the image lineage."""
+    _, _, request, _ = _transcription_request(env, monkeypatch)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert transcribed["status"] == "pending-review"
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert [r["id"] for r in listed["reviews"]] == [transcribed["id"]]
+    env.admin({"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1})
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert status == 200 and listed["reviews"] == []
+
+
+def test_reviewer_grant_expiring_during_publication_commits_nothing(env, monkeypatch):
+    """Review 3, finding 5: the publication guard covers the pending decision and the reviewing grant."""
+    env.policy()
+    env.admin({"op": "grant_reviewer", "record": {
+        "id": "grant-bob", "actor": "bob", "policyId": "policy-1", "scope": {"projectIds": [env.pid]},
+        "operations": ["review-internal"], "expiresAt": env.api.storage.clock() + 2 * DAY}})
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 0, "top": 0, "width": 10, "height": 10, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "table", "text": "표 전사", "tables": [["a", "b"]]},
+                                       ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    clock = storage.clock
+
+    def expire():
+        storage.clock = lambda: clock() + 3 * DAY  # past grant-bob only
+
+    # 1st read: the review's artifact check; 2nd: prepare_transcription's derivative read.
+    fired = revoke_during_read(env, monkeypatch, "transcription.json", expire, occurrence=2)
+    status, payload = env.http("POST", f"/intake/reviews/{transcribed['id']}",
+                               {"approve": True, "reason": "matches"}, actor="bob")
+    assert fired and status == 409, payload
+    storage.clock = clock
+    assert storage.get(owner, "adm_decision", transcribed["id"])["status"] == "pending-review"
+    assert storage.list(owner, "document") == []
+
+
+def test_image_decision_binds_a_hashed_normalization_receipt(env):
+    """Review 3, finding 8 (Minor): EXIF/ICC normalization evidence is persisted and verified."""
+    from intake import records
+    env.policy()
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    binding = image["artifact"]["normalization"]
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    key = storage.key_for(owner, "adm_decision", image["id"], "normalization.json")
+    data = storage.get_blob(key)
+    assert hashlib.sha256(data).hexdigest() == binding["sha256"]
+    receipt = records.validate_normalization(json.loads(data))
+    assert receipt["profile"] == "image-normalization-1" and receipt["sha256"] == image["artifact"]["sha256"]
+    assert receipt["exifTransposed"] is False and receipt["exifOrientation"] == 1
+    assert receipt["iccProfile"] == "none" and receipt["iccConverted"] is False
+    assert receipt["metadataStripped"] is True and receipt["visionTransform"] == []
+    with pytest.raises(ValueError):
+        records.validate_normalization({**receipt, "extra": 1})
+    assert admission.verify(env.api, env.scope(), image["id"])["id"] == image["id"]
+    storage.put_blob(key, data.replace(b'"exifTransposed":false', b'"exifTransposed":true'), "application/json")
+    with pytest.raises(AdmissionError) as error:
+        admission.verify(env.api, env.scope(), image["id"])
+    assert error.value.code == "artifact-changed"

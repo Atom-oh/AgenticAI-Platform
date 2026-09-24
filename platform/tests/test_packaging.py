@@ -97,3 +97,28 @@ def test_worker_docker_image_imports_intake():
     result = subprocess.run(["docker", "run", "--rm", "--entrypoint", "python", tag, "-c",
                              "import intake.images, intake.admission"], capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, result.stderr[-2000:]
+
+
+# PR #28 review round 3, finding 6 ------------------------------------------------
+
+@pytest.mark.parametrize("arguments", [["--assemble-only"], ["--assemble-only", ""], ["--no-web", "--assemble-only"],
+                                       ["--assemble-only", "relative/dir"]])
+def test_assemble_only_without_an_absolute_destination_fails_before_any_side_effect(tmp_path, arguments):
+    """A copy of deploy.sh runs in a sandbox whose tools only record that they were called."""
+    sandbox, stubs = tmp_path / "platform", tmp_path / "bin"
+    sandbox.mkdir()
+    stubs.mkdir()
+    shutil.copy(PLATFORM / "deploy.sh", sandbox / "deploy.sh")
+    marker = tmp_path / "side-effect"
+    for tool in ("python3", "python", "pip3", "npm", "npx", "aws", "cdk", "node", "git", "curl"):
+        stub = stubs / tool
+        stub.write_text(f"#!/bin/sh\necho {tool} >> '{marker}'\nexit 1\n")
+        stub.chmod(0o755)
+    log = tmp_path / "deploy.log"
+    environment = {"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(tmp_path), "LOG": str(log), "SKIP_TESTS": "1",
+                   "AWS_EC2_METADATA_DISABLED": "true"}
+    result = subprocess.run(["bash", str(sandbox / "deploy.sh"), *arguments], cwd=sandbox, env=environment,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 2, (result.stdout, result.stderr)
+    assert "--assemble-only" in result.stderr
+    assert not marker.exists() and not log.exists()

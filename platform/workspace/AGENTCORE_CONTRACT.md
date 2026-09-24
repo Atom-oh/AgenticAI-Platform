@@ -681,7 +681,10 @@ live evidence and the privacy redaction adapter remain outstanding.
   decision binds its admitted image decision (`lineage`); verifying it
   recursively verifies that image decision and fences its records, so revoking
   either reviewer grant invalidates the transcription and its library revision. Expiry is
-  `min(policy, provenance/grant, now + 30 days)`. `verify` raises
+  `min(policy, provenance/grant, now + 30 days)`. A repeated request returns its recorded
+  decision; `request(..., generation=n)` (1..1000) is an explicit fresh
+  evaluation under a new decision id (for example after provenance
+  registration), and earlier decisions remain as history. `verify` raises
   `decision-not-current`, `policy-changed`, `grant-revoked`, `source-changed`,
   `artifact-changed` or `inspection-changed`. `pages_for` is the only text read
   for model use, in bounded batches (≤ 400 000 bytes by default, never above
@@ -691,9 +694,14 @@ live evidence and the privacy redaction adapter remain outstanding.
   one shared `admission.Authority.recheck()` after its last read, immediately
   before returning anything: `pages_for`, `imaging.read_vision_chunk`,
   `imaging.vision_input`, `imaging.descriptor` (OCR text),
-  `collection.analyzer_request` (which also fences the `adm_resolver` profile)
-  and each `GET /intake/reviews` item (pending decision, policy, the actor's
-  grants and source fences): the source fences (`Sources.recheck`) and the exact decision,
+  `collection.analyzer_request` (which also fences the `adm_resolver` profile
+  and uses only the verified index), each `GET /intake/reviews` item and the
+  whole response after all reads (pending decision, policy, the actor's grants,
+  transcription image lineage and source fences). Model calls and commits use
+  the same recheck: `transcription.transcribe` immediately before `generate`,
+  `admission.decide` (every admission path) before and on each commit attempt,
+  `request_image` before queueing, and review approval/publication on each
+  attempt: the source fences (`Sources.recheck`) and the exact decision,
   policy, provenance and grant versions must still be current, schema-valid and
   unexpired. Grants and provenance pass `records.validate` on every use; a
   grant must name `review-internal` for the reviewing actor and provenance must
@@ -703,6 +711,12 @@ live evidence and the privacy redaction adapter remain outstanding.
   100 KiB per text file, 2 MiB of text and 8 MiB expanded in total including
   assets; reads are then bounded by each member's declared size and the
   remaining budget (`collection-too-large` / `collection-format`).
+- **Image normalization evidence.** Every image decision binds
+  `artifact.normalization.sha256`, the hash of a closed
+  `image-normalization-1` receipt blob (`normalization.json`:
+  original/normalized hashes, dimensions, mode, EXIF orientation and
+  transposition, ICC handling and conversion, metadata stripping, vision
+  transform), validated by `records.validate_normalization` on every `verify`.
 - **Redaction.** PII redaction is `unavailable`: an input whose inspection or
   residual scan finds PII is `blocked: redaction-required` until the privacy
   adapter for source documents is reviewed. Sanitized SVG is blocked

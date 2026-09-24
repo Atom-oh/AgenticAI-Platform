@@ -89,19 +89,22 @@ def decide(host, scope, decision_id, *, approve, reason, claims=None):
     write = {"owner": owner, "kind": "adm_decision", "item": sealed, "expected_version": decision["version"]}
     # Expiry is invisible to version fences: recheck the pending decision, policy,
     # grant and sources immediately before the commit.
-    admission.Authority(host, reader, [admission._check(owner, "adm_decision", decision),
-                                       admission._check(INTAKE_OWNER, "adm_policy", policy),
-                                       admission._check(INTAKE_OWNER, "adm_grant", grant)],
-                        pending={decision["id"]}).recheck()
+    # The same guard runs before every transaction attempt (including retries).
+    authority = admission.Authority(host, reader, [admission._check(owner, "adm_decision", decision),
+                                                   admission._check(INTAKE_OWNER, "adm_policy", policy),
+                                                   admission._check(INTAKE_OWNER, "adm_grant", grant)],
+                                    pending={decision["id"]})
+    authority.recheck()
     if approve and sealed["artifact"]["kind"] == "diagram-transcription":
-        return _approve_transcription(host, scope, write, list(unique.values()))
+        return _approve_transcription(host, scope, write, list(unique.values()), authority)
     try:
-        return storage.put_many([write], checks=list(unique.values()), retry_conflicts=False)[0]
+        return storage.put_many([write], checks=list(unique.values()), retry_conflicts=False,
+                                before_attempt=authority.recheck)[0]
     except Conflict:
         raise AdmissionError("conflict") from None
 
 
-def _approve_transcription(host, scope, write, checks):
+def _approve_transcription(host, scope, write, checks, authority):
     """Admit a transcription and publish its in-review library revision in ONE transaction.
 
     If the publication cannot commit, nothing is written: the decision stays
@@ -112,7 +115,9 @@ def _approve_transcription(host, scope, write, checks):
     from documents.library import prepare_transcription
     try:
         library, writes = prepare_transcription(host, scope, write["item"])
-        return library.commit([write, *writes], extra_checks=checks)[0]
+        # The pending decision, the reviewing grant, the policy and sources are
+        # rechecked (with expiry) before every commit attempt, with the lineage guard.
+        return library.commit([write, *writes], extra_checks=checks, guard=authority.recheck)[0]
     except DocumentError as error:
         raise AdmissionError(error.code, error.status) from None
     except Conflict:
@@ -163,7 +168,7 @@ def list_pending(host, scope, *, claims=None):
     storage, owner, project_id = host.storage, scope["owner"], admission._project(scope)
     grants = _any_grant(storage, scope["actor"], project_id)
     policies = {g["policyId"] for g in grants}
-    items, cursor, scanned = [], None, 0
+    items, authorities, cursor, scanned = [], [], None, 0
     while len(items) < MAX_LISTED:
         page = storage.list_page(owner, "adm_decision", limit=100, cursor=cursor)
         for row in page["items"]:
@@ -189,16 +194,21 @@ def list_pending(host, scope, *, claims=None):
             try:
                 preview = _preview(host, scope, decision, data)
                 title = _title(host, scope, decision)
+                # A pending transcription is reviewable only while its admitted image
+                # decision is (recursively) current; its records join this item's fence.
+                lineage = (admission._lineage_checks(host, scope, decision, reader, claims)
+                           if decision["artifact"]["kind"] == "diagram-transcription" else [])
                 # After the last read: the pending decision, its policy, the actor's
-                # grants for that policy and the source fences must all still hold.
+                # grants for that policy, the lineage and the source fences must hold.
                 authority = admission.Authority(host, reader, [
                     admission._check(owner, "adm_decision", decision),
                     admission._check(INTAKE_OWNER, "adm_policy", policy),
                     *(admission._check(INTAKE_OWNER, "adm_grant", g) for g in grants
-                      if g["policyId"] == decision["policy"]["id"])], pending={decision["id"]})
+                      if g["policyId"] == decision["policy"]["id"]), *lineage], pending={decision["id"]})
                 authority.recheck()
             except (AdmissionError, CollaborationError, ValueError, KeyError, TypeError, IndexError):
                 continue  # one unreadable or revoked item never breaks the whole queue
+            authorities.append(authority)
             items.append({"id": decision["id"], "revision": decision["revision"],
                           "source": {k: decision["source"][k] for k in ("sourceKind", "sourceId", "revision")},
                           "title": title, "dataClass": decision["dataClass"],
@@ -212,7 +222,17 @@ def list_pending(host, scope, *, claims=None):
         cursor = page.get("cursor")
         if not cursor or scanned >= 5000:
             break
-    return {"reviews": items}
+    # Response-wide final recheck after ALL reads: an item accumulated earlier is
+    # returned only if its whole authority still holds now.
+    _any_grant(storage, scope["actor"], project_id)
+    final = []
+    for item, authority in zip(items, authorities):
+        try:
+            authority.recheck()
+        except (AdmissionError, CollaborationError):
+            continue
+        final.append(item)
+    return {"reviews": final}
 
 
 def route(host, scope, claims, method, parts, body, query):

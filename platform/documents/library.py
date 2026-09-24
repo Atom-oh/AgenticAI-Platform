@@ -355,7 +355,7 @@ class Library:
                 present.add((check["owner"], check["kind"], check["id"]))
         return checks
 
-    def commit(self, writes, documents=(), extra_checks=()):
+    def commit(self, writes, documents=(), extra_checks=(), guard=None):
         checks = self.checks(documents)
         present = {(c["owner"], c["kind"], c["id"]): c for c in checks}
         for check in extra_checks:
@@ -375,7 +375,7 @@ class Library:
                     raise Conflict("Authority write must match the authorized version")
             else:
                 remaining.append(check)
-        return self.storage.put_many(writes, checks=remaining, **self._guard())
+        return self.storage.put_many(writes, checks=remaining, **self._guard(guard))
 
     def assert_current(self, documents=()):
         """A read has a linearization point after bytes were read, without a write."""
@@ -383,9 +383,17 @@ class Library:
         if checks:
             self.storage.put_many([], checks=checks, **self._guard())
 
-    def _guard(self):
-        """Transcription lineage adds an upstream-expiry guard to every commit attempt."""
-        return {"before_attempt": self._upstream_current} if self._upstream else {}
+    def _guard(self, extra=None):
+        """Transcription lineage adds an upstream-expiry guard to every commit attempt;
+        `extra` (a caller's final authority recheck) runs with it on every attempt."""
+        guards = ([self._upstream_current] if self._upstream else []) + ([extra] if extra else [])
+        if not guards:
+            return {}
+
+        def before_attempt():
+            for guard in guards:
+                guard()
+        return {"before_attempt": before_attempt}
 
     def _upstream_current(self):
         """Version fences cannot see expiry: before every commit attempt (including

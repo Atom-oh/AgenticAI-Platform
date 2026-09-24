@@ -173,7 +173,7 @@ def _expiry(now, *records_):
 
 def decide(host, scope, *, reader, source, data_class, policy, artifact, derivation, receipt, receipt_bytes,
            payload, blocking=(), identity=(), extra_checks=(), extra_blobs=None, content_type="application/json",
-           lineage=None, identifier=None, completion=None):
+           lineage=None, identifier=None, completion=None, generation=1):
     """Seal and commit one decision after the current policy/provenance checks.
 
     `payload` is the canonical derivative object whose sha256 is the derivative
@@ -184,9 +184,13 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     blocking = sorted(set(blocking) | set(receipt["blocking"]))
     if data_class not in policy["dataClasses"]:
         blocking = sorted(set(blocking) | {"data-class-ineligible"})
-    identifier = identifier or "adm-" + schema.digest([project_id, source, policy["id"], policy["revision"],
-                                                       data_class, artifact["kind"], derivation, receipt["hash"],
-                                                       list(identity)])[:40]
+    # Generation 1 keeps the historical identity; an explicit later generation is a
+    # fresh evaluation (e.g. after provenance registration) that never replaces history.
+    basis = [project_id, source, policy["id"], policy["revision"], data_class, artifact["kind"], derivation,
+             receipt["hash"], list(identity)]
+    if generation != 1:
+        basis.append({"generation": generation})
+    identifier = identifier or "adm-" + schema.digest(basis)[:40]
     existing = storage.get(owner, "adm_decision", identifier)
     if existing:
         return records.validate("adm_decision", existing)
@@ -234,9 +238,15 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     extra = completion(sealed) if completion else []
     for write in extra:
         unique.pop((write["owner"], write["kind"], write["item"]["id"]), None)
+    # Final authority recheck immediately before the commit and before every
+    # transaction attempt: policy, provenance, upstream (`extra_checks`, e.g. a
+    # transcription's image lineage) and source fences, including expiry.
+    guard = Authority(host, reader, checks)
+    guard.recheck()
     try:
         return storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed}, *extra],
-                                checks=list(unique.values()), retry_conflicts=False)[0]
+                                checks=list(unique.values()), retry_conflicts=False,
+                                before_attempt=guard.recheck)[0]
     except Conflict:
         existing = storage.get(owner, "adm_decision", identifier)
         if existing and records.digest_record(existing) == sealed["hash"]:
@@ -244,9 +254,19 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
         raise AdmissionError("conflict") from None
 
 
-def request(host, scope, source_ref, *, data_class, claims=None, kind="document-pages"):
-    """Inspect, normalize and record an admission for a verified actor's source."""
+MAX_GENERATION = 1000
+
+
+def request(host, scope, source_ref, *, data_class, claims=None, kind="document-pages", generation=1):
+    """Inspect, normalize and record an admission for a verified actor's source.
+
+    Repeating a request returns its recorded decision. `generation` (1..1000)
+    asks for an explicit fresh evaluation under a new decision id, for example
+    after provenance was registered; earlier decisions are kept as history.
+    """
     _project(scope)
+    if type(generation) is not int or not 1 <= generation <= MAX_GENERATION:
+        raise AdmissionError("invalid-generation", 400)
     if kind == "image":
         return request_image(host, scope, source_ref, data_class=data_class, claims=claims)
     if kind != "document-pages":
@@ -276,7 +296,7 @@ def request(host, scope, source_ref, *, data_class, claims=None, kind="document-
                   derivation={"profile": derivative.PROFILE, "originalHash": resolved["originalHash"],
                               "derivativeHash": derived["derivativeHash"]},
                   receipt=receipt, receipt_bytes=schema.canonical(receipt),
-                  payload=schema.canonical(derived["pages"]), blocking=blocking)
+                  payload=schema.canonical(derived["pages"]), blocking=blocking, generation=generation)
 
 
 def request_image(host, scope, source_ref, *, data_class, claims=None):
@@ -303,7 +323,9 @@ def request_image(host, scope, source_ref, *, data_class, claims=None):
     if ref["sourceKind"] != "asset" or "location" in ref:
         raise AdmissionError("intake-source-unsupported", 422)
     reader.resolve(ref)
-    reader.recheck()
+    # Final recheck (policy version/status/expiry and source fences) after the
+    # last read, immediately before the job is queued.
+    Authority(host, reader, [_check(INTAKE_OWNER, "adm_policy", policy)]).recheck()
     source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
     expiry = claims.get("exp") if isinstance(claims, dict) else None
     authorization = int(expiry) * 1000 if expiry is not None else storage.clock() + CURSOR_MS
@@ -444,6 +466,18 @@ def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=No
         _read_verified(storage, owner, vision["key"], vision["sha256"], "artifact-changed")
         _read_verified(storage, owner, storage.key_for(owner, "adm_decision", decision["id"], "ocr.json"),
                        vision["ocrSha256"], "artifact-changed", maximum=1024 * 1024)
+    if "normalization" in decision["artifact"]:
+        receipt = _read_verified(storage, owner,
+                                 storage.key_for(owner, "adm_decision", decision["id"], "normalization.json"),
+                                 decision["artifact"]["normalization"]["sha256"], "artifact-changed",
+                                 maximum=64 * 1024)
+        try:
+            receipt = records.validate_normalization(json.loads(receipt))
+        except ValueError:
+            raise AdmissionError("artifact-changed") from None
+        if (receipt["sha256"] != decision["artifact"]["sha256"]
+                or receipt["originalSha256"] != decision["derivation"]["originalHash"]):
+            raise AdmissionError("artifact-changed")
     checks = [_check(owner, "adm_decision", decision),
               *(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)]
     if decision["artifact"]["kind"] == "diagram-transcription":

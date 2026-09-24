@@ -105,6 +105,7 @@ def normalize_image(data: bytes) -> dict:
             if image.mode == "P" and "transparency" in image.info:
                 transposed.info["transparency"] = image.info["transparency"]
             converted, icc = _srgb(transposed)
+            icc_converted = converted is not transposed
             rgba = converted.convert("RGBA")
             # A fresh image carries no EXIF, ICC, text chunks or other metadata.
             clean = Image.frombytes("RGBA", rgba.size, rgba.tobytes())
@@ -116,7 +117,9 @@ def normalize_image(data: bytes) -> dict:
     return {"bytes": out, "sha256": hashlib.sha256(out).hexdigest(),
             "originalSha256": hashlib.sha256(data).hexdigest(),
             "width": clean.width, "height": clean.height, "mode": "RGBA",
-            "exifTransposed": orientation not in (None, 1), "iccProfile": icc}
+            "exifTransposed": orientation not in (None, 1), "iccProfile": icc,
+            "exifOrientation": orientation if type(orientation) is int and 1 <= orientation <= 8 else 1,
+            "iccConverted": icc_converted}
 
 
 def region_ok(region, image) -> bool:

@@ -12,15 +12,24 @@ LOG=${LOG:-/tmp/bank-platform-deploy.log}
 REGION=${AWS_REGION:-ap-northeast-2}
 GRAPH_BACKEND=${GRAPH_BACKEND:-local}
 MAIN_STACK=${MAIN_STACK:-BankPlatformCore}   # 라이브 메인 스택. (구 `BankPlatform` 스택은 롤백 정리 고착 — 갱신하지 않는다)
-WITH_PLANE=0; NO_WEB=0; NO_SEED=0; ASSEMBLE_ONLY=""
+WITH_PLANE=0; NO_WEB=0; NO_SEED=0; ASSEMBLE_ONLY=""; ASSEMBLE_FLAG=0
 prev=""
 for a in "$@"; do
   [ "$a" = "--plane" ] && WITH_PLANE=1
   [ "$a" = "--no-web" ] && NO_WEB=1
   [ "$a" = "--no-seed" ] && NO_SEED=1
+  [ "$a" = "--assemble-only" ] && ASSEMBLE_FLAG=1
   [ "$prev" = "--assemble-only" ] && ASSEMBLE_ONLY="$a"
   prev="$a"
 done
+# The offline assembly flag never falls through to deployment: a missing, empty or
+# relative destination is an error before any side effect (review round 3).
+if [ "$ASSEMBLE_FLAG" = 1 ]; then
+  case "$ASSEMBLE_ONLY" in
+    /?*) ;;
+    *) echo "--assemble-only requires an absolute destination directory" >&2; exit 2;;
+  esac
+fi
 PYTHON=${PYTHON:-python3}
 
 # Step 1 only: assemble the Lambda source modules into $1 (offline; no vendoring,
@@ -41,8 +50,7 @@ assemble_api() {
   return 0
 }
 
-if [ -n "$ASSEMBLE_ONLY" ]; then
-  case "$ASSEMBLE_ONLY" in /?*) ;; *) echo "--assemble-only requires an absolute directory" >&2; exit 2;; esac
+if [ "$ASSEMBLE_FLAG" = 1 ]; then
   assemble_api "$ASSEMBLE_ONLY"
   find "$ASSEMBLE_ONLY" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
   echo "assembled: $ASSEMBLE_ONLY"
