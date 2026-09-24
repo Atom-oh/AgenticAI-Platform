@@ -566,7 +566,7 @@ The fifty-fifth review found **all 177 prior findings fixed** and no new Critica
 - Never write the shared demo password or `AKIA…`-style keys into any file.
 
 **Model boundary**
-- Every bank model call passes the measured boundary: `engine/gate.py` in engine handlers, `BoundaryGateHook` in Runtime. Only admitted derivatives may reach a model. Never log raw prompts, source text or entity originals.
+- Every bank model call passes the measured boundary: `engine/gate.py` in engine handlers and in the new ontology/design Runtime execution path (`AGENTCORE_CONTRACT.md:617-622`, B2); `BoundaryGateHook` only in the existing Strands scenario runtime. Only admitted derivatives may reach a model. Never log raw prompts, source text or entity originals.
 
 **Human authority and determinism**
 - AI never approves. Model ontology writes enter as candidates through `Ontology.publish_candidate`, and only human `review_node` by the contract-required role changes review state.

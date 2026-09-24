@@ -136,7 +136,7 @@ Every model and tool step runs as an `agentcore-execution` job through the B0 le
 | `POST /design/{id}/flow/approve {flowHash, contractVersion?}` | approve (designer/owner) + edit_rules | **Flow approval** (review round 2, N15). The server does the following in one request:<br>1. It recomputes the flow.<br>2. It requires `flowHash` to equal the recomputed hash, a confirmed PRD and no flow issues.<br>3. It derives the Browser contract from the PRD, flow, registry, published pages and criteria **only**, with no compositions (E13; review round 7, AA4). Every later compile, Browser run and repair uses this exact contract.<br>4. It creates or updates **one** workspace `contract` record through the existing contract path: validation by `rules.validate_contract`, then the `_approval_put` approval at `http.py:807-813`, so `approval: {version, hash, actor, at}` exists exactly as `_run_approve` requires (`http.py:1049-1055`).<br>5. It stores `flow.approved = {by, at, hash, contractId, contractVersion, contractHash}` on the design record.<br><br>E13 always yields exactly one contract. A `contract-capacity` finding blocks flow approval and asks the planner to split the procedure into separate designs (review round 3, F8). |
 | `POST /design/{id}/mining {collectionDecisionId, requestId}` | upload | Admits the `source.analyze` ledger operation (B2 S4 `interpreter.analyze`). Its input is one admitted **code-collection** decision (B0 intake I6a), which carries collection-relative paths and the resolver, so basenames can collide safely (review round 3, F12). Completion publishes `parser-extracted` candidates (E5 `candidate_graph`) through the staged ontology publication. The existing offline `ontology_jobs.submit` path is not used and stays offline-gated (`ontology_jobs.py:43-47`). |
 | `GET /design/{id}/screens` | read | Lists screens with their variants, states, verification summary and route/strategy (E9) |
-| `GET /design/{id}/screens/{screenNodeId}` | read | Compositions, the React page source (from the round), the verification report and the edit history |
+| `GET /design/{id}/screens/{screenNodeId}` | read (source: state-dependent, below) | Compositions, the React page source (from the round, returned only when the shared round-content permission of B0 sharing H1 allows it; otherwise the source field is omitted with `sourceWithheld: "round-state"`), the verification report and the edit history |
 
 - [ ] **Step 1: Tests** (`tests/test_design_api.py`):
   - Build the `WorkspaceAPI` fixture per `tests/test_workspace_http.py:65-69`.
@@ -339,7 +339,7 @@ The comparison logic is extracted from `process_release` into `releases.verify_r
   - It stores the ZIP once with `put_blob_once(key_for(owner, "design", id, f"handoff/{releaseId}.zip"), …, "application/zip")`.
   - It records `{releaseId, key, sha256, size, by, at}` on the design record.
 - The convention is the synthetic seed, or the tenant copy from private storage `key_for(owner, "design", id, "convention.json")`.
-- `GET /design/{id}/handoff/{releaseId}/blob?offset=` (export) serves the stored ZIP through the existing **chunked binary download** pattern (`http.py:1125-1137`, `_release_download`): base64 body plus `X-Total-Size`, `X-Chunk-Size` and `X-SHA256`, with the offset range checks.
+- `GET /design/{id}/handoff/{releaseId}/blob?offset=` (current project `read` plus current source/data-audience checks on every chunk, per `AGENTCORE_CONTRACT.md:446`: a ready package is available to current authorized readers; only Git export needs developer/owner `export`) serves the stored ZIP through the existing **chunked binary download** pattern (`http.py:1125-1137`, `_release_download`): base64 body plus `X-Total-Size`, `X-Chunk-Size` and `X-SHA256`, with the offset range checks.
   - The route is placed next to the other blob routes, so it never passes through `_json` (Codex #16).
   - It re-runs `check_current` before every chunk.
   - Each completed download records a distribution event.
@@ -397,6 +397,8 @@ It works after the execution lease has expired, because it requires no current a
 - It records metrics.
 - It creates V-05 PolicyRule candidates through `verify_graph.rejection_candidates` and `publish_candidate(_producer="declared")`, with a `run-round` source ref (B0 sharing).
 
+**Round-state content permission** (PR #26 review round 3, `AGENTCORE_CONTRACT.md:443`). The screen detail route and **every** `GET /runs/{id}/blob?kind=source` chunk call the same shared check as the B0 sharing H1 adapter (`round_content_allowed(role, round)`): a draft/failed/needs-changes round's source is served only to designer/developer/owner; reviewable, approved and released rounds to current project readers. This also closes the existing gap where the legacy run-blob handler serves failed-round source to any `read` member; non-design legacy runs get the same rule. Tests: a planner is denied failed/draft source on both routes (screen detail omits it, blob → 404), a designer receives it, and a planner receives a reviewable round's source.
+
 **Artifact reads re-authorize lineage** (review round 3, F3). Stored-key authorization is not enough for a design-linked run or release. Every read of one re-runs `design_manifest.check_current` in its lineage-only form: current admission `verify` for every decision, and the `Sources.resolve` of every upstream source. This applies to:
 - `GET /runs/{id}/blob` (`http.py:1139`)
 - `GET /releases/{id}/blob` (`http.py:1120`)
@@ -416,7 +418,7 @@ The check runs **on every chunk request**. A failure → `403 source-revoked`, a
   - An ontology change to an asset used on an approved screen → `approval-stale:snapshot`.
   - An unrelated ontology change → still current. The snapshot hash covers only the procedure snapshot.
   - The handoff ZIP entries equal the release source bytes, and the manifest carries `approvalHash`, `sourceHash` and `bundleHash`.
-  - A designer downloading the handoff → 403. A developer → 200 with the correct content type.
+  - A designer or planner who is a current reader downloads the ready handoff → 200 with the correct content type; a removed member → 404; a designer starting a Git export → 403, a developer → allowed.
   - An unstable edit gives a `needs_changes` round with `unstable-edit`.
   - **End-to-end without pre-seeding:** flow approve → generate (fake ledger completion with fake receipts) → select → `selection/compose` → approve through the real `_run_approve` → release.
   - Approving a round produced before a later `select` change → `409 approval-stale:selection`.
