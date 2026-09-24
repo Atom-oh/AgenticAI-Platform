@@ -394,3 +394,51 @@ def test_historical_resolution_returns_the_authorized_revision_not_the_current_r
         assert pub2["hash"] not in json.dumps(record)
         if stage == "proposed":
             pub2 = publications.approve(ctx(org.api, "carol", org.origin), pub2["id"])
+
+
+def restrict(org, roles):
+    source = org.refs[0]
+    document = org.api.storage.get(f"project:{org.origin}", "document", source["sourceId"])
+    status, payload, _ = call(org.api, "PUT", f"/documents/{document['id']}/permissions",
+                              {"version": document["version"], "readRoles": roles}, actor="alice", project=org.origin)
+    assert status == 200, payload
+
+
+def test_destination_detail_applies_current_upstream_authorization(org):
+    """Finding 3: destination detail is the adapter's grant ∩ upstream intersection."""
+    pub = published(org)
+    granted(org, pub)
+    assert call(org.api, "GET", f"/publications/{pub['id']}", actor="gina", project=org.dest)[0] == 200
+    restrict(org, ["owner", "designer"])
+    status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}", actor="gina", project=org.dest)
+    assert status == 404 and org.refs[0]["sourceId"] not in json.dumps(payload)
+    status, listed, _ = call(org.api, "GET", "/publications", actor="gina", project=org.dest,
+                             query={"view": "granted"})
+    assert status == 200 and listed["grants"] == []
+
+
+def test_origin_views_hide_publications_whose_sources_the_caller_cannot_read(org):
+    """Finding 3: origin detail/listing apply the caller's current source authorization."""
+    pub = published(org)
+    status, listed, _ = call(org.api, "GET", "/publications", actor="carol", project=org.origin)
+    assert status == 200 and [p["id"] for p in listed["publications"]] == [pub["id"]]
+    restrict(org, ["owner", "planner"])
+    status, listed, _ = call(org.api, "GET", "/publications", actor="carol", project=org.origin)
+    assert status == 200 and listed["publications"] == [] and org.refs[0]["sourceId"] not in json.dumps(listed)
+    status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}", actor="carol", project=org.origin)
+    assert status == 404 and org.refs[0]["sourceId"] not in json.dumps(payload)
+
+
+def test_granted_view_omits_grants_that_exclude_the_callers_role(org):
+    """Finding 3: `view=granted` shows only grants naming the caller's current role."""
+    pub = published(org)
+    granted(org, pub, roles=("designer",))
+    status, listed, _ = call(org.api, "GET", "/publications", actor="frank", project=org.dest,
+                             query={"view": "granted"})
+    assert status == 200 and listed["grants"] == [] and pub["id"] not in json.dumps(listed)
+    status, listed, _ = call(org.api, "GET", "/publications", actor="erin", project=org.dest,
+                             query={"view": "granted"})
+    assert status == 200 and listed["grants"] == []
+    status, listed, _ = call(org.api, "GET", "/publications", actor="gina", project=org.dest,
+                             query={"view": "granted"})
+    assert status == 200 and [g["publicationId"] for g in listed["grants"]] == [pub["id"]]

@@ -22,7 +22,7 @@ from intake.records import INTAKE_OWNER
 from workbench.service import Service, fail, fields, public
 from workspace import ontology_schema as schema
 from workspace.collaboration import CollaborationError
-from workspace.ontology_sources import PROJECT_AUDIENCE
+from workspace.ontology_sources import _AUTHORITY_CODES, PROJECT_AUDIENCE, Sources, authority_identity
 
 PUBLICATION_OWNER = "publication:deployment"
 CAPABILITIES = {"design": "design_publish", "policy": "policy_publish"}
@@ -277,19 +277,78 @@ def withdraw(ctx, publication_id):
                "status": "withdrawn", "withdrawnBy": ctx.actor, "withdrawnAt": ctx.storage.clock(),
                "recallNeeded": recall}
     saved = ctx.commit([_write(PUBLICATION_OWNER, "publication", updated, record["version"])])[0]
-    return view(saved)
+    result = view(saved)
+    if not _origin_readable(ctx, saved):
+        # Withdrawal is protective and allowed; bound source references stay hidden from this caller.
+        result.pop("nodes", None)
+    return result
 
 
-def _visible_record(ctx, identifier):
+def _passes(check):
+    """Run one authorization; only expiry and frozen-authority failures propagate."""
+    try:
+        check()
+        return True
+    except CollaborationError as error:
+        if error.status == 401 or error.code in _AUTHORITY_CODES:
+            raise
+        return False
+
+
+def _origin_readable(ctx, record):
+    """An origin member sees a publication only while every recorded source is readable to them now."""
+    refs = {}
+    for node in record.get("nodes", []):
+        for ref in node.get("sourceRefs", []):
+            refs[authority_identity(ref)] = ref
+
+    def check():
+        sources = Sources(ctx, max_records=4 * MAX_NODES + 10, max_sources=MAX_NODES * 4)
+        for ref in refs.values():
+            sources.authorize(ref)
+        sources.recheck()
+    return _passes(check)
+
+
+def _grant_reference(row):
+    return {"sourceKind": "published-asset", "sourceId": row["publicationId"],
+            "revision": str(row["publicationRevision"]), "sha256": row["publicationHash"],
+            "audienceRevision": str(row["revision"])}
+
+
+def _granted_view(ctx, row):
+    """A destination grant's revision metadata: grant ∩ caller role ∩ current upstream, else None."""
+    if (not isinstance(row, dict) or row.get("projectId") != ctx.project_id or row.get("status") != "active"
+            or ctx.scope["role"] not in row.get("roles", [])):
+        return None
+    result = {}
+
+    def check():
+        sources = Sources(ctx)
+        result["record"] = resolve_published(sources, _grant_reference(row), historical=True)["record"]
+        sources.recheck()
+    return result["record"] if _passes(check) else None
+
+
+def _detail(ctx, identifier):
+    """Origin members with current source access, or a destination role an active grant names."""
     ctx.fresh()
     record = _publication(ctx.storage, identifier)
-    if record and record.get("originProject") == ctx.project_id:
-        return record
-    if record:
-        row = ctx.storage.get(ctx.owner, "pub_grant", grant_id(record["id"], record["revision"]))
-        if (row and row.get("projectId") == ctx.project_id and row.get("status") == "active"
-                and ctx.scope["role"] in row.get("roles", [])):
-            return record
+    if not record:
+        _not_found()
+    if record.get("originProject") == ctx.project_id:
+        if _origin_readable(ctx, record):
+            return view(record)
+        _not_found()
+    revisions = sorted({record["revision"], *(entry["revision"] for entry in record.get("history", []))},
+                       reverse=True)
+    for revision in revisions:
+        row = ctx.storage.get(ctx.owner, "pub_grant", grant_id(record["id"], revision))
+        if row and row.get("status") == "active" and ctx.scope["role"] in row.get("roles", []):
+            value = _granted_view(ctx, row)
+            if value is None:
+                break
+            return value
     _not_found()
 
 
@@ -456,16 +515,17 @@ def route(host, scope, claims, method, parts, body, query):
         from workbench.service import limit
         if query.get("view", "origin") == "granted":
             page = ctx.storage.list_page(ctx.owner, "pub_grant", limit=limit(query), cursor=query.get("cursor"))
-            items = [public(row) for row in page["items"] if row.get("projectId") == ctx.project_id]
+            items = [public(row) for row in page["items"] if _granted_view(ctx, row) is not None]
             return 200, {"grants": items, **({"cursor": page["cursor"]} if page.get("cursor") else {})}
         if query.get("view", "origin") != "origin":
             fail(400, "invalid-input", "view는 origin 또는 granted입니다.")
         page = ctx.storage.list_page(PUBLICATION_OWNER, "publication", limit=limit(query),
                                      cursor=query.get("cursor"))
-        items = [view(row) for row in page["items"] if row.get("originProject") == ctx.project_id]
+        items = [view(row) for row in page["items"]
+                 if row.get("originProject") == ctx.project_id and _origin_readable(ctx, row)]
         return 200, {"publications": items, **({"cursor": page["cursor"]} if page.get("cursor") else {})}
     if len(parts) == 1 and method == "GET":
-        return 200, {"publication": view(_visible_record(ctx, parts[0]))}
+        return 200, {"publication": _detail(ctx, parts[0])}
     if len(parts) == 2 and method == "GET" and parts[1] == "impact":
         return 200, impact(ctx, parts[0])
     if len(parts) == 2 and method == "POST":
