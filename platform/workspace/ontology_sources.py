@@ -16,6 +16,8 @@ _SHARED_AUDIENCE = {"asset", "product-guideline", "package", "run-round", "ux-co
 ROUND_EDITORS = frozenset({"owner", "designer", "developer"})
 MAX_ROUND_ADMISSIONS = 50
 MAX_INPUT_ASSETS = 20
+# Refinement chains (baseRunId/baseRound, change-request baselines) are traversed to this depth.
+MAX_BASE_DEPTH = 5
 MAX_ARCHIVE_BYTES = 8_000_000
 _ROUND = re.compile(r"[1-9][0-9]{0,3}\Z")
 _VERSION = re.compile(r"[1-9][0-9]{0,15}\Z")
@@ -100,6 +102,7 @@ class Sources:
         self.package_hashes = set()
         self.workbench_refs = {}
         self.historical_refs = {}
+        self._base_stack, self._bases_verified = [], set()
         self.max_records = max_records
         self.max_sources = max_sources
         self.ctx.fresh()
@@ -457,6 +460,7 @@ class Sources:
             resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read")
             self._fence_criteria(run)
             self._inputs(self._snapshot_refs(run), historical=False)
+            self._base_lineage(run)
         except CollaborationError as error:
             if _authority_error(error):
                 raise
@@ -530,12 +534,62 @@ class Sources:
                     _not_found()
                 for check in observed:
                     self._remember_owned(check["owner"], check["kind"], check)
+            self._base_lineage(run)
         except CollaborationError as error:
             # Only expiry and frozen-authority failures pass through; every upstream
             # permission failure is indistinguishable from a missing record.
             if error.status == 401 or error.code in _AUTHORITY_CODES:
                 raise
             _not_found()
+
+    @staticmethod
+    def _base_bindings(value):
+        """Exact refinement inputs: a run's base round and any change-request baseline."""
+        bindings = []
+        if value.get("baseRunId") is not None or "baseRound" in value:
+            bindings.append((value.get("baseRunId"), value.get("baseRound"),
+                             value.get("baseSourceHash"), value.get("baseArtifactSha256")))
+        for holder in (value, value.get("contract") if isinstance(value.get("contract"), dict) else {}):
+            baseline = (holder.get("changeRequest") or {}).get("baseline") if isinstance(holder, dict) else None
+            if baseline is not None:
+                if not isinstance(baseline, dict):
+                    _not_found()
+                bindings.append((baseline.get("runId"), baseline.get("round"), baseline.get("sourceHash"), None))
+        return bindings
+
+    def _base_lineage(self, value):
+        """Recursively reauthorize refinement inputs (bounded depth, cycles fail closed).
+
+        A base round is supplied input: its exact binding must still match and its
+        own lineage must still be permitted (historical checks: a revoked base
+        input denies, a merely superseded one does not). Failures raise
+        `404 not-found`; current-use callers map them to `source-upstream-revoked`.
+        """
+        for run_id, number, source_hash, artifact_hash in self._base_bindings(value):
+            if not isinstance(run_id, str) or type(number) is not int:
+                _not_found()
+            key = (run_id, number)
+            if key in self._bases_verified:
+                continue
+            if key in self._base_stack or len(self._base_stack) >= MAX_BASE_DEPTH:
+                _not_found()
+            self._base_stack.append(key)
+            try:
+                try:
+                    base = self.ctx.get("run", run_id)
+                except CollaborationError as error:
+                    if error.status == 404:
+                        _not_found()
+                    raise
+                rows = [row for row in base.get("rounds", []) if isinstance(row, dict) and row.get("number") == number]
+                if (len(rows) != 1 or source_hash is not None and rows[0].get("sourceHash") != source_hash
+                        or artifact_hash is not None and rows[0].get("artifactSha256") != artifact_hash):
+                    _not_found()
+                self._remember("run", base)
+                self._round_upstream_historical(base, rows[0])
+            finally:
+                self._base_stack.pop()
+            self._bases_verified.add(key)
 
     def _superseded_admission(self, decision_id):
         """Historical fallback for an admission whose source was superseded but is still readable.
@@ -622,6 +676,12 @@ class Sources:
             bound = self._retained_contract(contract, version, ref["sha256"])
         # Supplied inputs are lineage: every bound asset is reauthorized (AGENTCORE_CONTRACT).
         self._inputs(self._contract_asset_refs(bound, historical), historical=historical)
+        try:
+            self._base_lineage(bound)
+        except CollaborationError as error:
+            if historical or error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            fail(409, "source-upstream-revoked", "승인 규칙의 기준 시안 근거를 현재 사용할 수 없습니다.")
         if historical:
             return contract, current
         if not current:

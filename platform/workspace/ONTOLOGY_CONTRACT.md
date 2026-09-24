@@ -158,8 +158,11 @@ live sharing or release evidence.
   (through the `ux-contract` rules), every `designManifestInput.admissions` entry
   (`intake.admission.verify` with matching revision and derivative hash), every
   exact input binding in the run's `assetSnapshots` (resolved as an `asset`
-  source at the snapshot import revision and hash) and the product/guideline
-  criteria (`resolve_generation_context`); otherwise
+  source at the snapshot import revision and hash), every refinement input
+  (`baseRunId`/`baseRound` with its recorded source/artifact hash, and the
+  contract's `changeRequest.baseline`, each reauthorized recursively through the
+  base round's own lineage, at most 5 levels, cycles denied) and the
+  product/guideline criteria (`resolve_generation_context`); otherwise
   `409 source-upstream-revoked`. Text requires `location.path` and reads the
   verified source archive (`read_archive` over the stored archive hash).
   `Sources.release_source` returns the verified archive bytes under the same

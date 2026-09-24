@@ -604,3 +604,36 @@ def test_release_download_rechecks_authority_after_reading_the_chunk(env, design
     monkeypatch.setattr(storage, "get_blob", revoking)
     status, payload = blob(env, "rel-1", "source", route="releases")
     assert status in (404, 409) and not isinstance(payload, bytes)
+
+
+def test_refinement_base_round_lineage_is_reauthorized(env, design):
+    """Review 2 #3: a derivative's base run/round is supplied input with its own lineage."""
+    decision = internal_admitted(env)
+    base = react_run(env, design[1], run_id="run-base", admissions=[admission.admission_ref(decision)])
+    derived = react_run(env, design[1], run_id="run-derived")
+    owner = f"project:{env.pid}"
+    derived = env.api.storage.put(owner, "run", {**derived, "baseRunId": base["id"], "baseRound": 1,
+                                                 "baseSourceHash": base["rounds"][0]["sourceHash"]},
+                                  derived["version"])
+    ref = run_round_reference(derived, 1)
+    reader = Sources(ctx(env))
+    reader.resolve(ref)
+    assert "adm_decision" in {check["kind"] for check in reader.recheck()}
+    assert blob(env, derived["id"], "source")[0] == 200
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    assert code(Sources(ctx(env)).resolve, ref) == (409, "source-upstream-revoked")
+    assert code(Sources(ctx(env)).authorize, ref) == (404, "not-found")
+    assert blob(env, derived["id"], "source")[0] == 404
+
+
+def test_refinement_base_binding_and_depth_are_bounded(env, design):
+    """Review 2 #3: a changed base binding or an unbounded/cyclic chain fails closed."""
+    owner = f"project:{env.pid}"
+    base = react_run(env, design[1], run_id="run-base")
+    derived = react_run(env, design[1], run_id="run-derived")
+    forged = env.api.storage.put(owner, "run", {**derived, "baseRunId": base["id"], "baseRound": 1,
+                                                "baseSourceHash": "0" * 64}, derived["version"])
+    assert code(Sources(ctx(env)).resolve, run_round_reference(forged, 1)) == (409, "source-upstream-revoked")
+    cyclic = env.api.storage.get(owner, "run", base["id"])
+    env.api.storage.put(owner, "run", {**cyclic, "baseRunId": base["id"], "baseRound": 1}, cyclic["version"])
+    assert code(Sources(ctx(env)).authorize, run_round_reference(cyclic, 1)) == (404, "not-found")
