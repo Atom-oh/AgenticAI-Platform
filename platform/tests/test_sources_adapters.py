@@ -11,6 +11,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -637,3 +638,70 @@ def test_refinement_base_binding_and_depth_are_bounded(env, design):
     cyclic = env.api.storage.get(owner, "run", base["id"])
     env.api.storage.put(owner, "run", {**cyclic, "baseRunId": base["id"], "baseRound": 1}, cyclic["version"])
     assert code(Sources(ctx(env)).authorize, run_round_reference(cyclic, 1)) == (404, "not-found")
+
+
+@pytest.fixture
+def queued_export(env, design, monkeypatch):
+    """A queued Git export of an approved round whose lineage carries an admission."""
+    import workspace.git_service as git_service
+    from workspace.git_service import connection_hash
+    from workspace.worker import Worker
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)], approval=True)
+    row = run["rounds"][0]
+    owner = f"project:{env.pid}"
+    storage = env.api.storage
+    storage.put(owner, "release", {"id": "rel-1", "runId": run["id"], "round": 1, "status": "ready",
+                                   "sourceHash": row["sourceHash"], "sourceKey": row["sourceKey"],
+                                   "approvalHash": "a" * 64})
+    connection = {"id": "local-test", "provider": "local", "repository": "tests/design", "visibility": "internal"}
+    storage.put(owner, "gitexport", {"id": "export-1", "releaseId": "rel-1", "connectionId": connection["id"],
+                                     "connectionHash": connection_hash(connection), "sourceHash": row["sourceHash"],
+                                     "actor": "alice", "projectId": env.pid, "status": "queued"})
+    job = storage.put(owner, "job", {"id": "export-1", "task": "git", "input": {"exportId": "export-1"}})
+    # Criteria/approval checks are covered elsewhere; this fixture isolates the lineage gate.
+    monkeypatch.setattr(git_service, "resolve_generation_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(git_service, "approved_artifacts", lambda *args, **kwargs: None)
+    delivered = []
+
+    def factory(conn, token):
+        def export_release(*args, **kwargs):
+            delivered.append(args)
+            return {"status": "committed", "sourceHash": row["sourceHash"], "connectionId": conn["id"],
+                    "commitSha": "b" * 40}
+        return type("Exporter", (), {"export_release": staticmethod(export_release)})()
+    worker = Worker(storage=storage, git_connections=lambda: {connection["id"]: connection},
+                    git_exporter_factory=factory)
+    return SimpleNamespace(worker=worker, owner=owner, job=job, row=row, delivered=delivered)
+
+
+def test_queued_export_reauthorizes_lineage_at_worker_execution(env, queued_export):
+    """Review 2 #1: revocation after enqueueing blocks the worker before any delivery."""
+    from workspace.git_service import process_export
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    with pytest.raises(ValueError):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert queued_export.delivered == []
+
+
+def test_queued_export_rechecks_lineage_immediately_before_delivery(env, queued_export, monkeypatch):
+    """Review 2 #1: revocation while the worker reads the source still blocks delivery."""
+    from workspace.git_service import process_export
+    worker = queued_export.worker
+    original = worker._read
+
+    def revoking(owner, key, *args, **kwargs):
+        data = original(owner, key, *args, **kwargs)
+        if key == queued_export.row["sourceKey"]:
+            env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+        return data
+    monkeypatch.setattr(worker, "_read", revoking)
+    with pytest.raises(ValueError):
+        process_export(worker, queued_export.owner, queued_export.job)
+    assert queued_export.delivered == []
+
+
+def test_queued_export_with_current_lineage_is_delivered(env, queued_export):
+    from workspace.git_service import process_export
+    result = process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert result["status"] == "committed" and len(queued_export.delivered) == 1

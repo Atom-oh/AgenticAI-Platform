@@ -161,6 +161,10 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   permission checks; a restricted state or revoked upstream is `404 not-found`.
   The same reader rechecks every observed version and deadline after each chunk's
   bytes are read and before the chunk is returned.
+- The queued Git export worker (`git_service.process_export`) rebuilds the recorded
+  actor's current `export` scope (`ontology_sources.job_reader`), reruns the same
+  round-delivery lineage check at execution and rechecks that reader after reading
+  the source archive, immediately before the external exporter call.
 - Release record includes sourceHash,bundleHash,catalogHash,contractHash,guidelineId,approval,rebuildEvidence,status.
 - GET `/git-connections` exposes configured connection IDs/labels/repository visibility only; no credentials.
 - POST `/releases/:id/git` `{connectionId,requestId}` starts authorized feature-branch export.

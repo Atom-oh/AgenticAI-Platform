@@ -146,6 +146,9 @@ def process_export(worker, owner, job):
     if not connection or connection_hash(connection) != exported["connectionHash"]:
         raise ValueError("Git 대상 설정이 변경되었습니다.")
     run = worker.storage.get(owner, "run", release["runId"])
+    # Reauthorize the complete lineage at execution time (the request-time gate is not enough):
+    # the recorded actor's current export authority, round-state permission and every upstream.
+    reader = _export_lineage(worker, owner, exported, release)
     resolve_generation_context(worker.storage, owner, {**run, "actor": exported["actor"]}, "export")
     approved_artifacts(worker.storage, owner, run, release["round"], release["approvalHash"])
     source = worker._read(owner, release["sourceKey"])
@@ -154,6 +157,9 @@ def process_export(worker, owner, job):
     worker._update(owner, "job", job["id"], progress={"stage": "git", "percent": 30,
                                                     "message": "승인된 React 소스를 feature branch에 커밋"})
     exporter = worker.git_exporter_factory(connection, worker.git_token_provider)
+    # Final recheck of every retained observation after the last byte read, immediately
+    # before the external delivery.
+    _recheck_lineage(reader)
     try:
         result = exporter.export_release(release["id"], release["sourceHash"], files,
                                          release.get("productId") or release["runId"],
@@ -189,6 +195,28 @@ def process_export(worker, owner, job):
         except Conflict:
             continue
     return {"releaseId": release["id"], **result}
+
+
+def _export_lineage(worker, owner, exported, release):
+    from workspace.collaboration import CollaborationError
+    from workspace.ontology_sources import job_reader
+    try:
+        reader = job_reader(worker, owner, exported.get("actor"), "export")
+        if reader is not None:
+            reader.round_delivery(release["runId"], release["round"])
+        return reader
+    except CollaborationError:
+        raise ValueError("Git 내보내기 권한 또는 원본 근거가 회수되었습니다.") from None
+
+
+def _recheck_lineage(reader):
+    from workspace.collaboration import CollaborationError
+    if reader is None:
+        return
+    try:
+        reader.recheck()
+    except CollaborationError:
+        raise ValueError("Git 내보내기 직전에 권한 또는 원본 근거가 변경되었습니다.") from None
 
 
 def exporter_factory(connection, token_provider):

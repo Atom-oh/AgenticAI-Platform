@@ -94,6 +94,24 @@ def workbench_reference(reference):
             "location": {"documentId": reference["documentId"]}, "allowedRoles": reference["allowedRoles"]}
 
 
+def job_reader(host, owner, actor, action):
+    """The lineage reader for queued work: the recorded actor's current authority in the owner project.
+
+    Workers have no request JWT; they rebuild the scope from current membership
+    and require the job's action again. The single-owner legacy workspace
+    (`owner` not a project partition) has no shared lineage and returns None.
+    """
+    from workbench.service import Service
+    from workspace.collaboration import Collaboration
+    if not isinstance(owner, str) or not owner.startswith("project:"):
+        return None
+    collaboration = getattr(host, "collaboration", None) or Collaboration(host.storage)
+    scope = collaboration.require(collaboration.resolve_scope(actor, owner.split(":", 1)[1]), action)
+    if scope["owner"] != owner:
+        fail(403, "forbidden", "작업 범위가 일치하지 않습니다.")
+    return Sources(Service(host, scope, {"sub": actor}))
+
+
 class Sources:
     def __init__(self, context, *, max_records=90, max_sources=50):
         self.ctx = context
