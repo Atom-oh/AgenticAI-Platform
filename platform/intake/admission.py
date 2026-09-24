@@ -1,8 +1,8 @@
 """`source-admission/1` decisions, current-authority verification and derivative reads.
 
 `pages_for` is the only function that returns text for model use; it returns the
-admitted, identifier-normalized derivative only, in bounded batches, and reruns
-`verify` for every batch. Source checks always use `Sources.resolve` (current
+admitted, identifier-normalized derivative only, in bounded batches, reruns
+`verify` for every batch and rechecks all authority immediately before delivery. Source checks always use `Sources.resolve` (current
 authority), never the historical `Sources.authorize`.
 """
 from __future__ import annotations
@@ -343,8 +343,42 @@ def _load(host, scope, decision_id):
     return decision
 
 
+_RECHECK_CODES = {"adm_decision": "decision-not-current", "adm_policy": "policy-changed",
+                  "adm_provenance": "grant-revoked", "adm_grant": "grant-revoked"}
+
+
+def _final_recheck(host, reader, checks):
+    """Re-read every admission record and source fence immediately before use.
+
+    Each record must still pass its closed schema, be current (status and expiry
+    at the present clock) and keep the exact version observed during `verified`;
+    the current-source fences are rechecked through `Sources.recheck`.
+    """
+    storage = host.storage
+    for check in checks:
+        code = _RECHECK_CODES.get(check["kind"])
+        if code is None:
+            continue
+        row = storage.get(check["owner"], check["kind"], check["id"])
+        try:
+            row = records.validate(check["kind"], row) if row else None
+        except ValueError:
+            row = None
+        if not row or row.get("version") != check["version"] or not records.is_current(row, storage.clock()):
+            raise AdmissionError(code)
+    try:
+        return reader.recheck()
+    except CollaborationError:
+        raise AdmissionError("source-changed") from None
+
+
 def verified(host, scope, decision_id, *, claims=None, sources=None, observe=None):
     """Recheck an admitted decision; returns (decision, derivative bytes)."""
+    decision, data, _, _ = _verified(host, scope, decision_id, claims=claims, sources=sources, observe=observe)
+    return decision, data
+
+
+def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=None):
     storage, owner, project_id = host.storage, scope["owner"], _project(scope)
     decision = _load(host, scope, decision_id)
     if not records.is_current(decision, storage.clock()) or decision["status"] != "admitted":
@@ -377,11 +411,14 @@ def verified(host, scope, decision_id, *, claims=None, sources=None, observe=Non
         _read_verified(storage, owner, vision["key"], vision["sha256"], "artifact-changed")
         _read_verified(storage, owner, storage.key_for(owner, "adm_decision", decision["id"], "ocr.json"),
                        vision["ocrSha256"], "artifact-changed", maximum=1024 * 1024)
+    checks = [_check(owner, "adm_decision", decision),
+              *(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)]
+    # Final authority recheck after every read (AUTH-08), not only for observers.
+    fences = _final_recheck(host, reader, checks)
     if observe is not None:
-        observe.append(_check(owner, "adm_decision", decision))
-        observe.extend(_check(INTAKE_OWNER, kind, record) for kind, record in upstream)
-        observe.extend(reader.recheck())
-    return decision, data
+        observe.extend(checks)
+        observe.extend(fences)
+    return decision, data, reader, checks
 
 
 def verify(host, scope, decision_id, *, claims=None, sources=None, observe=None):
@@ -404,7 +441,7 @@ def pages_for(host, scope, decision_id, *, cursor=None, max_bytes=400_000, claim
     if type(max_bytes) is not int or not 1024 <= max_bytes <= MAX_RESPONSE_BYTES:
         raise AdmissionError("invalid-batch-size", 400)
     storage, owner = host.storage, scope["owner"]
-    decision, data = verified(host, scope, decision_id, claims=claims)
+    decision, data, reader, checks = _verified(host, scope, decision_id, claims=claims)
     binding = schema.digest([decision["id"], decision["revision"], decision["derivation"]["derivativeHash"],
                              scope["actor"]])
     start = 0
@@ -440,6 +477,9 @@ def pages_for(host, scope, decision_id, *, cursor=None, max_bytes=400_000, claim
         storage.put(owner, "ontology_cursor", {"id": next_cursor, "projectId": decision["projectId"],
                                                "purpose": "intake-pages", "binding": binding, "nextPage": index,
                                                "expiresAt": storage.clock() + CURSOR_MS})
+    # Delivery point: recheck source, decision, policy, provenance and grant
+    # versions and expiry once more after the derivative and cursor I/O.
+    _final_recheck(host, reader, checks)
     return {"pages": batch, "cursor": next_cursor, "total": len(pages),
             "derivativeHash": decision["derivation"]["derivativeHash"]}
 

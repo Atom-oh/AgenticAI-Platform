@@ -665,7 +665,13 @@ live evidence and the privacy redaction adapter remain outstanding.
   `artifact-changed` or `inspection-changed`. `pages_for` is the only text read
   for model use, in bounded batches (≤ 400 000 bytes by default, never above
   512 KiB) with a 5-minute cursor bound to decision, revision, derivative hash
-  and actor, and reruns `verify` for every batch.
+  and actor, and reruns `verify` for every batch. Every verification ends with
+  a final recheck after all reads, and `pages_for` repeats it immediately
+  before delivery: the source fences (`Sources.recheck`) and the exact decision,
+  policy, provenance and grant versions must still be current, schema-valid and
+  unexpired. Grants and provenance pass `records.validate` on every use; a
+  grant must name `review-internal` for the reviewing actor and provenance must
+  be a `fixture` for synthetic data or a `public-reference` for public data.
 - **Redaction.** PII redaction is `unavailable`: an input whose inspection or
   residual scan finds PII is `blocked: redaction-required` until the privacy
   adapter for source documents is reviewed. Sanitized SVG is blocked

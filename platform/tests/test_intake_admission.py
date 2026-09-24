@@ -487,3 +487,34 @@ def test_fixture_provenance_does_not_admit_a_public_source(env):
     env.provenance(ref, policy, kind="fixture")
     decision = admission.request(env.api, env.scope(), ref, data_class="public")
     assert decision["status"] == "blocked" and decision["blocking"] == ["provenance-required"]
+
+
+@pytest.mark.parametrize("revocation", ["grant", "policy", "source", "expiry"])
+def test_revocation_during_the_derivative_read_stops_delivery(env, monkeypatch, revocation):
+    """Finding 3: pages_for rechecks all authority immediately before delivery."""
+    decision = internal_admitted(env)
+    storage, key = env.api.storage, decision["artifact"]["key"]
+    original = storage.get_blob
+
+    def get_blob(blob_key, *args, **kwargs):
+        data = original(blob_key, *args, **kwargs)
+        if blob_key == key:
+            if revocation == "grant":
+                env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+            elif revocation == "policy":
+                policy = storage.get(INTAKE_OWNER, "adm_policy", "policy-1")
+                env.admin({"op": "retire_policy", "id": "policy-1", "expectedRevision": policy["revision"]})
+            elif revocation == "source":
+                document = storage.get(f"project:{env.pid}", "document", decision["source"]["sourceId"])
+                stored = {k: v for k, v in document.items() if k not in ("createdAt", "updatedAt", "version")}
+                storage.put(f"project:{env.pid}", "document", {**stored, "aclVersion": document["aclVersion"] + 1},
+                            expected_version=document["version"])
+            else:
+                clock = storage.clock
+                storage.clock = lambda: clock() + 31 * DAY
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    with pytest.raises((AdmissionError,)) as error:
+        admission.pages_for(env.api, env.scope(), decision["id"])
+    assert error.value.status == 409
