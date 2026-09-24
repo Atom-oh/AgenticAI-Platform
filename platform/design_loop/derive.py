@@ -113,16 +113,173 @@ def mine(sequences, *, min_len=2, max_len=5, min_support=2, exclude=frozenset())
     return sorted(out, key=lambda c: (-c["score"], c["identities"]))
 
 
-def candidate_graph(candidates, *, project_id, source_ref, analysis_coverage=None, unresolved=()):
+# --- PageTemplate reverse-derivation (O-03; review round 19, AM1) --------------------------------------------
+
+MAX_TEMPLATE_SLOTS = 12          # the uxModel slot limit (Task E3)
+
+
+class Mined(list):
+    """Template candidates plus the mining coverage (capacity notes); still a plain list of candidates."""
+
+    def __init__(self, items=(), coverage=None):
+        super().__init__(items)
+        self.coverage = coverage or {"unknown": [], "notes": []}
+
+
+def _identity(ref):
+    res = ref.get("resolution") or {}
+    return f"{res.get('package') or res.get('targetPath')}#{ref.get('symbol')}"
+
+
+def page_structures(analysis, *, profile=None):
+    """`{path: {root, regions}}` for files whose single root JSX element resolves; regions are its direct children.
+
+    A direct child that does not count as resolved stays `None` (never guessed). Truncated files, files without
+    analyzer nesting evidence and files with several root JSX elements are not structures (fail closed)."""
+    truncated = set((analysis.get("coverage") or {}).get("truncatedFiles", []))
+    per = defaultdict(list)
+    for ref in analysis.get("references", []):
+        if ref.get("kind") == "jsx-use":
+            per[ref["path"]].append(ref)
+    out = {}
+    for path, uses in per.items():
+        if path in truncated or any(type(u.get("depth")) is not int or "parent" not in u for u in uses):
+            continue
+        roots = [i for i, u in enumerate(uses) if u["depth"] == 0]
+        if len(roots) != 1 or not _counted(uses[roots[0]].get("resolution") or {}, profile):
+            continue
+        children = sorted((u for u in uses if u["parent"] == roots[0] and u["depth"] == 1),
+                          key=lambda u: (u["line"], u["column"]))
+        out[path] = {"root": _identity(uses[roots[0]]),
+                     "regions": [_identity(u) if _counted(u.get("resolution") or {}, profile) else None for u in children]}
+    return dict(sorted(out.items()))
+
+
+def mine_templates(structures, *, min_support=2):
+    """Group structures by `(root, len(regions))`, aligning regions position by position."""
+    groups = defaultdict(list)
+    for path, value in structures.items():
+        if value["regions"]:
+            groups[(value["root"], len(value["regions"]))].append(path)
+    out, coverage = [], {"unknown": [], "notes": []}
+    for (root, count), paths in sorted(groups.items()):
+        if len(paths) < min_support:
+            continue
+        if count > MAX_TEMPLATE_SLOTS:
+            if "template-capacity" not in coverage["unknown"]:
+                coverage["unknown"].append("template-capacity")
+            coverage["notes"].append({"reason": "template-capacity", "regions": count, "files": len(paths)})
+            continue
+        regions = [sorted({structures[p]["regions"][i] for p in paths if structures[p]["regions"][i] is not None})
+                   for i in range(count)]
+        unresolved = [i + 1 for i in range(count) if any(structures[p]["regions"][i] is None for p in paths)]
+        out.append({"id": "tpl-" + schema.digest([root, regions])[:24], "level": "PageTemplate", "root": root,
+                    "regions": regions, "unresolvedPositions": unresolved,
+                    "identities": sorted({i for position in regions for i in position}),
+                    "support": len(paths), "usage": sorted(paths), "score": len(paths) * count})
+    return Mined(sorted(out, key=lambda c: (-c["score"], c["id"])), coverage)
+
+
+def resolve_identities(identities, k, *, local=None):
+    """Map analyzer identities to ontology node ids: an existing asset whose `uxModel.layers.code`
+    `{importPath, exportName}` matches exactly, or a same-run mined candidate id given in `local`.
+    Zero or several matches leave the identity unmapped; nothing is guessed (review round 20, AN1)."""
+    index = defaultdict(set)
+    for asset_id, asset in (getattr(k, "assets", None) or {}).items():
+        code = asset.get("code") or {}
+        if isinstance(code.get("importPath"), str) and isinstance(code.get("exportName"), str) \
+                and isinstance(asset_id, str) and schema._ID.fullmatch(asset_id):
+            index[(code["importPath"], code["exportName"])].add(asset_id)
+    local = local or {}
+    out = {}
+    for identity in sorted(i for i in identities if isinstance(i, str)):
+        if "#" not in identity:
+            continue
+        origin, symbol = identity.rsplit("#", 1)
+        found = set(index.get((origin, symbol), set()))
+        if identity in local and isinstance(local[identity], str) and schema._ID.fullmatch(local[identity]):
+            found.add(local[identity])
+        if len(found) == 1:
+            out[identity] = found.pop()
+    return out
+
+
+def _template_node(c, *, scope, source_ref, identities, screens):
+    from workspace.ontology_ux import validate_ux_model
+    notes, unmapped, slots = [], 0, {}
+    for position, alternatives in enumerate(c["regions"], 1):
+        allowed = sorted({identities[i] for i in alternatives if i in identities})
+        unmapped += sum(1 for i in alternatives if i not in identities) + (position in c.get("unresolvedPositions", []))
+        if allowed:
+            slots[f"slot{position}"] = {"required": True, "allowed": allowed}
+        else:
+            notes.append(f"unmapped region at position {position}")
+    if not slots:
+        return None, []
+    origin, symbol = c["root"].rsplit("#", 1)
+    ux = {"slots": slots}
+    code = {"importPath": origin, "exportName": symbol, "childrenProp": None,
+            "props": {name: {"type": "node", "required": True} for name in slots}}
+    try:
+        ux = validate_ux_model({**ux, "layers": {"code": code}}, "PageTemplate")
+    except ValueError:
+        notes.append("root code layer not representable")
+    validate_ux_model(ux, "PageTemplate")
+    registry = screens or {}
+    usages = [registry[p] for p in c["usage"] if p in registry]
+    usage_ids = [u if isinstance(u, str) else u["id"] for u in usages]
+    unmapped_files = [p for p in c["usage"] if p not in registry]
+    text = f"반복 {c['support']}회: " + ", ".join(c["usage"][:20]) + f"; unmapped: {unmapped}"
+    if notes:
+        text += "; " + "; ".join(notes)
+    if unmapped_files:
+        text += "; unmapped files: " + ", ".join(unmapped_files[:20])
+    refs = [{**source_ref, "location": {"path": p, "exportName": symbol}} for p in c["usage"][:schema.MAX_REFS]]
+    node = schema.seal({"id": c["id"], "scope": scope, "type": "PageTemplate",
+                        "title": f"{symbol} 템플릿 · 영역 {len(c['regions'])}개"[:300], "revision": 1,
+                        "sourceRefs": refs, "provenance": "parser-extracted", "reviewState": "candidate",
+                        "tombstone": False,
+                        "properties": {"uxModel": ux, "description": text[:8000],
+                                       **({"usageIds": sorted(set(usage_ids))[:100]} if usage_ids else {})}})
+    edges = []
+    for usage in usages:
+        screen = {"id": usage, "revision": 1} if isinstance(usage, str) else {"id": usage["id"], "revision": usage["revision"]}
+        edges.append(schema.seal({"id": "use-" + schema.digest([screen["id"], c["id"]])[:24], "type": "COMPOSES",
+                                  "src": screen, "dst": {"id": c["id"], "revision": 1}, "sourceRefs": [source_ref],
+                                  "provenance": "parser-extracted", "reviewState": "candidate", "tombstone": False}))
+    return node, edges
+
+
+def candidate_graph(candidates, *, project_id, source_ref, analysis_coverage=None, unresolved=(), identities=None,
+                    screens=None, mining_coverage=None):
+    """Candidate nodes for mined compositions. PageTemplate candidates need `identities` from
+    `resolve_identities`; `screens` maps analyzed file paths to Screen node ids (the collection's screen registry)."""
     scope = {"kind": "project", "projectId": project_id}
-    nodes = [schema.seal({"id": c["id"], "scope": scope, "type": c["level"],
-                          "title": " + ".join(i.split("#")[1] for i in c["identities"])[:300], "revision": 1,
-                          "sourceRefs": [source_ref], "provenance": "parser-extracted", "reviewState": "candidate",
-                          "tombstone": False,
-                          "properties": {"description": f"반복 {c['support']}회: " + ", ".join(c["usage"][:20])[:7900]}})
-             for c in candidates[:200]]
+    nodes, edges, unknown = [], [], ["runtime-composition-not-observed"]
+    for c in list(candidates)[:200]:
+        if c["level"] == "PageTemplate":
+            node, uses = _template_node(c, scope=scope, source_ref=source_ref, identities=identities or {},
+                                        screens=screens)
+            if node is None:
+                if "unmapped-template-structure" not in unknown:
+                    unknown.append("unmapped-template-structure")
+                continue
+            nodes.append(node)
+            edges += uses
+            continue
+        nodes.append(schema.seal({"id": c["id"], "scope": scope, "type": c["level"],
+                                  "title": " + ".join(i.split("#")[1] for i in c["identities"])[:300], "revision": 1,
+                                  "sourceRefs": [source_ref], "provenance": "parser-extracted", "reviewState": "candidate",
+                                  "tombstone": False,
+                                  "properties": {"description": f"반복 {c['support']}회: " + ", ".join(c["usage"][:20])[:7900]}}))
     cov = analysis_coverage or {}
-    return {"nodes": nodes, "edges": [],
-            "coverage": {"complete": False, "scope": "observed-static-references", "truncated": bool(cov.get("truncated")),
-                         "unknown": ["runtime-composition-not-observed"] +
-                                    (["unresolved-references"] if cov.get("unresolvedObservations") or unresolved else [])}}
+    mining = mining_coverage or getattr(candidates, "coverage", None) or {}
+    if cov.get("unresolvedObservations") or unresolved:
+        unknown.append("unresolved-references")
+    unknown += [reason for reason in mining.get("unknown", []) if reason not in unknown]
+    result = {"nodes": nodes, "edges": edges,
+              "coverage": {"complete": False, "scope": "observed-static-references", "truncated": bool(cov.get("truncated")),
+                           "unknown": unknown}}
+    if mining.get("notes"):
+        result["notes"] = list(mining["notes"])
+    return result

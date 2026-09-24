@@ -26,7 +26,12 @@ extractor does not inspect remain location-bound unknown observations.
 
 Output includes input/resolver/result hashes, parser identity, import/JSX/
 resource observations, exported symbols, unresolved references and bounded
-diagnostics. Structural manifest coverage is not runtime completeness,
+diagnostics. Each `jsx-use` reference also carries nesting evidence: `parent`
+is the zero-based ordinal of the enclosing `jsx-use` reference in the same file
+(`null` at the file's root JSX; intrinsic elements such as `div` are transparent)
+and `depth` is the number of enclosing `jsx-use` references. JSX passed in an
+attribute is nested under the element that receives it.
+Structural manifest coverage is not runtime completeness,
 customer-package approval or an executed UX test. See the
 [ontology contract](../workspace/ONTOLOGY_CONTRACT.md).
 
