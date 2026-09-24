@@ -117,3 +117,66 @@ def test_synthesized_template_with_the_intake_flag_passes(tmp_path):
     assert resources[functions[0]]["Properties"]["Handler"] == "intake.admin_handler.handler"
     assert resources[functions[0]]["Properties"]["Runtime"] == "python3.12"
     assert audit_template(data) == []
+    # Finding 1 (PR #28 review): the API and Worker roles carry the partition Deny,
+    # and removing it from either is a release blocker.
+    for marker in ("DesignerWorkspaceApiRoleDefaultPolicy", "DesignerWorkspaceWorkerRoleDefaultPolicy"):
+        [policy] = [k for k, v in resources.items() if k.startswith(marker) and v["Type"] == "AWS::IAM::Policy"]
+        statements = resources[policy]["Properties"]["PolicyDocument"]["Statement"]
+        denies = [st for st in statements if st["Effect"] == "Deny"
+                  and st.get("Condition", {}).get("ForAnyValue:StringEquals", {}).get("dynamodb:LeadingKeys") == INTAKE_KEYS]
+        assert len(denies) == 1 and set(INTAKE_WRITES) <= set(denies[0]["Action"])
+        stripped = json.loads(json.dumps(data))
+        stripped["Resources"][policy]["Properties"]["PolicyDocument"]["Statement"] = [
+            st for st in statements if st["Effect"] != "Deny"]
+        assert any(policy in item for item in audit_template(stripped))
+
+
+# PR #28 review round 1: administrative partition write isolation ---------------
+
+INTAKE_WRITES = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem",
+                 "dynamodb:PartiQLInsert", "dynamodb:PartiQLUpdate", "dynamodb:PartiQLDelete"]
+
+
+def _workload(template, name, *, deny=True, deny_actions=None, allow_resource=None):
+    records = {"Fn::GetAtt": ["DesignerWorkspaceRecords", "Arn"]}
+    statements = [{"Effect": "Allow", "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"],
+                   "Resource": allow_resource or records}]
+    if deny:
+        statements.append({"Effect": "Deny", "Action": deny_actions or INTAKE_WRITES, "Resource": records,
+                           "Condition": {"ForAnyValue:StringEquals": {"dynamodb:LeadingKeys": INTAKE_KEYS}}})
+    template["Resources"][name] = {"Type": "AWS::IAM::Policy", "Properties": {
+        "PolicyDocument": {"Statement": statements}}}
+    return template
+
+
+def test_workload_roles_cannot_write_the_intake_administrative_partition():
+    """Finding 1: with intake configured, every non-admin table writer denies intake:deployment writes."""
+    names = ("DesignerWorkspaceApiRoleDefaultPolicyABC", "DesignerWorkspaceWorkerRoleDefaultPolicyABC")
+    good = _intake_admin(template())
+    for name in names:
+        _workload(good, name)
+    assert audit_template(good) == []
+    for name in names:
+        missing = _intake_admin(template())
+        for other in names:
+            _workload(missing, other, deny=other != name)
+        assert any(name in item and "intake:deployment" in item for item in audit_template(missing))
+    partial = _intake_admin(template())
+    _workload(partial, names[0], deny_actions=["dynamodb:PutItem"])
+    assert any("intake:deployment" in item for item in audit_template(partial))
+    wildcard = _intake_admin(template())
+    wildcard["Resources"]["OtherRoleDefaultPolicyABC"] = {"Type": "AWS::IAM::Policy", "Properties": {
+        "PolicyDocument": {"Statement": [{"Effect": "Allow", "Action": "dynamodb:*", "Resource": "*"}]}}}
+    assert any("OtherRoleDefaultPolicyABC" in item and "intake:deployment" in item
+               for item in audit_template(wildcard))
+
+
+def test_intake_partition_rule_applies_whenever_the_worker_is_intake_configured():
+    configured = _worker(template())
+    configured["Resources"]["DesignerWorkspaceWorkerABC"]["Properties"]["Environment"]["Variables"][
+        "INTAKE_DEPLOYMENT"] = "BankPlatform"
+    _workload(configured, "DesignerWorkspaceApiRoleDefaultPolicyABC", deny=False)
+    assert any("intake:deployment" in item for item in audit_template(configured))
+    unconfigured = template()
+    _workload(unconfigured, "DesignerWorkspaceApiRoleDefaultPolicyABC", deny=False)
+    assert audit_template(unconfigured) == []

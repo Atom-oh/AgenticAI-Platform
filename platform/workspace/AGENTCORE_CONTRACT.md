@@ -639,7 +639,15 @@ live evidence and the privacy redaction adapter remain outstanding.
   only. It has no API route, Function URL or `apigateway.amazonaws.com`
   permission, no `lambda:InvokeFunction` on other functions, and table access is
   limited by `dynamodb:LeadingKeys` to the `intake:deployment` partition
-  (asserted by `workspace/check_infra.py`).
+  (asserted by `workspace/check_infra.py`). Whenever intake is configured
+  (`intakeAdmin`, `intakeDenylistParam` or `intakeDeployment` context), the
+  Workspace API and Worker roles carry an explicit Deny of `PutItem`,
+  `UpdateItem`, `DeleteItem`, `BatchWriteItem` and PartiQL writes on that
+  partition (`ForAnyValue:StringEquals dynamodb:LeadingKeys`); reads and
+  `ConditionCheckItem` fences remain. `check_infra.py` fails any other policy
+  that can write the workspace table without that Deny. Without intake context
+  the admission path has no deployment scope (`policy-unavailable`) and the
+  main-stack template is unchanged.
 - **Reviewer routes.** `GET /studio-api/intake/reviews` and
   `POST /studio-api/intake/reviews/{decisionId}` require the workspace JWT, a
   current `adm_grant` covering the project with `review-internal`, **and**

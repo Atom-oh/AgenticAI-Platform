@@ -14,6 +14,7 @@ import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { denyIntakeAdministrationWrites, intakeConfigured } from './intake';
 
 export interface StudioWorkspaceProps {
   apiCode: lambda.Code;
@@ -269,6 +270,13 @@ export class StudioWorkspace extends Construct {
       actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:ConditionCheckItem'],
       resources: [table.tableArn],
     }));
+    // source-admission/1: only IntakeAdminFn writes the intake:deployment partition.
+    // Added with any intake context, so the default (intake-off) template is unchanged
+    // and check_infra requires the Deny whenever intake is configured.
+    if (intakeConfigured(this.node)) {
+      denyIntakeAdministrationWrites(apiRole, table);
+      denyIntakeAdministrationWrites(workerRole, table);
+    }
     apiRole.addToPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListUsers'],
       resources: [stack.formatArn({ service: 'cognito-idp', resource: 'userpool',
