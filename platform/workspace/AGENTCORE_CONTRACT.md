@@ -604,6 +604,7 @@ module-private ledger writer token):
 | `handles`, `transfers`, `transferUsage`, `cleanup` | Transfer handles, closed outputs, `{chunks, bytes}`, fenced handles awaiting cleanup |
 | `deadlineAt`, `authorizationExpiresAt`, `recoveryAt` | `min(now + deadlineMs, authorization expiry)`; JWT expiry; recovery start |
 | `completionScope` | Frozen `{nonSourceOperations, sourceChecks, sourceBindings}` accepted at admission |
+| `obligations` | Frozen `{sourceChecks: [{owner, kind, id, version}], sourceBindings: [...]}` taken from the validated input manifest |
 | `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate` |
 | `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
 
@@ -675,14 +676,21 @@ Completion is refused with `calls-unresolved` while any call of the attempt is
 still `intent` (no recorded outcome): the attempt stays open, the watchdog moves
 it to `recovery_required` with `unknownOutcome`, and `retry` marks such calls
 `unknown`.
-The frozen `completionScope` is enforced as an obligation. `stage_completion`
-returns `{writes, checks, sourceChecks, sourceBindings}`: `sourceChecks` must
-list exactly `completionScope.sourceChecks` distinct transactional version
-checks (`version` an existing record's int version) that are also submitted in
-`checks`, and `sourceBindings` exactly `completionScope.sourceBindings` distinct
-`{sourceKind, sourceId, revision, audience, documentId?}` bindings; otherwise
-`completion-obligations` with no transaction. Non-source operations (all writes
-and checks minus the declared source checks) above
+Admission validates the immutable input manifest: the object at
+`manifest.ref` (owned by the project) must hash to `manifest.hash` and be a JSON
+object whose `admissions` equals the admitted decisions exactly, whose
+`sourceChecks` are distinct `{owner, kind, id, version}` predicates that hold now
+(otherwise `authority-changed`), and whose distinct `sourceBindings`
+(`{sourceKind, sourceId, revision, audience, documentId?}`) match
+`completionScope` one for one; otherwise `manifest-invalid`. The source
+predicates are also checks of the admission transaction and are frozen as
+`obligations`. At completion the ledger rechecks and itself submits every frozen
+source predicate (a changed source fails the job with `authority-changed`).
+`stage_completion` returns `{writes, checks, sourceBindings, sourceChecks?}`:
+`sourceBindings` must equal the frozen bindings exactly, a declared
+`sourceChecks` must equal the frozen predicates exactly, and a staged check of
+a frozen record at another version is refused, all with
+`completion-obligations`. Non-source operations above
 `completionScope.nonSourceOperations` return `execution-completion-scope`.
 `source.analyze` completion (`finish` and `reconcile`) returns
 `completion-unavailable` (`reason: source-staging-adapter`) until the ontology
@@ -743,7 +751,7 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
 `completion-contention`, `completion-obligations`, `completion-unavailable`,
-`completion-invalid`, `calls-unresolved`, `profile-invalid`,
+`completion-invalid`, `calls-unresolved`, `profile-invalid`, `manifest-invalid`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
 

@@ -17,6 +17,7 @@ from workspace import execution_ledger as _ledger_module  # noqa: E402
 
 OWNER = "project:p1"
 import hashlib as _hashlib  # noqa: E402
+import json as _json_module  # noqa: E402
 XFER_DATA = bytes(range(256)) * 2048 + b"tail"            # the admitted derivative served by the xfer fixture
 ADM = [{"decisionId": "adm-1", "revision": "1", "artifactHash": _hashlib.sha256(XFER_DATA).hexdigest()}]
 
@@ -75,10 +76,25 @@ def bump_authority(storage, project_id):
     storage.put(OWNER, "project", {**project, "members": members}, project["version"])
 
 
+def make_manifest(storage, admissions=ADM, **extra):
+    """The immutable input manifest: exactly the admitted decisions plus frozen source obligations."""
+    body = _json_module.dumps({"admissions": admissions, **extra}, sort_keys=True).encode()
+    digest = _hashlib.sha256(body).hexdigest()
+    key = storage.key_for(OWNER, "run", "manifests", f"{digest}.json")
+    try:
+        storage.put_blob_once(key, body, "application/json")
+    except Exception:
+        pass
+    return {"ref": key, "hash": digest}
+
+
 def admit(ledger, key="req-1", **over):
     project = ledger.storage.get(OWNER, "project", "p1")
+    extra = over.pop("manifest_extra", {})
+    if "manifest" not in over:
+        over["manifest"] = make_manifest(ledger.storage, over.get("admissions", ADM), **extra)
     args = dict(request_key=key, actor="designer-1", project_id="p1", operation="design.generate",
-                model="model-a", manifest={"ref": "m1", "hash": "b" * 64}, admissions=ADM,
+                model="model-a", manifest=None, admissions=ADM,
                 backend_config_revision="cfg-1", authorization_expires_at=1_800_000_000_000 + 3_600_000,
                 project_authority={"authorityRevision": project["authorityRevision"],
                                    "membershipDigest": schema.digest(project["members"])})
@@ -231,7 +247,9 @@ def test_completion_scope_preflight(env):
         admit(ledger, key="k51", completion_scope={"nonSourceOperations": 12, "sourceChecks": 1, "sourceBindings": 51})
     assert error.value.code == "execution-completion-scope"
     assert len(storage.table().transactions) == before          # no write, no dispatch, no model call
-    job = admit(ledger, key="k88", completion_scope={"nonSourceOperations": 12, "sourceChecks": 88, "sourceBindings": 50})
+    fenced, bound = source_fences(storage)
+    job = admit(ledger, key="k88", completion_scope={"nonSourceOperations": 12, "sourceChecks": 88, "sourceBindings": 50},
+                manifest_extra={"sourceChecks": fenced, "sourceBindings": bound})
     assert job["completionScope"]["sourceChecks"] == 88
 
 
@@ -902,7 +920,7 @@ def test_design_release_chain_retrieves_manifest_and_approved_source_through_the
     storage.put_blob_once(source_key, source, "application/zip")
     prior = {"sourceKind": "run-round", "sourceId": "run-1", "revision": "2",
              "sha256": hashlib.sha256(source).hexdigest(), "key": source_key}
-    manifest = _json.dumps({"priors": [prior]}).encode()
+    manifest = _json.dumps({"admissions": ADM, "priors": [prior]}).encode()
     manifest_key = storage.key_for(OWNER, "run", "run-1", "release-manifest.json")
     storage.put_blob_once(manifest_key, manifest, "application/json")
     job = run_job(ledger, operation="design.release",
@@ -927,7 +945,7 @@ def test_prior_not_listed_or_revoked_is_refused(xfer):
     storage.put_blob_once(key, data, "application/zip")
     prior = {"sourceKind": "run-round", "sourceId": "revoked-round", "revision": "1",
              "sha256": hashlib.sha256(data).hexdigest(), "key": key}
-    manifest = _json.dumps({"priors": [prior]}).encode()
+    manifest = _json.dumps({"admissions": ADM, "priors": [prior]}).encode()
     manifest_key = storage.key_for(OWNER, "run", "run-2", "manifest.json")
     storage.put_blob_once(manifest_key, manifest, "application/json")
     job = run_job(ledger, operation="design.release",
@@ -957,7 +975,8 @@ GOOD = {"context": ("ok", {}), "generate": ("ok", {}), "compile": ("ok", {"sourc
 
 
 def release_manifest(storage):
-    body = _json.dumps({"approved": {"sourceHash": "s" * 64, "bundleHash": "u" * 64}, "priors": []}).encode()
+    body = _json.dumps({"admissions": ADM, "approved": {"sourceHash": "s" * 64, "bundleHash": "u" * 64},
+                        "priors": []}).encode()
     key = storage.key_for(OWNER, "run", "run-r", "release-manifest.json")
     try:
         storage.put_blob_once(key, body, "application/json")
@@ -1624,23 +1643,47 @@ WIDE_SCOPE = {"nonSourceOperations": 12, "sourceChecks": 88, "sourceBindings": 5
 
 
 def source_fences(storage, checks=88, bindings=50):
-    records = [storage.put(OWNER, "asset", {"id": f"src-{i}", "status": "ready"}) for i in range(checks)]
+    records = []
+    for i in range(checks):
+        record = storage.get(OWNER, "asset", f"src-{i}") or storage.put(OWNER, "asset", {"id": f"src-{i}",
+                                                                                        "status": "ready"})
+        records.append(record)
     fenced = [{"owner": OWNER, "kind": "asset", "id": row["id"], "version": row["version"]} for row in records]
     bound = [{"sourceKind": "asset", "sourceId": f"src-{i}", "revision": "1", "audience": "project"}
              for i in range(bindings)]
     return fenced, bound
 
 
-@pytest.mark.parametrize("supplied", ["none", "project-only", "short-checks", "short-bindings", "undeclared"])
-def test_frozen_source_fences_cannot_be_omitted_at_completion(xfer, supplied):
+def chain_with_scope(xfer, scope):
+    """chain() for a job admitted with a frozen completion scope whose manifest lists the exact obligations."""
+    import functools
+    fenced, bound = source_fences(xfer[0], scope["sourceChecks"], scope["sourceBindings"])
+    original = globals()["admit"]
+    globals()["admit"] = functools.partial(original, completion_scope=scope,
+                                           manifest_extra={"sourceChecks": fenced, "sourceBindings": bound})
+    try:
+        return chain(xfer, key="req-scoped")
+    finally:
+        globals()["admit"] = original
+
+
+NEVER_ADMITTED = {"sourceKind": "asset", "sourceId": "never-admitted", "revision": "1", "audience": "project"}
+
+
+@pytest.mark.parametrize("supplied", ["none", "short-bindings", "unrelated-binding", "unrelated-checks"])
+def test_frozen_source_obligations_require_exact_correspondence(xfer, supplied):
+    """Review 2 finding 5: completion must correspond exactly to the frozen decisions, bindings and predicates."""
     storage, ledger, _, _ = xfer
     job, result = chain_with_scope(xfer, WIDE_SCOPE)
     fenced, bound = source_fences(storage)
+    unrelated = [storage.put(OWNER, "asset", {"id": f"other-{i}", "status": "ready"}) for i in range(88)]
+    unrelated = [{"owner": OWNER, "kind": "asset", "id": row["id"], "version": row["version"]} for row in unrelated]
     staged = {"none": None,
-              "project-only": {"writes": [], "checks": [], "sourceChecks": [], "sourceBindings": []},
-              "short-checks": {"writes": [], "checks": fenced[:-1], "sourceChecks": fenced[:-1], "sourceBindings": bound},
-              "short-bindings": {"writes": [], "checks": fenced, "sourceChecks": fenced, "sourceBindings": bound[:-1]},
-              "undeclared": {"writes": [], "checks": fenced[1:], "sourceChecks": fenced, "sourceBindings": bound}}[supplied]
+              "short-bindings": {"writes": [], "checks": [], "sourceBindings": bound[:-1]},
+              "unrelated-binding": {"writes": [], "checks": fenced, "sourceChecks": fenced,
+                                    "sourceBindings": [*bound[:-1], NEVER_ADMITTED]},
+              "unrelated-checks": {"writes": [], "checks": unrelated, "sourceChecks": unrelated,
+                                   "sourceBindings": bound}}[supplied]
     with pytest.raises(LedgerError) as error:
         finish(ledger, job, "succeeded", result,
                stage_completion=None if staged is None else (lambda prepared: staged))
@@ -1648,15 +1691,41 @@ def test_frozen_source_fences_cannot_be_omitted_at_completion(xfer, supplied):
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
 
 
-def chain_with_scope(xfer, scope):
-    """chain() for a job admitted with a frozen completion scope."""
-    import functools
-    original = globals()["admit"]
-    globals()["admit"] = functools.partial(original, completion_scope=scope)
-    try:
-        return chain(xfer, key="req-scoped")
-    finally:
-        globals()["admit"] = original
+def test_a_frozen_source_changed_after_admission_stops_completion(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain_with_scope(xfer, WIDE_SCOPE)
+    fenced, bound = source_fences(storage)
+    record = storage.get(OWNER, "asset", "src-7")
+    storage.put(OWNER, "asset", {**record, "status": "revised"}, record["version"])
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, stage_completion=lambda prepared: {"sourceBindings": bound})
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+
+
+@pytest.mark.parametrize("case", ["other-decision", "missing-blob", "hash-mismatch", "scope-count", "stale-check"])
+def test_admission_validates_the_immutable_input_manifest(env, case):
+    storage, ledger, _ = env
+    fenced, bound = source_fences(storage, 2, 1)
+    extra, scope = {}, {"nonSourceOperations": 12, "sourceChecks": 2, "sourceBindings": 1}
+    admissions = ADM
+    if case == "other-decision":
+        manifest = make_manifest(storage, [{**ADM[0], "decisionId": "adm-9"}], sourceChecks=fenced,
+                                 sourceBindings=bound)
+    elif case == "missing-blob":
+        manifest = {"ref": storage.key_for(OWNER, "run", "manifests", "absent.json"), "hash": "c" * 64}
+    elif case == "hash-mismatch":
+        manifest = {**make_manifest(storage, ADM, sourceChecks=fenced, sourceBindings=bound), "hash": "d" * 64}
+    elif case == "scope-count":
+        manifest = make_manifest(storage, ADM, sourceChecks=fenced[:1], sourceBindings=bound)
+    else:
+        manifest = make_manifest(storage, ADM, sourceChecks=[{**fenced[0], "version": 99}, fenced[1]],
+                                 sourceBindings=bound)
+    before = len(storage.table().transactions)
+    with pytest.raises(LedgerError) as error:
+        admit(ledger, key="k-" + case, manifest=manifest, admissions=admissions, completion_scope=scope)
+    assert error.value.code == ("authority-changed" if case == "stale-check" else "manifest-invalid")
+    assert len(storage.table().transactions) == before
 
 
 def test_complete_frozen_source_fences_commit_with_the_terminal_job(xfer):
@@ -1664,7 +1733,7 @@ def test_complete_frozen_source_fences_commit_with_the_terminal_job(xfer):
     job, result = chain_with_scope(xfer, WIDE_SCOPE)
     fenced, bound = source_fences(storage)
     done = finish(ledger, job, "succeeded", result, stage_completion=lambda prepared: {
-        "writes": [], "checks": fenced, "sourceChecks": fenced, "sourceBindings": bound})
+        "writes": [], "checks": fenced[:3], "sourceChecks": fenced, "sourceBindings": list(reversed(bound))})
     assert done["status"] == "succeeded"
     assert len([e for e in storage.table().transactions[-1]["TransactItems"] if "ConditionCheck" in e]) == 90   # project + admission + 88 source
 

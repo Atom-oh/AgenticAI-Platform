@@ -537,6 +537,7 @@ class Ledger:
                 or project.get("authorityRevision") != project_authority.get("authorityRevision")
                 or schema.digest(members) != project_authority.get("membershipDigest")):
             raise LedgerError("authority-changed")
+        obligations, source_checks = self._admitted_manifest(owner, manifest, admissions, scope)
         job_id = "exec-" + secrets.token_hex(16)
         quotas = self._quota_writes(owner, actor, project_id, add=job_id)   # raises concurrency-actor/-project
         job = {"id": job_id, "task": TASK, "executionSchemaVersion": SCHEMA_VERSION, "requestKey": request_key,
@@ -552,13 +553,56 @@ class Ledger:
                "deadlineAt": min(now + profile["deadlineMs"], authorization_expires_at),
                "authorizationExpiresAt": authorization_expires_at, "result": None, "error": None,
                "unknownOutcome": False, "authority": project_authority, "completionScope": scope,
+               "obligations": obligations,
                "supersedes": supersedes, "ops": {}, "clock": now, "dueId": None}
         marker_write = {"owner": owner, "kind": "exec_request",
                         "item": {"id": marker_id, "jobId": job_id, "inputHash": input_hash}, "expected_version": None}
         due = self._due_writes(owner, None, job)
         # The project record's version is a transactional fence: a concurrent membership change aborts admission.
         return self._put(owner, job, None, extra_writes=[marker_write, *quotas, *due],
-                         checks=[{"owner": owner, "kind": "project", "id": project_id, "version": project["version"]}])
+                         checks=[{"owner": owner, "kind": "project", "id": project_id, "version": project["version"]},
+                                 *source_checks])
+
+    _BINDING_FIELDS = frozenset({"sourceKind", "sourceId", "revision", "audience"})
+
+    def _binding(self, row):
+        if (not isinstance(row, dict) or not self._BINDING_FIELDS <= set(row)
+                or set(row) - self._BINDING_FIELDS - {"documentId"}
+                or not all(isinstance(value, str) and value for value in row.values())):
+            return None
+        return json.dumps(row, sort_keys=True, ensure_ascii=False)
+
+    def _admitted_manifest(self, owner, manifest, admissions, scope):
+        """Validate the immutable input manifest and freeze its exact obligations (review 2, RUN-04/05).
+
+        The manifest names exactly the admitted decisions; its source checks are current version predicates of
+        existing records and, with its source bindings, match the accepted completion scope one for one.
+        """
+        try:
+            if not self.storage.owns_key(owner, manifest["ref"]):
+                raise ValueError("foreign manifest")
+            data = self.storage.get_blob(manifest["ref"])
+            document = json.loads(data)
+        except (ValueError, FileNotFoundError, RuntimeError, TypeError) as error:
+            raise LedgerError("manifest-invalid") from error
+        if hashlib.sha256(data).hexdigest() != manifest["hash"] or not isinstance(document, dict):
+            raise LedgerError("manifest-invalid")
+        if document.get("admissions") != admissions:
+            raise LedgerError("manifest-invalid")          # exactly the admitted decisions, revisions and hashes
+        checks, bindings = document.get("sourceChecks", []), document.get("sourceBindings", [])
+        if not isinstance(checks, list) or not isinstance(bindings, list):
+            raise LedgerError("manifest-invalid")
+        frozen = [self._authority_check(row) for row in checks]
+        identities = {(row["owner"], row["kind"], row["id"]) for row in frozen if row}
+        keys = {self._binding(row) for row in bindings}
+        if (None in frozen or len(identities) != len(checks) or None in keys or len(keys) != len(bindings)
+                or len(checks) != scope["sourceChecks"] or len(bindings) != scope["sourceBindings"]):
+            raise LedgerError("manifest-invalid")
+        for row in frozen:
+            current = self.storage.get(row["owner"], row["kind"], row["id"])
+            if not current or current.get("version") != row["version"]:
+                raise LedgerError("authority-changed")
+        return {"sourceChecks": frozen, "sourceBindings": copy.deepcopy(bindings)}, frozen
 
     def _may_act(self, owner, job, actor):
         if actor == job["actor"]:
@@ -1415,36 +1459,49 @@ class Ledger:
                 raise LedgerError("deadline-budget")
         return guard
 
-    def _check_obligations(self, job, writes, checks, staged):
-        """The frozen completion scope is an obligation, not a ceiling (ONTOLOGY_CONTRACT completion scope).
+    def _frozen(self, job):
+        return job.get("obligations") or {"sourceChecks": [], "sourceBindings": []}
 
-        Every frozen source check must be present as a transactional version check of an existing record, and
-        every frozen source binding must be declared; nothing may be omitted or shrunk at finish. Non-source
-        operations may not exceed the reserved count.
+    def _fresh_obligations(self, owner, job):
+        """Every frozen source predicate still holds; a changed source stops the execution (authority-changed)."""
+        for row in self._frozen(job)["sourceChecks"]:
+            current = self.storage.get(row["owner"], row["kind"], row["id"])
+            if not current or current.get("version") != row["version"]:
+                self._source_revoked(owner, job, {"kind": row["kind"], "id": row["id"]})
+
+    def _check_obligations(self, job, writes, checks, staged):
+        """Exact correspondence with the frozen obligations (ONTOLOGY_CONTRACT completion scope, review 2).
+
+        The ledger itself submits every frozen source predicate; the staged publication must declare exactly the
+        frozen source bindings (and, if it declares source checks, exactly the frozen ones). A staged check of a
+        frozen record at another version is refused. Returns the checks list with the frozen predicates merged.
         """
+        frozen = self._frozen(job)
+        expected = {json.dumps(row, sort_keys=True) for row in frozen["sourceChecks"]}
+        if "sourceChecks" in staged:
+            declared = [json.dumps(self._authority_check(row), sort_keys=True) if self._authority_check(row) else None
+                        for row in staged["sourceChecks"]]
+            if None in declared or len(set(declared)) != len(declared) or set(declared) != expected:
+                raise LedgerError("completion-obligations")
+        bindings = [self._binding(row) for row in staged.get("sourceBindings", [])]
+        if (None in bindings or len(set(bindings)) != len(bindings)
+                or set(bindings) != {self._binding(row) for row in frozen["sourceBindings"]}):
+            raise LedgerError("completion-obligations")
+        by_identity = {(row["owner"], row["kind"], row["id"]): row["version"] for row in frozen["sourceChecks"]}
+        merged = []
+        for row in checks:
+            identity = (row.get("owner"), row.get("kind"), row.get("id")) if isinstance(row, dict) else None
+            if identity in by_identity:
+                if row.get("version") != by_identity[identity]:
+                    raise LedgerError("completion-obligations")
+                continue                                     # submitted once, below
+            merged.append(row)
+        merged.extend(copy.deepcopy(frozen["sourceChecks"]))
         scope = job["completionScope"]
-        declared, bindings = staged.get("sourceChecks", []), staged.get("sourceBindings", [])
-        submitted = {json.dumps(row, sort_keys=True, default=str) for row in checks if isinstance(row, dict)}
-        identities, binding_keys = set(), set()
-        for row in declared:
-            if (not isinstance(row, dict) or set(row) != {"owner", "kind", "id", "version"}
-                    or type(row["version"]) is not int or row["version"] < 1
-                    or json.dumps(row, sort_keys=True, default=str) not in submitted):
-                raise LedgerError("completion-obligations")
-            identities.add((row["owner"], row["kind"], row["id"]))
-        for row in bindings:
-            if (not isinstance(row, dict) or not {"sourceKind", "sourceId", "revision", "audience"} <= set(row)
-                    or set(row) - {"sourceKind", "sourceId", "revision", "audience", "documentId"}
-                    or not all(isinstance(value, str) and value for value in row.values())):
-                raise LedgerError("completion-obligations")
-            binding_keys.add(json.dumps(row, sort_keys=True))
-        if (len(identities) != len(declared) or len(identities) != scope["sourceChecks"]
-                or len(binding_keys) != len(bindings) or len(binding_keys) != scope["sourceBindings"]):
-            raise LedgerError("completion-obligations", expected={"sourceChecks": scope["sourceChecks"],
-                                                                  "sourceBindings": scope["sourceBindings"]})
-        if len(writes) + len(checks) - len(declared) > scope["nonSourceOperations"]:
+        if len(writes) + len(merged) - len(frozen["sourceChecks"]) > scope["nonSourceOperations"]:
             raise LedgerError("execution-completion-scope",
                               limits={"nonSourceOperations": scope["nonSourceOperations"]})
+        return merged
 
     def _complete(self, owner, before, job, *, status, result, op, stage_completion, recovery=False):
         """Checks, prepares and submits the terminal transition plus staged writes in ONE transaction."""
@@ -1472,6 +1529,7 @@ class Ledger:
             raise LedgerError("status-inconsistent")
         self._check_result_manifest(job, stages, result)
         self._reverify_chain(owner, job, stages, attempt)
+        self._fresh_obligations(owner, before)
         protected, guard = self._protect(owner, before, recovery=recovery)
         after = {**job, "status": status, "result": copy.deepcopy(result), "completedAt": self.storage.clock()}
         after["cleanup"] = self._cleanup_for(after)
@@ -1490,9 +1548,9 @@ class Ledger:
                 raise LedgerError("completion-invalid")
             writes.extend(staged.get("writes", []))
             checks.extend(staged.get("checks", []))
+        checks = self._check_obligations(job, writes, checks, staged)
         if len(writes) + len(checks) > TRANSACTION_LIMIT:
             raise LedgerError("execution-completion-scope", limits={"transaction": TRANSACTION_LIMIT})
-        self._check_obligations(job, writes, checks, staged)
         try:
             return self.storage.put_many(writes, checks, retry_conflicts=False, _writer=_WRITER,
                                          before_attempt=guard)[0]
