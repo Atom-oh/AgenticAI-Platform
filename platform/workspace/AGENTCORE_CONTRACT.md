@@ -698,10 +698,24 @@ live evidence and the privacy redaction adapter remain outstanding.
   and uses only the verified index), each `GET /intake/reviews` item and the
   whole response after all reads (pending decision, policy, the actor's grants,
   transcription image lineage and source fences). Model calls and commits use
-  the same recheck: `transcription.transcribe` immediately before `generate`,
+  the same recheck: `transcription.transcribe` (which sends the region in the
+  delivered vision image's coordinates, checking that image's PNG dimensions
+  against the recorded `downscale-WxH` transform, while the decision's
+  lineage keeps the canonical normalized-image region) immediately before `generate`
+  and again before its commit, keeping the original `Sources` reader so the
+  pre-generation source observations fence the commit,
   `admission.decide` (every admission path) before and on each commit attempt,
-  `request_image` before queueing, and review approval/publication on each
-  attempt: the source fences (`Sources.recheck`) and the exact decision,
+  `request_image` before queueing (the job freezes the project
+  `authorityRevision` and the earliest known authorization deadline, the
+  verified scope's `authorizationExpiresAt` or the token `exp`, never extended
+  by the five-minute fallback used only when neither is known; its id and
+  request hash exclude the token deadline, so a refreshed token replays it
+  while the job keeps its deadline; the job also persists every observed
+  source record version, part of its id, so a revoked and restored asset is a
+  new request), the Worker's `intake-image` processing and commit (the scope
+  keeps the job's authorization deadline; the frozen epoch and the observed
+  source versions are required before processing and on every attempt), and review
+  approval/publication on each attempt: the source fences (`Sources.recheck`) and the exact decision,
   policy, provenance and grant versions must still be current, schema-valid and
   unexpired. Grants and provenance pass `records.validate` on every use; a
   grant must name `review-internal` for the reviewing actor and provenance must

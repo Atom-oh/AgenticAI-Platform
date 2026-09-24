@@ -71,7 +71,7 @@ def prepare(host, scope, source_ref, *, claims=None):
 
 
 def admit_image(host, scope, source_ref, *, data_class, ocr, claims=None, prepared=None, identifier=None,
-                completion=None, policy_binding=None):
+                completion=None, policy_binding=None, guards=()):
     project_id = admission._project(scope)
     if data_class not in records.DATA_CLASSES:
         return admission._blocked(["data-class-ineligible"])
@@ -121,7 +121,7 @@ def admit_image(host, scope, source_ref, *, data_class, ocr, claims=None, prepar
         derivation={"profile": images.PROFILE, "originalHash": normalized["originalSha256"],
                     "derivativeHash": normalized["sha256"]},
         receipt=receipt, receipt_bytes=schema.canonical(receipt), payload=normalized["bytes"],
-        content_type="image/png", blocking=blocking, identifier=identifier, completion=completion,
+        content_type="image/png", blocking=blocking, identifier=identifier, completion=completion, guards=guards,
         extra_blobs={"vision.png": (vision, "image/png"), "ocr.json": ocr_bytes,
                      "normalization.json": normalization})
 

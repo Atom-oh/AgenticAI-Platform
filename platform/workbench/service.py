@@ -31,22 +31,32 @@ _TIMED_AUTHORITY = {
     "adm_provenance": ("source-upstream-revoked", "원본 출처 등록이 만료되었거나 회수되었습니다."),
     "adm_grant": ("source-upstream-revoked", "원본 검토 권한이 만료되었거나 회수되었습니다."),
 }
+UPSTREAM_ADMISSION_KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision")
 
 
-def check_source_deadlines(storage, checks, claims=None):
+def check_source_deadlines(storage, checks, claims=None, deadline=None):
     """Recheck the aggregate deadline after reads and transaction preparation.
 
     IAM-administered authority records whose validity is time-bound (organization
     publication capabilities, sharing policies and admission lineage) expire
-    without a version change, so their currency is rechecked here, immediately before every
-    transaction submission, in addition to the version fence.
+    without a version change, so their schema, exact version, status and expiry
+    are rechecked here, immediately before every transaction submission.
+    `deadline` is the verified scope's `authorizationExpiresAt` (ms), which binds
+    even when the claims carry no `exp` (a server-side context for deferred work).
     """
     deadlines = []
+    now = storage.clock()
+    if deadline is not None and (type(deadline) is not int or deadline <= now):
+        fail(401, "authorization-expired", "인증이 만료되었습니다.")
     for check in checks:
         if check["kind"] in _TIMED_AUTHORITY:
-            from intake.records import is_current
+            from intake import records
             row = storage.get(check["owner"], check["kind"], check["id"])
-            if not row or row["version"] != check["version"] or not is_current(row, storage.clock()):
+            try:
+                row = records.validate(check["kind"], row) if row else None
+            except ValueError:
+                row = None
+            if not row or row["version"] != check["version"] or not records.is_current(row, now):
                 code, message = _TIMED_AUTHORITY[check["kind"]]
                 fail(403 if check["kind"] == "capability" else 409, code, message)
             continue
@@ -60,7 +70,6 @@ def check_source_deadlines(storage, checks, claims=None):
     expiry = (claims or {}).get("exp")
     if expiry is None and not deadlines:
         return
-    now = storage.clock()
     if expiry is not None and int(expiry) * 1000 <= now:
         fail(401, "authorization-expired", "인증이 만료되었습니다.")
     if deadlines and min(deadlines) <= now:
@@ -180,6 +189,9 @@ class Service:
         project = self.scope["project"]
         if self.claims.get("exp") is not None and int(self.claims["exp"]) * 1000 <= self.storage.clock():
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        bound = self.scope.get("authorizationExpiresAt")
+        if bound is not None and (type(bound) is not int or bound <= self.storage.clock()):
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
         if len(writes) + 1 > 100:
             fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         unique = {}
@@ -207,7 +219,7 @@ class Service:
             # retry must return there for reauthorization before another send.
             observed = list(unique.values())
             return self.storage.put_many([*writes, fence], checks=observed, retry_conflicts=False,
-                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims))[:-1]
+                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims, bound))[:-1]
         except Conflict as error:
             raise CollaborationError(409, "conflict", "프로젝트 또는 근거가 변경되었습니다.") from error
 

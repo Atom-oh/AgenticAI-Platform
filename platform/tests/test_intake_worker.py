@@ -224,3 +224,152 @@ def test_policy_retired_during_the_image_request_queues_no_job(env, monkeypatch)
         admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive", kind="image")
     assert error.value.code == "policy-changed"
     assert env.api.storage.list(f"project:{env.pid}", "job") == []
+
+
+# PR #28 review round 4 ----------------------------------------------------------
+
+def _queue(env, ref, data_class="synthetic", claims=None):
+    queued = admission.request(env.api, env.scope(), ref, data_class=data_class, kind="image", claims=claims)
+    assert queued["status"] == "queued"
+    return queued, json.loads(env.api.lambda_client.calls[-1]["Payload"])
+
+
+def test_authorization_expiring_during_ocr_commits_nothing(env):
+    """Review 4, finding 1: the job's authorization deadline is enforced before every commit attempt."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    storage = env.api.storage
+    clock = storage.clock
+
+    def ocr(data):
+        storage.clock = lambda: clock() + 600_000  # past the 5-minute request authorization
+        return OCR_TEXT, "complete"
+
+    worker = worker_for(env)
+    worker.ocr = ocr
+    outcome = worker.handle(invoked)
+    storage.clock = clock
+    owner = f"project:{env.pid}"
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+    assert storage.get(owner, "job", queued["job"]["id"])["status"] == "failed"
+
+
+@pytest.mark.parametrize("moment", ["before-processing", "during-ocr"])
+def test_removed_and_restored_member_cannot_resurrect_a_queued_image_job(env, moment):
+    """Review 4, finding 2: the queued job freezes the membership authority epoch."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+
+    def remove_and_restore():
+        project = storage.get(owner, "project", env.pid)
+        stored = {k: v for k, v in project.items() if k not in ("createdAt", "updatedAt", "version",
+                                                                 "authorityRevision")}
+        members = dict(stored["members"])
+        member = members.pop("alice")
+        removed = storage.put(owner, "project", {**stored, "members": members}, expected_version=project["version"])
+        storage.put(owner, "project", {**stored, "members": {**members, "alice": member}},
+                    expected_version=removed["version"])
+
+    worker = worker_for(env)
+    if moment == "before-processing":
+        remove_and_restore()
+    else:
+        ocr = worker.ocr
+
+        def racing(data):
+            remove_and_restore()
+            return ocr(data)
+        worker.ocr = racing
+    outcome = worker.handle(invoked)
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+
+
+def test_refreshed_token_replays_the_same_image_request(env):
+    """Review 4, finding 4 (Minor): request identity is independent of the token's expiry."""
+    env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    now = env.api.storage.clock() // 1000
+    first, _ = _queue(env, ref, data_class="internal-non-sensitive", claims={"sub": "alice", "exp": now + 600})
+    second, _ = _queue(env, ref, data_class="internal-non-sensitive", claims={"sub": "alice", "exp": now + 1200})
+    assert second["job"]["id"] == first["job"]["id"] and second["decisionId"] == first["decisionId"]
+    job = env.api.storage.get(f"project:{env.pid}", "job", first["job"]["id"])
+    assert job["input"]["authorizationExpiresAt"] == (now + 600) * 1000  # the existing deadline is kept
+
+
+# PR #28 review round 5 ----------------------------------------------------------
+
+@pytest.mark.parametrize("claims_offset", [None, 600])
+def test_queued_image_job_keeps_the_scope_authorization_deadline(env, claims_offset):
+    """Review 5, finding 1: queueing never extends the verified scope's deadline (no 5-minute fallback)."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    now = storage.clock()
+    scope = {**env.scope(), "authorizationExpiresAt": now + 2000}
+    claims = None if claims_offset is None else {"sub": "alice", "exp": now // 1000 + claims_offset}
+    queued = admission.request(env.api, scope, ref, data_class="synthetic", kind="image", claims=claims)
+    job = storage.get(owner, "job", queued["job"]["id"])
+    assert job["input"]["authorizationExpiresAt"] == now + 2000  # the earliest applicable deadline
+    invoked = json.loads(env.api.lambda_client.calls[-1]["Payload"])
+    clock = storage.clock
+    storage.clock = lambda: clock() + 10_000
+    try:
+        outcome = worker_for(env).handle(invoked)
+    finally:
+        storage.clock = clock
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+
+
+def test_expired_scope_deadline_queues_no_image_job(env):
+    """Review 5, finding 1: an already expired scope deadline is refused before queueing."""
+    env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    scope = {**env.scope(), "authorizationExpiresAt": env.api.storage.clock() - 1}
+    with pytest.raises(Exception) as error:
+        admission.request(env.api, scope, ref, data_class="synthetic", kind="image")
+    assert getattr(error.value, "status", None) == 401
+    assert env.api.storage.list(f"project:{env.pid}", "job") == []
+
+
+
+def _revoke_and_restore_asset(env, identifier):
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    asset = storage.get(owner, "asset", identifier)
+    stored = {k: v for k, v in asset.items() if k not in ("createdAt", "updatedAt", "version")}
+    revoked = storage.put(owner, "asset", {**stored, "accessRevoked": True}, asset["version"])
+    storage.put(owner, "asset", stored, revoked["version"])
+
+
+@pytest.mark.parametrize("moment", ["before-processing", "during-ocr"])
+def test_asset_revoked_and_restored_after_queueing_cannot_complete_the_job(env, moment):
+    """Review 5, finding 2: the job persists the observed source versions and enforces them."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    worker = worker_for(env)
+    if moment == "before-processing":
+        _revoke_and_restore_asset(env, "flow")
+    else:
+        ocr = worker.ocr
+
+        def racing(data):
+            _revoke_and_restore_asset(env, "flow")
+            return ocr(data)
+        worker.ocr = racing
+    outcome = worker.handle(invoked)
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+    job = storage.get(owner, "job", queued["job"]["id"])
+    assert job["status"] == "failed"
+    assert job["input"]["observed"] == [{"owner": owner, "kind": "asset", "id": "flow", "version": 1}]

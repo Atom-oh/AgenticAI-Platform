@@ -173,7 +173,7 @@ def _expiry(now, *records_):
 
 def decide(host, scope, *, reader, source, data_class, policy, artifact, derivation, receipt, receipt_bytes,
            payload, blocking=(), identity=(), extra_checks=(), extra_blobs=None, content_type="application/json",
-           lineage=None, identifier=None, completion=None, generation=1):
+           lineage=None, identifier=None, completion=None, generation=1, guards=()):
     """Seal and commit one decision after the current policy/provenance checks.
 
     `payload` is the canonical derivative object whose sha256 is the derivative
@@ -241,12 +241,18 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     # Final authority recheck immediately before the commit and before every
     # transaction attempt: policy, provenance, upstream (`extra_checks`, e.g. a
     # transcription's image lineage) and source fences, including expiry.
-    guard = Authority(host, reader, checks)
-    guard.recheck()
+    authority = Authority(host, reader, checks)
+
+    def guard():
+        authority.recheck()
+        for extra_guard in guards:  # caller-owned checks, e.g. a Worker job's frozen epoch
+            extra_guard()
+
+    guard()
     try:
         return storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed}, *extra],
                                 checks=list(unique.values()), retry_conflicts=False,
-                                before_attempt=guard.recheck)[0]
+                                before_attempt=guard)[0]
     except Conflict:
         existing = storage.get(owner, "adm_decision", identifier)
         if existing and records.digest_record(existing) == sealed["hash"]:
@@ -299,6 +305,31 @@ def request(host, scope, source_ref, *, data_class, claims=None, kind="document-
                   payload=schema.canonical(derived["pages"]), blocking=blocking, generation=generation)
 
 
+def _authorization_deadline(storage, scope, claims):
+    """The earliest applicable authorization deadline for deferred work.
+
+    The verified scope's `authorizationExpiresAt` and the claims' `exp` both
+    bound the request; the job keeps the earlier one. The bounded fallback is used
+    only when neither is known, so it can never extend a known deadline.
+    """
+    known = []
+    bound = scope.get("authorizationExpiresAt")
+    if bound is not None:
+        if type(bound) is not int:
+            raise AdmissionError("authorization-expired", 401)
+        known.append(bound)
+    expiry = claims.get("exp") if isinstance(claims, dict) else None
+    if expiry is not None:
+        try:
+            known.append(int(expiry) * 1000)
+        except (TypeError, ValueError, OverflowError):
+            raise AdmissionError("authorization-expired", 401) from None
+    deadline = min(known) if known else storage.clock() + CURSOR_MS
+    if deadline <= storage.clock():
+        raise AdmissionError("authorization-expired", 401)
+    return deadline
+
+
 def request_image(host, scope, source_ref, *, data_class, claims=None):
     """Queue the Worker `intake-image` task (Pillow runs only in the Worker image).
 
@@ -325,16 +356,29 @@ def request_image(host, scope, source_ref, *, data_class, claims=None):
     reader.resolve(ref)
     # Final recheck (policy version/status/expiry and source fences) after the
     # last read, immediately before the job is queued.
-    Authority(host, reader, [_check(INTAKE_OWNER, "adm_policy", policy)]).recheck()
+    fences = Authority(host, reader, [_check(INTAKE_OWNER, "adm_policy", policy)]).recheck()
     source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
-    expiry = claims.get("exp") if isinstance(claims, dict) else None
-    authorization = int(expiry) * 1000 if expiry is not None else storage.clock() + CURSOR_MS
-    request_id = schema.digest([project_id, scope["actor"], source, data_class, policy["id"], policy["revision"]])
+    authorization = _authorization_deadline(storage, scope, claims)
+    # The membership authority epoch is frozen on the job: a removed and restored
+    # member (a later epoch) is a different request that the old job cannot serve.
+    epoch = reader.ctx.scope["project"].get("authorityRevision", 0)
+    # So are the observed source record versions: a revoked and restored asset
+    # (a later version) is a different request that the old job cannot serve.
+    observed = sorted(({key: check[key] for key in ("owner", "kind", "id", "version")} for check in fences),
+                      key=lambda check: (check["owner"], check["kind"], check["id"]))
+    if not observed or any(check["owner"] != scope["owner"] for check in observed):
+        raise AdmissionError("source-changed")
+    request_id = schema.digest([project_id, scope["actor"], source, data_class, policy["id"], policy["revision"],
+                                epoch, observed])
     job_id = "intake-image-" + request_id[:40]
     data = {"actorId": scope["actor"], "projectId": project_id, "sourceRef": source, "dataClass": data_class,
             "policy": {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]},
-            "decisionId": "adm-img-" + request_id[:40], "authorizationExpiresAt": authorization}
-    job = host._new_job(scope["owner"], job_id, "intake-image", data, request_hash=schema.digest(data))
+            "decisionId": "adm-img-" + request_id[:40], "authorityRevision": epoch, "observed": observed,
+            "authorizationExpiresAt": authorization}
+    # Stable request identity excludes the token deadline: a refreshed token replays
+    # the same job (current access was rechecked above; the job keeps its deadline).
+    identity = {key: value for key, value in data.items() if key != "authorizationExpiresAt"}
+    job = host._new_job(scope["owner"], job_id, "intake-image", data, request_hash=schema.digest(identity))
     host._invoke(scope["owner"], job)
     return {"status": "queued", "decisionId": data["decisionId"], "job": {"id": job["id"], "status": job["status"]}}
 

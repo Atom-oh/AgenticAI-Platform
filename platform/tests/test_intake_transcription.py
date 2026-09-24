@@ -673,3 +673,109 @@ def test_image_decision_binds_a_hashed_normalization_receipt(env):
     with pytest.raises(AdmissionError) as error:
         admission.verify(env.api, env.scope(), image["id"])
     assert error.value.code == "artifact-changed"
+
+
+# PR #28 review round 4 ----------------------------------------------------------
+
+def test_image_access_revoked_and_restored_during_generation_records_nothing(env, monkeypatch):
+    """Review 4, finding 3: the original source observations are carried through generation and commit."""
+    ref, image, request, adapter = _transcription_request(env, monkeypatch)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    converse = adapter.converse_with_tools
+
+    def revoke_and_restore(*args, **kwargs):
+        result = converse(*args, **kwargs)
+        asset = storage.get(owner, "asset", ref["sourceId"])
+        stored = {k: v for k, v in asset.items() if k not in ("createdAt", "updatedAt", "version")}
+        revoked = storage.put(owner, "asset", {**stored, "accessRevoked": True}, asset["version"])
+        storage.put(owner, "asset", stored, revoked["version"])
+        return result
+
+    adapter.converse_with_tools = revoke_and_restore
+    with pytest.raises(AdmissionError) as error:
+        transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert error.value.code == "source-changed"
+    assert len(adapter.calls) == 1 and _transcriptions(env) == []
+
+
+# PR #28 review round 5 ----------------------------------------------------------
+
+def test_image_admission_expiring_during_the_publish_transaction_publishes_nothing(chain, monkeypatch):
+    """Review 5, finding 3: admission expiry reaches the ontology commit's before_attempt guard."""
+    from workbench.service import Service
+    from workspace.ontology_store import CURRENT, Ontology
+    assert library_review(chain, "bob")[0] == 200
+    ref = doc_ref(chain)
+    storage = chain.api.storage
+    image = storage.get(chain.chain["owner"], "adm_decision", chain.chain["image"]["id"])
+    original, clock = storage.put_many, storage.clock
+
+    def put_many(writes, checks=None, **kwargs):
+        if any(w["kind"] == "ontology" for w in writes):
+            # Expiry changes no version: only a before_attempt deadline check sees it.
+            storage.clock = lambda: image["expiresAt"] + 1
+        return original(writes, checks, **kwargs)
+
+    monkeypatch.setattr(storage, "put_many", put_many)
+    try:
+        with pytest.raises(CollaborationError) as error:
+            Ontology(Service(chain.api, chain.scope(), {"sub": "alice"})).publish_candidate(
+                "guide-rules", rule_graph(chain, ref), expected_generation=None, request_id="rules-5")
+    finally:
+        storage.clock = clock
+    assert error.value.status == 409
+    assert storage.get(chain.chain["owner"], "ontology", CURRENT) is None
+
+
+def test_region_is_transformed_into_the_downscaled_vision_image(env):
+    """Review 5, finding 4: the model receives region coordinates in the delivered image's
+    coordinate system; the lineage keeps the canonical normalized-image coordinates."""
+    import os
+    env.policy()
+    env.grant("dana", "grant-dana")
+    side = 1100
+    buffer = io.BytesIO()
+    Image.frombytes("RGB", (side, side), os.urandom(side * side * 3)).save(buffer, "PNG")
+    data = buffer.getvalue()
+    owner = f"project:{env.pid}"
+    key = env.api.storage.key_for(owner, "asset", "big", "original.png")
+    env.api.storage.put_blob_once(key, data, "image/png")
+    ref = asset_reference(env.api.storage.put(owner, "asset", {
+        "id": "big", "projectId": env.pid, "name": "big.png", "uploadStatus": "stored", "parseStatus": "complete",
+        "originalKey": key, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "importRevision": 1}))
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="ok")
+    assert image["artifact"]["vision"]["transform"] == ["downscale-880x880"]
+    region = {"left": 1000, "top": 1000, "width": 100, "height": 100,
+              "normalizedImageHash": image["artifact"]["sha256"]}
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region=region)
+    calls = []
+
+    def generate(system, user, images, **kwargs):
+        calls.append((user, images))
+        return json.dumps({"kind": "diagram", "text": "도식 전사", "tables": []}, ensure_ascii=False), None, None
+
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL, generate=generate)
+    (user, images), = calls
+    delivered = Image.open(io.BytesIO(images[0]["bytes"]))
+    assert delivered.size == (880, 880)
+    assert "left=800, top=800, width=80, height=80" in user and "880x880" in user
+    assert transcribed["artifact"]["region"] == {"page": 1, **region}  # canonical coordinates in lineage
+
+
+def test_service_commit_attempt_enforces_the_scope_deadline_without_token_expiry(env):
+    """Review 5 audit: a server-side context (scope deadline, claims without `exp`, as built by
+    `inspect.context` for the Worker) enforces that deadline on every commit attempt."""
+    from workbench.service import Service
+    storage = env.api.storage
+    clock = storage.clock
+    now = clock()
+    ctx = Service(env.api, {**env.scope(), "authorizationExpiresAt": now + 1000}, {"sub": "alice"})
+    storage.clock = lambda: clock() + 5000
+    try:
+        with pytest.raises(CollaborationError) as error:
+            ctx.commit([ctx.write("comment", {"id": "probe-audit", "projectId": env.pid})])
+    finally:
+        storage.clock = clock
+    assert error.value.status == 401
+    assert storage.get(f"project:{env.pid}", "comment", "probe-audit") is None

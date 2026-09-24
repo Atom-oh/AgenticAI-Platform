@@ -30,11 +30,36 @@ def process_image(worker, owner, job):
     data = job.get("input", {})
     storage = worker.storage
     collaboration = getattr(worker, "collaboration", None) or Collaboration(storage)
-    scope = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"))
+    deadline = data.get("authorizationExpiresAt")
+    if type(deadline) is not int or deadline <= storage.clock():
+        raise IntakeBlocked(["authorization-expired"])
+    # The reconstructed scope keeps the request's authorization deadline, so every
+    # later `fresh()`/`Sources.recheck` (including each commit attempt) enforces it.
+    scope = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
     if scope["owner"] != owner or job.get("task") != "intake-image":
         raise ValueError("작업 범위가 반입 요청과 다릅니다.")
-    if data.get("authorizationExpiresAt", 0) <= storage.clock():
-        raise IntakeBlocked(["authorization-expired"])
+    frozen = data.get("authorityRevision")
+    observed = data.get("observed")
+    if (not isinstance(observed, list) or not observed
+            or any(not isinstance(check, dict) or set(check) != {"owner", "kind", "id", "version"}
+                   or check["owner"] != owner or type(check["version"]) is not int for check in observed)):
+        raise IntakeBlocked(["source-changed"])
+
+    def current_authority():
+        """The membership epoch and every source record version observed at queueing
+        must still hold: a removed and restored member (a later epoch) or a revoked
+        and restored asset (a later version) cannot resurrect the queued request."""
+        if storage.clock() >= deadline:
+            raise IntakeBlocked(["authorization-expired"])
+        fresh = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
+        if type(frozen) is not int or fresh["project"].get("authorityRevision", 0) != frozen:
+            raise IntakeBlocked(["authority-changed"])
+        for check in observed:
+            row = storage.get(check["owner"], check["kind"], check["id"])
+            if not row or row.get("version") != check["version"]:
+                raise IntakeBlocked(["source-changed"])
+
+    current_authority()
     current = storage.get(owner, "job", job["id"])
     if not current or current.get("status") != "running" or current.get("input") != data:
         raise ValueError("반입 작업이 변경되었습니다.")
@@ -46,7 +71,8 @@ def process_image(worker, owner, job):
 
     outcome = imaging.admit_image(worker, scope, data["sourceRef"], data_class=data["dataClass"],
                                   ocr=_ocr_adapter(worker), identifier=data["decisionId"],
-                                  completion=completion, policy_binding=data["policy"])
+                                  completion=completion, policy_binding=data["policy"],
+                                  guards=[current_authority])
     if outcome.get("status") == "blocked" and "id" not in outcome:
         raise IntakeBlocked(outcome["blocking"])
     return {"decisionId": outcome["id"], "status": outcome["status"]}
