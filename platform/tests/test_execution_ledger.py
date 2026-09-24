@@ -1539,3 +1539,17 @@ def test_recovery_window_passing_during_reconcile_staging_is_refused(xfer):
                                       result=result, stage_completion=slow)
     assert error.value.code == "recovery-window"
     assert storage.get(OWNER, "job", job["id"])["status"] == "recovery_required"
+
+
+def test_concurrent_heartbeat_does_not_defeat_unknown_outcome_recovery():
+    """Finding 9: the recovery entry uses the latest compatible version of the same attempt."""
+    env = flaky_env("timeout-before")
+    storage, ledger, _ = env
+    job, result = chain(env)
+    storage.table().hook = lambda wire: ledger.tool().heartbeat(*ids(job))
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, operation_id=op_id())
+    assert error.value.code == "unknown-outcome"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "recovery_required" and stored["unknownOutcome"] is True
+    assert stored["attempt"]["id"] == job["attempt"]["id"] and stored["attempt"]["heartbeatAt"] is not None

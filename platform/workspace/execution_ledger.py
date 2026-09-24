@@ -1236,19 +1236,39 @@ class Ledger:
             from botocore.exceptions import BotoCoreError
             if not isinstance(error, BotoCoreError):
                 raise LedgerError("unavailable") from error
-            return self._unknown_outcome(owner, before, op)
+            return self._unknown_outcome(owner, before, op, result)
 
-    def _unknown_outcome(self, owner, before, op):
-        current = self.storage.get(owner, "job", before["id"])
-        if (current and current["version"] == before["version"] + 1 and current["status"] in TERMINAL
-                and (op is None or op[0] in (current.get("ops") or {}))):
-            return current
-        if current and current["version"] == before["version"] and current["status"] in ("dispatched", "running"):
+    def _unknown_outcome(self, owner, before, op, result):
+        """Reconcile durable markers against the submitting attempt, then enter bounded recovery.
+
+        The completion transaction is conditioned on ``before["version"]``; any later version (a heartbeat,
+        or the recovery entry itself) fences it, so recovery may use the latest version of the same attempt.
+        """
+        attempt_id, fence = (before.get("attempt") or {}).get("id"), before["fence"]
+        for _ in range(3):
             try:
-                self._commit(owner, current, {**current, "status": "recovery_required",
-                                              "recoveryAt": self.storage.clock(), "unknownOutcome": True})
+                current = self._get(owner, before["id"])
             except LedgerError:
-                pass
+                break
+            attempt = current.get("attempt") or {}
+            if attempt.get("id") != attempt_id:
+                break                                   # superseded: nothing of this attempt to recover
+            if current["status"] in ("succeeded", "needs_changes"):
+                if current.get("result") == result and (op is None or op[0] in (current.get("ops") or {})):
+                    return current                      # the submission committed
+                break
+            if (current["status"] not in ("dispatched", "running", "recovery_required")
+                    or current["fence"] != fence or attempt.get("fence") != fence):
+                break                                   # cancelled/expired/failed/fenced: preserved
+            if current["status"] == "recovery_required" and current.get("unknownOutcome") is True:
+                break
+            recovery_at = current.get("recoveryAt") if current["status"] == "recovery_required" else None
+            try:
+                self._commit(owner, current, {**current, "status": "recovery_required", "unknownOutcome": True,
+                                              "recoveryAt": recovery_at or self.storage.clock()})
+                break
+            except LedgerError:
+                continue                                # a concurrent write: re-read the latest version
         raise LedgerError("unknown-outcome")
 
     def _late(self, owner, job, attempt_id, result):

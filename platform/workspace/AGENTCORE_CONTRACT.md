@@ -647,6 +647,12 @@ times with fresh checks. On exhaustion the ledger persists a fenced
 released) for the still-current attempt, and returns `completion-contention`;
 later submissions for that attempt get `stale-attempt`/`terminal`. A job that
 concurrently became cancelled, expired or superseded keeps that state.
+An unknown transport outcome re-reads the job and compares it with the
+submitting attempt: a terminal record with the same attempt, result and
+operation entry is the committed result. Otherwise, while the same attempt and
+fence are still active, the ledger conditionally enters `recovery_required`
+with `unknownOutcome=true` from the latest version (a concurrent heartbeat is
+re-read, not treated as a lost race), and returns `unknown-outcome`.
 
 | Facade (caller role) | Methods |
 |---|---|
