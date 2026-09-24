@@ -553,3 +553,36 @@ def test_studio_store_is_a_separate_table_and_handler_never_imports_workspace_st
     assert "workspace.storage" not in source and "WORKSPACE_TABLE" not in source
     store_source = (Path(__file__).resolve().parents[1] / "studio" / "store.py").read_text()
     assert "WORKSPACE_TABLE" not in store_source
+
+
+# --- PR #27 review 2: the linked-job exclusion is fenced in the artifact's own transaction -----------
+
+def test_linked_job_marked_after_the_guard_read_aborts_a_worker_update(storage):
+    """Finding 9: a real Worker._update whose linked job gains a reserved discriminator after the guard read."""
+    from workspace.worker import Worker
+    job = storage.put("alice", "job", {"id": "legacy-1", "task": "generate", "status": "running"})
+    run = storage.put("alice", "run", {"id": "run-1", "jobId": "legacy-1", "status": "processing"})
+    original, injected = storage.get, []
+
+    def racing_get(owner, kind, identifier):
+        value = original(owner, kind, identifier)
+        if kind == "job" and identifier == "legacy-1" and not injected:
+            injected.append(True)          # the ledger marks the job between the guard read and the write
+            seed(storage, {**original(owner, kind, identifier), "executionId": "exec-" + "1" * 32},
+                 owner="alice", expected_version=job["version"])
+        return value
+    storage.get = racing_get
+    with pytest.raises((ReservedRecord, Conflict, ValueError)):
+        Worker(storage=storage)._update("alice", "run", run["id"], status="completed")
+    storage.get = original
+    assert injected and storage.get("alice", "run", "run-1")["status"] == "processing"
+
+
+def test_linked_job_fence_is_a_transaction_predicate(storage):
+    job = storage.put("alice", "job", {"id": "legacy-2", "task": "generate", "status": "running"})
+    run = storage.put("alice", "run", {"id": "run-2", "jobId": "legacy-2", "status": "processing"})
+    storage.put("alice", "run", {**run, "status": "completed"}, run["version"])
+    [check] = [entry["ConditionCheck"] for entry in storage.table().transactions[-1]["TransactItems"]
+               if "ConditionCheck" in entry]
+    assert check["Key"]["sk"] == "job#legacy-2"
+    assert check["ExpressionAttributeValues"] == {":version": job["version"]}

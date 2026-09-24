@@ -734,6 +734,11 @@ Legacy guard: `Storage._prepare` refuses any non-ledger write in these cases:
 
 Non-ledger updates also carry
 `attribute_not_exists(executionSchemaVersion) AND attribute_not_exists(executionId)`.
+Every stored linked job the guard reads is also fenced in the same
+transaction: a `ConditionCheck` that its version is unchanged (or that it is
+still absent). A single `put` with such a fence is submitted as a one-put
+transaction, so a job that becomes reserved after the guard's read aborts the
+artifact write.
 Human approval, release creation and Git export use a separate module-checked
 token. That token applies only to kinds `run`, `release`, `gitexport` and
 `design`, and never moves a status into `failed`, `needs_changes` or

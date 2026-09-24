@@ -186,7 +186,8 @@ class Storage:
         response = self.table().get_item(Key=self._key(owner, kind, id), ConsistentRead=True)
         return _record(response["Item"]) if response.get("Item") else None
 
-    def _prepare(self, owner, kind, item, expected_version, now, *, writer=None, proposed_jobs=frozenset()):
+    def _prepare(self, owner, kind, item, expected_version, now, *, writer=None, proposed_jobs=frozenset(),
+                 fences=None):
         from boto3.dynamodb.conditions import Attr
         if not isinstance(item, dict):
             raise ValueError("Invalid metadata record")
@@ -206,7 +207,7 @@ class Storage:
                  and not (item.get("status") in _HUMAN_BLOCKED_STATUS
                           and (previous is None or previous.get("status") != item.get("status"))))
         if not ledger and not human:
-            self._guard(owner, kind, identifier, item, previous, proposed_jobs)
+            self._guard(owner, kind, identifier, item, previous, proposed_jobs, fences)
         data = {key: copy.deepcopy(value) for key, value in item.items()
                 if key not in ("pk", "sk", "owner", "sub", "ttl")}
         data.update(id=identifier, version=expected_version + 1 if expected_version else 1,
@@ -238,8 +239,19 @@ class Storage:
             condition = Attr("pk").not_exists()
         return data, keys, condition
 
-    def _guard(self, owner, kind, identifier, item, previous, proposed_jobs):
-        """platform-execution/1 chokepoint: legacy writers never mutate reserved or reserved-linked records."""
+    def _guard(self, owner, kind, identifier, item, previous, proposed_jobs, fences=None):
+        """platform-execution/1 chokepoint: legacy writers never mutate reserved or reserved-linked records.
+
+        Every stored linked job the guard reads is appended to ``fences`` as (owner, id, version-or-None); the
+        write then carries a transactional check that the job is unchanged (or still absent), so a job that
+        acquires a reserved discriminator after this read aborts the artifact mutation (RUN-01).
+        """
+        def read_job(candidate):
+            linked = self.get(owner, "job", candidate)
+            if fences is not None and (owner, candidate) not in proposed_jobs:
+                fences.append((owner, candidate, linked["version"] if linked else None))
+            return linked
+
         if is_reserved(item) or is_reserved(previous):
             raise ReservedRecord(kind, identifier, "reserved-item" if is_reserved(item) else "reserved-record")
         if kind not in LINKED_KINDS:
@@ -251,7 +263,7 @@ class Storage:
             # Detaching from, or attaching to, an execution job is a mismatched linkage.
             for candidate in (stored_link, item["jobId"]):
                 if (not isinstance(candidate, str) or not _ID.fullmatch(candidate)
-                        or candidate.startswith(EXECUTION_JOB_PREFIX) or is_reserved(self.get(owner, "job", candidate))):
+                        or candidate.startswith(EXECUTION_JOB_PREFIX) or is_reserved(read_job(candidate))):
                     raise ReservedRecord(kind, identifier, "linkage-mismatch")
             return
         if link is None:
@@ -259,7 +271,7 @@ class Storage:
         if not isinstance(link, str) or not _ID.fullmatch(link):
             raise ReservedRecord(kind, identifier, "unknown-linkage")
         # The stored job is authoritative; a caller-supplied job dict is never trusted.
-        linked = self.get(owner, "job", link)
+        linked = read_job(link)
         if is_reserved(linked) or linked is None and link.startswith(EXECUTION_JOB_PREFIX):
             raise ReservedRecord(kind, identifier, "linked-reserved-job")
         # Unknown linkage is refused only for REPAIR of an existing linked record (review round 7, AA1):
@@ -270,11 +282,17 @@ class Storage:
             raise ReservedRecord(kind, identifier, "unknown-linkage")
 
     def put(self, owner: str, kind: str, item: dict, expected_version: int | None = None, *, _writer=None) -> dict:
+        fences = []
         try:
-            data, keys, condition = self._prepare(owner, kind, item, expected_version, self.clock(), writer=_writer)
+            data, keys, condition = self._prepare(owner, kind, item, expected_version, self.clock(), writer=_writer,
+                                                  fences=fences)
         except ReservedRecord as refused:
             self._report(owner, refused)
             raise
+        if fences:
+            # A linked-job fence needs a second predicate: submit the write as a one-put transaction.
+            return self.put_many([{"owner": owner, "kind": kind, "item": item, "expected_version": expected_version}],
+                                 retry_conflicts=False, _writer=_writer)[0]
         table = self.table()
         try:
             table.put_item(Item={**_marshal(data), **keys}, ConditionExpression=condition)
@@ -330,11 +348,12 @@ class Storage:
                 raise ValueError("Invalid transaction write")
         proposed_jobs = frozenset((write.get("owner"), write["item"].get("id")) for write in writes
                                   if write.get("kind") == "job" and isinstance(write.get("item"), dict))
+        fences = []
         for write in writes:
             try:
                 data, keys, condition = self._prepare(
                     write.get("owner"), write.get("kind"), write.get("item"), write.get("expected_version"), now,
-                    writer=_writer, proposed_jobs=proposed_jobs)
+                    writer=_writer, proposed_jobs=proposed_jobs, fences=fences)
             except ReservedRecord as refused:
                 self._report(write.get("owner"), refused)
                 raise
@@ -368,6 +387,21 @@ class Storage:
                 "ExpressionAttributeValues": {":version": check["version"]},
             }
             if check["version"] is None:
+                condition.update(ConditionExpression="attribute_not_exists(#pk)", ExpressionAttributeNames={"#pk": "pk"})
+                condition.pop("ExpressionAttributeValues")
+            transactions.append({"ConditionCheck": condition})
+        for fence_owner, job_id, version in fences:
+            keys = self._key(fence_owner, "job", job_id)
+            identity = keys["pk"], keys["sk"]
+            if identity in seen:
+                continue            # the job is written or checked by this transaction already
+            seen.add(identity)
+            if len(transactions) >= 100:
+                raise ValueError("A transaction requires between 1 and 100 writes")
+            condition = {"TableName": table.name, "Key": keys, "ConditionExpression": "#version = :version",
+                         "ExpressionAttributeNames": {"#version": "version"},
+                         "ExpressionAttributeValues": {":version": version}}
+            if version is None:
                 condition.update(ConditionExpression="attribute_not_exists(#pk)", ExpressionAttributeNames={"#pk": "pk"})
                 condition.pop("ExpressionAttributeValues")
             transactions.append({"ConditionCheck": condition})
