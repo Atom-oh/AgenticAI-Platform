@@ -761,3 +761,21 @@ def test_region_is_transformed_into_the_downscaled_vision_image(env):
     assert delivered.size == (880, 880)
     assert "left=800, top=800, width=80, height=80" in user and "880x880" in user
     assert transcribed["artifact"]["region"] == {"page": 1, **region}  # canonical coordinates in lineage
+
+
+def test_service_commit_attempt_enforces_the_scope_deadline_without_token_expiry(env):
+    """Review 5 audit: a server-side context (scope deadline, claims without `exp`, as built by
+    `inspect.context` for the Worker) enforces that deadline on every commit attempt."""
+    from workbench.service import Service
+    storage = env.api.storage
+    clock = storage.clock
+    now = clock()
+    ctx = Service(env.api, {**env.scope(), "authorizationExpiresAt": now + 1000}, {"sub": "alice"})
+    storage.clock = lambda: clock() + 5000
+    try:
+        with pytest.raises(CollaborationError) as error:
+            ctx.commit([ctx.write("comment", {"id": "probe-audit", "projectId": env.pid})])
+    finally:
+        storage.clock = clock
+    assert error.value.status == 401
+    assert storage.get(f"project:{env.pid}", "comment", "probe-audit") is None
