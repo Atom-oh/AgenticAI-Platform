@@ -12,6 +12,7 @@ from execution_fakes import TestKeyVerifier, receipt  # noqa: E402
 from workspace.execution_ledger import Ledger, LedgerError, PROFILE_DEFAULT  # noqa: E402
 from workspace.storage import Storage  # noqa: E402
 from workspace import ontology_schema as schema  # noqa: E402
+from workspace.execution_ledger import receipt_hash  # noqa: E402
 
 OWNER = "project:p1"
 ADM = [{"decisionId": "adm-1", "revision": "1", "artifactHash": "a" * 64}]
@@ -308,7 +309,7 @@ def test_stage_records_a_verified_chain_with_server_checked_outputs(env):
     first = chained(job, "context", "n1", outputs=[out], status="ok", result={"summary": "x"})
     job = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], first)
     assert job["stages"][-1]["stage"] == "context" and job["stages"][-1]["outputs"] == [out]
-    second = chained(job, "generate", "n2", previous=schema.digest(first),
+    second = chained(job, "generate", "n2", previous=receipt_hash(first),
                      inputs=[{"key": out["key"], "sha256": out["sha256"], "size": out["size"]}], status="ok")
     job = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], second)
     assert [row["stage"] for row in job["stages"]] == ["context", "generate"]
@@ -652,7 +653,7 @@ def test_job_record_stays_bounded_under_heartbeats_and_recorded_operations(env):
     for index in range(30):
         r = chained(job, "generate", f"nonce-{index}", previous=previous)
         ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], r, operation_id=op_id())
-        previous = schema.digest(r)
+        previous = receipt_hash(r)
     stored = storage.get(OWNER, "job", job["id"])
     assert len(stored["ops"]) == 150
     import json
@@ -907,3 +908,404 @@ def test_prior_not_listed_or_revoked_is_refused(xfer):
 def test_production_ledger_has_no_input_resolver():
     from workspace.execution_ledger import Ledger as L
     assert "input_resolver" not in L.production.__code__.co_varnames
+
+
+# === Task 8: coupled completion and reconciliation (RUN-02, RUN-04) ==================================
+
+from test_workspace_storage import TransactionFailure  # noqa: E402
+from botocore.exceptions import ClientError, ReadTimeoutError  # noqa: E402
+
+GOOD = {"context": ("ok", {}), "generate": ("ok", {}), "compile": ("ok", {"sourceHash": "s" * 64, "bundleHash": "u" * 64}),
+        "browser": ("ok", {"visualDiff": 0.0}), "analyze": ("ok", {"coverage": {"files": 1}}),
+        "verify": ("ok", {"verdict": "pass", "approvable": True, "issues": [], "reviewer": "deterministic",
+                          "passed": True, "compositionHashes": ["h1"], "judgeEvidence": {"h1": "ev-1"}})}
+
+
+def release_manifest(storage):
+    body = _json.dumps({"approved": {"sourceHash": "s" * 64, "bundleHash": "u" * 64}, "priors": []}).encode()
+    key = storage.key_for(OWNER, "run", "run-r", "release-manifest.json")
+    try:
+        storage.put_blob_once(key, body, "application/json")
+    except Exception:
+        pass
+    return {"ref": key, "hash": hashlib.sha256(body).hexdigest()}
+
+
+def chain(env, operation="design.generate", results=None, skip=(), key="req-1"):
+    """Drive a complete verified receipt chain; returns (job, finish result)."""
+    storage, ledger = env[0], env[1]
+    over = {"manifest": release_manifest(storage)} if operation == "design.release" else {}
+    job = run_job(ledger, operation=operation, key=key, **over)
+    results = {**GOOD, **(results or {})}
+    previous, hashes, files = None, [], []
+    stages = [stage for stage in __import__("workspace.execution_ledger", fromlist=["OPERATIONS"]).OPERATIONS[operation]
+              if stage not in skip]
+    for index, stage in enumerate(stages):
+        outputs = [put_output(storage, job, stage, f"{stage}.out", f"{stage}-bytes".encode())]
+        files.append({"key": outputs[0]["key"], "sha256": outputs[0]["sha256"]})
+        if index == len(stages) - 1:
+            manifest = _json.dumps({"files": files}).encode()
+            outputs.append(put_output(storage, job, stage, "result-manifest.json", manifest))
+        status, result = results[stage]
+        r = chained(job, stage, f"n-{stage}", previous=previous, outputs=outputs, status=status, result=result)
+        job = ledger.tool().stage(*ids(job), r)
+        previous = receipt_hash(r)
+        hashes.append(previous)
+    manifest_out = job["stages"][-1]["outputs"][-1]
+    return job, {"manifestRef": manifest_out["key"], "manifestHash": manifest_out["sha256"], "receipts": hashes}
+
+
+def finish(ledger, job, status="succeeded", result=None, **kwargs):
+    return ledger.tool().finish(*ids(job), status=status, result=result, **kwargs)
+
+
+RULES = [
+    ("source.analyze", {}, "succeeded", True), ("source.analyze", {"analyze": ("ok", {})}, "succeeded", False),
+    ("source.analyze", {}, "needs_changes", False),
+    ("design.extract", {}, "succeeded", True),
+    ("design.extract", {"verify": ("ok", {"issues": ["missing citation"]})}, "needs_changes", True),
+    ("design.extract", {"verify": ("ok", {"issues": ["missing citation"]})}, "succeeded", False),
+    ("design.generate", {}, "succeeded", True),
+    ("design.generate", {"verify": ("ok", {"verdict": "fail", "approvable": False})}, "needs_changes", True),
+    ("design.generate", {"verify": ("ok", {"verdict": "fail", "approvable": False})}, "succeeded", False),
+    ("design.edit", {"verify": ("ok", {"verdict": "pass", "approvable": False})}, "succeeded", False),
+    ("design.compose", {}, "succeeded", True),
+    ("design.compose", {"verify": ("ok", {"reviewer": "deterministic", "passed": True, "compositionHashes": ["h1", "h2"],
+                                          "judgeEvidence": {"h1": "ev-1"}})}, "needs_changes", True),
+    ("design.compose", {"verify": ("ok", {"reviewer": "llm", "passed": True, "compositionHashes": [],
+                                          "judgeEvidence": {}})}, "succeeded", False),
+    ("intake.transcribe", {}, "succeeded", True),
+    ("intake.transcribe", {"verify": ("ok", {"issues": ["region outside image"]})}, "needs_changes", True),
+    ("design.release", {}, "succeeded", True),
+    ("design.release", {"browser": ("ok", {"visualDiff": 0.03})}, "succeeded", False),
+    ("design.release", {"compile": ("ok", {"sourceHash": "0" * 64, "bundleHash": "u" * 64})}, "succeeded", False),
+    ("design.release", {}, "needs_changes", False),
+]
+
+
+@pytest.mark.parametrize("operation,results,status,accepted", RULES)
+def test_terminal_rules_are_operation_specific(xfer, operation, results, status, accepted):
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer, operation, results)
+    if accepted:
+        done = finish(ledger, job, status, result)
+        assert done["status"] == status and done["result"]["manifestHash"] == result["manifestHash"]
+        assert quota(storage, job) == ([], [])
+    else:
+        with pytest.raises(LedgerError) as error:
+            finish(ledger, job, status, result)
+        assert error.value.code == "status-inconsistent"
+        assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def test_a_signed_failed_receipt_cannot_finish_succeeded(xfer):
+    _, ledger, _, _ = xfer
+    job, result = chain(xfer, results={"browser": ("failed", {"visualDiff": 1.0})})
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "status-inconsistent"
+
+
+def test_compose_refuses_a_model_intent(xfer):
+    _, ledger, _, _ = xfer
+    job = run_job(ledger, operation="design.compose")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="verify", kind="model", min_remaining_ms=0)
+    assert error.value.code == "model-not-allowed"
+
+
+def test_finishing_without_the_browser_stage_is_incomplete(xfer):
+    _, ledger, _, _ = xfer
+    job, result = chain(xfer, skip=("browser",))
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "stages-incomplete"
+
+
+def test_receipt_list_must_equal_the_recorded_chain(xfer):
+    _, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", {**result, "receipts": list(reversed(result["receipts"]))})
+    assert error.value.code == "receipt-invalid"
+
+
+def test_substituted_result_manifest_is_refused(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    fake = _json.dumps({"files": [{"key": storage.key_for(OWNER, "asset", "x", "y"), "sha256": "0" * 64}]}).encode()
+    forged = put_output(storage, job, "verify", "forged.json", fake)    # under the prefix but not a chain output
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", {**result, "manifestRef": forged["key"], "manifestHash": forged["sha256"]})
+    assert error.value.code == "receipt-invalid"
+
+
+def test_manifest_listing_a_non_chain_object_is_refused(xfer):
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger, operation="source.analyze")
+    stray = put_output(storage, job, "analyze", "stray.bin", b"stray")
+    previous, hashes = None, []
+    for stage in ("context", "analyze"):
+        outputs = [put_output(storage, job, stage, f"{stage}.out", stage.encode())]
+        if stage == "analyze":
+            body = _json.dumps({"files": [{"key": stray["key"], "sha256": stray["sha256"]}]}).encode()
+            outputs.append(put_output(storage, job, stage, "result-manifest.json", body))
+        r = chained(job, stage, "n-" + stage, previous=previous, outputs=outputs, status="ok", result=GOOD[stage][1])
+        job = ledger.tool().stage(*ids(job), r)
+        previous = receipt_hash(r)
+        hashes.append(previous)
+    manifest = job["stages"][-1]["outputs"][-1]
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
+                                          "receipts": hashes})
+    assert error.value.code == "receipt-invalid"
+
+
+def test_open_output_handles_block_finish(xfer):
+    _, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    open_out(ledger, job, b"unfinished", name="late.txt", stage="verify")
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "transfers-incomplete"
+
+
+def staged_publication(storage, job):
+    """Stands in for publish_candidate(_stage=True, _origin="execution") output (see report: staging mode deferred)."""
+    def stage_completion(prepared):
+        assert prepared["job"]["status"] == "succeeded"
+        return {"writes": [
+            {"owner": OWNER, "kind": "ontology", "item": {"id": "project-current", "generation": "g-1"},
+             "expected_version": None},
+            {"owner": OWNER, "kind": "ontology", "item": {"id": "request-" + job["id"][5:], "generation": "g-1"},
+             "expected_version": None},
+            {"owner": OWNER, "kind": "wb_artifact", "item": {"id": "art-x", "jobId": job["id"],
+                                                             "executionId": job["id"], "status": "completed"},
+             "expected_version": None}],
+            "checks": [{"owner": OWNER, "kind": "asset", "id": "src-1", "version": None}]}
+    return stage_completion
+
+
+def test_combined_finish_commits_ontology_marker_artifact_and_job_in_one_transaction(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    before = len(storage.table().transactions)
+    done = finish(ledger, job, "succeeded", result, stage_completion=staged_publication(storage, job),
+                  operation_id=op_id())
+    assert len(storage.table().transactions) == before + 1
+    kinds = [entry["Put"]["Item"]["sk"].split("#")[0] for entry in storage.table().transactions[-1]["TransactItems"]
+             if "Put" in entry]
+    assert {"job", "ontology", "wb_artifact", "exec_quota"} <= set(kinds)
+    assert done["status"] == "succeeded"
+    assert storage.get(OWNER, "ontology", "project-current")["generation"] == "g-1"
+
+
+def test_stale_completion_write_commits_nothing(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    artifact = storage.put(OWNER, "wb_artifact", {"id": "art-s", "status": "processing"})
+    stale = lambda prepared: {"writes": [{"owner": OWNER, "kind": "wb_artifact",
+                                          "item": {**artifact, "status": "completed"}, "expected_version": 99}],
+                              "checks": []}
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, stage_completion=stale)
+    assert error.value.code == "conflict"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+    assert storage.get(OWNER, "wb_artifact", "art-s")["status"] == "processing"
+
+
+def test_completion_scope_overflow_writes_nothing(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    before = len(storage.table().transactions)
+    wide = lambda prepared: {
+        "writes": [{"owner": OWNER, "kind": "wb_artifact", "item": {"id": f"w{i}"}, "expected_version": None}
+                   for i in range(2)],
+        "checks": [{"owner": OWNER, "kind": "asset", "id": f"c{i}", "version": None} for i in range(99)]}
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, stage_completion=wide)
+    assert error.value.code == "execution-completion-scope"
+    assert len(storage.table().transactions) == before
+
+
+def test_retried_completed_finish_returns_the_terminal_job(xfer):
+    _, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    operation = op_id()
+    done = finish(ledger, job, "succeeded", result, operation_id=operation)
+    again = finish(ledger, job, "succeeded", result, operation_id=operation)
+    assert again["status"] == "succeeded" and again["version"] == done["version"]
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "needs_changes", result, operation_id=operation)
+    assert error.value.code == "operation-changed"
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, operation_id=op_id())
+    assert error.value.code in {"terminal", "stale-attempt"}
+
+
+def test_superseded_attempt_finish_is_stale_and_kept_as_a_late_diagnostic(xfer):
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])
+    retried = ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "stale-attempt"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "queued" and stored["result"] is None
+    assert stored["attempts"][-1]["id"] == job["attempt"]["id"]
+    assert stored["attempts"][-1]["late"][0]["receipts"] == result["receipts"]
+    assert retried["fence"] == stored["fence"]
+
+
+def test_reconcile_completes_a_recovery_required_attempt_from_verified_receipts(xfer):
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer, skip=("verify",))
+    out = put_output(storage, job, "verify", "verify.out", b"verify")
+    files = [{"key": row["outputs"][0]["key"], "sha256": row["outputs"][0]["sha256"]} for row in job["stages"]]
+    manifest = put_output(storage, job, "verify", "result-manifest.json", _json.dumps({"files": files}).encode())
+    last = chained(job, "verify", "n-verify", previous=result["receipts"][-1], outputs=[out, manifest],
+                   status="ok", result=GOOD["verify"][1])
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])
+    done = ledger.reconciler().reconcile(OWNER, job["id"], job["attempt"]["id"], receipts=[last], status="succeeded",
+                                         result={"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
+                                                 "receipts": [*result["receipts"], receipt_hash(last)]})
+    assert done["status"] == "succeeded"
+
+
+def test_reconcile_after_the_deadline_is_refused(xfer):
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])
+    now[0] = job["deadlineAt"]
+    with pytest.raises(LedgerError) as error:
+        ledger.reconciler().reconcile(OWNER, job["id"], job["attempt"]["id"], receipts=[], status="succeeded",
+                                      result=result)
+    assert error.value.code == "deadline"
+
+
+def test_single_attempt_transport_configuration():
+    assert Storage(table_name="t", single_attempt=True)._client_config().retries["total_max_attempts"] == 1
+    assert Storage(table_name="t")._client_config().retries["total_max_attempts"] == 3
+
+
+class FlakyTable(FakeTable):
+    def __init__(self, mode, failures=1):
+        super().__init__()
+        self.mode, self.failures, self.wire = mode, failures, 0
+        self.meta.client.transact_write_items = self.flaky
+
+    def flaky(self, **kwargs):
+        finishing = any("Put" in entry and entry["Put"]["Item"]["sk"].startswith("job#")
+                        and entry["Put"]["Item"].get("status") == "succeeded" for entry in kwargs["TransactItems"])
+        if not finishing:
+            return self.transact_write_items(**kwargs)
+        self.wire += 1
+        if self.failures:
+            self.failures -= 1
+            if self.mode == "timeout-before":
+                raise ReadTimeoutError(endpoint_url="https://dynamodb.invalid")
+            if self.mode == "timeout-after":
+                self.transact_write_items(**kwargs)
+                raise ReadTimeoutError(endpoint_url="https://dynamodb.invalid")
+            if self.mode == "contention":
+                error = TransactionFailure.__new__(TransactionFailure)
+                ClientError.__init__(error, {"Error": {"Code": "TransactionCanceledException"},
+                                             "CancellationReasons": [{"Code": "TransactionConflict"}]
+                                             * len(kwargs["TransactItems"])}, "TransactWriteItems")
+                raise error
+        return self.transact_write_items(**kwargs)
+
+
+def flaky_env(mode, failures=1):
+    now = [1_800_000_000_000]
+    storage = Storage(table=FlakyTable(mode, failures), s3=FakeS3(), bucket="private-test", clock=lambda: now[0])
+    storage.put(OWNER, "project", {"id": "p1", "status": "active", "members": {"designer-1": {"role": "designer"}}})
+    ledger = Ledger.offline(storage, verifier=TestKeyVerifier())
+    return storage, ledger, now
+
+
+def test_unknown_transport_outcome_is_one_wire_attempt_then_recovery(monkeypatch):
+    env = flaky_env("timeout-before")
+    storage, ledger, _ = env
+    job, result = chain(env)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, operation_id=op_id())
+    assert error.value.code == "unknown-outcome"
+    assert storage.table().wire == 1
+    assert storage.get(OWNER, "job", job["id"])["status"] == "recovery_required"
+
+
+def test_unknown_transport_outcome_that_committed_is_reconciled_from_durable_state():
+    env = flaky_env("timeout-after")
+    storage, ledger, _ = env
+    job, result = chain(env)
+    done = finish(ledger, job, "succeeded", result, operation_id=op_id())
+    assert done["status"] == "succeeded" and storage.table().wire == 1
+
+
+def test_proven_contention_retries_with_fresh_authority_checks(monkeypatch):
+    env = flaky_env("contention", failures=5)
+    storage, ledger, _ = env
+    job, result = chain(env)
+    calls = []
+    original = ledger._authority
+    monkeypatch.setattr(ledger, "_authority", lambda *a: calls.append(1) or original(*a))
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, operation_id=op_id())
+    assert error.value.code == "conflict"
+    assert storage.table().wire == 3 and len(calls) == 3
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+@pytest.mark.parametrize("version", [True, "1", 2, None, "missing"])
+def test_malformed_discriminators_are_rejected_by_every_entry_point(env, version):
+    from workspace.execution_ledger import _seed_for_tests
+    storage, ledger, _ = env
+    record = {"id": "exec-" + "9" * 32, "task": "agentcore-execution", "status": "running", "fence": 1,
+              "attempt": {"id": "att-x", "fence": 1}}
+    if version != "missing":
+        record["executionSchemaVersion"] = version
+    seeded = _seed_for_tests(storage, OWNER, "job", record)
+    calls = [
+        lambda: ledger.dispatcher().allocate(OWNER, seeded["id"]),
+        lambda: ledger.tool().claim(OWNER, seeded["id"], "att-x", 1),
+        lambda: ledger.tool().stage(OWNER, seeded["id"], "att-x", 1, {}),
+        lambda: ledger.tool().finish(OWNER, seeded["id"], "att-x", 1, status="succeeded", result={}),
+        lambda: ledger.reconciler().sweep(OWNER, seeded["id"]),
+        lambda: ledger.reconciler().reconcile(OWNER, seeded["id"], "att-x", receipts=[], status="succeeded", result={}),
+        lambda: ledger.api().retry(OWNER, seeded["id"], actor="designer-1", acknowledge_unknown_outcome=True),
+    ]
+    for call in calls:
+        with pytest.raises(LedgerError) as error:
+            call()
+        assert error.value.code == "not-an-execution"
+    assert storage.get(OWNER, "job", seeded["id"])["version"] == seeded["version"]
+
+
+def test_every_facade_method_is_implemented(env):
+    ledger = env[1]
+    for facade, names in ((ledger.api(), ("admit", "cancel", "retry", "read")),
+                          (ledger.dispatcher(), ("allocate",)),
+                          (ledger.tool(), ("claim", "heartbeat", "intent", "outcome", "stage", "finish", "fail",
+                                           "open_manifest", "open_prior", "open_input", "read_chunk",
+                                           "open_output", "write_chunk", "close_output")),
+                          (ledger.reconciler(), ("sweep", "reconcile", "resolve_orphan", "run_due"))):
+        assert all(callable(getattr(facade, name, None)) for name in names)
+
+
+def test_production_requires_a_registered_verifier_and_single_attempt_storage(monkeypatch):
+    from workspace import execution_ledger as module
+
+    class ReviewedVerifier:
+        def verify(self, receipt):
+            return False
+    monkeypatch.setattr(module, "_REGISTERED", {ReviewedVerifier})
+    with pytest.raises(PermissionError):
+        Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b"), verifier=ReviewedVerifier())
+    ledger = Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True),
+                               verifier=ReviewedVerifier())
+    assert isinstance(ledger.cost_gate, module.CostGuardGate) and ledger.input_resolver is None

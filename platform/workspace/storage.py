@@ -34,6 +34,10 @@ class Conflict(Exception):
     """A conditional write lost a race or would replace immutable bytes."""
 
 
+class TransactionContention(Conflict):
+    """A canceled transaction whose only failures were proven TransactionConflict contention (wrote nothing)."""
+
+
 class ReservedRecord(Conflict):
     """A legacy writer attempted to mutate a new-execution record (platform-execution/1)."""
 
@@ -134,8 +138,11 @@ def _record(item):
 class Storage:
     key_for = staticmethod(key_for)
 
-    def __init__(self, table=None, s3=None, bucket=None, table_name=None, clock=None):
+    def __init__(self, table=None, s3=None, bucket=None, table_name=None, clock=None, single_attempt=False):
         self._table, self._s3 = table, s3
+        # The execution ledger and its facades use exactly one wire attempt per request (review round 8, AB1):
+        # an SDK retry of a timed-out transaction would bypass the facade's fresh authority checks.
+        self.single_attempt = single_attempt
         self.bucket = bucket if bucket is not None else os.environ.get("WORKSPACE_BUCKET", "")
         self.table_name = table_name if table_name is not None else os.environ.get("WORKSPACE_TABLE", "")
         self.clock = clock or (lambda: int(time.time() * 1000))
@@ -145,12 +152,17 @@ class Storage:
         from botocore.config import Config
         return Config(connect_timeout=5, read_timeout=30, retries={"mode": "standard", "total_max_attempts": 3})
 
+    def _client_config(self):
+        from botocore.config import Config
+        attempts = 1 if getattr(self, "single_attempt", False) else 3
+        return Config(connect_timeout=5, read_timeout=30, retries={"mode": "standard", "total_max_attempts": attempts})
+
     def table(self):
         if self._table is None:
             if not self.table_name:
                 raise RuntimeError("Workspace metadata storage is not configured")
             import boto3
-            self._table = boto3.resource("dynamodb", config=self._config()).Table(self.table_name)
+            self._table = boto3.resource("dynamodb", config=self._client_config()).Table(self.table_name)
         return self._table
 
     def s3(self):
@@ -158,7 +170,7 @@ class Storage:
             raise RuntimeError("Workspace blob storage is not configured")
         if self._s3 is None:
             import boto3
-            self._s3 = boto3.client("s3", config=self._config())
+            self._s3 = boto3.client("s3", config=self._client_config())
         return self._s3
 
     @staticmethod
@@ -377,6 +389,8 @@ class Storage:
                 if contention and retry_conflicts and attempt < 4:
                     time.sleep(random.uniform(.025 * 2 ** attempt, .05 * 2 ** attempt))
                     continue
+                if contention:
+                    raise TransactionContention("The transaction lost a race and wrote nothing") from error
                 if any(code in ("ConditionalCheckFailed", "TransactionConflict") for code in codes):
                     raise Conflict("The resource has changed") from error
                 raise

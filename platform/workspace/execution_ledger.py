@@ -71,6 +71,12 @@ def profile_hash(profile):
     return schema.digest(profile)
 
 
+def receipt_hash(value):
+    """SHA-256 of the canonical JSON form; receipts may carry bounded floats (e.g. visualDiff)."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                                     allow_nan=False).encode()).hexdigest()
+
+
 def _actor_quota_id(actor):
     return "quota-actor-" + hashlib.sha256(str(actor).encode()).hexdigest()[:48]
 
@@ -239,6 +245,8 @@ class Ledger:
     def production(cls, storage, *, verifier):
         if type(verifier) not in _REGISTERED:
             raise PermissionError("unregistered receipt verifier")
+        if getattr(storage, "single_attempt", False) is not True:
+            raise PermissionError("the ledger requires a single-attempt storage transport")
         return cls(storage, verifier, _CONSTRUCT, cost_gate=CostGuardGate())
 
     @classmethod
@@ -352,6 +360,12 @@ class Ledger:
     # --- transitions ---------------------------------------------------------
     def _commit(self, owner, before, job, *, extra_writes=(), checks=(), op=None, value=None, reindex=True):
         """One conditional put: job CAS, op entry, due index, quota and caller writes."""
+        job, writes = self._prepare(owner, before, job, extra_writes=extra_writes, op=op, value=value,
+                                    reindex=reindex)
+        return self._put(owner, job, before["version"], extra_writes=writes, checks=list(checks))
+
+    def _prepare(self, owner, before, job, *, extra_writes=(), op=None, value=None, reindex=True):
+        """Prepared, uncommitted ledger writes (prepare_finish): the job record plus its index writes."""
         job = copy.deepcopy(job)
         job["clock"] = self.storage.clock()
         if op is not None:
@@ -367,7 +381,7 @@ class Ledger:
         writes = list(extra_writes)
         if reindex:
             writes = [*self._due_writes(owner, before, job), *writes]
-        return self._put(owner, job, before["version"], extra_writes=writes, checks=list(checks))
+        return job, writes
 
     def _terminal(self, owner, job, status, *, error=None, bump_fence=False, checks=(), op=None, extra=None):
         if job["status"] in TERMINAL:
@@ -404,7 +418,7 @@ class Ledger:
             return None, None
         if not isinstance(operation_id, str) or not _OPERATION_ID.fullmatch(operation_id):
             raise LedgerError("operation-id-invalid")
-        digest = schema.digest({"method": method, "args": args})
+        digest = receipt_hash({"method": method, "args": args})
         entry = (job.get("ops") or {}).get(operation_id)
         if entry is not None:
             if entry["digest"] != digest:
@@ -671,7 +685,7 @@ class Ledger:
                     or not entry["key"].startswith(prefix)
                     or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
-        return {"stage": receipt["stage"], "receiptHash": schema.digest(receipt), "nonce": nonce,
+        return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
                 "attemptId": attempt["id"], "status": receipt.get("status", "ok"),
                 "result": copy.deepcopy(receipt.get("result", {})),
                 "outputs": [{key: entry[key] for key in ("key", "sha256", "size", "role") if key in entry}
@@ -1020,6 +1034,182 @@ class Ledger:
         after["cleanup"] = self._cleanup_for(job)
         return self._commit(owner, job, after, extra_writes=quotas, checks=[check])
 
+    # --- tool role: coupled completion (RUN-02, RUN-04) -------------------------
+    def _terminal_status(self, job, stages):
+        """TERMINAL_RULES[operation]: a closed, profile-versioned table (review round 3, F4)."""
+        last = {}
+        for row in stages:
+            last[row["stage"]] = row
+        required = OPERATIONS[job["operation"]]
+        if any(last[name]["status"] != "ok" for name in required):
+            return None
+        result = {name: last[name].get("result") or {} for name in required}
+        operation = job["operation"]
+        if operation == "source.analyze":
+            return "succeeded" if "coverage" in result["analyze"] else None
+        if operation in ("design.extract", "intake.transcribe"):
+            issues = result["verify"].get("issues")
+            if issues == []:
+                return "succeeded"
+            return "needs_changes" if isinstance(issues, list) and issues else None
+        if operation in ("design.generate", "design.edit"):
+            verify = result["verify"]
+            if verify.get("verdict") == "pass" and verify.get("approvable") is True:
+                return "succeeded"
+            if verify.get("verdict") in ("fail", "blocked") or verify.get("approvable") is False:
+                return "needs_changes"
+            return None
+        if operation == "design.compose":
+            verify = result["verify"]
+            if verify.get("reviewer") != "deterministic" or any(call.get("kind") == "model" for call in job["calls"]):
+                return None
+            hashes, evidence = verify.get("compositionHashes"), verify.get("judgeEvidence")
+            if not isinstance(hashes, list) or not isinstance(evidence, dict) or not isinstance(verify.get("passed"), bool):
+                return None
+            covered = all(isinstance(evidence.get(h), str) and evidence[h] for h in hashes)
+            return "succeeded" if verify["passed"] and covered and hashes else "needs_changes"
+        if operation == "design.release":
+            approved = self._manifest_document(job).get("approved") or {}
+            diff = result["browser"].get("visualDiff")
+            if (approved and result["compile"].get("sourceHash") == approved.get("sourceHash")
+                    and result["compile"].get("bundleHash") == approved.get("bundleHash")
+                    and isinstance(diff, (int, float)) and not isinstance(diff, bool) and diff <= 0.02):
+                return "succeeded"
+            return None
+        return None
+
+    def _manifest_document(self, job):
+        ref = job["manifest"]["ref"]
+        try:
+            data = self.storage.get_blob(ref)
+        except (ValueError, FileNotFoundError, RuntimeError):
+            return {}
+        if hashlib.sha256(data).hexdigest() != job["manifest"]["hash"]:
+            return {}
+        try:
+            document = json.loads(data)
+        except ValueError:
+            return {}
+        return document if isinstance(document, dict) else {}
+
+    def _check_result_manifest(self, job, stages, result):
+        outputs = {entry["key"]: entry["sha256"] for row in stages for entry in row.get("outputs", [])}
+        ref, digest = result.get("manifestRef"), result.get("manifestHash")
+        if not isinstance(ref, str) or outputs.get(ref) != digest:
+            raise LedgerError("receipt-invalid")
+        try:
+            data = self.storage.get_blob(ref)
+            document = json.loads(data)
+        except (ValueError, FileNotFoundError, RuntimeError) as error:
+            raise LedgerError("receipt-invalid") from error
+        if hashlib.sha256(data).hexdigest() != digest or not isinstance(document, dict):
+            raise LedgerError("receipt-invalid")
+        listed = [*document.get("files", []), *document.get("objects", [])]
+        if not isinstance(document.get("files", []), list) or not isinstance(document.get("objects", []), list):
+            raise LedgerError("receipt-invalid")
+        for entry in listed:
+            if not isinstance(entry, dict) or outputs.get(entry.get("key")) != entry.get("sha256"):
+                raise LedgerError("receipt-invalid")
+
+    def _complete(self, owner, before, job, *, status, result, op, stage_completion):
+        """Checks, prepares and submits the terminal transition plus staged writes in ONE transaction."""
+        if status not in ("succeeded", "needs_changes"):
+            raise LedgerError("status-inconsistent")
+        if not isinstance(result, dict) or set(result) != {"manifestRef", "manifestHash", "receipts"}:
+            raise LedgerError("receipt-invalid")
+        attempt = job["attempt"]
+        stages = [row for row in job["stages"] if row.get("attemptId") == attempt["id"]]
+        if set(OPERATIONS[job["operation"]]) - {row["stage"] for row in stages}:
+            raise LedgerError("stages-incomplete")
+        if result["receipts"] != [row["receiptHash"] for row in stages]:
+            raise LedgerError("receipt-invalid")
+        if any(h.get("direction") == "out" and h.get("status") == "open" and h.get("attemptId") == attempt["id"]
+               for h in job["handles"].values()):
+            raise LedgerError("transfers-incomplete")
+        if self._terminal_status(job, stages) != status:
+            raise LedgerError("status-inconsistent")
+        self._check_result_manifest(job, stages, result)
+        check = self._check_authority(owner, before)
+        after = {**job, "status": status, "result": copy.deepcopy(result), "completedAt": self.storage.clock()}
+        after["cleanup"] = self._cleanup_for(after)
+        quotas = self._quota_writes(owner, job["actor"], job["projectId"], remove=job["id"])
+        prepared_job, ledger_writes = self._prepare(owner, before, after, extra_writes=quotas, op=op)
+        writes = [{"owner": owner, "kind": "job", "item": prepared_job, "expected_version": before["version"]},
+                  *ledger_writes]
+        checks = [check]
+        if stage_completion is not None:
+            staged = stage_completion({"job": copy.deepcopy(prepared_job), "writes": copy.deepcopy(writes),
+                                       "checks": copy.deepcopy(checks)})
+            if not isinstance(staged, dict) or set(staged) - {"writes", "checks"}:
+                raise LedgerError("completion-invalid")
+            writes.extend(staged.get("writes", []))
+            checks.extend(staged.get("checks", []))
+        if len(writes) + len(checks) > TRANSACTION_LIMIT:
+            raise LedgerError("execution-completion-scope", limits={"transaction": TRANSACTION_LIMIT})
+        try:
+            return self.storage.put_many(writes, checks, retry_conflicts=False, _writer=_WRITER)[0]
+        except _storage.TransactionContention:
+            raise
+        except Conflict as error:
+            raise LedgerError("conflict") from error
+        except ValueError:
+            raise
+        except Exception as error:  # noqa: BLE001 - an unknown transport outcome is never resubmitted blindly
+            from botocore.exceptions import BotoCoreError
+            if not isinstance(error, BotoCoreError):
+                raise LedgerError("unavailable") from error
+            return self._unknown_outcome(owner, before, op)
+
+    def _unknown_outcome(self, owner, before, op):
+        current = self.storage.get(owner, "job", before["id"])
+        if (current and current["version"] == before["version"] + 1 and current["status"] in TERMINAL
+                and (op is None or op[0] in (current.get("ops") or {}))):
+            return current
+        if current and current["version"] == before["version"] and current["status"] in ("dispatched", "running"):
+            try:
+                self._commit(owner, current, {**current, "status": "recovery_required",
+                                              "recoveryAt": self.storage.clock(), "unknownOutcome": True})
+            except LedgerError:
+                pass
+        raise LedgerError("unknown-outcome")
+
+    def _late(self, owner, job, attempt_id, result):
+        """A superseded attempt's completion is kept only as a non-current diagnostic."""
+        index = next((i for i, row in enumerate(job["attempts"]) if row.get("id") == attempt_id), None)
+        if index is None:
+            return
+        receipts = result.get("receipts", []) if isinstance(result, dict) else []
+        attempts = copy.deepcopy(job["attempts"])
+        late = attempts[index].setdefault("late", [])
+        if len(late) >= 5:
+            return
+        late.append({"at": self.storage.clock(), "receipts": [r for r in receipts if isinstance(r, str)][:32]})
+        try:
+            self._commit(owner, job, {**job, "attempts": attempts}, reindex=False)
+        except LedgerError:
+            pass
+
+    def _finish(self, owner, job_id, attempt_id, fence, *, status, result, operation_id=None, stage_completion=None):
+        args = {"jobId": job_id, "attemptId": attempt_id, "fence": fence, "status": status, "result": result}
+        for attempt_number in range(PROFILE_DEFAULT["completionRetries"] + 1):
+            job = self._get(owner, job_id)
+            op, replay = self._op(job, "finish", operation_id, args)
+            if replay:
+                return replay["job"]
+            try:
+                self._current(job, attempt_id, fence)
+            except LedgerError:
+                self._late(owner, job, attempt_id, result)
+                raise
+            try:
+                return self._complete(owner, job, job, status=status, result=result, op=op,
+                                      stage_completion=stage_completion)
+            except _storage.TransactionContention as error:
+                # Proven contention wrote nothing: retry with fresh actor, deadline and attempt checks.
+                if attempt_number >= job["profileBody"]["completionRetries"]:
+                    raise LedgerError("conflict") from error
+        raise LedgerError("conflict")
+
     # --- reconciler role -----------------------------------------------------
     def _resolve_orphan(self, due):
         return _resolve_orphan(self.storage, due)
@@ -1061,7 +1251,32 @@ class Ledger:
             return None
         return self._sweep(owner, job_id)
 
-    def _reconcile(self, owner, job_id, attempt_id, **kwargs):
-        # Receipt-verified completion of a recovery_required attempt arrives with coupled completion (B0 Task 8).
-        self._get(owner, job_id)
-        raise LedgerError("recovery-unavailable")
+    def _reconcile(self, owner, job_id, attempt_id, *, receipts, status, result, operation_id=None,
+                   stage_completion=None):
+        """Complete a recovery_required attempt from receipts verified exactly as stage verifies them."""
+        args = {"jobId": job_id, "attemptId": attempt_id, "receipts": receipts, "status": status, "result": result}
+        for attempt_number in range(PROFILE_DEFAULT["completionRetries"] + 1):
+            job = self._get(owner, job_id)
+            op, replay = self._op(job, "reconcile", operation_id, args)
+            if replay:
+                return replay["job"]
+            if self.storage.clock() >= job["deadlineAt"]:
+                raise LedgerError("deadline")
+            attempt = job.get("attempt") or {}
+            if (job["status"] != "recovery_required" or attempt.get("id") != attempt_id
+                    or attempt.get("fence") != job["fence"]):
+                raise LedgerError("stale-attempt")
+            if not isinstance(receipts, list) or len(receipts) > 16:
+                raise LedgerError("receipt-invalid")
+            staged = copy.deepcopy(job)
+            for receipt in receipts:
+                entry = self._verified_receipt(owner, staged, receipt, attempt=attempt)
+                staged["stages"].append(entry)
+                staged["nonces"].append(entry["nonce"])
+            try:
+                return self._complete(owner, job, staged, status=status, result=result, op=op,
+                                      stage_completion=stage_completion)
+            except _storage.TransactionContention as error:
+                if attempt_number >= job["profileBody"]["completionRetries"]:
+                    raise LedgerError("conflict") from error
+        raise LedgerError("conflict")
