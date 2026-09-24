@@ -38,6 +38,18 @@ def process_image(worker, owner, job):
     scope = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
     if scope["owner"] != owner or job.get("task") != "intake-image":
         raise ValueError("작업 범위가 반입 요청과 다릅니다.")
+    frozen = data.get("authorityRevision")
+
+    def current_authority():
+        """The membership epoch observed at queueing must still hold: a removed and
+        restored member (a later epoch) cannot resurrect the queued request."""
+        if storage.clock() >= deadline:
+            raise IntakeBlocked(["authorization-expired"])
+        fresh = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
+        if type(frozen) is not int or fresh["project"].get("authorityRevision", 0) != frozen:
+            raise IntakeBlocked(["authority-changed"])
+
+    current_authority()
     current = storage.get(owner, "job", job["id"])
     if not current or current.get("status") != "running" or current.get("input") != data:
         raise ValueError("반입 작업이 변경되었습니다.")
@@ -49,7 +61,8 @@ def process_image(worker, owner, job):
 
     outcome = imaging.admit_image(worker, scope, data["sourceRef"], data_class=data["dataClass"],
                                   ocr=_ocr_adapter(worker), identifier=data["decisionId"],
-                                  completion=completion, policy_binding=data["policy"])
+                                  completion=completion, policy_binding=data["policy"],
+                                  guards=[current_authority])
     if outcome.get("status") == "blocked" and "id" not in outcome:
         raise IntakeBlocked(outcome["blocking"])
     return {"decisionId": outcome["id"], "status": outcome["status"]}

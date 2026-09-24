@@ -256,3 +256,37 @@ def test_authorization_expiring_during_ocr_commits_nothing(env):
     assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
     assert storage.get(owner, "job", queued["job"]["id"])["status"] == "failed"
 
+
+@pytest.mark.parametrize("moment", ["before-processing", "during-ocr"])
+def test_removed_and_restored_member_cannot_resurrect_a_queued_image_job(env, moment):
+    """Review 4, finding 2: the queued job freezes the membership authority epoch."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+
+    def remove_and_restore():
+        project = storage.get(owner, "project", env.pid)
+        stored = {k: v for k, v in project.items() if k not in ("createdAt", "updatedAt", "version",
+                                                                 "authorityRevision")}
+        members = dict(stored["members"])
+        member = members.pop("alice")
+        removed = storage.put(owner, "project", {**stored, "members": members}, expected_version=project["version"])
+        storage.put(owner, "project", {**stored, "members": {**members, "alice": member}},
+                    expected_version=removed["version"])
+
+    worker = worker_for(env)
+    if moment == "before-processing":
+        remove_and_restore()
+    else:
+        ocr = worker.ocr
+
+        def racing(data):
+            remove_and_restore()
+            return ocr(data)
+        worker.ocr = racing
+    outcome = worker.handle(invoked)
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+
