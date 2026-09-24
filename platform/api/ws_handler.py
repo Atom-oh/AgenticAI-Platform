@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import time
 
@@ -31,11 +32,23 @@ def _connect(event, conn_id: str) -> dict:
     try:
         u = _idp.get_user(AccessToken=token)
         email = next((a["Value"] for a in u["UserAttributes"] if a["Name"] == "email"), u["Username"])
+        user_sub = next(a["Value"] for a in u["UserAttributes"] if a["Name"] == "sub")
+        if not isinstance(user_sub, str) or not user_sub:
+            raise ValueError("Verified Cognito subject is required")
+        # GetUser verifies the token signature; bind that verified token to the
+        # configured pool/client instead of admitting tokens from other pools.
+        claims = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "==="))
+        pool, client = os.environ.get("COGNITO_USER_POOL_ID"), os.environ.get("COGNITO_CLIENT_ID")
+        if (not pool or not client or claims.get("sub") != user_sub
+                or claims.get("token_use") != "access" or claims.get("client_id") != client
+                or claims.get("iss") != f"https://cognito-idp.{REGION}.amazonaws.com/{pool}"
+                or type(claims.get("exp")) is not int or claims["exp"] <= time.time()):
+            raise ValueError("Token does not belong to this application")
     except Exception:
         log_event("ws.connect_rejected", connId=conn_id)
         return {"statusCode": 403}
-    _ddb.put_item(Item={"connId": conn_id, "email": email, "ts": int(time.time()),
-                        "ttl": int(time.time()) + 3600 * 3})
+    _ddb.put_item(Item={"connId": conn_id, "email": email, "userSub": user_sub, "ts": int(time.time()),
+                        "authorizationExpiresAt": claims["exp"], "ttl": min(claims["exp"], int(time.time()) + 3600 * 3)})
     log_event("ws.connected", connId=conn_id, email=email)
     return {"statusCode": 200}
 
@@ -62,7 +75,11 @@ def handler(event, context):
     rid = str(body.get("reqId", ""))[:32]
     endpoint = f"https://{rc['domainName']}/{rc['stage']}"
     ctx = Ctx(apigw=boto3.client("apigatewaymanagementapi", endpoint_url=endpoint),
-              conn_id=conn_id, email=rec["email"], rid=rid)
+              conn_id=conn_id, email=rec["email"], rid=rid, user_sub=rec.get("userSub"))
+    if not rec.get("userSub") or rec.get("authorizationExpiresAt", 0) <= time.time():
+        _ddb.delete_item(Key={"connId": conn_id})
+        ctx.error("인증된 연결이 만료되었습니다. 다시 연결하세요.", code=401)
+        return {"statusCode": 401}
 
     fn = ROUTES.get(action)
     if fn is None:
@@ -72,9 +89,9 @@ def handler(event, context):
     try:
         fn(ctx, body)
     except Exception as e:
-        log_event("ws.action_failed", ctx.trace_id, action=action, error=f"{type(e).__name__}: {str(e)[:200]}")
+        log_event("ws.action_failed", ctx.trace_id, action=action, errorType=type(e).__name__)
         try:
-            ctx.error(f"{type(e).__name__}: {e}")
+            ctx.error("요청을 처리하지 못했습니다.", code=500, errorType=type(e).__name__)
         except Exception:
             pass
         return {"statusCode": 500}

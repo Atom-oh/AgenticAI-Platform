@@ -19,6 +19,7 @@ COPY _ctx/agent_specs.py ./agent_specs.py
 COPY _ctx/model_catalog.py ./model_catalog.py
 COPY _ctx/skills ./skills
 COPY _ctx/design_loop ./design_loop
+COPY _ctx/common ./common
 COPY app.py mcp_gateway.py boundary_gate.py design_deps.py ./
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin agent \

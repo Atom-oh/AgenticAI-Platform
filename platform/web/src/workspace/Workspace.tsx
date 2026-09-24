@@ -105,7 +105,7 @@ export default function Workspace({ initialStep }: { initialStep?: 'files' | 'gu
   const client = useMemo(() => createWorkspaceClient(projectId ? { projectId } : {}), [projectId]);
   const scope = useMemo(() => ({ client, project, actorId: config?.actorId, role }), [client, project, config?.actorId, role]);
   return <div className="designer-workspace">
-    <header className="ws-header"><div><h1>UX 설계 작업실</h1><p>업무를 정의하고, 고객 기준으로 흐름과 상태를 설계해 검증된 React 소스를 전달하세요.</p></div></header>
+    <header className="ws-header"><div><h1>UX 설계 작업실</h1><p>만들고 싶은 화면을 설명하고, 시안을 보며 바로 수정하세요.</p></div></header>
     <div className="ws-project-bar">
       <label className="ws-field">작업 공간<select aria-label="작업 공간" value={projectId} disabled={creating} onChange={event => {
         if (unsaved.current && !confirm('저장하지 않은 설계 변경을 닫고 다른 작업 공간으로 이동할까요?')) return;
@@ -156,10 +156,16 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const [planningDirty, setPlanningDirty] = useState(false);
   const editingNow = useRef(editing);
   const planningNow = useRef(planningDirty);
+  const composeNow = useRef(false);
+  const onCompose = useCallback((dirty: boolean) => {
+    composeNow.current = dirty;
+    onDirty(dirty || editingNow.current.dirty || planningNow.current);
+  }, [onDirty]);
   const [criteriaPending, setCriteriaPending] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [requestedRun, setRequestedRun] = useState({ id: route.runId, round: route.round });
+  const [criteriaOverride, setCriteriaOverride] = useState<{ route: typeof route; id: string } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const activeStage = useRef(step); activeStage.current = step;
   const activeProduct = useRef(productId); activeProduct.current = productId;
@@ -197,10 +203,10 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   }, [client, project?.id]);
   useEffect(() => { void refresh(); return () => controller.current?.abort(); }, [refresh]);
   useEffect(() => { setGuideRefs(previous => previous.filter(ref => selected.includes(ref.assetId))); }, [selected]);
-  useEffect(() => { onDirty(editingNow.current.dirty || planningNow.current); }, [editing.dirty, planningDirty, onDirty]);
+  useEffect(() => { onDirty(editingNow.current.dirty || planningNow.current || composeNow.current); }, [editing.dirty, planningDirty, onDirty, route]);
   useEffect(() => {
     if (activeProduct.current !== route.productId) {
-      editingNow.current = { id: '', dirty: false }; planningNow.current = false; onDirty(false);
+      editingNow.current = { id: '', dirty: false }; planningNow.current = false; composeNow.current = false; onDirty(false);
       setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
       setSelected([]); setGuideRefs([]);
     }
@@ -210,7 +216,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   }, [route]);
   const onEditing = useCallback((id: string, dirty: boolean) => {
     if (activeProduct.current !== productId) return;
-    editingNow.current = { id, dirty }; onDirty(dirty || planningNow.current);
+    editingNow.current = { id, dirty }; onDirty(dirty || planningNow.current || composeNow.current);
     setEditing(previous => previous.id === id && previous.dirty === dirty ? previous : { id, dirty });
     if (id && ['define', 'design'].includes(activeStage.current)) {
       const params = new URLSearchParams(location.hash.split('?')[1]);
@@ -222,7 +228,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   }, [productId, onDirty, onLocation]);
   const onPlanning = useCallback((dirty: boolean) => {
     if (activeProduct.current !== productId) return;
-    planningNow.current = dirty; setPlanningDirty(dirty); onDirty(dirty || editingNow.current.dirty);
+    planningNow.current = dirty; setPlanningDirty(dirty); onDirty(dirty || editingNow.current.dirty || composeNow.current);
   }, [productId, onDirty]);
   const onApproved = useCallback((contract: Contract) => {
     setPreferredContract(contract.id); setPreferredSelection(value => value + 1);
@@ -231,23 +237,24 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const product = products.find(item => item.id === productId);
   const scopedContracts = contracts.filter(item => !productId || !item.productId || item.productId === productId);
   const scopedRuns = runs.filter(item => !productId || item.productId === productId);
-  const navigate = (next: WorkflowStep, runId?: string, round?: number) => {
+  const navigate = (next: WorkflowStep, runId?: string, round?: number, criteriaId?: string) => {
     if (criteriaPending) { setError('기준 시안 조회가 끝나면 다음 단계로 이동할 수 있습니다.'); return; }
     setStep(next);
+    if (criteriaId !== undefined) setCriteriaOverride({ route, id: criteriaId });
     const target = runId ? { id: runId, round } : {
       id: selection?.run.id || requestedRun.id, round: selection?.round?.number || requestedRun.round,
     };
     if (target.id && (next === 'review' || next === 'handoff')) setRequestedRun(target);
     const hash = workflowHash(location.hash, { projectId: project?.id || '', productId, step: next,
-      contractId: editing.id || undefined,
+      contractId: criteriaId ?? (editing.id || undefined),
       ...(next === 'review' || next === 'handoff' ? { runId: target.id, round: target.round } : {}) });
     if (hash !== location.hash) history.pushState(null, '', hash);
     onLocation(hash);
     requestAnimationFrame(() => heading.current?.focus({ preventScroll: true }));
   };
   const chooseProduct = (id: string) => {
-    if (id !== productId && (editingNow.current.dirty || planningNow.current) && !confirm('저장하지 않은 설계 변경을 닫고 다른 상품을 선택할까요?')) return;
-    activeProduct.current = id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; onDirty(false);
+    if (id !== productId && (editingNow.current.dirty || planningNow.current || composeNow.current) && !confirm('저장하지 않은 설계 변경을 닫고 다른 상품을 선택할까요?')) return;
+    activeProduct.current = id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; composeNow.current = false; onDirty(false);
     setProductId(id); setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setRequestedRun({ id: '', round: undefined });
     setPlanningDirty(false);
     setSelected([]); setGuideRefs([]);
@@ -258,9 +265,9 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const saveProduct = (value: Product) => {
     const sameProduct = value.id === productId;
     setProducts(items => [value, ...items.filter(item => item.id !== value.id)]);
-    if (!sameProduct && editingNow.current.dirty && !confirm('저장하지 않은 UX 설계 변경을 닫고 저장한 상품으로 이동할까요?')) return;
+    if (!sameProduct && (editingNow.current.dirty || composeNow.current) && !confirm('저장하지 않은 UX 설계 변경을 닫고 저장한 상품으로 이동할까요?')) return;
     if (!sameProduct) {
-      activeProduct.current = value.id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; onDirty(false);
+      activeProduct.current = value.id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; composeNow.current = false; onDirty(false);
       setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
       setRequestedRun({ id: '', round: undefined }); setSelected([]); setGuideRefs([]);
     }
@@ -276,16 +283,19 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       onChange={event => chooseProduct(event.target.value)}><option value="">상품 미선택 · 전체 이력</option>
       {products.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
       <p>{product?.publishedGuidelineId ? `게시 ${product.publishedRevision}차 기준으로 함께 설계합니다.` : '업무 정의에서 상품 조건과 진행 절차를 먼저 확정하세요.'}</p></div>}
-    <nav className="ws-workflow-nav" aria-label="UX 설계 단계">{WORKFLOW_STEPS.map((item, index) =>
-      <button key={item.id} data-workflow-step={item.id} aria-label={`${index + 1} ${item.label}`}
+    <nav className="ws-workflow-nav ws-canvas-nav" aria-label="UX 설계 단계">{[3, 1, 0, 2, 4].map(index => {
+      const item = WORKFLOW_STEPS[index];
+      const label = item.id === 'review' ? '화면 만들기' : item.label;
+      return (
+      <button key={item.id} data-workflow-step={item.id} aria-label={label}
         aria-current={step === item.id ? 'step' : undefined} disabled={criteriaPending} onClick={() => navigate(item.id)}>
-        <span>{String(index + 1).padStart(2, '0')}</span><strong>{item.label}</strong><small>{item.output}</small>
-      </button>)}</nav>
+        <strong>{label}</strong>
+      </button>); })}</nav>
     <div className="ws-stage-heading"><div><h2 ref={heading} tabIndex={-1}>{current.label}</h2><p>{current.purpose}</p></div>
       <button onClick={() => void refresh()} disabled={loading}>{loading ? '조회 중…' : '내 작업 새로 조회'}</button></div>
     {error && <Notice error>{error}</Notice>}
     {productId && !product && !loading && <Notice error>연결된 상품을 이 작업 공간에서 찾지 못했습니다. 현재 프로젝트의 상품을 다시 선택하세요.</Notice>}
-    {(!productId || product) && <div className="ws-collaboration-layout"><div className="ws-work-area">
+    {(!productId || product) && <div className={`ws-collaboration-layout ${step === 'review' ? 'ws-canvas-workspace' : ''}`}><div className="ws-work-area">
       {project && <section className="ws-section ws-product-definition" hidden={step !== 'define'}>
         <h2>상품 조건과 진행 절차</h2><p>팀이 사용할 상품 기준을 게시한 뒤 UX 목적과 상태를 정합니다.</p>
         <details open={!product?.publishedGuidelineId}><summary>{product?.publishedGuidelineId ? '게시 기준 확인·새 버전 작성' : '상품 지침 작성·게시'}</summary>
@@ -294,7 +304,8 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       <div hidden={step !== 'define' && step !== 'design'}><RulesPanel key={productId || 'unbound'} config={config} assets={assets} selected={selected}
         runs={scopedRuns}
         onPending={setCriteriaPending}
-        guideRefs={guideRefs} stage={step === 'define' ? 'define' : 'design'} initialContractId={route.contractId}
+        guideRefs={guideRefs} stage={step === 'define' ? 'define' : 'design'}
+        initialContractId={criteriaOverride?.route === route ? criteriaOverride.id : route.contractId}
         contracts={scopedContracts} product={product} onContinue={() => navigate(step === 'define' ? 'assets' : 'review')}
         refresh={() => void refresh()} onApproved={onApproved} onEditing={onEditing} /></div>
       <div hidden={step !== 'assets'}>
@@ -316,12 +327,21 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
       <div hidden={step !== 'review'}><RunsPanel key={productId || 'unbound'} config={config} assets={assets}
         contracts={scopedContracts} runs={scopedRuns} initialRunId={requestedRun.id} initialRound={requestedRun.round}
         refresh={() => void refresh()} preferredContract={preferredContract} preferredSelection={preferredSelection} editing={editing} onSelection={reviewSelection} product={product}
+        selectedAssets={selected.filter(id => assets.some(asset => asset.id === id && !asset.archived && !asset.system && asset.uploadStatus === 'stored'))}
+        guideRefs={guideRefs} onComposeDirty={onCompose} onAssets={() => navigate('assets')}
+        onCriteria={id => {
+          if (id && id !== editingNow.current.id && editingNow.current.dirty &&
+              !confirm('저장하지 않은 기준 변경을 닫고 선택한 확인 기준을 열까요?')) return;
+          // No target means return to the current editor, including an unsaved
+          // new draft. Do not turn absence into an explicit empty selection.
+          navigate('design', undefined, undefined, id || undefined);
+        }}
         onHandoff={(runId, round) => navigate('handoff', runId, round)} /></div>
       {step === 'handoff' && <HandoffPanel key={productId || 'unbound'} runs={scopedRuns} contracts={scopedContracts} selection={selection}
         product={product} initialRunId={requestedRun.id} initialRound={requestedRun.round} onSelection={handoffSelection}
         onReview={(runId, round) => navigate('review', runId, round)} />}
-    </div><CollaborationSidebar products={products} product={product} onProduct={chooseProduct} selection={selection} assets={assets} catalog={config.componentCatalog}
+    </div><details className="ws-collaboration-disclosure" open={step !== 'review'}><summary>팀 의견·상품·개발 정보</summary><CollaborationSidebar products={products} product={product} onProduct={chooseProduct} selection={selection} assets={assets} catalog={config.componentCatalog}
       workflow refresh={() => void refresh()} onProductSaved={saveProduct}
-      onProjectRefresh={onProjectRefresh} /></div>}
+      onProjectRefresh={onProjectRefresh} /></details></div>}
   </>;
 }

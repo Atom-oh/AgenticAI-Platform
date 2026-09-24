@@ -69,6 +69,10 @@ class PiiVerificationUnavailable(Exception):
     pass
 
 
+class GuardrailPolicyDenied(PiiVerificationUnavailable):
+    """A policy intervention cannot be represented as zero detected PII."""
+
+
 def guardrail_hits(response: dict, *, strict: bool = False) -> list[dict]:
     """Detection is distinct from policy enforcement (action NONE can detect)."""
     assessments = response.get("assessments")
@@ -121,26 +125,35 @@ def verify_guardrail_coverage(response: dict, text: str, *, context_chars: int =
         raise PiiVerificationUnavailable("PII verification did not cover the input")
 
 
-def scan_guardrail(text: str, *, strict: bool = False) -> list[dict]:
+def scan_guardrail(text: str, *, strict: bool = False, max_chars: int = 4000) -> list[dict]:
     """Bedrock Guardrails PII 평가 — 마스킹 규칙과 독립된 ML 탐지기. 실패 시 빈 목록(로그)."""
+    if type(max_chars) is not int or not 1 <= max_chars <= 100_000:
+        raise PiiVerificationUnavailable("Invalid PII verification size limit")
     if not GUARDRAIL_ID or not text:
         if strict:
             raise PiiVerificationUnavailable("PII verification is not configured")
         return []
-    if strict and len(text) > 4000:
+    if strict and len(text) > max_chars:
         # 창을 넘는 입력은 네트워크 이전에 거부한다 (일부만 검사하고 전체를 검증했다고 주장하지 않는다).
         # 페이로드가 커져 이 경로에 걸리면 사용자에게는 일반적인 검증 실패로만 보이므로, 운영자가
         # 원인을 구분할 수 있도록 길이만 기록한다 — 원문은 남기지 않는다 (§12.5).
         from common.log import log_event
-        log_event("pii.verification_input_too_long", chars=len(text), limit=4000)
+        log_event("pii.verification_input_too_long", chars=len(text), limit=max_chars)
         raise PiiVerificationUnavailable("PII verification input exceeds checked length")
     try:
         rt = boto3.client("bedrock-runtime", region_name=REGION)
         r = rt.apply_guardrail(guardrailIdentifier=GUARDRAIL_ID, guardrailVersion=GUARDRAIL_VER,
-                               source="INPUT", content=[{"text": {"text": text[:4000]}}])
+                               source="INPUT", content=[{"text": {"text": text[:max_chars]}}])
         if strict:
             verify_guardrail_coverage(r, text)
-        return guardrail_hits(r, strict=strict)
+        hits = guardrail_hits(r, strict=strict)
+        if strict and r.get("action") == "GUARDRAIL_INTERVENED" and not hits:
+            raise GuardrailPolicyDenied("Guardrail policy rejected the input")
+        return hits
+    except GuardrailPolicyDenied:
+        from common.log import log_event
+        log_event("pii.guardrail_policy_denied", chars=len(text), blocked=True)
+        raise
     except Exception as ex:  # 계측 실패는 요청을 막지 않되 기록한다
         from common.log import log_event
         log_event("pii.guardrail_scan_failed", errorType=type(ex).__name__)
@@ -149,7 +162,8 @@ def scan_guardrail(text: str, *, strict: bool = False) -> list[dict]:
         return []
 
 
-def scan_outbound(text: str, use_guardrail: bool = True, *, strict: bool = False, trusted_tokens=None) -> dict:
+def scan_outbound(text: str, use_guardrail: bool = True, *, strict: bool = False, trusted_tokens=None,
+                  max_chars: int = 4000) -> dict:
     """반환: {"count": n, "hits": [...], "detectors": ["rules","guardrail"]}"""
     checked_text = guardrail_view(text, trusted_tokens)
     hits = scan_rules(checked_text)
@@ -157,6 +171,7 @@ def scan_outbound(text: str, use_guardrail: bool = True, *, strict: bool = False
     if strict and hits:
         return {"count": len(hits), "hits": hits[:20], "detectors": detectors}
     if use_guardrail:
-        hits += scan_guardrail(checked_text, strict=strict)
+        options = {"max_chars": max_chars} if max_chars != 4000 else {}
+        hits += scan_guardrail(checked_text, strict=strict, **options)
         detectors.append("guardrail")
     return {"count": len(hits), "hits": hits[:20], "detectors": detectors}

@@ -1,6 +1,6 @@
 """에이전트 빌더 핸들러 테스트 — 오프라인 (AgentCore Harness/Registry 는 페이크, Registry 는 인메모리).
 
-검증: 생성 → PENDING_APPROVAL + 미러 호출 · 미승인 호출 거부(Harness 미호출) · 승인 후 스트리밍/usage ·
+검증: 생성 → PENDING_APPROVAL (관리자 처리 전 미러 없음) · 미승인 호출 거부(Harness 미호출) · 승인 후 스트리밍/usage ·
 잘못된 도구/이름/스킬 거부 · 카탈로그 조인 · 오류 내성 · executionRoleArn 비노출 · 로그에 프롬프트 원문 없음.
 실행: cd platform && python3 -m pytest tests/test_agents_handler.py -q
 """
@@ -23,6 +23,7 @@ os.environ["REGISTRY_EMBED"] = "0"
 os.environ.setdefault("AWS_DEFAULT_REGION", "ap-northeast-2")
 
 from agentcore import harness as harness_mod  # noqa: E402
+REAL_HARNESS_INVOKE = harness_mod.invoke_stream
 from agentcore import registry_mirror as mirror_mod  # noqa: E402
 from common.ctx import Ctx  # noqa: E402
 from registry import api  # noqa: E402
@@ -59,12 +60,9 @@ class FakeHarness:
         name = f"bank_{spec['name']}"
         if name in self.harnesses:
             return self.harnesses[name]
-        d = {"harnessId": f"{name}-abc123", "harnessName": name, "status": "READY",
+        d = {**harness_mod.build_config(spec), "harnessId": f"{name}-abc123", "harnessName": name, "status": "READY",
              "arn": f"arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:harness/{name}-abc123",
              "executionRoleArn": ROLE_ARN, "clientToken": "tok",
-             "model": {"bedrockModelConfig": {"modelId": spec.get("model")}},
-             "systemPrompt": [{"text": spec["systemPrompt"]}],
-             "allowedTools": [f"bank_platform_tools___{t}" for t in spec.get("allowedTools", [])],
              "memory": {"disabled": {}}, "maxIterations": 12, "timeoutSeconds": 120}
         self.harnesses[name] = d
         return d
@@ -73,6 +71,11 @@ class FakeHarness:
         self.calls.append(("invoke", arn, text, session_id))
         if self.fail_invoke:
             raise RuntimeError("ThrottlingException: slow down")
+        measured = harness_mod._inspect(text, "synthetic.harness.input")
+        yield ("boundary", {"chars": measured["chars"], "estTokens": measured["estTokens"],
+                            "piiRules": measured["piiRules"]["count"], "source": "harness-input",
+                            "piiDetectors": measured["verification"]["detectors"],
+                            "piiCount": measured["verification"]["count"]})
         yield ("text", "안녕")
         yield ("tool_start", {"name": "lookup_customer_profile", "toolUseId": "t1"})
         yield ("tool_input", {"name": "lookup_customer_profile", "input": json.dumps({"question": "우대금리"})})
@@ -112,7 +115,15 @@ class _FakeApigw:
 
 
 @pytest.fixture(autouse=True)
-def fresh_store():
+def fresh_store(monkeypatch):
+    from common import pii
+    from types import SimpleNamespace
+    def verify(**request):
+        text = request["content"][0]["text"]["text"]
+        return {"action": "NONE", "assessments": [], "usage": {"sensitiveInformationPolicyUnits": 1},
+                "guardrailCoverage": {"textCharacters": {"guarded": len(text), "total": len(text)}}}
+    monkeypatch.setattr(pii, "GUARDRAIL_ID", "synthetic-guardrail")
+    monkeypatch.setattr(pii.boto3, "client", lambda *args, **kwargs: SimpleNamespace(apply_guardrail=verify))
     api.reset_for_tests()
     for s in ("bank-publishing-conventions", "kwcag-accessibility"):
         api.create_record({"name": s, "recordVersion": "v1", "recordType": "SKILL", "description": "스킬",
@@ -127,6 +138,8 @@ def fakes(monkeypatch):
         monkeypatch.setattr(harness_mod, attr, getattr(fh, attr))
     monkeypatch.setattr(mirror_mod, "mirror", fm.mirror)
     monkeypatch.setattr(mirror_mod, "find_record", fm.find_record)
+    monkeypatch.setattr(harness_mod, "HARNESS_ROLE_ARN", ROLE_ARN)
+    monkeypatch.setattr(harness_mod, "GATEWAY_ARN", "arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:gateway/synthetic")
     return fh, fm
 
 
@@ -137,9 +150,9 @@ def _handler():
     return mod
 
 
-def _ctx(rid="r1"):
+def _ctx(rid="r1", user_sub="synthetic-user-one"):
     gw = _FakeApigw()
-    return Ctx(apigw=gw, conn_id="c1", email=ACTOR, rid=rid), gw
+    return Ctx(apigw=gw, conn_id="c1", email=ACTOR, rid=rid, user_sub=user_sub), gw
 
 
 def _create_body(**kw):
@@ -147,7 +160,7 @@ def _create_body(**kw):
             "model": "global.anthropic.claude-sonnet-5",
             "systemPrompt": f"당신은 아톰은행 카드 혜택 상담 에이전트다. {SECRET_PROMPT_MARK} 공통 규칙을 따른다.",
             "allowedTools": ["lookup_customer_profile", "resolve_metric"], "skills": ["kwcag-accessibility"],
-            "memory": True}
+            "memory": False}
     body.update(kw)
     return body
 
@@ -162,6 +175,21 @@ def _types(gw):
     return [e["type"] for e in gw.posted]
 
 
+def _approve(h, name="card_benefit_agent"):
+    import admin_handler
+    from types import SimpleNamespace
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": name, "version": "v1", "to": "APPROVED", "reason": "Synthetic administrator approval"})
+    request = gw.posted[-1]["request"]
+    result = admin_handler.handler({"op": "apply_agent_request", "name": request["name"], "version": request["version"]},
+                                   SimpleNamespace(aws_request_id="11111111-1111-4111-8111-111111111111"))
+    if not result["ok"]:
+        from registry import model
+        error = getattr(model, result["errorType"], RuntimeError)
+        raise error(result["error"])
+    return result
+
+
 # ---------------- 라우트 ----------------
 def test_routes():
     h = _handler()
@@ -169,7 +197,7 @@ def test_routes():
 
 
 # ---------------- 생성 ----------------
-def test_create_goes_to_pending_and_mirrors(fakes, capsys):
+def test_create_records_a_request_without_agentcore_control_calls(fakes, capsys):
     fh, fm = fakes
     h = _handler()
     ev = _create(h)
@@ -177,24 +205,19 @@ def test_create_goes_to_pending_and_mirrors(fakes, capsys):
     rec = ev["record"]
     assert rec["status"] == "PENDING_APPROVAL" and rec["recordType"] == "AGENT" and rec["recordVersion"] == "v1"
     assert rec["updatedBy"] == ACTOR and rec["payload"]["runtime"] == "AgentCore Harness"
-    assert rec["payload"]["harnessArn"].endswith("harness/bank_card_benefit_agent-abc123")
+    assert "harnessArn" not in rec["payload"]
     assert rec["payload"]["allowedTools"] == ["lookup_customer_profile", "resolve_metric"]
-    assert rec["payload"]["skills"] == ["kwcag-accessibility"] and rec["payload"]["memory"] is True
+    assert rec["payload"]["skills"] == ["kwcag-accessibility"] and rec["payload"]["memory"] is False
     assert rec["payload"]["createdBy"] == ACTOR and rec["payload"]["scenario"] == "custom"
-    assert ev["harness"] == {**ev["harness"], "status": "READY", "reused": False}
-    assert ev["harness"]["arn"] == rec["payload"]["harnessArn"]
-    # 미러는 PENDING_APPROVAL 레코드로 1회 호출
-    assert len(fm.calls) == 1 and fm.calls[0]["status"] == "PENDING_APPROVAL" and fm.calls[0]["name"] == "card_benefit_agent"
-    assert ev["agentcoreRegistry"]["status"] == "PENDING_APPROVAL" and ev["agentcoreRegistry"]["action"] == "created"
-    # Harness 명세: createdBy = 사용자, scenario custom, 프롬프트 그대로
-    ensure = next(c for c in fh.calls if c[0] == "ensure")[1]
-    assert ensure["createdBy"] == ACTOR and ensure["scenario"] == "custom" and SECRET_PROMPT_MARK in ensure["systemPrompt"]
+    assert ev["harness"]["status"] == "PENDING_ADMIN" and ev["harness"]["arn"] is None
+    assert fh.calls == [] and fm.calls == []
+    assert ev["agentcoreRegistry"]["status"] == "PENDING_ADMIN"
     # 감사: DRAFT 생성 → PENDING_APPROVAL (사유 기록)
     trail = api.audit_trail("card_benefit_agent", "v1")
     assert [a["to"] for a in trail] == ["PENDING_APPROVAL", "DRAFT"] and trail[0]["reason"] == "빌더 생성 — 승인 대기"
     # 로그에는 프롬프트 원문·이메일이 없다
     out = capsys.readouterr().out
-    assert "agent.created" in out and SECRET_PROMPT_MARK not in out and ACTOR not in out
+    assert "agent.requested" in out and SECRET_PROMPT_MARK not in out and ACTOR not in out
 
 
 def test_create_rejects_unknown_tool(fakes):
@@ -213,6 +236,9 @@ def test_create_rejects_unknown_tool(fakes):
     ({"skills": ["nonexistent-skill"]}, "SKILL"),
     ({"systemPrompt": "   "}, "프롬프트"),
     ({"model": "global.anthropic.claude-haiku-9"}, "모델"),
+    ({"allowedTools": []}, "도구"),
+    ({"allowedTools": ["*"]}, "도구"),
+    ({"memory": True}, "Memory"),
 ])
 def test_create_validation(fakes, bad, needle):
     fh, _ = fakes
@@ -231,7 +257,7 @@ def test_create_duplicate_name_is_409_without_touching_harness(fakes):
     assert ev["ok"] is False and ev["code"] == 409 and len(fh.calls) == n
 
 
-def test_create_harness_failure_returns_error_and_no_record(fakes, monkeypatch):
+def test_admin_provision_failure_preserves_the_unapproved_request(fakes, monkeypatch):
     fh, fm = fakes
     h = _handler()
 
@@ -239,17 +265,406 @@ def test_create_harness_failure_returns_error_and_no_record(fakes, monkeypatch):
         raise RuntimeError("ValidationException: bad model")
     monkeypatch.setattr(harness_mod, "ensure_harness", boom)
     ev = _create(h)
-    assert ev["ok"] is False and ev["stage"] == "harness" and "ValidationException" in ev["error"]
-    assert api.get_record("card_benefit_agent", "v1") is None and fm.calls == []
+    assert ev["ok"] and fh.calls == []
+    with pytest.raises(RuntimeError):
+        _approve(h)
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "PENDING_APPROVAL" and fm.calls == []
 
 
-def test_create_tolerates_mirror_failure(fakes):
+def test_create_does_not_contact_the_registry_mirror(fakes):
     _, fm = fakes
     fm.fail = True
     h = _handler()
     ev = _create(h)
     assert ev["ok"] is True and ev["record"]["status"] == "PENDING_APPROVAL"
-    assert "error" in ev["agentcoreRegistry"] and "unreachable" in ev["agentcoreRegistry"]["error"]
+    assert ev["agentcoreRegistry"]["status"] == "PENDING_ADMIN" and fm.calls == []
+
+
+def test_generic_registry_route_cannot_apply_agent_approval(fakes):
+    from handlers.registry import registry_transition
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    registry_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Request"})
+    assert gw.posted[-1]["request"]["status"] == "PENDING_ADMIN"
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "PENDING_APPROVAL"
+    assert not fh.calls and not fm.calls
+
+
+def test_generic_registry_create_cannot_supply_an_approved_agent(fakes):
+    from handlers.registry import registry_create
+    fh, fm = fakes
+    ctx, gw = _ctx()
+    registry_create(ctx, {"record": {"name": "forged_agent", "recordVersion": "v1",
+        "recordType": "AGENT", "status": "APPROVED", "description": "Synthetic forgery",
+        "payload": {"runtime": "AgentCore Harness", "harnessArn": "arn:synthetic"}}})
+    assert gw.posted[-1]["code"] == 403
+    assert api.get_record("forged_agent", "v1") is None and not fh.calls and not fm.calls
+
+
+@pytest.mark.parametrize("name,subtype", [
+    ("forged_request", "AGENT_ADMIN_REQUEST"),
+    ("agent-request-" + "a" * 48, "COMPONENT"),
+])
+def test_generic_registry_cannot_occupy_administration_namespaces(fakes, name, subtype):
+    from handlers.registry import registry_create
+    ctx, gw = _ctx()
+    registry_create(ctx, {"record": {"name": name, "recordVersion": "v1", "recordType": "CUSTOM",
+                                    "subtype": subtype, "status": "APPROVED", "payload": {}}})
+    assert gw.posted[-1]["code"] == 403
+    assert api.get_store().get(name, "v1") is None
+
+
+def test_admin_request_reconciles_a_failed_mirror_without_reprovisioning(fakes):
+    from agentcore.administration import apply_request
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Synthetic"})
+    request = gw.posted[-1]["request"]
+    fm.fail = True
+    partial = apply_request(request["name"])
+    assert partial["applied"] is True and partial["completed"] is False
+    assert partial["agentcoreRegistry"]["status"] == "SYNC_PENDING"
+    assert partial["record"]["status"] == "APPROVED" and partial["request"]["status"] == "DRAFT"
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "APPROVED"
+    fm.fail = False
+    result = apply_request(request["name"])
+    assert result["request"]["status"] == "APPROVED"
+    assert len([call for call in fh.calls if call[0] == "ensure"]) == 1
+    assert apply_request(request["name"])["replayed"] is True
+
+
+def test_iam_reconciliation_updates_an_unapproved_orphan_with_an_exact_hash(fakes, monkeypatch):
+    from types import SimpleNamespace
+    from agentcore.administration import apply_request, harness_fingerprint
+    fh, _ = fakes
+    from agentcore import skill_binding
+    original = _create_body(systemPrompt="Old synthetic specification")
+    existing = fh.ensure_harness({**original, "skillBindings": skill_binding.capture(original["skills"])})
+    existing.update(maxIterations=999, maxTokens=999999, timeoutSeconds=999)
+    existing["model"]["bedrockModelConfig"]["maxTokens"] = 999999
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Reconcile"})
+    request = gw.posted[-1]["request"]
+    calls = []
+
+    def update(**parameters):
+        calls.append(parameters)
+        assert parameters["memory"] == {"optionalValue": {"disabled": {}}}
+        existing.update({key: value for key, value in parameters.items()
+                         if key not in {"harnessId", "clientToken", "memory"}})
+        existing["memory"] = parameters["memory"]["optionalValue"]
+        existing["status"] = "READY"
+        return {}
+
+    monkeypatch.setattr(harness_mod, "ctl", lambda: SimpleNamespace(
+        update_harness=update, get_harness=lambda **kwargs: {"harness": existing}))
+    result = apply_request(request["name"], reconcile_hash=harness_fingerprint(existing))
+    assert result["record"]["status"] == "APPROVED"
+    assert len(calls) == 1 and calls[0]["harnessId"] == existing["harnessId"]
+    assert SECRET_PROMPT_MARK in existing["systemPrompt"][0]["text"]
+    assert (existing["maxIterations"], existing["maxTokens"], existing["timeoutSeconds"]) == (12, 8192, 120)
+    assert existing["model"]["bedrockModelConfig"]["maxTokens"] == 2048
+    assert existing["model"]["bedrockModelConfig"]["apiFormat"] == "converse_stream"
+
+
+def test_agent_invocation_requires_the_verified_subject(fakes):
+    fh, _ = fakes
+    ctx, gw = _ctx(user_sub=None)
+    _handler().agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hello", "userSub": "forged"})
+    assert gw.posted[-1]["code"] == 401
+    assert not fh.calls
+
+
+def test_oversized_handler_input_is_rejected_without_truncation(fakes):
+    handler = _handler()
+    ctx, gw = _ctx()
+    handler.agent_invoke(ctx, {"name": "synthetic", "message": "x" * handler.MAX_MESSAGE + "CUST-0042"})
+    assert gw.posted[-1]["code"] == 413 and not fakes[0].calls
+
+
+def test_unknown_harness_execution_configuration_is_not_ignored(fakes):
+    handler = _handler()
+    _create(handler)
+    _approve(handler)
+    fakes[0].harnesses["bank_card_benefit_agent"]["unexpectedExecutionExtension"] = {"enabled": True}
+    ctx, gw = _ctx()
+    handler.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "safe"})
+    assert gw.posted[-1]["code"] == 409
+    assert not any(call[0] == "invoke" for call in fakes[0].calls)
+
+
+@pytest.mark.parametrize("missing", ["chars", "piiCount", "piiDetectors", "independent"])
+def test_incomplete_boundary_is_not_recorded_as_clean_evidence(fakes, monkeypatch, capsys, missing):
+    from agentcore import invoke
+    handler = _handler()
+    _create(handler)
+    _approve(handler)
+    boundary = {"chars": 10, "estTokens": 3, "piiRules": 0, "piiCount": 0,
+                "piiDetectors": ["rules", "guardrail"]}
+    if missing == "independent":
+        boundary["piiDetectors"] = ["rules"]
+    else:
+        boundary.pop(missing)
+    monkeypatch.setattr(invoke, "stream", lambda *args: iter([
+        ("boundary", boundary), ("text", "UNVERIFIED_OUTPUT"),
+        ("meta", {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}})]))
+    capsys.readouterr()
+    ctx, gw = _ctx()
+    handler.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "safe"})
+    assert gw.posted[-1]["error"] and "UNVERIFIED_OUTPUT" not in json.dumps(gw.posted)
+    trace = next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace["piiDetectors"] == [] and "piiOutbound" not in trace
+
+
+def test_admin_rejects_legacy_empty_skill_records_without_explicit_bindings(fakes):
+    from registry.model import ValidationError
+    h = _handler()
+    item = _create(h, skills=[])["record"]
+    payload = dict(item["payload"])
+    payload.pop("skillBindings")
+    api.get_store().rewrite(item["name"], "v1", {"payload": payload}, "iam-admin")
+    with pytest.raises(ValidationError):
+        _approve(h)
+    assert api.get_record(item["name"], "v1")["status"] == "PENDING_APPROVAL"
+    assert not fakes[0].calls and not fakes[1].calls
+
+
+def test_user_cannot_mark_an_administrative_request_as_applied(fakes):
+    from handlers.registry import registry_transition
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Request"})
+    request = gw.posted[-1]["request"]
+    registry_transition(ctx, {"name": request["name"], "version": "v1", "to": "PENDING_APPROVAL", "reason": "forged"})
+    assert gw.posted[-1]["code"] == 403
+    assert api.get_record(request["name"], "v1", include_internal=True)["status"] == "DRAFT"
+
+
+@pytest.mark.parametrize("status", ["DRAFT", "REJECTED", "DEPRECATED"])
+def test_custom_agent_cannot_select_an_unapproved_skill(fakes, status):
+    api.get_store().force_status("kwcag-accessibility", "v1", status, "admin", "Synthetic state")
+    result = _create(_handler())
+    assert result["code"] == 400 and "SKILL" in result["error"]
+    assert fakes[0].calls == []
+
+
+@pytest.mark.parametrize("change", ["record", "source"])
+def test_skill_revision_is_fixed_before_administrative_approval(fakes, monkeypatch, tmp_path, change):
+    from agentcore import skill_binding
+    from registry.model import ValidationError
+    h = _handler()
+    _create(h)
+    if change == "record":
+        api.get_store().rewrite("kwcag-accessibility", "v1", {"description": "Unreviewed edit"}, "admin")
+    else:
+        monkeypatch.setattr(skill_binding, "SKILLS_DIR", tmp_path)
+        (tmp_path / "kwcag-accessibility.md").write_text("Unreviewed replacement")
+    with pytest.raises(ValidationError):
+        _approve(h)
+    assert not fakes[0].calls and not fakes[1].calls
+
+
+def test_custom_harness_embeds_the_exact_approved_skill_and_rechecks_use(fakes):
+    h = _handler()
+    record = _create(h)["record"]
+    _approve(h)
+    saved = fakes[0].harnesses["bank_card_benefit_agent"]
+    binding = record["payload"]["skillBindings"][0]
+    assert binding["contentHash"] in saved["systemPrompt"][0]["text"]
+    assert saved["skills"] == []  # No mutable S3 skill prefix in custom Harness.
+    api.get_store().force_status("kwcag-accessibility", "v1", "DEPRECATED", "admin", "Synthetic retirement")
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hello"})
+    assert gw.posted[-1]["code"] == 409
+    assert not any(call[0] == "invoke" for call in fakes[0].calls)
+
+
+@pytest.mark.parametrize("conflict", ["hash", "approved_consumer", "limits"])
+def test_reconciliation_rejects_unreviewed_or_in_use_harnesses(fakes, monkeypatch, conflict):
+    from agentcore.administration import apply_request, harness_fingerprint
+    from registry.model import ConflictError
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    record = api.get_record("card_benefit_agent", "v1")
+    spec, error = h._validate_create({**record["payload"], "name": record["name"], "description": record["description"]})
+    assert error is None
+    existing = fh.ensure_harness(spec)
+    reviewed_hash = harness_fingerprint(existing)
+    existing["maxIterations"] = 999
+    assert harness_fingerprint(existing) != reviewed_hash
+    if conflict == "approved_consumer":
+        api.create_record({**record, "recordVersion": "v2"}, "admin", status="APPROVED", embed=False)
+        reviewed_hash = harness_fingerprint(existing)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": record["name"], "version": "v1", "to": "APPROVED"})
+    calls_before = len(fh.calls)
+    with pytest.raises(ConflictError):
+        apply_request(gw.posted[-1]["request"]["name"],
+                      reconcile_hash=None if conflict == "limits" else reviewed_hash)
+    assert not fm.calls
+    assert all(call[0] != "ensure" for call in fh.calls[calls_before:])
+    assert api.get_record(record["name"], "v1")["status"] == "PENDING_APPROVAL"
+
+
+def test_admin_requests_are_hidden_from_all_registry_discovery_paths(fakes):
+    from handlers import registry as routes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED",
+                             "reason": "PRIVATE_APPROVAL_REASON"})
+    name = gw.posted[-1]["request"]["name"]
+    assert api.get_record(name, "v1", include_internal=True)["payload"]["reason"] == "PRIVATE_APPROVAL_REASON"
+    ctx, gw = _ctx(user_sub="another-user")
+    for route, body in [(routes.registry_list, {}), (routes.registry_get, {"name": name, "version": "v1"}),
+                        (routes.registry_search, {"q": "agent-request"}), (routes.registry_consumer, {})]:
+        route(ctx, body)
+    assert "PRIVATE_APPROVAL_REASON" not in json.dumps(gw.posted)
+    assert gw.posted[1]["code"] == 404
+    assert api.get_record(name, "v1") is None
+    assert api.audit_trail(name, "v1") == [] and api.version_chain(name, "v1") == []
+    assert all(row["name"] != name for row in api.list_records())
+    api.get_store().force_status(name, "v1", "APPROVED", "admin", "Synthetic completion")
+    assert all(row["name"] != name for row in api.list_approved())
+
+
+def test_stream_error_events_never_expose_upstream_response_bodies(fakes, monkeypatch, capsys):
+    from agentcore import invoke
+    h = _handler()
+    _create(h)
+    _approve(h)
+    monkeypatch.setattr(invoke, "stream", lambda *args: iter([
+        ("error", {"message": "UPSTREAM_BODY_SENTINEL Traceback lambda.py", "code": 502}),
+        ("meta", {"stopReason": "error"}),
+    ]))
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "Synthetic request"})
+    assert gw.posted[-1]["error"]
+    assert "UPSTREAM_BODY_SENTINEL" not in json.dumps(gw.posted)
+    from common.log import hash8
+    trace = next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace["queryHash"] == hash8("Synthetic request")
+
+
+@pytest.mark.parametrize("drift", ["legacy", "wildcard", "maxIterations", "maxTokens", "timeoutSeconds",
+                                 "modelTokens", "memory"])
+def test_all_approved_harness_versions_require_the_reviewed_configuration(fakes, drift):
+    h = _handler()
+    _create(h)
+    _approve(h)
+    record = api.get_record("card_benefit_agent", "v1")
+    existing = fakes[0].harnesses["bank_card_benefit_agent"]
+    if drift == "legacy":
+        payload = {key: value for key, value in record["payload"].items() if key not in {"administration", "skillBindings"}}
+        api.get_store().rewrite(record["name"], "v1", {"payload": payload}, "admin")
+    elif drift == "wildcard":
+        existing["allowedTools"] = ["*"]
+    elif drift in {"maxIterations", "maxTokens", "timeoutSeconds"}:
+        existing[drift] = 999999
+    elif drift == "modelTokens":
+        existing["model"]["bedrockModelConfig"]["maxTokens"] = 999999
+    else:
+        existing["memory"] = {"managedMemoryConfiguration": {"arn": "arn:synthetic:memory/unreviewed"}}
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": record["name"], "version": "v1", "message": "Synthetic request"})
+    assert gw.posted[-1]["code"] == 409
+    assert not any(call[0] == "invoke" for call in fakes[0].calls)
+
+
+def test_harness_memory_is_explicitly_disabled_and_generated_ids_do_not_change_approval(fakes):
+    from agentcore.administration import harness_settings
+    from agentcore import skill_binding
+    spec = _create_body()
+    expected = harness_mod.build_config({**spec, "skillBindings": skill_binding.capture(spec["skills"])})
+    assert expected["memory"] == {"disabled": {}}
+    actual = json.loads(json.dumps(expected))
+    actual["environment"]["agentCoreRuntimeEnvironment"].update(
+        agentRuntimeArn="arn:synthetic", agentRuntimeName="synthetic", agentRuntimeId="synthetic")
+    assert harness_settings(actual) == harness_settings(expected)
+    actual["environment"]["agentCoreRuntimeEnvironment"]["networkConfiguration"]["networkMode"] = "VPC"
+    assert harness_settings(actual) != harness_settings(expected)
+
+
+def test_agent_get_omits_upstream_harness_status_reason(fakes):
+    h = _handler()
+    _create(h)
+    _approve(h)
+    fakes[0].harnesses["bank_card_benefit_agent"]["statusReason"] = "UPSTREAM_STATUS_SENTINEL Traceback"
+    ctx, gw = _ctx()
+    h.agent_get(ctx, {"name": "card_benefit_agent", "version": "v1"})
+    assert gw.posted[-1]["ok"]
+    assert "UPSTREAM_STATUS_SENTINEL" not in json.dumps(gw.posted)
+
+
+def test_operational_prompts_are_not_part_of_authenticated_discovery(fakes):
+    from handlers import registry as routes
+    from agentcore.administration import apply_request
+    h = _handler()
+    _create(h)
+    requester, sent = _ctx()
+    h.agent_transition(requester, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED",
+                                   "reason": "PRIVATE_APPROVAL_REASON"})
+    apply_request(sent.posted[-1]["request"]["name"])
+    ctx, gw = _ctx(user_sub="another-user")
+    h.agent_get(ctx, {"name": "card_benefit_agent", "version": "v1"})
+    routes.registry_get(ctx, {"name": "card_benefit_agent", "version": "v1"})
+    routes.registry_list(ctx, {"type": "AGENT"})
+    routes.registry_search(ctx, {"q": "card_benefit_agent"})
+    routes.registry_consumer(ctx, {"type": "AGENT"})
+    assert SECRET_PROMPT_MARK not in json.dumps(gw.posted)
+    assert "systemPrompt" not in json.dumps(gw.posted)
+    assert "PRIVATE_APPROVAL_REASON" not in json.dumps(gw.posted)
+    assert any(event["reason"] == "PRIVATE_APPROVAL_REASON" for event in api.audit_trail("card_benefit_agent", "v1"))
+    # Trusted administration still reads the original immutable specification.
+    assert SECRET_PROMPT_MARK in api.get_record("card_benefit_agent", "v1")["payload"]["systemPrompt"]
+
+
+def test_admin_approval_fences_specification_changes_during_provisioning(fakes, monkeypatch):
+    from agentcore.administration import apply_request
+    from registry.model import RegistryError
+    fh, fm = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Request"})
+    request = gw.posted[-1]["request"]
+    ensure = harness_mod.ensure_harness
+
+    def mutate(spec):
+        result = ensure(spec)
+        record = api.get_record("card_benefit_agent", "v1")
+        api.get_store().rewrite(record["name"], "v1", {"payload": {**record["payload"], "systemPrompt": "Changed specification"}}, "admin")
+        return result
+
+    monkeypatch.setattr(harness_mod, "ensure_harness", mutate)
+    with pytest.raises(RegistryError):
+        apply_request(request["name"])
+    assert api.get_record("card_benefit_agent", "v1")["status"] == "PENDING_APPROVAL"
+    assert not fm.calls
+
+
+def test_old_approval_request_cannot_survive_a_rejection_and_resubmission(fakes):
+    from agentcore.administration import apply_request
+    from registry.model import ConflictError
+    fh, _ = fakes
+    h = _handler()
+    _create(h)
+    ctx, gw = _ctx()
+    h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "Old request"})
+    request = gw.posted[-1]["request"]
+    for state in ["REJECTED", "DRAFT", "PENDING_APPROVAL"]:
+        api.transition("card_benefit_agent", "v1", state, "admin", "New review cycle")
+    with pytest.raises(ConflictError):
+        apply_request(request["name"])
+    assert not fh.calls
 
 
 # ---------------- 호출 — Consumer 게이트 ----------------
@@ -288,14 +703,20 @@ def test_transition_then_invoke_streams(fakes, capsys):
     fh, fm = fakes
     h = _handler()
     _create(h)
-    # 데모: 즉시 승인 — 전이 + 미러 동기화
+    # User requests cannot apply the state; IAM administration provisions it.
     ctx, gw = _ctx("r3")
     h.agent_transition(ctx, {"name": "card_benefit_agent", "version": "v1", "to": "APPROVED", "reason": "데모 — 즉시 승인"})
     ev = gw.posted[-1]
-    assert ev["type"] == "agent_transition" and ev["ok"] and ev["record"]["status"] == "APPROVED"
-    assert ev["audit"]["actor"] == ACTOR and ev["transition"] == "approve"
-    assert len(fm.calls) == 2 and fm.calls[-1]["status"] == "APPROVED" and fm.calls[-1]["statusReason"] == "데모 — 즉시 승인"
-    assert ev["agentcoreRegistry"]["status"] == "APPROVED"
+    assert ev["type"] == "agent_transition" and ev["ok"] and ev["record"]["status"] == "PENDING_APPROVAL"
+    assert fh.calls == [] and fm.calls == []
+    from agentcore.administration import apply_request
+    import admin_handler
+    from types import SimpleNamespace
+    applied = admin_handler.handler({"op": "apply_agent_request", "name": ev["request"]["name"]},
+                                    SimpleNamespace(aws_request_id="11111111-1111-4111-8111-111111111111"))
+    assert applied["record"]["status"] == "APPROVED" and applied["audit"]["actor"].startswith("iam-invoke:")
+    assert len(fm.calls) == 1 and fm.calls[-1]["status"] == "APPROVED"
+    assert SECRET_PROMPT_MARK not in json.dumps(fm.calls) and ACTOR not in json.dumps(fm.calls)
     # 호출
     capsys.readouterr()
     ctx, gw = _ctx("r4")
@@ -307,40 +728,48 @@ def test_transition_then_invoke_streams(fakes, capsys):
     assert tokens == ["안녕", "하세요"]
     stages = [e for e in gw.posted if e["type"] == "agent.stage"]
     ts = next(s for s in stages if s["step"] == "tool_start")
-    assert ts["name"] == "lookup_customer_profile" and ts["toolUseId"] == "t1" and ts["plane"] == "vpc"
+    assert ts["name"] == "lookup_customer_profile" and ts["toolUseId"] == "t1" and ts["plane"] == "agentcore"
     ti = next(s for s in stages if s["step"] == "tool_input")
-    assert json.loads(ti["input"]) == {"question": "우대금리"}
+    assert "input" not in ti and ti["inputRedacted"] is True and ti["chars"] > 0
     done = gw.posted[-1]
     assert done["usage"]["inputTokens"] == 120 and done["usage"]["outputTokens"] == 45
     assert done["modelId"] == "global.anthropic.claude-sonnet-5" and done["runtime"] == "AgentCore Harness"
-    assert done["sessionId"].endswith("-session") and done["stopReason"] == "end_turn" and done["toolCalls"] == 1
+    assert done["sessionId"] and len(done["runtimeSessionId"]) == 64 and done["stopReason"] == "end_turn" and done["toolCalls"] == 1
     assert "error" not in done and done["errors"] == [] and "elapsedMs" in done
     inv = next(c for c in fh.calls if c[0] == "invoke")
-    assert inv[1].endswith("bank_card_benefit_agent-abc123") and SECRET_MESSAGE_MARK in inv[2] and inv[3] is None
+    assert inv[1].endswith("bank_card_benefit_agent-abc123") and SECRET_MESSAGE_MARK in inv[2] and inv[3] == done["runtimeSessionId"]
     # 트레이스: 시나리오 AGENT, 토큰 실측, 메시지 원문 없음
     out = capsys.readouterr().out
     trace = next(json.loads(l) for l in out.splitlines() if '"event": "trace.recorded"' in l)
     assert trace["scenario"] == "AGENT" and trace["tokensIn"] == 120 and trace["tokensOut"] == 45
     assert trace["route"] == "harness" and trace["plane"] == "agentcore" and trace["agent"] == "card_benefit_agent"
-    assert trace["piiOutbound"] == 0 and trace["piiDetectors"] == ["tool-egress-gate"] and trace["blocked"] is False
+    assert trace["piiOutbound"] == 0 and trace["piiDetectors"] == ["rules(harness-input)", "guardrail"] and trace["blocked"] is False
     assert SECRET_MESSAGE_MARK not in out and ACTOR not in out and "queryHash" in trace
-    # 세션 유지: 클라이언트가 준 sessionId 가 Harness 로 전달되고 done 에 되돌아온다
+    # Client conversation ID is echoed; Harness receives the actor-bound Runtime ID.
     sid = "0123456789abcdef0123456789abcdef-session"
     ctx, gw = _ctx("r5")
     h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "다시", "sessionId": sid})
-    assert fh.calls[-1][3] == sid and gw.posted[-1]["sessionId"] == sid
+    bound = fh.calls[-1][3]
+    assert bound != sid and gw.posted[-1]["sessionId"] == sid
+    ctx, gw = _ctx("r6")
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "다시", "sessionId": sid})
+    assert fh.calls[-1][3] == bound
+    ctx, gw = _ctx("r7", user_sub="synthetic-user-two")
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "다시", "sessionId": sid})
+    assert fh.calls[-1][3] != bound and gw.posted[-1]["sessionId"] == sid
 
 
 def test_invoke_harness_exception_ends_with_done_error(fakes):
     fh, _ = fakes
     h = _handler()
     _create(h)
-    api.transition("card_benefit_agent", "v1", "APPROVED", ACTOR)
+    _approve(h)
     fh.fail_invoke = True
     ctx, gw = _ctx()
     h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "hi"})
     done = gw.posted[-1]
-    assert done["type"] == "agent.done" and "Harness 호출 실패" in done["error"] and "ThrottlingException" in done["error"]
+    assert done["type"] == "agent.done" and "에이전트 호출 실패" in done["error"] and "RuntimeError" in done["error"]
+    assert "slow down" not in json.dumps(done)
 
 
 def test_transition_invalid_is_400_event(fakes):
@@ -359,6 +788,7 @@ def test_catalog_joins_registry_harness_and_agentcore(fakes, monkeypatch):
     monkeypatch.setenv("GATEWAY_URL", "https://gw1.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp")
     h = _handler()
     _create(h)
+    _approve(h)
     api.create_record({"name": "s2_mydata_advisor", "recordVersion": "v1", "recordType": "AGENT", "subtype": "PIPELINE",
                        "description": "파이프라인형", "tags": ["s2"],
                        "payload": {"entry": "handlers.s2", "scenario": "S2", "model": "m"}}, ACTOR, status="APPROVED")
@@ -368,10 +798,10 @@ def test_catalog_joins_registry_harness_and_agentcore(fakes, monkeypatch):
     assert ev["type"] == "agents_catalog"
     by = {a["name"]: a for a in ev["agents"]}
     a = by["card_benefit_agent"]
-    assert a["status"] == "PENDING_APPROVAL" and a["agentcoreStatus"] == "PENDING_APPROVAL" and a["harnessStatus"] == "READY"
+    assert a["status"] == "APPROVED" and a["agentcoreStatus"] == "APPROVED" and a["harnessStatus"] == "READY"
     assert a["harnessArn"].endswith("bank_card_benefit_agent-abc123") and a["title"] == "카드 혜택 상담"
     assert a["model"] == "global.anthropic.claude-sonnet-5" and a["allowedTools"] == ["lookup_customer_profile", "resolve_metric"]
-    assert a["skills"] == ["kwcag-accessibility"] and a["memory"] is True and a["scenario"] == "custom"
+    assert a["skills"] == ["kwcag-accessibility"] and a["memory"] is False and a["scenario"] == "custom"
     assert a["createdBy"] == ACTOR and a["updatedAt"] and a["version"] == "v1"
     p = by["s2_mydata_advisor"]
     assert p["harnessStatus"] == "none" and p["harnessArn"] is None and p["agentcoreStatus"] is None and p["scenario"] == "S2"
@@ -400,23 +830,110 @@ def test_catalog_tolerates_backend_errors(fakes):
     h.agents_catalog(ctx, {})
     ev = gw.posted[-1]
     a = ev["agents"][0]
-    assert a["harnessStatus"] == "unknown" and "AccessDeniedException" in a["harnessError"]
-    assert a["agentcoreStatus"] is None and "us-east-1" in ev["agentcoreRegistryError"]
-    assert a["harnessArn"].endswith("abc123")  # payload 의 ARN 은 그대로 보인다
+    assert a["harnessStatus"] == "unknown" and a["harnessError"] == "RuntimeError"
+    assert a["agentcoreStatus"] is None and ev["agentcoreRegistryError"] == "RuntimeError"
+    assert a["harnessArn"] is None
     assert ev["gateway"] == {"arn": "", "url": ""}
 
 
 def test_agent_get_hides_execution_role(fakes):
     h = _handler()
     _create(h)
+    _approve(h)
     ctx, gw = _ctx()
     h.agent_get(ctx, {"name": "card_benefit_agent"})
     ev = gw.posted[-1]
     assert ev["type"] == "agent_get" and ev["ok"] and ev["record"]["recordVersion"] == "v1"
     hs = ev["harness"]
     assert hs["status"] == "READY" and hs["arn"].endswith("abc123") and hs["harnessName"] == "bank_card_benefit_agent"
-    assert SECRET_PROMPT_MARK in hs["systemPrompt"] and isinstance(hs["systemPrompt"], str)
+    assert "systemPrompt" not in hs and SECRET_PROMPT_MARK not in json.dumps(ev)
     assert "executionRoleArn" not in json.dumps(ev) and "clientToken" not in json.dumps(ev) and ROLE_ARN not in json.dumps(ev)
-    assert [a["to"] for a in ev["audit"]] == ["PENDING_APPROVAL", "DRAFT"]
+    assert [a["to"] for a in ev["audit"]] == ["APPROVED", "PENDING_APPROVAL", "DRAFT"]
     h.agent_get(ctx, {"name": "nope"})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 404
+
+
+@pytest.mark.parametrize("session_id", ["x" * 129, "x" * 128 + "first", "x" * 128 + "second", {}, 12, " "])
+def test_invalid_client_session_ids_are_rejected_before_lookup(fakes, session_id):
+    h = _handler()
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "synthetic", "message": "safe", "sessionId": session_id})
+    assert gw.posted[-1]["code"] == 400
+    assert not fakes[0].calls
+
+
+@pytest.mark.parametrize("late_boundary", [False, True])
+def test_text_before_valid_boundary_never_reaches_socket(fakes, monkeypatch, late_boundary):
+    from agentcore import invoke
+    h = _handler()
+    _create(h)
+    _approve(h)
+    events = [("text", "UNVERIFIED_OUTPUT" * 20)]
+    if late_boundary:
+        events.append(("boundary", {"chars": 20, "piiRules": 0}))
+    events.append(("meta", {"stopReason": "end_turn", "usage": {}}))
+    monkeypatch.setattr(invoke, "stream", lambda *args, **kwargs: iter(events))
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "safe"})
+    assert gw.posted[-1]["error"] and "UNVERIFIED_OUTPUT" not in json.dumps(gw.posted)
+    assert not any(event["type"] == "agent.token" for event in gw.posted)
+
+
+def test_handler_returns_measured_rules_only_harness_refusal(fakes, monkeypatch, capsys):
+    h = _handler()
+    _create(h)
+    _approve(h)
+    monkeypatch.setattr(harness_mod, "invoke_stream", REAL_HARNESS_INVOKE)
+    monkeypatch.setattr(harness_mod, "data", lambda: pytest.fail("raw identifier reached Harness transport"))
+    capsys.readouterr()
+    ctx, gw = _ctx()
+    h.agent_invoke(ctx, {"name": "card_benefit_agent", "message": "person@example.invalid"})
+    done = gw.posted[-1]
+    assert done["blocked"] and done["code"] == 422 and done["stopReason"] == "gate_refused"
+    evidence = done["boundary"]
+    assert evidence["chars"] > 0 and evidence["estTokens"] > 0 and evidence["piiCount"] > 0
+    assert evidence["piiDetectors"] == ["rules"] and evidence["refusedTypes"] == ["EMAIL"]
+    trace = next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace["blocked"] and trace["piiOutbound"] > 0 and trace["piiDetectors"] == ["rules(harness-input)"]
+
+
+@pytest.mark.parametrize('second_boundary', [False, True])
+def test_each_runtime_model_call_needs_its_own_boundary(fakes, monkeypatch, second_boundary):
+    from agentcore import invoke
+    h = _handler()
+    api.create_record({'name': 'runtime_sequence_probe', 'recordVersion': 'v1', 'recordType': 'AGENT',
+        'payload': {'runtime': 'agentcore-runtime/strands', 'runtimeArn': 'synthetic', 'runtimeSourceHash': 'a'*64}},
+        'admin', status='APPROVED', embed=False)
+    first = {'chars': 10, 'estTokens': 3, 'piiRules': 0, 'piiCount': 0, 'piiDetectors': ['rules','guardrail'], 'seq': 1}
+    events = [('boundary',first), ('text_boundary',{'seq':1}), ('text','FIRST_SAFE'),
+              ('tool_result',{'name':'synthetic','chars':10,'status':'success'})]
+    if second_boundary:
+        events.append(('boundary',{**first,'seq':2}))
+    events += [('text_boundary',{'seq':2}), ('text','SECOND_OUTPUT'), ('meta',{'stopReason':'end_turn','usage':{}})]
+    monkeypatch.setattr(invoke,'stream',lambda *args,**kwargs:iter(events))
+    ctx,gw = _ctx()
+    h.agent_invoke(ctx,{'name':'runtime_sequence_probe','message':'safe'})
+    assert ('SECOND_OUTPUT' in json.dumps(gw.posted)) is second_boundary
+    assert bool(gw.posted[-1].get('error')) is not second_boundary
+
+
+@pytest.mark.parametrize('policy_only', [False, True])
+def test_runtime_refusal_survives_missing_terminal_metadata(fakes, monkeypatch, capsys, policy_only):
+    from agentcore import invoke, runtime
+    h = _handler()
+    api.create_record({'name':'runtime_refusal_probe','recordVersion':'v1','recordType':'AGENT',
+        'payload':{'runtime':'agentcore-runtime/strands','runtimeArn':'synthetic','runtimeSourceHash':'a'*64}},
+        'admin',status='APPROVED',embed=False)
+    raw = [{'type':'boundary','seq':1,'chars':12,'estTokens':4,'piiRules':0 if policy_only else 1,
+            'piiCount':0 if policy_only else 1,'piiDetectors':['rules','guardrail'] if policy_only else ['rules'],
+            'refusedTypes':[] if policy_only else ['EMAIL'],'blocked':True},
+           {'type':'error','gate':'refused','code':422,'types':[] if policy_only else ['EMAIL'],'message':'PRIVATE_DETAIL'}]
+    monkeypatch.setattr(invoke,'stream',lambda *args,**kwargs:runtime.to_tuples(raw,'s'*64))
+    capsys.readouterr()
+    ctx,gw = _ctx()
+    h.agent_invoke(ctx,{'name':'runtime_refusal_probe','message':'safe'})
+    done=gw.posted[-1]
+    assert done['blocked'] and done['code']==422 and done['stopReason']=='gate_refused'
+    assert 'PRIVATE_DETAIL' not in json.dumps(gw.posted)
+    trace=next(json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event": "trace.recorded"' in line)
+    assert trace['blocked'] and trace['piiOutbound']==(0 if policy_only else 1)

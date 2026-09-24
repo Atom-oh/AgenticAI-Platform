@@ -116,7 +116,7 @@ def test_gemma_parse_completion_non_stream_and_content_parts():
 def test_gemma_generate_posts_openai_chat_body_with_bearer_key():
     op = FakeOpener(lambda req: FakeResponse(json.dumps(COMPLETION, ensure_ascii=False).encode()))
     ad = _adapter(op)
-    assert ad.region == "us-west-2" and ad.route == "gemma" and ad.tier == "2" and ad.endpoint == "bedrock-mantle"
+    assert ad.region == "us-west-2" and ad.route == "gemma" and ad.tier == "0/1" and ad.endpoint == "bedrock-mantle"
     text, usage = ad.generate("시스템", "질문: 우대금리?", max_tokens=50, temperature=0.1)
     assert text == "우대금리 조건을 충족합니다." and usage["inputTokens"] == 40 and usage["outputTokens"] == 9
     req = op.requests[0]
@@ -292,7 +292,7 @@ def test_vllm_stub_raises_not_implemented_with_hybrid_wording():
         with pytest.raises(NotImplementedError) as ei:
             fn()
         assert "idc_vllm" in str(ei.value) and "미구성" in str(ei.value) and ("온" + "프렘") not in str(ei.value)
-    assert v.route == "idc_vllm" and v.tier == "2" and v.health()["ok"] is False
+    assert v.route == "idc_vllm" and v.tier == "0/1" and v.health()["ok"] is False
 
 
 def test_normalize_usage_variants():

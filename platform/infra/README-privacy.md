@@ -94,10 +94,24 @@ cd platform/infra
 
 The checker synthesizes the privacy stack without lookups or Docker builds.
 The command above uses HEAD as the baseline main-stack source; CI supplies the
-PR base instead. Privacy disabled must match that supplied baseline; enabled may
-add only the WebSocket Lambda environment entry and exact
-`lambda:InvokeFunction` permission. This is a scoped regression check, not a ban
-on separately reviewed main-stack changes. Results are in
+PR base instead. At both the baseline and current revision, enabling privacy may
+add only the WebSocket and Workspace API environment entries and exact
+`lambda:InvokeFunction` permissions. Each enabled template is compared with its
+own revision's disabled template. Baseline source modules are loaded from the
+named `PR_BASE_SHA` (default HEAD), including all relative
+TypeScript dependencies such as `workspace.ts`; stdin must match that revision.
+The installed package/compiler configuration must have identical baseline locks,
+otherwise the check fails and requires an independent dependency installation.
+Both synths use the same explicitly recorded asset fixture; they do not certify
+runtime code or deployed artifacts. Other main-stack changes must exactly match
+the base and resource inventory in `privacy/deploy/reviewed-main-delta.json`.
+An unlisted resource, omitted expected change, different base, or changed resource
+configuration hash fails the check. Generated Lambda S3/container asset digests are
+normalized because worker bundles contain the manifest itself; bucket, handler,
+role, environment and all policy contents remain hash-bound. Code bytes require
+the separate exact-source deployment artifact checks.
+The manifest and each resource's complete diff still require current AI review
+and the bank IAM isolation test; they are not privacy-toggle effects. Results are in
 `platform/infra/cdk.out/privacy-check/verified.json`. Existing main-stack runtime
 and CDK deprecation warnings are outside this change.
 
@@ -160,8 +174,8 @@ node and NLB probes and exposes no model or input data. This is an additional
 application boundary, not a claim of strict-mode or host-level isolation.
 
 The main stack accepts the exact same-account Seoul relay ARN using
-`mydataPrivacyFunctionArn`. Only the WebSocket API role receives the new
-identity-policy grant. Existing account-level administrative permissions are not
+`mydataPrivacyFunctionArn`. Only the WebSocket and Workspace API roles receive
+the consumer identity-policy grant. Existing account-level administrative permissions are not
 rewritten. No new exports, GPU resources, VPCs, or peering are introduced.
 
 ## Image and manifest procedure

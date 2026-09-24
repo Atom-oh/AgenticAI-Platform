@@ -31,6 +31,7 @@ class Ctx:
     _tok_at: float = 0.0
     token_batch_chars: int = 32
     token_batch_ms: int = 60
+    user_sub: str | None = None
 
     def post(self, payload: dict) -> None:
         if self._tok_buf and not str(payload.get("type", "")).endswith(".token"):
