@@ -1180,7 +1180,19 @@ class Ledger:
                                                      "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
             self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=checks, before_attempt=guard,
                          reindex=False)
+        else:
+            # A pure retry charges nothing but is fenced exactly like a first read: the unchanged job version (the
+            # attempt/fence), the authority predicates and the temporal guard, after the bytes were read.
+            self._fence(owner, job, checks, guard)
         return {"index": index, "data": base64.b64encode(data).decode(), "sha256": digest}
+
+    def _fence(self, owner, job, checks, guard):
+        """A check-only transaction: nothing is written, every predicate and the final guard must still hold."""
+        predicates = [{"owner": owner, "kind": "job", "id": job["id"], "version": job["version"]}, *checks]
+        try:
+            self.storage.put_many([], predicates, retry_conflicts=False, before_attempt=guard, _writer=_WRITER)
+        except Conflict as error:
+            raise LedgerError("conflict") from error
 
     def _open_output(self, owner, job_id, attempt_id, fence, *, stage, name, total, sha256, operation_id=None):
         job = self._get(owner, job_id)

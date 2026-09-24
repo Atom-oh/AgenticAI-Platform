@@ -2088,3 +2088,37 @@ def test_failed_contention_settlement_cannot_permit_further_completion_submissio
     completions = [t for t in storage.table().transactions
                    if any("Put" in e and e["Put"]["Item"].get("status") == "succeeded" for e in t["TransactItems"])]
     assert completions == [] and storage.get(OWNER, "job", job["id"])["status"] == "failed"
+
+
+# === PR #27 review round 3 regressions ===============================================================
+
+@pytest.mark.parametrize("race", ["withdrawal", "lease-expiry"])
+def test_retried_chunk_read_runs_the_final_authority_and_temporal_fence(xfer, race):
+    """Review 3 finding 2: a retried chunk is fenced like a first read, without charging usage twice."""
+    storage, ledger, now, _ = xfer
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    operation = op_id()
+    ledger.tool().read_chunk(*ids(job), handle["handleId"], 0, operation_id=operation)
+    again = ledger.tool().read_chunk(*ids(job), handle["handleId"], 0, operation_id=operation)
+    assert again["index"] == 0
+    assert storage.get(OWNER, "job", job["id"])["transferUsage"]["chunks"] == 1
+    original = storage.get_blob
+
+    def racing(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key == handle_key:
+            if race == "withdrawal":
+                withdraw_admission(storage)
+            else:
+                now[0] = storage.get(OWNER, "job", job["id"])["attempt"]["leaseExpiresAt"]
+        return data
+    handle_key = storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]["key"]
+    storage.get_blob = racing
+    try:
+        with pytest.raises(LedgerError) as error:
+            ledger.tool().read_chunk(*ids(job), handle["handleId"], 0, operation_id=operation)
+    finally:
+        storage.get_blob = original
+    assert error.value.code in ("conflict", "stale-attempt")
+    assert storage.get(OWNER, "job", job["id"])["transferUsage"]["chunks"] == 1

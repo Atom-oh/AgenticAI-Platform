@@ -633,7 +633,12 @@ input handle's admission still resolves to the same key and hash, otherwise
 `transfer-invalid`. `read_chunk` and `write_chunk` are not `ops` entries; a supplied
 `operation_id` (mandatory in production) is bound on the handle
 (`chunkOps: {operationId: "index:chunkSha256"}`, at most `2 × chunks + 8`), and
-reusing it for another index or chunk hash is `operation-changed`.
+reusing it for another index or chunk hash is `operation-changed`. Every returned
+chunk is fenced after its bytes are read: a first read commits its usage with
+the guard's predicates, and a pure retry (already read, same operation ID)
+submits a check-only transaction (unchanged job version plus the guard's
+predicates and `before_attempt` checks) that charges no usage; a failure
+returns no bytes.
 
 Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,
