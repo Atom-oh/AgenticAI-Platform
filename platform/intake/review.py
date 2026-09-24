@@ -163,7 +163,7 @@ def list_pending(host, scope, *, claims=None):
     storage, owner, project_id = host.storage, scope["owner"], admission._project(scope)
     grants = _any_grant(storage, scope["actor"], project_id)
     policies = {g["policyId"] for g in grants}
-    items, cursor, scanned = [], None, 0
+    items, authorities, cursor, scanned = [], [], None, 0
     while len(items) < MAX_LISTED:
         page = storage.list_page(owner, "adm_decision", limit=100, cursor=cursor)
         for row in page["items"]:
@@ -199,6 +199,7 @@ def list_pending(host, scope, *, claims=None):
                 authority.recheck()
             except (AdmissionError, CollaborationError, ValueError, KeyError, TypeError, IndexError):
                 continue  # one unreadable or revoked item never breaks the whole queue
+            authorities.append(authority)
             items.append({"id": decision["id"], "revision": decision["revision"],
                           "source": {k: decision["source"][k] for k in ("sourceKind", "sourceId", "revision")},
                           "title": title, "dataClass": decision["dataClass"],
@@ -212,7 +213,17 @@ def list_pending(host, scope, *, claims=None):
         cursor = page.get("cursor")
         if not cursor or scanned >= 5000:
             break
-    return {"reviews": items}
+    # Response-wide final recheck after ALL reads: an item accumulated earlier is
+    # returned only if its whole authority still holds now.
+    _any_grant(storage, scope["actor"], project_id)
+    final = []
+    for item, authority in zip(items, authorities):
+        try:
+            authority.recheck()
+        except (AdmissionError, CollaborationError):
+            continue
+        final.append(item)
+    return {"reviews": final}
 
 
 def route(host, scope, claims, method, parts, body, query):

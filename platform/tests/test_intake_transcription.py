@@ -587,3 +587,19 @@ def test_image_revoked_during_generation_publishes_no_transcription(env, monkeyp
         transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
     assert error.value.status == 409
     assert len(adapter.calls) == 1 and _transcriptions(env) == []
+
+
+def test_grant_revoked_during_a_later_item_read_returns_no_earlier_preview(env, monkeypatch):
+    """Review 3, finding 3: the complete review response is rechecked after all reads."""
+    from test_intake_admission import guide
+    env.policy()
+    env.grant("bob", "grant-bob")
+    for name in ("first.txt", "second.txt"):
+        ref = guide(env, text=f"{name} 정기예금 안내.\n", name=name, request=name)
+        assert admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive")["status"] == \
+            "pending-review"
+    fired = revoke_during_read(env, monkeypatch, "inspection.json", lambda: env.admin(
+        {"op": "revoke_grant", "id": "grant-bob", "expectedRevision": 1}), occurrence=2)
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert fired and (status == 403 or listed["reviews"] == []), listed
+
