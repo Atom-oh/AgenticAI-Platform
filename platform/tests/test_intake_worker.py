@@ -290,3 +290,14 @@ def test_removed_and_restored_member_cannot_resurrect_a_queued_image_job(env, mo
     assert outcome["status"] == "failed"
     assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
 
+
+def test_refreshed_token_replays_the_same_image_request(env):
+    """Review 4, finding 4 (Minor): request identity is independent of the token's expiry."""
+    env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    now = env.api.storage.clock() // 1000
+    first, _ = _queue(env, ref, data_class="internal-non-sensitive", claims={"sub": "alice", "exp": now + 600})
+    second, _ = _queue(env, ref, data_class="internal-non-sensitive", claims={"sub": "alice", "exp": now + 1200})
+    assert second["job"]["id"] == first["job"]["id"] and second["decisionId"] == first["decisionId"]
+    job = env.api.storage.get(f"project:{env.pid}", "job", first["job"]["id"])
+    assert job["input"]["authorizationExpiresAt"] == (now + 600) * 1000  # the existing deadline is kept

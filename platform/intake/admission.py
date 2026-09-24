@@ -345,7 +345,10 @@ def request_image(host, scope, source_ref, *, data_class, claims=None):
             "policy": {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]},
             "decisionId": "adm-img-" + request_id[:40], "authorityRevision": epoch,
             "authorizationExpiresAt": authorization}
-    job = host._new_job(scope["owner"], job_id, "intake-image", data, request_hash=schema.digest(data))
+    # Stable request identity excludes the token deadline: a refreshed token replays
+    # the same job (current access was rechecked above; the job keeps its deadline).
+    identity = {key: value for key, value in data.items() if key != "authorizationExpiresAt"}
+    job = host._new_job(scope["owner"], job_id, "intake-image", data, request_hash=schema.digest(identity))
     host._invoke(scope["owner"], job)
     return {"status": "queued", "decisionId": data["decisionId"], "job": {"id": job["id"], "status": job["status"]}}
 
