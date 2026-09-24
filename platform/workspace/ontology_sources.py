@@ -2,11 +2,46 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from workbench.service import fail
 from workspace import ontology_schema as schema
+from workspace.collaboration import CollaborationError
 
 PROJECT_AUDIENCE = "current-project-members-v1"
+# Kinds whose audience is the current project (or grant), never a ref-supplied role list.
+_SHARED_AUDIENCE = {"asset", "product-guideline", "package", "run-round", "ux-contract", "published-asset"}
+# edit_design-class roles may inspect draft/failed/needs-changes rounds (AGENTCORE_CONTRACT publishing-handoff/1).
+ROUND_EDITORS = frozenset({"owner", "designer", "developer"})
+MAX_ROUND_ADMISSIONS = 50
+MAX_ARCHIVE_BYTES = 8_000_000
+_ROUND = re.compile(r"[1-9][0-9]{0,3}\Z")
+_VERSION = re.compile(r"[1-9][0-9]{0,15}\Z")
+# Authority failures pass through unchanged; they are not upstream lineage outcomes.
+_AUTHORITY_CODES = {"ontology-authority-changed", "ontology-authority-limit", "authorization-expired"}
+
+
+def _not_found():
+    # One message for missing and inaccessible records: no existence is disclosed.
+    fail(404, "not-found", "원본을 찾을 수 없거나 읽을 권한이 없습니다.")
+
+
+def _authority_error(error):
+    return error.status in (401, 403) or error.code in _AUTHORITY_CODES
+
+
+def round_state(run, row):
+    """publishing-handoff/1 state of one generated round, fail-closed to the restricted states."""
+    approval = run.get("approval") or {}
+    if (row.get("passed") is True and approval.get("round") == row.get("number")
+            and row.get("sourceHash") and approval.get("sourceHash") == row["sourceHash"]):
+        return "approved"
+    verification = row.get("verification")
+    if (row.get("passed") is True and row.get("blockingFindings") == []
+            and run.get("status") in ("completed", "needs_changes")
+            and (verification is None or isinstance(verification, dict) and verification.get("approvable") is True)):
+        return "reviewable"
+    return "draft" if run.get("status") in ("queued", "running") else "failed"
 
 
 def authority_identity(reference):
@@ -27,6 +62,14 @@ def guideline_reference(guideline):
     return {"sourceKind": "product-guideline", "sourceId": guideline["id"],
             "revision": str(guideline["revision"]), "sha256": guideline["sha256"],
             "audienceRevision": PROJECT_AUDIENCE}
+
+
+def run_round_reference(run, number):
+    row = next((item for item in run.get("rounds", []) if item.get("number") == number), None)
+    if row is None or not row.get("sourceHash"):
+        raise ValueError("The run has no generated source for this round")
+    return {"sourceKind": "run-round", "sourceId": run["id"], "revision": str(number),
+            "sha256": row["sourceHash"], "audienceRevision": PROJECT_AUDIENCE}
 
 
 def workbench_reference(reference):
@@ -95,14 +138,41 @@ class Sources:
             fail(409, "ontology-source-integrity", "온톨로지 원본 바이트를 확인하지 못했습니다.")
         return raw
 
-    def resolve(self, reference, *, text=False):
+    def resolve(self, reference, *, text=False, historical=False):
+        """Current authority. `historical=True` returns metadata only, never reuse authority."""
         ref = schema.source_ref(reference)
+        if historical:
+            if text:
+                fail(422, "ontology-source-historical", "과거 원본은 메타데이터만 조회할 수 있습니다.")
+            record = self._authorize(ref, remember=True)
+            return {"ref": ref, "kind": ref["sourceKind"], "record": record, "text": None, "historical": True}
         self._fresh()
-        if ref["sourceKind"] in {"asset", "product-guideline", "package"} and "allowedRoles" in ref:
+        if ref["sourceKind"] in _SHARED_AUDIENCE and "allowedRoles" in ref:
             fail(403, "ontology-source-audience", "프로젝트 공용 원본의 권한을 참조 필드로 변경할 수 없습니다.")
         if "allowedRoles" in ref and self.ctx.scope["role"] not in ref["allowedRoles"]:
             fail(403, "ontology-source-forbidden", "기록된 원본 읽기 권한이 없습니다.")
         kind = ref["sourceKind"]
+        if kind == "run-round":
+            run, row = self._round(ref)
+            if run.get("archived"):
+                fail(409, "ontology-source-stale", "보관된 생성 실행의 라운드는 현재 근거로 사용할 수 없습니다.")
+            self._round_upstream_current(run)
+            self._round_admissions_current(row)
+            content = None
+            if text:
+                path = ref.get("location", {}).get("path")
+                if not path:
+                    fail(400, "ontology-source-location", "라운드 원본 파일 경로가 필요합니다.")
+                files = self._round_files(row)
+                if path not in files:
+                    _not_found()
+                if len(files[path]) > 102400:
+                    fail(422, "ontology-source-limit", "분석할 텍스트 원본은 100 KiB 이하여야 합니다.")
+                try:
+                    content = files[path].decode("utf-8")
+                except UnicodeError:
+                    fail(422, "ontology-source-format", "텍스트로 분석할 수 없는 원본입니다.")
+            return {"ref": ref, "kind": kind, "record": row, "text": content}
         if kind == "asset":
             asset = self._remember("asset", self.ctx.get("asset", ref["sourceId"]))
             if (asset.get("archived") or asset.get("accessRevoked") or asset.get("tombstone")
@@ -192,9 +262,14 @@ class Sources:
 
     def authorize(self, reference, *, remember=True):
         """Authorize historical metadata, never reuse/approval or original bytes."""
-        ref = schema.source_ref(reference)
+        self._authorize(schema.source_ref(reference), remember)
+        return True
+
+    def _authorize(self, ref, remember):
+        """Historical checks; returns the adapter record for installed sharing kinds."""
         self._fresh()
-        if ref["sourceKind"] in {"asset", "product-guideline", "package"} and "allowedRoles" in ref:
+        record = None
+        if ref["sourceKind"] in _SHARED_AUDIENCE and "allowedRoles" in ref:
             fail(403, "ontology-source-audience", "프로젝트 공용 원본의 권한을 참조 필드로 변경할 수 없습니다.")
         kind = ref["sourceKind"]
         if "allowedRoles" in ref and self.ctx.scope["role"] not in ref["allowedRoles"]:
@@ -233,11 +308,223 @@ class Sources:
         elif kind == "package":
             if ref["sourceId"] != "studio-ui" or ref["audienceRevision"] != "platform-package-v1":
                 fail(403, "ontology-source-forbidden", "허용된 플랫폼 패키지가 아닙니다.")
+        elif kind == "run-round":
+            run, record = self._round(ref)
+            self._round_upstream_historical(run, record)
         else:
             self.resolve(ref)
         if remember:
             self.historical_refs[schema.digest(ref)] = ref
-        return True
+        return record
+
+    # run-round ------------------------------------------------------------
+
+    def _round(self, ref):
+        """The exact round of a React run in this project, readable by this role in its state.
+
+        Missing, foreign-project and state-restricted rounds all fail identically
+        before any hash comparison, so a restricted reader learns nothing.
+        """
+        try:
+            run = self.ctx.get("run", ref["sourceId"])
+        except CollaborationError as error:
+            if error.status == 404:
+                _not_found()
+            raise
+        if run.get("outputType") != "react" or not _ROUND.fullmatch(ref["revision"]):
+            _not_found()
+        number = int(ref["revision"])
+        rows = [row for row in run.get("rounds", []) if isinstance(row, dict) and row.get("number") == number]
+        if len(rows) != 1:
+            _not_found()
+        row = rows[0]
+        if (round_state(run, row) not in ("reviewable", "approved")
+                and self.ctx.scope["role"] not in ROUND_EDITORS):
+            _not_found()
+        location = ref.get("location", {})
+        if "round" in location and location["round"] != number:
+            fail(400, "ontology-source-location", "라운드 위치가 참조 리비전과 다릅니다.")
+        if not row.get("sourceHash") or row["sourceHash"] != ref["sha256"]:
+            fail(409, "source-changed", "생성 라운드의 원본 해시가 다릅니다.")
+        if ref["audienceRevision"] != PROJECT_AUDIENCE:
+            fail(409, "ontology-source-stale", "라운드의 읽기 권한 기준이 다릅니다.")
+        self._remember("run", run)
+        return run, row
+
+    def _round_files(self, row):
+        raw = self._round_archive(row)
+        from workspace.react_artifacts import read_archive
+        try:
+            return read_archive(raw, row["sourceHash"])
+        except (ValueError, KeyError, OSError) as error:
+            fail(409, "ontology-source-integrity", "라운드 원본 파일 구성과 해시가 일치하지 않습니다.")
+            raise error  # pragma: no cover
+
+    def _round_archive(self, row):
+        key, expected = row.get("sourceKey"), row.get("sourceArchiveSha256")
+        if not key or not isinstance(expected, str):
+            fail(409, "ontology-source-integrity", "라운드 원본 파일을 확인하지 못했습니다.")
+        return self._blob(key, expected, MAX_ARCHIVE_BYTES)
+
+    def release_source(self, reference):
+        """Verified source-archive bytes of a current round, under the same constraints as `resolve`."""
+        value = self.resolve(reference)
+        if value["kind"] != "run-round":
+            fail(422, "ontology-source-kind", "생성 라운드 원본만 내려받을 수 있습니다.")
+        row = value["record"]
+        files = self._round_files(row)
+        raw = self._round_archive(row)
+        self.recheck()
+        return {"ref": value["ref"], "bytes": raw, "sha256": row["sourceArchiveSha256"],
+                "sourceHash": row["sourceHash"], "files": sorted(files)}
+
+    @staticmethod
+    def _contract_ref(run):
+        version = run.get("contractVersion")
+        if type(version) is not int or not isinstance(run.get("contractId"), str) or not run.get("contractHash"):
+            fail(409, "source-upstream-revoked", "라운드의 승인 규칙 근거가 없습니다.")
+        return {"sourceKind": "ux-contract", "sourceId": run["contractId"], "revision": str(version),
+                "sha256": run["contractHash"], "audienceRevision": PROJECT_AUDIENCE}
+
+    def _round_upstream_current(self, run):
+        """The approved contract and published product/guideline criteria must still be current."""
+        from workspace.criteria import resolve_generation_context
+        try:
+            self._contract(self._contract_ref(run), historical=False)
+            if self._rules().contract_hash(run.get("contract") or {}) != run["contractHash"]:
+                fail(409, "source-changed", "라운드의 규칙 사본이 승인본과 다릅니다.")
+            resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read")
+        except CollaborationError as error:
+            if _authority_error(error):
+                raise
+            fail(409, "source-upstream-revoked", "라운드의 규칙 또는 상품 기준이 더 이상 현재 승인본이 아닙니다.")
+        except ValueError:
+            fail(409, "source-upstream-revoked", "라운드의 규칙 또는 상품 기준이 더 이상 현재 승인본이 아닙니다.")
+
+    @staticmethod
+    def _admission_refs(row):
+        manifest = row.get("designManifestInput")
+        if manifest is None:
+            return []
+        admissions = manifest.get("admissions", []) if isinstance(manifest, dict) else None
+        if not isinstance(admissions, list) or len(admissions) > MAX_ROUND_ADMISSIONS or any(
+                not isinstance(item, dict) or set(item) != {"decisionId", "revision", "artifactHash"}
+                or not isinstance(item["decisionId"], str) for item in admissions):
+            fail(409, "source-upstream-revoked", "라운드의 반입 승인 근거 형식을 확인하지 못했습니다.")
+        return admissions
+
+    @staticmethod
+    def _admission_matches(decision, binding):
+        return (str(decision["revision"]) == str(binding["revision"])
+                and decision["derivation"]["derivativeHash"] == binding["artifactHash"])
+
+    def _round_admissions_current(self, row):
+        from intake import admission
+        for binding in self._admission_refs(row):
+            observed = []
+            try:
+                decision = admission.verify(self.ctx.host, self.ctx.scope, binding["decisionId"],
+                                            claims=self.ctx.claims, sources=self, observe=observed)
+            except admission.AdmissionError:
+                fail(409, "source-upstream-revoked", "라운드 입력의 반입 승인이 회수되었거나 현재가 아닙니다.")
+            except CollaborationError as error:
+                if _authority_error(error):
+                    raise
+                fail(409, "source-upstream-revoked", "라운드 입력의 반입 승인이 회수되었거나 현재가 아닙니다.")
+            if not self._admission_matches(decision, binding):
+                fail(409, "source-upstream-revoked", "라운드 입력의 반입 승인 리비전이 다릅니다.")
+            for check in observed:
+                self._remember_owned(check["owner"], check["kind"], check)
+
+    def _round_upstream_historical(self, run, row):
+        """Historical round metadata requires upstream permission, not upstream currency.
+
+        A superseded but still readable upstream admits diagnostics; a revoked one
+        (contract revision gone, admission grant/decision revoked, guideline no
+        longer published) denies with the same not-found error.
+        """
+        from intake import admission
+        try:
+            self._contract(self._contract_ref(run), historical=True)
+            if run.get("productId"):
+                product = self.ctx.get("product", run["productId"])
+                guideline = self.ctx.get("guideline", run.get("guidelineId") or "-")
+                if guideline.get("productId") != product["id"] or guideline.get("status") != "published":
+                    _not_found()
+            for binding in self._admission_refs(row):
+                probe = Sources(self.ctx)
+                try:
+                    decision = admission.verify(self.ctx.host, self.ctx.scope, binding["decisionId"],
+                                                claims=self.ctx.claims, sources=probe)
+                except admission.AdmissionError as error:
+                    if error.code != "source-changed":
+                        _not_found()
+                    # Superseded source: the decision itself is still current and admitted.
+                    decision = self.storage.get(self.ctx.owner, "adm_decision", binding["decisionId"])
+                    if not decision or decision["source"]["sourceKind"] == "prompt-text":
+                        _not_found()
+                    Sources(self.ctx).authorize(dict(decision["source"]), remember=False)
+                if not self._admission_matches(decision, binding):
+                    _not_found()
+        except CollaborationError as error:
+            # Only expiry and frozen-authority failures pass through; every upstream
+            # permission failure is indistinguishable from a missing record.
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            _not_found()
+
+    # ux-contract ----------------------------------------------------------
+
+    def _rules(self):
+        rules = getattr(self.ctx.host, "rules", None)
+        if callable(rules):
+            return rules()
+        from workspace import rules as module
+        return module
+
+    def _contract(self, ref, *, historical):
+        """An exact approved contract revision; current use also requires current criteria."""
+        try:
+            contract = self.ctx.get("contract", ref["sourceId"])
+        except CollaborationError as error:
+            if error.status == 404:
+                _not_found()
+            raise
+        if not _VERSION.fullmatch(ref["revision"]):
+            _not_found()
+        version = int(ref["revision"])
+        approval = contract.get("approval") or {}
+        current = (contract.get("status") == "approved" and contract.get("version") == version
+                   and approval.get("version") == version and approval.get("hash") == ref["sha256"])
+        retained = any(isinstance(item, dict) and item.get("version") == version and item.get("hash") == ref["sha256"]
+                       for item in contract.get("revisions", []))
+        if not current and not retained:
+            if contract.get("status") != "approved":
+                _not_found()
+            fail(409, "source-changed", "승인 규칙의 리비전 또는 해시가 다릅니다.")
+        if ref["audienceRevision"] != PROJECT_AUDIENCE:
+            fail(409, "ontology-source-stale", "승인 규칙의 읽기 권한 기준이 다릅니다.")
+        self._remember("contract", contract)
+        if current:
+            try:
+                digest = self._rules().contract_hash(contract)
+            except ValueError:
+                digest = None
+            if digest != approval.get("hash"):
+                fail(409, "source-changed", "승인 규칙 내용이 승인 해시와 다릅니다.")
+        if historical:
+            return contract, current
+        if not current:
+            fail(409, "source-superseded", "새 규칙 리비전으로 대체된 승인 규칙입니다.")
+        criteria = {key: contract[key] for key in ("projectId", "productId", "guidelineId", "ontologyHash")
+                    if key in contract}
+        superseded = not self.ctx.collaboration.is_current(self.ctx.scope, criteria)
+        if not superseded and contract.get("catalogHash"):
+            from workspace.component_catalog import read_catalog
+            superseded = read_catalog()["hash"] != contract["catalogHash"]
+        if superseded:
+            fail(409, "source-superseded", "승인 규칙의 상품·가이드 기준이 현재 게시본이 아닙니다.")
+        return contract, current
 
     @staticmethod
     def _identity(actual, expected):
