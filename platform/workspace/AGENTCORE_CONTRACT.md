@@ -687,9 +687,14 @@ live evidence and the privacy redaction adapter remain outstanding.
   one shared `admission.Authority.recheck()` after its last read, immediately
   before returning anything: `pages_for`, `imaging.read_vision_chunk`,
   `imaging.vision_input`, `imaging.descriptor` (OCR text),
-  `collection.analyzer_request` (which also fences the `adm_resolver` profile)
-  and each `GET /intake/reviews` item (pending decision, policy, the actor's
-  grants and source fences): the source fences (`Sources.recheck`) and the exact decision,
+  `collection.analyzer_request` (which also fences the `adm_resolver` profile
+  and uses only the verified index), each `GET /intake/reviews` item and the
+  whole response after all reads (pending decision, policy, the actor's grants,
+  transcription image lineage and source fences). Model calls and commits use
+  the same recheck: `transcription.transcribe` immediately before `generate`,
+  `admission.decide` (every admission path) before and on each commit attempt,
+  `request_image` before queueing, and review approval/publication on each
+  attempt: the source fences (`Sources.recheck`) and the exact decision,
   policy, provenance and grant versions must still be current, schema-valid and
   unexpired. Grants and provenance pass `records.validate` on every use; a
   grant must name `review-internal` for the reviewing actor and provenance must

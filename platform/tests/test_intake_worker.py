@@ -202,3 +202,25 @@ def test_runtime_delivery_in_bounded_chunks_with_revocation_between_chunks(env, 
     with pytest.raises(AdmissionError) as error:
         imaging.read_vision_chunk(env.api, env.scope(), decision["id"], len(first["bytes"]))
     assert error.value.code == "grant-revoked"
+
+
+def test_policy_retired_during_the_image_request_queues_no_job(env, monkeypatch):
+    """Review 3 systematic pass: request_image rechecks authority before queueing the job."""
+    from intake.records import INTAKE_OWNER
+    from workspace.ontology_sources import Sources
+    env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    original = Sources.resolve
+
+    def resolving(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        policy = env.api.storage.get(INTAKE_OWNER, "adm_policy", "policy-1")
+        if policy["status"] == "active":
+            env.admin({"op": "retire_policy", "id": "policy-1", "expectedRevision": policy["revision"]})
+        return result
+
+    monkeypatch.setattr(Sources, "resolve", resolving)
+    with pytest.raises(AdmissionError) as error:
+        admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive", kind="image")
+    assert error.value.code == "policy-changed"
+    assert env.api.storage.list(f"project:{env.pid}", "job") == []

@@ -323,7 +323,9 @@ def request_image(host, scope, source_ref, *, data_class, claims=None):
     if ref["sourceKind"] != "asset" or "location" in ref:
         raise AdmissionError("intake-source-unsupported", 422)
     reader.resolve(ref)
-    reader.recheck()
+    # Final recheck (policy version/status/expiry and source fences) after the
+    # last read, immediately before the job is queued.
+    Authority(host, reader, [_check(INTAKE_OWNER, "adm_policy", policy)]).recheck()
     source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
     expiry = claims.get("exp") if isinstance(claims, dict) else None
     authorization = int(expiry) * 1000 if expiry is not None else storage.clock() + CURSOR_MS
