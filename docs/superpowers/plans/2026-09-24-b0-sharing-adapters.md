@@ -63,6 +63,7 @@ Resolution rules:
 - The round with `number == int(revision)` exists, and `round.sourceHash == sha256`.
 - For React rounds, the round's `outputType == "react"`.
 - The actor has project `read`.
+- **State-dependent content permission** (PR #26 review, `AGENTCORE_CONTRACT.md:440-447`). Before any source text or `release_source` bytes are returned, the round's state is checked: a draft/failed/needs-changes round is readable only by designer/developer/owner (`edit_design`-class roles); a reviewable, approved or released round by any current project reader. A planner resolving a draft/failed round → the same `404 not-found`. Metadata-only `resolve` (no text) follows the same rule. Tests: planner denied for draft and failed rounds, allowed for a reviewable round; designer allowed for a failed round.
 - **Upstream lineage (review round 2, N10).** A round's source is a derivative of its inputs, so these must still be current:
   - the run's `contract` sources: the approved contract through the `ux-contract` adapter
   - the round's `designManifestInput.admissions`: each admission decision through `intake.admission.verify(host, scope, decisionId)`

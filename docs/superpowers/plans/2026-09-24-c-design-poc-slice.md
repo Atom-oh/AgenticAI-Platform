@@ -339,7 +339,7 @@ The comparison logic is extracted from `process_release` into `releases.verify_r
   - It stores the ZIP once with `put_blob_once(key_for(owner, "design", id, f"handoff/{releaseId}.zip"), …, "application/zip")`.
   - It records `{releaseId, key, sha256, size, by, at}` on the design record.
 - The convention is the synthetic seed, or the tenant copy from private storage `key_for(owner, "design", id, "convention.json")`.
-- `GET /design/{id}/handoff/{releaseId}/blob?offset=` (export) serves the stored ZIP through the existing **chunked binary download** pattern (`http.py:1125-1137`, `_release_download`): base64 body plus `X-Total-Size`, `X-Chunk-Size` and `X-SHA256`, with the offset range checks.
+- `GET /design/{id}/handoff/{releaseId}/blob?offset=` (current project `read` plus current source/data-audience checks on every chunk, per `AGENTCORE_CONTRACT.md:446`: a ready package is available to current authorized readers; only Git export needs developer/owner `export`) serves the stored ZIP through the existing **chunked binary download** pattern (`http.py:1125-1137`, `_release_download`): base64 body plus `X-Total-Size`, `X-Chunk-Size` and `X-SHA256`, with the offset range checks.
   - The route is placed next to the other blob routes, so it never passes through `_json` (Codex #16).
   - It re-runs `check_current` before every chunk.
   - Each completed download records a distribution event.
@@ -416,7 +416,7 @@ The check runs **on every chunk request**. A failure → `403 source-revoked`, a
   - An ontology change to an asset used on an approved screen → `approval-stale:snapshot`.
   - An unrelated ontology change → still current. The snapshot hash covers only the procedure snapshot.
   - The handoff ZIP entries equal the release source bytes, and the manifest carries `approvalHash`, `sourceHash` and `bundleHash`.
-  - A designer downloading the handoff → 403. A developer → 200 with the correct content type.
+  - A designer or planner who is a current reader downloads the ready handoff → 200 with the correct content type; a removed member → 404; a designer starting a Git export → 403, a developer → allowed.
   - An unstable edit gives a `needs_changes` round with `unstable-edit`.
   - **End-to-end without pre-seeding:** flow approve → generate (fake ledger completion with fake receipts) → select → `selection/compose` → approve through the real `_run_approve` → release.
   - Approving a round produced before a later `select` change → `409 approval-stale:selection`.
