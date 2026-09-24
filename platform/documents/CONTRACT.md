@@ -153,6 +153,18 @@ owner, job)` handles `document-finalize`. Its stored input contains trusted
 `DocumentError(status, code, message)` is a bounded, non-sensitive domain error.
 Library code never imports a model client.
 
+### Private intake derivatives (`source-admission/1`)
+
+Private intake (`intake/*`) reads approved revision projections through
+`Library.document`/`revision(..., approved=True)`/`projection` after
+`Sources.resolve` (current authority, never the historical `authorize`) to build
+identifier-normalized derivatives. The library remains the source authority:
+derivatives, inspection receipts and admission decisions are intake records
+(`adm_decision` and its private blobs), not library records, and they never
+change a document, revision, binding or approval. Unpaginated TXT/MD/HTML
+projections are grouped into deterministic logical pages of at most 4 000
+characters without splitting a paragraph; citations use those page numbers.
+
 ### Transcription revisions (`source-admission/1`, I6b)
 
 `documents.library.publish_transcription(host, scope, decision)` is a trusted

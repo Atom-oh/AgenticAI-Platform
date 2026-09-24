@@ -291,3 +291,27 @@ Extend existing run/round/release/Git interfaces with exact context and observed
 service receipts. The [design](ARCHITECTURE.md) maps the integration sequence;
 the [acceptance cases](ONTOLOGY_AGENTCORE_VALIDATION.md) define its verification.
 The default backend and graph mode remain legacy until their applicable gates.
+
+## Source admission (`source-admission/1`)
+
+Private intake (`intake/*`) owns source admission and de-identified derivatives;
+the binding details are in
+[`workspace/AGENTCORE_CONTRACT.md`](../workspace/AGENTCORE_CONTRACT.md) (`source-admission/1`).
+Offline code and tests exist; no route or function is deployed by this record.
+
+| Method / path | Input / output |
+|---|---|
+| GET `/studio-api/intake/reviews` | JWT access token, `X-Workspace-Project`, and a current IAM-administered reviewer grant → `{reviews: [{id, revision, source: {sourceKind, sourceId, revision}, title, dataClass, artifactKind, pageCount, inspection: {pages, chars, pii, identifiers, blocking}, derivativePreview, expiresAt}]}`; only `pending-review` decisions the actor may review (grant **and** current source access); the preview is derivative text only |
+| POST `/studio-api/intake/reviews/{decisionId}` | `{approve: boolean, reason}` (closed fields; the reason is not stored) → `{decision: {id, revision, status, expiresAt}}`; `403 review-grant-required` / `source-access-required`, `409 decision-not-pending` / `policy-changed` / `conflict` |
+
+These routes confer no administration: no workspace/project API creates, edits or
+activates a policy, provenance registration, reviewer grant or resolver profile.
+In-app `platform-operators`/`admin` groups confer nothing.
+
+Storage kinds: `adm_policy`, `adm_provenance`, `adm_grant`, `adm_resolver` and
+`adm_audit` live in the owner partition `intake:deployment`; `adm_decision` lives
+in the project partition `project:<id>`. Derivative pages, inspection receipts,
+code-collection index/files/mapping, prompt text and image/vision derivatives are
+private blobs under `Storage.key_for(owner, "adm_decision", <id>, ...)`.
+The Worker task `intake-image` (job target `adm_decision.decisionId`) produces
+image decisions atomically with its job completion.

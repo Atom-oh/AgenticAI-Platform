@@ -604,6 +604,74 @@ The implementation must record the concrete private module/storage/entry-point
 bindings before installation. Source admission reads revalidate current policy,
 grant where required, source audience and the exact artifact/inspection hashes.
 
+#### Concrete bindings (B0 intake; offline code, not deployed)
+
+These bindings are implemented and tested offline. `IntakeAdminFn` is
+synthesized only with `-c intakeAdmin=true` and is deployed with B1; G0-ADMISSION
+live evidence and the privacy redaction adapter remain outstanding.
+
+- **Module.** `platform/intake/*`: `records` (closed schemas, `seal`,
+  `validate`, `is_current`), `admin_handler` (IAM-only administration),
+  `inspect` (current-authority resolution and metadata-only receipts),
+  `derivative` (`identifier-normalization-1`), `images` (v1 image profile),
+  `imaging` (image and vision derivatives), `admission` (`request`, `decide`,
+  `verify`, `pages_for`, `admission_ref`), `review` (reviewer decisions),
+  `collection` (code collections), `prompts` (prompt text), `transcription`
+  (diagram/table transcription), `audit` (metadata-only export), `worker`
+  (Worker task `intake-image`).
+- **Storage kinds and partitions.** `adm_policy`, `adm_provenance`, `adm_grant`,
+  `adm_resolver` (code-collection resolver profiles; IAM-administered, packages
+  verified against the platform package registry) and `adm_audit` (one metadata
+  event per administration operation) in the owner partition `intake:deployment`;
+  `adm_decision` in the project partition `project:<id>`. Derivatives,
+  inspection receipts and private mappings are blobs under
+  `Storage.key_for(owner, "adm_decision", <id>, ...)`. Every record has an
+  immutable `revision`, `hash` (canonical digest of the record without `hash`
+  and storage fields), `status` and `expiresAt`; unknown fields, kinds, statuses
+  and values fail closed.
+- **IAM-only entry point.** `IntakeAdminFn` (`infra/lib/intake.ts`, handler
+  `intake.admin_handler.handler`) with operations `put_policy`,
+  `activate_policy`, `retire_policy`, `register_provenance`,
+  `revoke_provenance`, `grant_reviewer`, `revoke_grant`,
+  `put_resolver_profile` and `retire_resolver_profile`. Events shaped like API
+  Gateway or a Function URL, or a context without `invoked_function_arn`, are
+  refused (`forbidden-transport`) with no write; `operator` is an audit label
+  only. It has no API route, Function URL or `apigateway.amazonaws.com`
+  permission, no `lambda:InvokeFunction` on other functions, and table access is
+  limited by `dynamodb:LeadingKeys` to the `intake:deployment` partition
+  (asserted by `workspace/check_infra.py`).
+- **Reviewer routes.** `GET /studio-api/intake/reviews` and
+  `POST /studio-api/intake/reviews/{decisionId}` require the workspace JWT, a
+  current `adm_grant` covering the project with `review-internal`, **and**
+  current source access through `Sources.resolve`. The grant never confers
+  source access; project ownership and in-app groups confer nothing. Previews
+  show derivative text only.
+- **Profile `identifier-normalization-1`.** The private deny-list is read only
+  from the SSM SecureString named by `INTAKE_DENYLIST_PARAM` or the private S3
+  key named by `INTAKE_DENYLIST_KEY`; a missing, unreadable or invalid list
+  blocks (`denylist-unavailable`). Replacement is longest-term-first,
+  NFC-normalized and ASCII case-insensitive (default aliases `고객사 A` for names
+  and `[내부 링크]` for internal URLs and deny-listed hosts); numbers are
+  untouched. Admission requires a clean residual scan (no deny-list term,
+  internal URL or `pii.scan_rules` hit). Code collections use one neutral
+  identifier-safe alias per matched term (`neutral_<n>`) consistently across
+  file text, path segments, package scopes and the derived resolver.
+- **Decisions.** Synthetic/public inputs require a current, in-scope
+  `adm_provenance` matching the exact source revision and byte hash;
+  internal-non-sensitive inputs, prompt text and transcriptions are
+  `pending-review` until a reviewer admits them. Expiry is
+  `min(policy, provenance/grant, now + 30 days)`. `verify` raises
+  `decision-not-current`, `policy-changed`, `grant-revoked`, `source-changed`,
+  `artifact-changed` or `inspection-changed`. `pages_for` is the only text read
+  for model use, in bounded batches (≤ 400 000 bytes by default, never above
+  512 KiB) with a 5-minute cursor bound to decision, revision, derivative hash
+  and actor, and reruns `verify` for every batch.
+- **Redaction.** PII redaction is `unavailable`: an input whose inspection or
+  residual scan finds PII is `blocked: redaction-required` until the privacy
+  adapter for source documents is reviewed. Sanitized SVG is blocked
+  (`svg-sanitizer-unavailable`) until a reviewed sanitizer lands, so SRC-05 is
+  partial.
+
 ## Phase 0: mandatory capability gates
 
 ### Resolved implementation choices
