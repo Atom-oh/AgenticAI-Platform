@@ -12,7 +12,7 @@ from execution_fakes import TestKeyVerifier, receipt  # noqa: E402
 from workspace.execution_ledger import Ledger, LedgerError, PROFILE_DEFAULT  # noqa: E402
 from workspace.storage import Storage  # noqa: E402
 from workspace import ontology_schema as schema  # noqa: E402
-from workspace.execution_ledger import receipt_hash  # noqa: E402
+from workspace.execution_ledger import receipt_hash, STAGE_SERVICES  # noqa: E402
 
 OWNER = "project:p1"
 import hashlib as _hashlib  # noqa: E402
@@ -312,7 +312,8 @@ def test_stage_records_a_verified_chain_with_server_checked_outputs(env):
     job = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], first)
     assert job["stages"][-1]["stage"] == "context" and job["stages"][-1]["outputs"] == [out]
     second = chained(job, "generate", "n2", previous=receipt_hash(first),
-                     inputs=[{"key": out["key"], "sha256": out["sha256"], "size": out["size"]}], status="ok")
+                     inputs=[{"key": out["key"], "sha256": out["sha256"], "size": out["size"]}], status="ok",
+                     service=service_call(ledger, job, "generate", "model"))
     job = ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], second)
     assert [row["stage"] for row in job["stages"]] == ["context", "generate"]
 
@@ -648,12 +649,14 @@ def test_job_record_stays_bounded_under_heartbeats_and_recorded_operations(env):
     job = running(env)
     for _ in range(11_000):
         ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
-    for _ in range(120):
-        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate", kind="model",
-                             min_remaining_ms=0, max_tokens=1000, operation_id=op_id())
+    calls = [ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                                  kind="model", min_remaining_ms=0, max_tokens=1000, operation_id=op_id())["callId"]
+             for _ in range(120)]
     previous = None
     for index in range(30):
-        r = chained(job, "generate", f"nonce-{index}", previous=previous)
+        ledger.tool().outcome(*ids(job), calls[index], status="completed")
+        r = chained(job, "generate", f"nonce-{index}", previous=previous,
+                    service={"kind": "model", "sessionId": job["attempt"]["sessionId"], "taskId": calls[index]})
         ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], r, operation_id=op_id())
         previous = receipt_hash(r)
     stored = storage.get(OWNER, "job", job["id"])
@@ -949,7 +952,10 @@ def chain(env, operation="design.generate", results=None, skip=(), key="req-1"):
             manifest = _json.dumps({"files": files}).encode()
             outputs.append(put_output(storage, job, stage, "result-manifest.json", manifest))
         status, result = results[stage]
-        r = chained(job, stage, f"n-{stage}", previous=previous, outputs=outputs, status=status, result=result)
+        kind = STAGE_SERVICES[stage][0]
+        service = {} if kind == "runtime" else {"service": service_call(ledger, job, stage, kind)}
+        r = chained(job, stage, f"n-{stage}", previous=previous, outputs=outputs, status=status, result=result,
+                    **service)
         job = ledger.tool().stage(*ids(job), r)
         previous = receipt_hash(r)
         hashes.append(previous)
@@ -1626,3 +1632,77 @@ def test_non_source_operations_beyond_the_frozen_scope_are_refused(xfer):
         finish(ledger, job, "succeeded", result, stage_completion=extra)
     assert error.value.code == "execution-completion-scope"
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def service_call(ledger, job, stage, kind, *, status="completed", session="svc-session-1"):
+    """A recorded call intent plus outcome: the observed service task a receipt must reference."""
+    call = ledger.tool().intent(*ids(job), stage=stage, kind=kind, min_remaining_ms=0)["callId"]
+    if status is not None:
+        ledger.tool().outcome(*ids(job), call, status=status,
+                              **({} if kind == "model" else {"service_session_id": session}))
+    if kind == "model":
+        return {"kind": "model", "sessionId": job["attempt"]["sessionId"], "taskId": call}
+    return {"kind": kind, "sessionId": session, "taskId": call, "exitCode": 0}
+
+
+SERVICE_CASES = ["missing", "wrong-kind", "unrelated-task", "unrelated-session", "nonzero-exit", "other-stage-call",
+                 "call-not-completed", "runtime-foreign-session", "reused-task", "model-exit-code"]
+
+
+@pytest.mark.parametrize("case", SERVICE_CASES)
+def test_receipts_must_carry_stage_specific_service_bindings(env, case):
+    """Finding 3: a signed receipt whose service evidence contradicts the stage, call or outcome is rejected."""
+    storage, ledger, _ = env
+    job = running(env)
+    service = service_call(ledger, job, "browser", "browser")
+    stage, previous = "browser", None
+    if case == "missing":
+        service = None
+    if case == "wrong-kind":
+        service = {**service, "kind": "model"}
+    if case == "unrelated-task":
+        service = {**service, "taskId": "task-unrelated"}
+    if case == "unrelated-session":
+        service = {**service, "sessionId": "svc-other"}
+    if case == "nonzero-exit":
+        service = {**service, "exitCode": 17}
+    if case == "other-stage-call":
+        service = service_call(ledger, job, "compile", "interpreter")
+        service = {**service, "kind": "browser"}
+    if case == "call-not-completed":
+        service = service_call(ledger, job, "browser", "browser", status=None)
+    if case == "runtime-foreign-session":
+        stage, service = "context", {"kind": "runtime", "sessionId": "rt-" + "1" * 40}
+    if case == "reused-task":
+        first = chained(job, "browser", "n0", status="ok", service=service)
+        job = ledger.tool().stage(*ids(job), first)
+        previous = receipt_hash(first)
+    if case == "model-exit-code":
+        stage, service = "generate", {**service_call(ledger, job, "generate", "model"), "exitCode": 0}
+    extra = {"status": "ok"} if service is None else {"status": "ok", "service": service}
+    body = chained(job, stage, "n1", previous=previous, **extra)
+    if service is None:
+        body = resign({k: v for k, v in body.items() if k != "service"})
+    before = storage.get(OWNER, "job", job["id"])["version"]
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(*ids(job), body)
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["version"] == before
+
+
+def test_a_failed_browser_receipt_may_report_a_nonzero_exit(env):
+    storage, ledger, _ = env
+    job = running(env)
+    service = {**service_call(ledger, job, "browser", "browser", status="failed"), "exitCode": 17}
+    job = ledger.tool().stage(*ids(job), chained(job, "browser", "n1", status="failed", service=service))
+    assert job["stages"][-1]["status"] == "failed" and job["stages"][-1]["service"]["taskId"] == service["taskId"]
+
+
+def test_the_reviewed_contradictory_browser_receipt_is_rejected(env):
+    storage, ledger, _ = env
+    job = running(env)
+    forged = chained(job, "browser", "n1", status="ok",
+                     service={"kind": "model", "sessionId": "sess-unrelated", "taskId": "task-unrelated", "exitCode": 17})
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(*ids(job), forged)
+    assert error.value.code == "receipt-invalid"

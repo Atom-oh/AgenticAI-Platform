@@ -36,6 +36,11 @@ OPERATIONS = {"design.extract": ("context", "generate", "verify"),
               "intake.transcribe": ("context", "generate", "verify"),
               "source.analyze": ("context", "analyze")}
 
+# The observing service each stage's receipt must bind (RUN-04 trusted-adapter observation). A non-runtime
+# service is a ledger-recorded call of the same attempt, stage and kind; the Runtime session is the attempt's.
+STAGE_SERVICES = {"context": ("runtime",), "generate": ("model",), "compile": ("interpreter",),
+                  "browser": ("browser",), "verify": ("runtime",), "analyze": ("runtime", "interpreter")}
+_SERVICE_SESSION = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 # Operations whose coupled publication adapter is not available yet: completion is refused explicitly.
 _COMPLETION_UNAVAILABLE = {"source.analyze": "source-staging-adapter"}
 TERMINAL = frozenset({"succeeded", "needs_changes", "failed", "cancelled", "expired"})
@@ -636,9 +641,38 @@ class Ledger:
         return hashlib.sha256(data).hexdigest() == entry["sha256"] and len(data) == entry["size"]
 
     _RECEIPT_REQUIRED = frozenset({"schemaVersion", "executionId", "attemptId", "fence", "sessionId", "stage", "nonce",
-                                   "profileHash", "admissions", "keyId", "signature"})
-    _RECEIPT_OPTIONAL = frozenset({"operationId", "objects", "inputs", "outputs", "service", "iat", "exp",
+                                   "profileHash", "admissions", "service", "keyId", "signature"})
+    _RECEIPT_OPTIONAL = frozenset({"operationId", "objects", "inputs", "outputs", "iat", "exp",
                                    "status", "result", "previous"})
+
+    def _service_binding(self, job, receipt, attempt, stages):
+        """Stage-specific service, task, session and outcome association; returns the compact binding or None."""
+        service, stage, status = receipt["service"], receipt["stage"], receipt.get("status", "ok")
+        if (not isinstance(service, dict) or set(service) - {"kind", "sessionId", "taskId", "exitCode"}
+                or service.get("kind") not in STAGE_SERVICES.get(stage, ()) or not isinstance(service.get("sessionId"), str)
+                or "exitCode" in service and type(service["exitCode"]) is not int):
+            return None
+        kind, exit_code = service["kind"], service.get("exitCode")
+        if status == "ok" and exit_code not in (None, 0):
+            return None
+        if kind == "runtime":
+            if service["sessionId"] != attempt["sessionId"] or "taskId" in service:
+                return None
+            return {key: service[key] for key in ("kind", "sessionId", "exitCode") if key in service}
+        task = service.get("taskId")
+        call = next((row for row in job.get("calls", []) if row.get("callId") == task), None) \
+            if isinstance(task, str) else None
+        if (call is None or call.get("attemptId") != attempt["id"] or call.get("stage") != stage
+                or call.get("kind") != kind or any((row.get("service") or {}).get("taskId") == task for row in stages)):
+            return None
+        if kind == "model":
+            if service["sessionId"] != attempt["sessionId"] or "exitCode" in service:
+                return None
+        elif service["sessionId"] != call.get("serviceSessionId") or "exitCode" not in service:
+            return None
+        if status == "ok" and call.get("status") != "completed":
+            return None
+        return {key: service[key] for key in ("kind", "sessionId", "taskId", "exitCode") if key in service}
 
     def _verified_receipt(self, owner, job, receipt, *, attempt=None):
         """Receipt schema v1 checks; returns the stage entry or raises receipt-invalid without writing."""
@@ -673,12 +707,8 @@ class Ledger:
         if "result" in receipt:
             checks.append(isinstance(receipt["result"], dict)
                           and len(json.dumps(receipt["result"], ensure_ascii=False, default=str).encode()) <= 8192)
-        if "service" in receipt:
-            service = receipt["service"]
-            checks.append(isinstance(service, dict)
-                          and service.get("kind") in ("runtime", "interpreter", "browser", "model")
-                          and not set(service) - {"kind", "sessionId", "taskId", "exitCode"})
-        if not all(checks):
+        binding = self._service_binding(job, receipt, attempt, stages) if all(checks) else None
+        if binding is None:
             raise LedgerError("receipt-invalid")
         allowed = self._allowed_inputs(owner, job)
         inputs = receipt.get("inputs", [])
@@ -702,7 +732,7 @@ class Ledger:
                     or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
         return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
-                "attemptId": attempt["id"], "status": receipt.get("status", "ok"),
+                "attemptId": attempt["id"], "status": receipt.get("status", "ok"), "service": binding,
                 "result": copy.deepcopy(receipt.get("result", {})),
                 "outputs": [{key: entry[key] for key in ("key", "sha256", "size", "role") if key in entry}
                             for entry in outputs]}
@@ -761,20 +791,29 @@ class Ledger:
         saved = self._commit(owner, job, after, checks=[check], op=op, value=call["callId"], reindex=False)
         return {"callId": call["callId"], "job": saved}
 
-    def _outcome(self, owner, job_id, attempt_id, fence, call_id, *, status, usage=None):
-        """Keyed by callId on the call record: the same outcome is idempotent, a different one is refused."""
+    def _outcome(self, owner, job_id, attempt_id, fence, call_id, *, status, usage=None, service_session_id=None):
+        """Keyed by callId on the call record: the same outcome is idempotent, a different one is refused.
+
+        Interpreter and Browser outcomes record the observed service session; a receipt must bind to it.
+        """
         job = self._get(owner, job_id)
         attempt = self._current(job, attempt_id, fence, statuses=("running",))
         index = next((i for i, call in enumerate(job["calls"]) if call.get("callId") == call_id), None)
         if index is None or job["calls"][index].get("attemptId") != attempt["id"]:
             raise LedgerError("call-invalid")
         call = job["calls"][index]
-        recorded = {"status": status, "usage": usage}
+        recorded = {"status": status, "usage": usage, "serviceSessionId": service_session_id}
         if call["status"] != "intent":
-            if {"status": call["status"], "usage": call.get("usage")} == recorded:
+            if {"status": call["status"], "usage": call.get("usage"),
+                    "serviceSessionId": call.get("serviceSessionId")} == recorded:
                 return self._projection(job)
             raise LedgerError("operation-changed")
         if status not in ("completed", "failed"):
+            raise LedgerError("call-invalid")
+        if call["kind"] in ("interpreter", "browser"):
+            if not isinstance(service_session_id, str) or not _SERVICE_SESSION.fullmatch(service_session_id):
+                raise LedgerError("call-invalid")
+        elif service_session_id is not None:
             raise LedgerError("call-invalid")
         if usage is not None and (not isinstance(usage, dict) or set(usage) != {"inputTokens", "outputTokens"}
                                   or any(type(v) is not int or v < 0 for v in usage.values())):
@@ -785,6 +824,8 @@ class Ledger:
                       tokensUsed=budget["tokensUsed"] + actual)
         calls = list(job["calls"])
         calls[index] = {**call, "status": status, "usage": usage, "doneAt": self.storage.clock()}
+        if service_session_id is not None:
+            calls[index]["serviceSessionId"] = service_session_id
         saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget}, reindex=False)
         if call["kind"] == "model" and actual:
             self.cost_gate.record(actual)

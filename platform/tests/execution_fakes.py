@@ -21,9 +21,15 @@ class TestKeyVerifier:
         return receipt.get("keyId") == self.key_id and hmac.compare_digest(receipt.get("signature", ""), self.sign(body))
 
 
+RUNTIME_STAGES = ("context", "verify", "analyze")
+
+
 def receipt(verifier, *, job, stage, nonce, objects=(), extra=None):
+    extra = dict(extra or {})
+    if "service" not in extra and stage in RUNTIME_STAGES:      # the attempt's own Runtime session observed it
+        extra["service"] = {"kind": "runtime", "sessionId": job["attempt"]["sessionId"]}
     body = {"schemaVersion": 1, "executionId": job["id"], "attemptId": job["attempt"]["id"],
             "fence": job["fence"], "sessionId": job["attempt"]["sessionId"], "stage": stage, "nonce": nonce,
             "profileHash": job["profile"]["hash"], "admissions": job["admissions"],
-            "objects": list(objects), "keyId": verifier.key_id, **(extra or {})}
+            "objects": list(objects), "keyId": verifier.key_id, **extra}
     return {**body, "signature": verifier.sign(body)}

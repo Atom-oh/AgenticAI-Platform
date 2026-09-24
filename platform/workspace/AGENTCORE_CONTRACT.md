@@ -609,9 +609,11 @@ module-private ledger writer token):
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
 heartbeatAt, startedAt}`. Call: `{callId, stage, kind, status: intent|completed|
-failed|unknown, at, attemptId, reserved, usage?}`; usage holds only
-`{inputTokens, outputTokens}`. Stage: `{stage, receiptHash, nonce, attemptId,
-status, result, outputs}`. Transfer output: `{handleId, key, sha256, size,
+failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?}`; usage
+holds only `{inputTokens, outputTokens}`. `outcome` for an `interpreter` or
+`browser` call requires `service_session_id`, the observed service session,
+stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
+receiptHash, nonce, attemptId, status, service, result, outputs}`. Transfer output: `{handleId, key, sha256, size,
 stage, attemptId}` under `out/{attemptId}/{stage}/{name}` of the job. An input
 handle (`source="input"`) is opened only when the resolved artifact hash equals
 the frozen `admissions[*].artifactHash`; it records that `decisionId`,
@@ -626,9 +628,21 @@ prior handle's `prior_authority` must still grant it, otherwise
 
 Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,
-`admissions`, `keyId` and `signature`. The optional fields `operationId`,
-`inputs`, `outputs`, `objects`, `service`, `iat`/`exp`, `status`, `result` and
-`previous` are validated when present. Any other field is rejected. The
+`admissions`, `service`, `keyId` and `signature`. The optional fields
+`operationId`, `inputs`, `outputs`, `objects`, `iat`/`exp`, `status`, `result`
+and `previous` are validated when present. Any other field is rejected.
+
+`service` is bound per stage (`STAGE_SERVICES`): `context` and `verify` →
+`runtime`, `generate` → `model`, `compile` → `interpreter`, `browser` →
+`browser`, `analyze` → `runtime` or `interpreter`. A `runtime` service carries
+the attempt's `sessionId` and no `taskId`. Any other kind carries `taskId`, the
+`callId` of a recorded call of the same attempt, stage and kind that no other
+receipt of the attempt used. A `model` service carries the attempt's
+`sessionId` and no `exitCode`; an `interpreter`/`browser` service carries the
+call's recorded `serviceSessionId` and an integer `exitCode`. A receipt with
+`status: ok` requires `exitCode` 0 (when present) and a `completed` call. The
+`profileHash` must equal the job's profile hash. Any mismatch is
+`receipt-invalid`. The
 receipt hash is SHA-256 over sorted-key JSON.
 
 Completion (`finish`, and `reconcile` through the same path) re-reads every
