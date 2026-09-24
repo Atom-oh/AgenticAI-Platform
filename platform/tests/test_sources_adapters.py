@@ -705,3 +705,43 @@ def test_queued_export_with_current_lineage_is_delivered(env, queued_export):
     from workspace.git_service import process_export
     result = process_export(queued_export.worker, queued_export.owner, queued_export.job)
     assert result["status"] == "committed" and len(queued_export.delivered) == 1
+
+
+def test_content_bearing_json_routes_apply_the_same_source_authority(env, bound):
+    """Review 2 #5: contract/run detail and listings treat revoked lineage as missing."""
+    asset, contract, run = bound
+    owner = f"project:{env.pid}"
+    assert http(env, "GET", f"/contracts/{contract['id']}")[0] == 200
+    assert http(env, "GET", f"/runs/{run['id']}")[0] == 200
+    env.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    for path in (f"/contracts/{contract['id']}", f"/runs/{run['id']}"):
+        status, payload = http(env, "GET", path)
+        assert status == 404 and asset["id"] not in json.dumps(payload)
+    for path, field, hidden in (("/contracts", "contracts", contract["id"]), ("/runs", "runs", run["id"])):
+        status, listed = http(env, "GET", path)
+        assert status == 200 and hidden not in json.dumps(listed), listed
+
+
+def test_run_detail_omits_rounds_whose_admission_was_revoked(env, design):
+    decision = internal_admitted(env)
+    run = react_run(env, design[1], admissions=[admission.admission_ref(decision)])
+    status, payload = http(env, "GET", f"/runs/{run['id']}")
+    assert status == 200 and [row["number"] for row in payload["run"]["rounds"]] == [1]
+    env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+    status, payload = http(env, "GET", f"/runs/{run['id']}")
+    assert status == 200 and payload["run"]["rounds"] == [] and decision["id"] not in json.dumps(payload)
+
+
+def test_listings_use_opaque_cursors_that_skip_hidden_rows(env, bound):
+    """Review 2 #5: listing continuation is opaque and bound to the caller."""
+    asset, contract, run = bound
+    for index in range(3):
+        react_run(env, contract, run_id=f"run-extra-{index}")
+    status, first = call(env.api, "GET", "/runs", actor="alice", project=env.pid, query={"limit": "2"})[:2]
+    assert status == 200 and len(first["runs"]) == 2 and first["cursor"].startswith("pagecur-")
+    assert "run-" not in first["cursor"] and "sk" not in first["cursor"]
+    status, second = call(env.api, "GET", "/runs", actor="alice", project=env.pid,
+                          query={"limit": "2", "cursor": first["cursor"]})[:2]
+    assert status == 200 and {r["id"] for r in second["runs"]}.isdisjoint({r["id"] for r in first["runs"]})
+    assert call(env.api, "GET", "/runs", actor="bob", project=env.pid,
+                query={"limit": "2", "cursor": first["cursor"]})[0] == 409

@@ -320,6 +320,41 @@ class WorkspaceAPI:
         # The caller performs its last byte read and then `reader.recheck()` before returning.
         return reader
 
+    def _lineage_context(self, scope, claims):
+        """A request context for the shared lineage reader, or None in the single-owner workspace."""
+        if not scope or not scope.get("project"):
+            return None
+        from workbench.service import Service
+        return Service(self, scope, claims or {})
+
+    def _authorized(self, context, kind, record, cache=None, owner=None, scope=None):
+        """Content-bearing metadata under the shared source authority; None if inaccessible."""
+        from workspace.ontology_sources import _AUTHORITY_CODES, Sources
+        try:
+            reader = Sources(context)
+            if kind == "contract":
+                return reader.contract_access(record)
+            if kind == "run":
+                viewed = self._run_view(owner, record, scope, cache)
+                return {**reader.run_access(record), "needsRevalidation": viewed["needsRevalidation"]}
+            if kind == "release":
+                reader.round_delivery(record.get("runId"), record.get("round"))
+                return record
+        except CollaborationError as error:
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            return None
+        raise ValueError("Unknown lineage record kind")
+
+    def _authorized_list(self, context, owner, kind, name, query, scope):
+        from workspace.ontology_sources import authorized_page
+        cache = {}
+        page = authorized_page(context, query, name, owner, kind, "",
+                               lambda record: self._authorized(context, kind, record, cache, owner, scope),
+                               purpose="workspace-list", token="pagecur", stale_code="list-cursor-stale",
+                               default=100)
+        return {name: page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
+
     def _route(self, owner, method, parts, event, query, scope=None, claims=None):
         if parts[0] in ("documents", "impact-analyses"):
             from documents.errors import DocumentError
@@ -357,17 +392,29 @@ class WorkspaceAPI:
             return _json(200, {"batches": page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
         if len(parts) == 2 and parts[0] == "batches" and method == "GET":
             from workspace.batches import batch_view
-            return _json(200, batch_view(self, owner, self._get(owner, "batch", parts[1])))
+            view = batch_view(self, owner, self._get(owner, "batch", parts[1]))
+            context = self._lineage_context(scope, claims)
+            if context is not None:
+                cache = {}
+                view["runs"] = [row for row in (self._authorized(context, "run", run, cache, owner, scope)
+                                                for run in view["runs"]) if row is not None]
+            return _json(200, view)
         if parts == ["releases"] and method == "POST":
             from workspace.releases import create_release
             return create_release(self, owner, _body(event), scope)
         if parts == ["releases"] and method == "GET":
+            context = self._lineage_context(scope, claims)
+            if context is not None:
+                return _json(200, self._authorized_list(context, owner, "release", "releases", query, scope))
             page = self.storage.list_page(owner, "release", limit=100, cursor=query.get("cursor"))
             return _json(200, {"releases": page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
         if parts[0] == "releases" and len(parts) in (2, 3) and method == "GET":
             release = self._get(owner, "release", parts[1])
             if len(parts) == 2:
                 from workspace.git_service import hydrate_release
+                context = self._lineage_context(scope, claims)
+                if context is not None and self._authorized(context, "release", release) is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
                 return _json(200, {"release": hydrate_release(self.storage, owner, release)})
             if parts[2] == "blob":
                 reader = self._round_delivery(scope, claims, release.get("runId"), release.get("round"))
@@ -379,6 +426,10 @@ class WorkspaceAPI:
             return create_export(self, owner, release, _body(event), scope)
         if len(parts) == 1 and parts[0] in ("assets", "contracts", "runs") and method == "GET":
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
+            context = self._lineage_context(scope, claims)
+            if context is not None and kind in ("contract", "run"):
+                # Hidden rows never supply continuation: opaque, caller-bound cursors (ONT-09).
+                return _json(200, self._authorized_list(context, owner, kind, parts[0], query, scope))
             page = self.storage.list_page(owner, kind, limit=100, cursor=query.get("cursor"))
             if kind == "run":
                 cache = {}
@@ -408,7 +459,12 @@ class WorkspaceAPI:
             return _json(200, {"baseline": {"runId": record["id"], "round": number, "sourceHash": row["sourceHash"]},
                                "files": sorted(generated_files(project))})
         if len(parts) == 2 and method == "GET":
-            if kind == "run":
+            context = self._lineage_context(scope, claims) if kind in ("contract", "run") else None
+            if context is not None:
+                record = self._authorized(context, kind, record, None, owner, scope)
+                if record is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+            elif kind == "run":
                 record = self._run_view(owner, record, scope)
             if kind == "job":
                 if record.get("task") in ("document-finalize", "document-analysis"):

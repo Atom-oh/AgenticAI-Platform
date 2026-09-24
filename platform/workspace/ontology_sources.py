@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 
 from workbench.service import fail
 from workspace import ontology_schema as schema
@@ -92,6 +93,66 @@ def workbench_reference(reference):
             "revision": reference["generation"], "sha256": reference["contentHash"],
             "audienceRevision": str(reference["permissionVersion"]),
             "location": {"documentId": reference["documentId"]}, "allowedRoles": reference["allowedRoles"]}
+
+
+MAX_PAGE_SCAN = 200
+PAGE_CURSOR_MS = 300_000
+
+
+def authorized_page(ctx, query, view_name, owner, kind, prefix, include, *, purpose, token, stale_code,
+                    default=50):
+    """Page over authorized rows only, with an opaque, scope-bound, expiring cursor.
+
+    Storage continuation keys stay server-side in an `ontology_cursor` record of
+    the caller's project partition; the returned cursor is a random ID bound to
+    actor, role, project, authority epoch, view and page size (ONT-09). A hidden
+    record never supplies a public continuation identifier.
+    """
+    from workbench.service import limit as page_limit
+    size = page_limit({**query, "limit": query.get("limit", default)})
+    project = ctx.scope["project"]
+    fingerprint = schema.digest([purpose, view_name, ctx.actor, ctx.scope["role"], ctx.project_id,
+                                 project.get("authorityRevision", 0), size])
+    position = None
+    cursor = query.get("cursor")
+    if cursor:
+        saved = None
+        if isinstance(cursor, str) and re.fullmatch(re.escape(token) + r"-[a-f0-9]{48}", cursor):
+            saved = ctx.storage.get(ctx.owner, "ontology_cursor", cursor)
+        if (not saved or saved.get("purpose") != purpose or saved.get("fingerprint") != fingerprint
+                or saved.get("expiresAt", 0) <= ctx.storage.clock() or not isinstance(saved.get("position"), str)):
+            fail(409, stale_code, "조회 범위 또는 권한이 변경되었습니다. 처음부터 다시 조회하세요.")
+        position = saved["position"]
+    items, scanned, next_position = [], 0, None
+    while True:
+        page = ctx.storage.list_page(owner, kind, limit=min(100, MAX_PAGE_SCAN - scanned), cursor=position,
+                                     prefix=prefix)
+        rows = page["items"]
+        for index, row in enumerate(rows):
+            scanned += 1
+            value = include(row)
+            if value is not None:
+                items.append(value)
+            if len(items) == size or scanned >= MAX_PAGE_SCAN:
+                more = index + 1 < len(rows) or bool(page.get("cursor"))
+                next_position = ctx.storage.cursor_after(owner, kind, row["id"], prefix=prefix) if more else None
+                break
+        else:
+            next_position = page.get("cursor")
+            if next_position and scanned < MAX_PAGE_SCAN:
+                position = next_position
+                continue
+        break
+    ctx.fresh()
+    result = {"items": items}
+    if next_position:
+        identifier = token + "-" + secrets.token_hex(24)
+        ctx.storage.put(ctx.owner, "ontology_cursor", {
+            "id": identifier, "projectId": ctx.project_id, "purpose": purpose,
+            "fingerprint": fingerprint, "position": next_position,
+            "expiresAt": ctx.storage.clock() + PAGE_CURSOR_MS})
+        result["cursor"] = identifier
+    return result
 
 
 def job_reader(host, owner, actor, action):
@@ -526,9 +587,21 @@ class Sources:
 
         A superseded but still readable upstream admits diagnostics; a revoked one
         (contract revision gone, admission grant/decision revoked, guideline no
-        longer published) denies with the same not-found error.
+        longer published, bound input or base round revoked) denies with the same
+        not-found error.
         """
-        from intake import admission
+        self._run_upstream_historical(run)
+        self._row_admissions_historical(row)
+
+    @staticmethod
+    def _permission_failure(error):
+        # Only expiry and frozen-authority failures pass through; every upstream
+        # permission failure is indistinguishable from a missing record.
+        if error.status == 401 or error.code in _AUTHORITY_CODES:
+            raise error
+        _not_found()
+
+    def _run_upstream_historical(self, run):
         try:
             self._contract(self._contract_ref(run), historical=True)
             self._inputs(self._snapshot_refs(run), historical=True)
@@ -537,6 +610,13 @@ class Sources:
                 guideline = self.ctx.get("guideline", run.get("guidelineId") or "-")
                 if guideline.get("productId") != product["id"] or guideline.get("status") != "published":
                     _not_found()
+            self._base_lineage(run)
+        except CollaborationError as error:
+            self._permission_failure(error)
+
+    def _row_admissions_historical(self, row):
+        from intake import admission
+        try:
             for binding in self._admission_refs(row):
                 observed = []
                 try:
@@ -552,13 +632,52 @@ class Sources:
                     _not_found()
                 for check in observed:
                     self._remember_owned(check["owner"], check["kind"], check)
-            self._base_lineage(run)
         except CollaborationError as error:
-            # Only expiry and frozen-authority failures pass through; every upstream
-            # permission failure is indistinguishable from a missing record.
-            if error.status == 401 or error.code in _AUTHORITY_CODES:
-                raise
-            _not_found()
+            self._permission_failure(error)
+
+    # content-bearing metadata ----------------------------------------------
+
+    def contract_access(self, contract):
+        """Historical permission to read a contract record's content (draft or approved).
+
+        Its bound inputs (`assetIds`) and change-request baseline must still be
+        permitted; otherwise `404 not-found`, like a missing record. Returns the
+        record after the final recheck.
+        """
+        self._fresh()
+        try:
+            self._inputs(self._contract_asset_refs(contract, True), historical=True)
+            self._base_lineage(contract)
+        except CollaborationError as error:
+            self._permission_failure(error)
+        self._remember("contract", contract)
+        self.recheck()
+        return contract
+
+    def run_access(self, run):
+        """Run metadata under the same lineage authority as its rounds.
+
+        A revoked run-level upstream denies the whole record (`404 not-found`); a
+        round whose own admission lineage is revoked is omitted.
+        """
+        self._fresh()
+        self._run_upstream_historical(run)
+        rounds = []
+        for row in run.get("rounds", []):
+            probe = Sources(self.ctx)
+            try:
+                probe._row_admissions_historical(row if isinstance(row, dict) else {})
+                probe.recheck()
+            except CollaborationError as error:
+                if error.status == 401 or error.code in _AUTHORITY_CODES:
+                    raise
+                continue
+            for check in probe.observed.values():
+                self._remember_owned(check["owner"], check["kind"], check)
+            rounds.append(row)
+        self._remember("run", run)
+        self.recheck()
+        return {**run, "rounds": rounds}
 
     @staticmethod
     def _base_bindings(value):

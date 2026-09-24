@@ -161,6 +161,15 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   permission checks; a restricted state or revoked upstream is `404 not-found`.
   The same reader rechecks every observed version and deadline after each chunk's
   bytes are read and before the chunk is returned.
+- Content-bearing JSON routes use the same reader in a project scope:
+  `GET /contracts/:id` (`Sources.contract_access`: bound `assetIds` and baseline
+  still permitted), `GET /runs/:id` (`Sources.run_access`: run-level lineage; rounds
+  whose own admission lineage is revoked are omitted), `GET /releases/:id`, the
+  `/contracts`, `/runs` and `/releases` listings and `/batches/:id` runs. An
+  inaccessible record is `404 not-found` or omitted; listings page only authorized
+  rows with an opaque `pagecur-…` cursor (5-minute `ontology_cursor` record bound
+  to actor, role, project, authority epoch, listing and `limit`, default 100;
+  `409 list-cursor-stale` otherwise).
 - The queued Git export worker (`git_service.process_export`) rebuilds the recorded
   actor's current `export` scope (`ontology_sources.job_reader`), reruns the same
   round-delivery lineage check at execution and rechecks that reader after reading
