@@ -22,7 +22,8 @@ from intake.records import INTAKE_OWNER
 from workbench.service import Service, fail, fields, public
 from workspace import ontology_schema as schema
 from workspace.collaboration import CollaborationError
-from workspace.ontology_sources import _AUTHORITY_CODES, PROJECT_AUDIENCE, Sources, authority_identity
+from workspace.ontology_sources import (_AUTHORITY_CODES, PROJECT_AUDIENCE, Sources, aggregate_reader,
+                                        authority_identity)
 
 PUBLICATION_OWNER = "publication:deployment"
 CAPABILITIES = {"design": "design_publish", "policy": "policy_publish"}
@@ -367,8 +368,12 @@ def _passes(check):
         return False
 
 
-def _origin_readable(ctx, record):
-    """An origin member sees a publication only while every recorded source is readable to them now."""
+def _origin_readable(ctx, record, aggregate=None):
+    """An origin member sees a publication only while every recorded source is readable to them now.
+
+    With `aggregate`, the row's observations are absorbed into the response-wide
+    reader, whose single final recheck runs once the complete response is ready.
+    """
     refs = {}
     for node in record.get("nodes", []):
         for ref in node.get("sourceRefs", []):
@@ -379,6 +384,8 @@ def _origin_readable(ctx, record):
         for ref in refs.values():
             sources.authorize(ref)
         sources.recheck()
+        if aggregate is not None:
+            aggregate.absorb(sources)
     return _passes(check)
 
 
@@ -388,7 +395,7 @@ def _grant_reference(row):
             "audienceRevision": str(row["revision"])}
 
 
-def _granted_view(ctx, row):
+def _granted_view(ctx, row, aggregate=None):
     """A destination grant's revision metadata: grant ∩ caller role ∩ current upstream, else None."""
     if (not isinstance(row, dict) or row.get("projectId") != ctx.project_id or row.get("status") != "active"
             or ctx.scope["role"] not in row.get("roles", [])):
@@ -399,6 +406,8 @@ def _granted_view(ctx, row):
         sources = Sources(ctx)
         result["record"] = resolve_published(sources, _grant_reference(row), historical=True)["record"]
         sources.recheck()
+        if aggregate is not None:
+            aggregate.absorb(sources)
     return result["record"] if _passes(check) else None
 
 
@@ -689,10 +698,10 @@ def resolve_published(sources, ref, *, historical=False, text=False):
     return {"record": _revision_view(record, entry, snapshot), "text": raw.decode("utf-8") if text else None}
 
 
-def _authorized_page(ctx, query, view_name, owner, kind, prefix, include):
+def _authorized_page(ctx, query, view_name, owner, kind, prefix, include, reader):
     from workspace.ontology_sources import authorized_page
     return authorized_page(ctx, query, view_name, owner, kind, prefix, include, purpose="publications",
-                           token="pubcur", stale_code="publication-cursor-stale")
+                           token="pubcur", stale_code="publication-cursor-stale", reader=reader)
 
 
 def route(host, scope, claims, method, parts, body, query):
@@ -704,14 +713,18 @@ def route(host, scope, claims, method, parts, body, query):
     if parts == [] and method == "GET":
         ctx.fresh()
         if query.get("view", "origin") == "granted":
-            page = _authorized_page(ctx, query, "granted", ctx.owner, "pub_grant", "",
-                                    lambda row: public(row) if _granted_view(ctx, row) is not None else None)
+            aggregate = aggregate_reader(ctx)
+            page = _authorized_page(
+                ctx, query, "granted", ctx.owner, "pub_grant", "",
+                lambda row: public(row) if _granted_view(ctx, row, aggregate) is not None else None, aggregate)
             return 200, {"grants": page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
         if query.get("view", "origin") != "origin":
             fail(400, "invalid-input", "view는 origin 또는 granted입니다.")
+        aggregate = aggregate_reader(ctx)
         page = _authorized_page(
             ctx, query, "origin", PUBLICATION_OWNER, "publication", origin_prefix(ctx.project_id),
-            lambda row: view(row) if row.get("originProject") == ctx.project_id and _origin_readable(ctx, row) else None)
+            lambda row: (view(row) if row.get("originProject") == ctx.project_id
+                         and _origin_readable(ctx, row, aggregate) else None), aggregate)
         return 200, {"publications": page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
     if len(parts) == 1 and method == "GET":
         return 200, {"publication": _detail(ctx, parts[0])}

@@ -136,6 +136,11 @@ final authority, source-version and expiry checks are always repeated before
 returning data or committing a mutation.
 Opaque pagination cursors use the separate `ontology_cursor` record kind,
 with an application expiry and DynamoDB TTL of at most five minutes.
+Multi-record responses (workspace and publication listings, batch views) check
+each row on its own reader, absorb every row's observations into one aggregate
+reader (`ontology_sources.aggregate_reader`) and run a single final aggregate
+recheck after the complete response is assembled and before it or its cursor is
+returned; a change to any earlier row's authority fails the response.
 
 The `run-round`, `ux-contract` and `published-asset` source kinds have installed
 authority adapters (B0 sharing). Each resolves the exact record in the current

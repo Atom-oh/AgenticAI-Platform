@@ -843,3 +843,23 @@ def test_missing_and_inaccessible_round_artifacts_are_byte_identical(env, design
         status, payload, _ = call(env.api, "GET", path, actor="bob", project=env.pid, query=query)
         responses.append((status, json.dumps(payload, sort_keys=True)))
     assert len(set(responses)) == 1 and responses[0][0] == 404, responses
+
+
+def test_run_listing_rechecks_every_rows_observations_before_responding(env, bound, monkeypatch):
+    """Review 3 #3: a row's source revoked while later rows are checked is never returned."""
+    asset, contract, first = bound
+    react_run(env, contract, run_id="run-2")
+    owner = f"project:{env.pid}"
+    original = Sources.run_access
+    calls = {"n": 0}
+
+    def revoking(self, run):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            current = env.api.storage.get(owner, "asset", asset["id"])
+            env.api.storage.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+        return original(self, run)
+    monkeypatch.setattr(Sources, "run_access", revoking)
+    status, payload = http(env, "GET", "/runs")
+    assert calls["n"] >= 2
+    assert status == 409 or asset["id"] not in json.dumps(payload), payload

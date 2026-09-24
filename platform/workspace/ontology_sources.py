@@ -99,8 +99,13 @@ MAX_PAGE_SCAN = 200
 PAGE_CURSOR_MS = 300_000
 
 
+def aggregate_reader(ctx):
+    """One reader for a whole multi-record response: rows absorb their observations into it."""
+    return Sources(ctx, max_records=5000, max_sources=5000)
+
+
 def authorized_page(ctx, query, view_name, owner, kind, prefix, include, *, purpose, token, stale_code,
-                    default=50):
+                    default=50, reader=None):
     """Page over authorized rows only, with an opaque, scope-bound, expiring cursor.
 
     Storage continuation keys stay server-side in an `ontology_cursor` record of
@@ -144,6 +149,10 @@ def authorized_page(ctx, query, view_name, owner, kind, prefix, include, *, purp
                 continue
         break
     ctx.fresh()
+    if reader is not None:
+        # One final aggregate recheck of every row's retained observations, after the
+        # complete response is assembled and before it (or its cursor) is released.
+        reader.recheck()
     result = {"items": items}
     if next_position:
         identifier = token + "-" + secrets.token_hex(24)

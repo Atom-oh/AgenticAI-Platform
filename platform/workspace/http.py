@@ -333,32 +333,40 @@ class WorkspaceAPI:
         from workbench.service import Service
         return Service(self, scope, claims or {})
 
-    def _authorized(self, context, kind, record, cache=None, owner=None, scope=None):
-        """Content-bearing metadata under the shared source authority; None if inaccessible."""
+    def _authorized(self, context, kind, record, cache=None, owner=None, scope=None, aggregate=None):
+        """Content-bearing metadata under the shared source authority; None if inaccessible.
+
+        With `aggregate` (multi-record responses), the row's observations are absorbed
+        into the response reader for one final recheck of the complete response.
+        """
         from workspace.ontology_sources import _AUTHORITY_CODES, Sources
         try:
             reader = Sources(context)
             if kind == "contract":
-                return reader.contract_access(record)
-            if kind == "run":
+                value = reader.contract_access(record)
+            elif kind == "run":
                 viewed = self._run_view(owner, record, scope, cache)
-                return {**reader.run_access(record), "needsRevalidation": viewed["needsRevalidation"]}
-            if kind == "release":
+                value = {**reader.run_access(record), "needsRevalidation": viewed["needsRevalidation"]}
+            elif kind == "release":
                 reader.round_delivery(record.get("runId"), record.get("round"))
-                return record
+                value = record
+            else:
+                raise ValueError("Unknown lineage record kind")
         except CollaborationError as error:
             if error.status == 401 or error.code in _AUTHORITY_CODES:
                 raise
             return None
-        raise ValueError("Unknown lineage record kind")
+        if aggregate is not None:
+            aggregate.absorb(reader)
+        return value
 
     def _authorized_list(self, context, owner, kind, name, query, scope):
-        from workspace.ontology_sources import authorized_page
-        cache = {}
+        from workspace.ontology_sources import aggregate_reader, authorized_page
+        cache, aggregate = {}, aggregate_reader(context)
         page = authorized_page(context, query, name, owner, kind, "",
-                               lambda record: self._authorized(context, kind, record, cache, owner, scope),
+                               lambda record: self._authorized(context, kind, record, cache, owner, scope, aggregate),
                                purpose="workspace-list", token="pagecur", stale_code="list-cursor-stale",
-                               default=100)
+                               default=100, reader=aggregate)
         return {name: page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
 
     def _route(self, owner, method, parts, event, query, scope=None, claims=None):
@@ -401,9 +409,11 @@ class WorkspaceAPI:
             view = batch_view(self, owner, self._get(owner, "batch", parts[1]))
             context = self._lineage_context(scope, claims)
             if context is not None:
-                cache = {}
-                view["runs"] = [row for row in (self._authorized(context, "run", run, cache, owner, scope)
+                from workspace.ontology_sources import aggregate_reader
+                cache, aggregate = {}, aggregate_reader(context)
+                view["runs"] = [row for row in (self._authorized(context, "run", run, cache, owner, scope, aggregate)
                                                 for run in view["runs"]) if row is not None]
+                aggregate.recheck()
             return _json(200, view)
         if parts == ["releases"] and method == "POST":
             from workspace.releases import create_release

@@ -706,3 +706,26 @@ def test_shared_transcription_applies_full_image_source_currency(chain, change):
     with pytest.raises(CollaborationError):
         reader.recheck()
     assert denied(Sources(ctx(chain.api, "gina", dest)).resolve, ref) == (409, "source-upstream-revoked")
+
+
+def test_publication_listing_rechecks_every_rows_observations_before_responding(org_two, monkeypatch):
+    """Review 3 #3: aggregate observations are rechecked once the complete response is ready."""
+    org = org_two
+    capability(org.api, "carol")
+    for identifier in sorted(org.nodes):
+        pub = publications.propose(ctx(org.api, "carol", org.origin), kind="design", node_ids=[identifier],
+                                   revision_bindings={identifier: bindings(org.nodes)[identifier]})
+        publications.approve(ctx(org.api, "carol", org.origin), pub["id"])
+    original = publications._origin_readable
+    calls = {"n": 0}
+
+    def restricting(ctx_, record, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            for ref in org.refs:
+                restrict(SimpleNamespace(api=org.api, origin=org.origin, refs=[ref]), ["owner", "planner"])
+        return original(ctx_, record, *args, **kwargs)
+    monkeypatch.setattr(publications, "_origin_readable", restricting)
+    status, listed, _ = call(org.api, "GET", "/publications", actor="carol", project=org.origin)
+    assert calls["n"] >= 2
+    assert status == 409 or not any(ref["sourceId"] in json.dumps(listed) for ref in org.refs), listed
