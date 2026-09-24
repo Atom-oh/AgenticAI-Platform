@@ -36,3 +36,27 @@ def test_tls_denial_is_not_mistaken_for_public_grant():
     assert audit_template(source) == []
     source["Resources"]["DesignerWorkspaceBucketPolicy"]["Properties"]["PolicyDocument"]["Statement"][0]["Effect"] = "Allow"
     assert any("wildcard principal" in item for item in audit_template(source))
+
+
+def _worker(template, parameter="/bank/intake/denylist", resource=None, actions=("ssm:GetParameter",)):
+    template["Resources"]["DesignerWorkspaceWorkerABC"] = {"Type": "AWS::Lambda::Function", "Properties": {
+        "Environment": {"Variables": {"INTAKE_DENYLIST_PARAM": parameter}}}}
+    arn = resource if resource is not None else {"Fn::Join": ["", [
+        "arn:", {"Ref": "AWS::Partition"}, ":ssm:ap-northeast-2:", {"Ref": "AWS::AccountId"}, ":parameter", parameter]]}
+    template["Resources"]["DesignerWorkspaceWorkerRoleDefaultPolicyABC"] = {"Type": "AWS::IAM::Policy", "Properties": {
+        "PolicyDocument": {"Statement": [{"Effect": "Allow", "Action": list(actions) if len(actions) > 1 else actions[0],
+                                          "Resource": arn}]}}}
+    return template
+
+
+def test_worker_reads_exactly_the_configured_intake_deny_list_parameter():
+    assert audit_template(_worker(template())) == []
+    wildcard = _worker(template(), resource="arn:aws:ssm:ap-northeast-2:000000000000:parameter/bank/*")
+    assert any("deny-list" in item for item in audit_template(wildcard))
+    other = _worker(template(), resource="arn:aws:ssm:ap-northeast-2:000000000000:parameter/bank/other")
+    assert any("deny-list" in item for item in audit_template(other))
+    broad = _worker(template(), actions=("ssm:GetParameter", "ssm:GetParametersByPath"))
+    assert any("deny-list" in item for item in audit_template(broad))
+    missing = _worker(template())
+    del missing["Resources"]["DesignerWorkspaceWorkerRoleDefaultPolicyABC"]
+    assert any("without its read grant" in item for item in audit_template(missing))

@@ -155,7 +155,7 @@ def _expiry(now, *records_):
 
 def decide(host, scope, *, reader, source, data_class, policy, artifact, derivation, receipt, receipt_bytes,
            payload, blocking=(), identity=(), extra_checks=(), extra_blobs=None, content_type="application/json",
-           lineage=None):
+           lineage=None, identifier=None, completion=None):
     """Seal and commit one decision after the current policy/provenance checks.
 
     `payload` is the canonical derivative object whose sha256 is the derivative
@@ -166,8 +166,9 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     blocking = sorted(set(blocking) | set(receipt["blocking"]))
     if data_class not in policy["dataClasses"]:
         blocking = sorted(set(blocking) | {"data-class-ineligible"})
-    identifier = "adm-" + schema.digest([project_id, source, policy["id"], policy["revision"], data_class,
-                                         artifact["kind"], derivation, receipt["hash"], list(identity)])[:40]
+    identifier = identifier or "adm-" + schema.digest([project_id, source, policy["id"], policy["revision"],
+                                                       data_class, artifact["kind"], derivation, receipt["hash"],
+                                                       list(identity)])[:40]
     existing = storage.get(owner, "adm_decision", identifier)
     if existing:
         return records.validate("adm_decision", existing)
@@ -211,8 +212,12 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     fences = [*reader.recheck(), *checks, {"owner": owner, "kind": "project", "id": project_id,
                                             "version": project["version"]}]
     unique = {(c["owner"], c["kind"], c["id"]): c for c in fences}
+    # `completion` lets a worker job commit its terminal state in the same transaction.
+    extra = completion(sealed) if completion else []
+    for write in extra:
+        unique.pop((write["owner"], write["kind"], write["item"]["id"]), None)
     try:
-        return storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed}],
+        return storage.put_many([{"owner": owner, "kind": "adm_decision", "item": sealed}, *extra],
                                 checks=list(unique.values()), retry_conflicts=False)[0]
     except Conflict:
         existing = storage.get(owner, "adm_decision", identifier)
@@ -221,9 +226,13 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
         raise AdmissionError("conflict") from None
 
 
-def request(host, scope, source_ref, *, data_class, claims=None):
+def request(host, scope, source_ref, *, data_class, claims=None, kind="document-pages"):
     """Inspect, normalize and record an admission for a verified actor's source."""
     _project(scope)
+    if kind == "image":
+        return request_image(host, scope, source_ref, data_class=data_class, claims=claims)
+    if kind != "document-pages":
+        raise AdmissionError("artifact-kind-unsupported", 422)
     if data_class not in records.DATA_CLASSES:
         return _blocked(["data-class-ineligible"])
     try:
@@ -250,6 +259,44 @@ def request(host, scope, source_ref, *, data_class, claims=None):
                               "derivativeHash": derived["derivativeHash"]},
                   receipt=receipt, receipt_bytes=schema.canonical(receipt),
                   payload=schema.canonical(derived["pages"]), blocking=blocking)
+
+
+def request_image(host, scope, source_ref, *, data_class, claims=None):
+    """Queue the Worker `intake-image` task (Pillow runs only in the Worker image).
+
+    The decision record is written by the Worker, atomically with the job's
+    completion; until then the queued job is the pending request.
+    """
+    storage, project_id = host.storage, _project(scope)
+    if data_class not in records.DATA_CLASSES:
+        return _blocked(["data-class-ineligible"])
+    try:
+        policy = current_policy(storage, project_id)
+    except AdmissionError as error:
+        return _blocked([error.code])
+    if data_class not in policy["dataClasses"]:
+        return _blocked(["data-class-ineligible"])
+    context = inspect.context(host, scope, claims)
+    reader = Sources(context)
+    try:
+        ref = schema.source_ref(source_ref)
+    except ValueError:
+        raise AdmissionError("invalid-source", 400) from None
+    if ref["sourceKind"] != "asset" or "location" in ref:
+        raise AdmissionError("intake-source-unsupported", 422)
+    reader.resolve(ref)
+    reader.recheck()
+    source = {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
+    expiry = claims.get("exp") if isinstance(claims, dict) else None
+    authorization = int(expiry) * 1000 if expiry is not None else storage.clock() + CURSOR_MS
+    request_id = schema.digest([project_id, scope["actor"], source, data_class, policy["id"], policy["revision"]])
+    job_id = "intake-image-" + request_id[:40]
+    data = {"actorId": scope["actor"], "projectId": project_id, "sourceRef": source, "dataClass": data_class,
+            "policy": {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]},
+            "decisionId": "adm-img-" + request_id[:40], "authorizationExpiresAt": authorization}
+    job = host._new_job(scope["owner"], job_id, "intake-image", data, request_hash=schema.digest(data))
+    host._invoke(scope["owner"], job)
+    return {"status": "queued", "decisionId": data["decisionId"], "job": {"id": job["id"], "status": job["status"]}}
 
 
 def _source_current(host, scope, decision, reader):

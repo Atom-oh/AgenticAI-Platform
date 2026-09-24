@@ -69,6 +69,7 @@ def audit_template(template: dict) -> list[str]:
                         actions = [actions]
                     if any(not action.startswith(("logs:", "ec2:")) for action in actions):
                         issues.append(f"{identifier}: browser role can access application services")
+    issues.extend(_intake_denylist_issues(resources))
     for identifier, resource in resources.items():
         if resource["Type"] == "AWS::CloudFront::Distribution":
             origins = json.dumps(resource.get("Properties", {}).get("DistributionConfig", {}).get("Origins", []))
@@ -76,6 +77,53 @@ def audit_template(template: dict) -> list[str]:
                 issues.append(f"{identifier}: private originals must not be a CloudFront origin")
     if len(browser_functions) != 1 or len(private_buckets) != 1:
         issues.append("Expected exactly one private workspace bucket and isolated browser function")
+    return issues
+
+
+def _flatten(value):
+    """Render a CloudFormation string expression (Fn::Join/Ref) for exact comparison."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and "Fn::Join" in value:
+        separator, parts = value["Fn::Join"]
+        return separator.join(_flatten(part) for part in parts)
+    if isinstance(value, dict) and "Ref" in value:
+        return "${" + value["Ref"] + "}"
+    return json.dumps(value, sort_keys=True)
+
+
+def _statements(resources, role_marker):
+    for identifier, resource in resources.items():
+        if resource["Type"] != "AWS::IAM::Policy" or role_marker not in identifier:
+            continue
+        for statement in resource.get("Properties", {}).get("PolicyDocument", {}).get("Statement", []):
+            actions = statement.get("Action", [])
+            yield identifier, statement, [actions] if isinstance(actions, str) else actions
+
+
+def _intake_denylist_issues(resources):
+    """The Worker reads exactly the configured deny-list parameter and nothing else (AV1)."""
+    issues, names = [], []
+    for identifier, resource in resources.items():
+        if (identifier.startswith("DesignerWorkspaceWorker") and resource["Type"] == "AWS::Lambda::Function"):
+            name = resource.get("Properties", {}).get("Environment", {}).get("Variables", {}).get("INTAKE_DENYLIST_PARAM")
+            if name is not None:
+                names.append(name)
+    for identifier, statement, actions in _statements(resources, "DesignerWorkspaceWorkerRole"):
+        if not any(action in ("ssm:GetParameter", "ssm:GetParameters", "ssm:*", "ssm:GetParametersByPath")
+                   for action in actions):
+            continue
+        allowed = statement.get("Resource")
+        allowed = allowed if isinstance(allowed, list) else [allowed]
+        if actions != ["ssm:GetParameter"] or len(names) != 1 or len(allowed) != 1:
+            issues.append(f"{identifier}: the Worker may read only the configured intake deny-list parameter")
+            continue
+        arn = _flatten(allowed[0])
+        if "*" in arn or not arn.endswith(":parameter" + names[0]):
+            issues.append(f"{identifier}: the Worker deny-list grant must name exactly {names[0]}")
+    if names and not any("ssm:GetParameter" in actions
+                         for _, _, actions in _statements(resources, "DesignerWorkspaceWorkerRole")):
+        issues.append("DesignerWorkspaceWorker: INTAKE_DENYLIST_PARAM is set without its read grant")
     return issues
 
 

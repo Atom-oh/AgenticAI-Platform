@@ -31,7 +31,7 @@ _EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules",
 _BASE_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
 _JOB_TARGETS = {"finalize": ("asset", "assetId"), "run": ("run", "runId"), "release": ("release", "releaseId"),
                 "git": ("gitexport", "exportId"), "document-finalize": ("docrevision", "revisionId"),
-                "document-analysis": ("docanalysis", "analysisId")}
+                "document-analysis": ("docanalysis", "analysisId"), "intake-image": ("adm_decision", "decisionId")}
 
 
 class HTTPError(Exception):
