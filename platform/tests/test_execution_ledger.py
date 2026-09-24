@@ -1706,3 +1706,27 @@ def test_the_reviewed_contradictory_browser_receipt_is_rejected(env):
     with pytest.raises(LedgerError) as error:
         ledger.tool().stage(*ids(job), forged)
     assert error.value.code == "receipt-invalid"
+
+
+# === PR #27 review round 2 regressions ===============================================================
+
+def test_chunk_operation_ids_are_bound_to_handle_index_and_hash(xfer):
+    """Review 2 finding 10: reusing a chunk operation ID for a different submission is an operation conflict."""
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    data = b"a" * (CHUNK + 3)
+    handle = open_out(ledger, job, data)
+    operation = op_id()
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data[:CHUNK]), operation_id=operation)
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data[:CHUNK]), operation_id=operation)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().write_chunk(*ids(job), handle["handleId"], 1, b64(data[CHUNK:]), operation_id=operation)
+    assert error.value.code == "operation-changed"
+    stored = storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]
+    assert len(stored["parts"]) == 1
+    source = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    read_op = op_id()
+    ledger.tool().read_chunk(*ids(job), source["handleId"], 0, operation_id=read_op)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().read_chunk(*ids(job), source["handleId"], 1, operation_id=read_op)
+    assert error.value.code == "operation-changed"

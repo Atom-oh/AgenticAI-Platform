@@ -951,7 +951,25 @@ class Ledger:
             raise LedgerError("transfer-invalid")
         return handle
 
-    def _read_chunk(self, owner, job_id, attempt_id, fence, handle_id, index):
+    def _chunk_op(self, handle, operation_id, index, digest):
+        """Binds a supplied chunk operation ID to (handle, index, chunk hash). Returns the new entry or None."""
+        if operation_id is None:
+            if not self.offline:
+                raise LedgerError("operation-id-required")
+            return None
+        if not isinstance(operation_id, str) or not _OPERATION_ID.fullmatch(operation_id):
+            raise LedgerError("operation-id-invalid")
+        binding = f"{index}:{digest}"
+        recorded = (handle.get("chunkOps") or {}).get(operation_id)
+        if recorded is not None:
+            if recorded != binding:
+                raise LedgerError("operation-changed")
+            return None
+        if len(handle.get("chunkOps") or {}) >= 2 * handle["chunks"] + 8:
+            raise LedgerError("operation-budget")
+        return {operation_id: binding}
+
+    def _read_chunk(self, owner, job_id, attempt_id, fence, handle_id, index, *, operation_id=None):
         job = self._get(owner, job_id)
         self._current(job, attempt_id, fence, statuses=("running",))
         handle = self._handle(job, handle_id, "in")
@@ -965,9 +983,13 @@ class Ledger:
         except (ValueError, FileNotFoundError) as error:
             raise LedgerError("transfer-invalid") from error
         digest = hashlib.sha256(data).hexdigest()
-        if index not in handle["read"]:
-            usage = self._transfer_budget(job, 1, len(data))
-            handles = {**job["handles"], handle_id: {**handle, "read": [*handle["read"], index]}}
+        bound = self._chunk_op(handle, operation_id, index, digest)
+        if index not in handle["read"] or bound:
+            first = index not in handle["read"]
+            usage = self._transfer_budget(job, 1, len(data)) if first else job["transferUsage"]
+            handles = {**job["handles"], handle_id: {**handle, "read": [*handle["read"], index] if first
+                                                     else handle["read"],
+                                                     "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
             self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=[check],
                          reindex=False)
         return {"index": index, "data": base64.b64encode(data).decode(), "sha256": digest}
@@ -998,7 +1020,7 @@ class Ledger:
         return {"handleId": handle_id, "key": key, "total": total, "sha256": sha256, "chunks": chunks, "job": saved}
 
     def _write_chunk(self, owner, job_id, attempt_id, fence, handle_id, index, data, *, operation_id=None):
-        """Idempotent by (handleId, index, chunkHash); not an op entry (review round 3, N6)."""
+        """Idempotent by (handleId, index, chunkHash); a supplied operation ID is bound to that tuple on the handle."""
         job = self._get(owner, job_id)
         self._current(job, attempt_id, fence, statuses=("running",))
         handle = self._handle(job, handle_id, "out")
@@ -1009,10 +1031,15 @@ class Ledger:
         if raw is None or not 0 < len(raw) <= CHUNK_BYTES or type(index) is not int:
             raise LedgerError("transfer-invalid")
         digest = hashlib.sha256(raw).hexdigest()
+        bound = self._chunk_op(handle, operation_id, index, digest)
         if index < len(handle["parts"]):
-            if handle["parts"][index] == digest:
+            if handle["parts"][index] != digest:
+                raise LedgerError("transfer-invalid")
+            if not bound:
                 return self._projection(job)
-            raise LedgerError("transfer-invalid")
+            handles = {**job["handles"], handle_id: {**handle, "chunkOps": {**(handle.get("chunkOps") or {}), **bound}}}
+            return self._commit(owner, job, {**job, "handles": handles}, checks=[self._check_authority(owner, job)],
+                                reindex=False)
         if index != len(handle["parts"]) or index >= handle["chunks"]:
             raise LedgerError("transfer-invalid")
         usage = self._transfer_budget(job, 1, len(raw))
@@ -1025,7 +1052,8 @@ class Ledger:
         except Conflict as error:
             raise LedgerError("transfer-invalid") from error
         handles = {**job["handles"], handle_id: {**handle, "parts": [*handle["parts"], digest],
-                                                 "partKeys": [*handle["partKeys"], part_key]}}
+                                                 "partKeys": [*handle["partKeys"], part_key],
+                                                 "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
         return self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=[check],
                             reindex=False)
 

@@ -624,7 +624,10 @@ mismatch fails the job with `authority-changed`) and fences its mutation with
 the project version check. `read_chunk` also rechecks the handle's source: an
 input handle's admission must still resolve to the same key and hash, and a
 prior handle's `prior_authority` must still grant it, otherwise
-`transfer-invalid`.
+`transfer-invalid`. `read_chunk` and `write_chunk` are not `ops` entries; a supplied
+`operation_id` (mandatory in production) is bound on the handle
+(`chunkOps: {operationId: "index:chunkSha256"}`, at most `2 × chunks + 8`), and
+reusing it for another index or chunk hash is `operation-changed`.
 
 Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,
