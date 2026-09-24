@@ -2573,3 +2573,31 @@ def test_production_cost_gate_records_each_charge_once_and_surfaces_failures(mon
     with pytest.raises(LedgerError) as error:
         gate.record(5, charge_id="chg-2")
     assert error.value.code == "daily-budget-unavailable"
+
+
+@pytest.mark.parametrize("then", ["cancel", "complete-replacement"])
+def test_explicit_retry_charges_the_superseded_unknown_call_independently(xfer, then):
+    """Review 4 finding 4: a retried attempt's unresolved call is conservatively charged when marked unknown."""
+    storage, ledger, now, _ = xfer
+    job = run_job(ledger)
+    call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                max_tokens=1000)["callId"]
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    assert ledger.reconciler().sweep(OWNER, job["id"])["status"] == "recovery_required"
+    retried = ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    row = next(c for c in retried["calls"] if c["callId"] == call)
+    assert row["status"] == "unknown" and row["usageEstimated"] is True
+    assert retried["budget"]["tokensReserved"] == 0 and retried["budget"]["tokensUsed"] == 1000
+    assert ledger.cost_gate.recorded == [1000] and retried["accounting"] == []
+    if then == "cancel":
+        ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+    else:
+        job = ledger.dispatcher().allocate(OWNER, job["id"])
+        job = ledger.tool().claim(*ids(job))
+        other = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                     max_tokens=500)["callId"]
+        ledger.tool().outcome(*ids(job), other, status="completed", usage={"inputTokens": 1, "outputTokens": 2})
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["budget"]["tokensReserved"] == 0
+    assert stored["budget"]["tokensUsed"] == (1000 if then == "cancel" else 1003)
+    assert ledger.cost_gate.recorded == ([1000] if then == "cancel" else [1000, 3])

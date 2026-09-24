@@ -1540,12 +1540,16 @@ class Ledger:
         if previous:
             archived.append({**previous, "stages": [row["receiptHash"] for row in job["stages"]
                                                     if row.get("attemptId") == previous["id"]], "late": []})
-        calls = [{**call, "status": "unknown"} if call.get("status") == "intent" else call for call in job["calls"]]
+        # Superseded unresolved calls become ``unknown`` and are conservatively charged their reservation now,
+        # independently of the replacement attempt (review 4, RUN-02/03); the charge is a retained obligation.
+        calls, budget, charges = self._unknown_calls(job)
         after = {**job, "status": "queued", "fence": job["fence"] + 1, "attempt": None, "attempts": archived,
-                 "stages": [], "calls": calls, "error": None, "recoveryAt": None,
+                 "stages": [], "calls": calls, "budget": budget, "error": None, "recoveryAt": None,
+                 "settlementDueAt": None, "accounting": self._obligations(job, charges),
                  "retriedBy": {"actor": actor, "at": now, "acknowledgedUnknownOutcome": bool(job.get("unknownOutcome"))}}
         after["cleanup"] = self._cleanup_for(job)
-        return self._commit(owner, job, after, extra_writes=quotas, checks=[check])
+        saved = self._commit(owner, job, after, extra_writes=quotas, checks=[check])
+        return self._settle_accounting(owner, saved)
 
     # --- tool role: coupled completion (RUN-02, RUN-04) -------------------------
     def _terminal_status(self, job, stages):

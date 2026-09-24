@@ -743,7 +743,9 @@ status; a later `reconcile` can then use the settled call.
 Completion is refused with `calls-unresolved` while any call of the attempt is
 still `intent` (no recorded outcome): the attempt stays open, the watchdog moves
 it to `recovery_required` with `unknownOutcome`, and `retry` marks such calls
-`unknown`.
+`unknown` and, in the same write, charges each one's reservation as used (and
+as a daily `accounting` obligation, `usageEstimated` for model calls),
+independently of the replacement attempt; it also clears `settlementDueAt`.
 Admission validates the immutable input manifest: the object at
 `manifest.ref` (owned by the project) must hash to `manifest.hash` and be a JSON
 object whose `admissions` equals the admitted decisions exactly, whose
