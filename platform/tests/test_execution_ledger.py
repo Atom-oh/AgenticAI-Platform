@@ -414,3 +414,246 @@ def test_attempt_and_session_identifiers(env):
     job = ledger.dispatcher().allocate(OWNER, admit(ledger)["id"])
     assert job["status"] == "dispatched" and job["fence"] == 1 and job["attempt"]["fence"] == 1
     assert len(job["attempt"]["sessionId"]) >= 33 and job["attempt"]["id"].startswith("att-")
+
+
+# === Task 6: per-call intent, budget and unknown outcomes (RUN-03) =================================
+
+def test_lost_model_response_becomes_recovery_required_and_is_not_replayed(env):
+    storage, ledger, now = env
+    job = running(env)
+    call = ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                                kind="model", min_remaining_ms=60_000)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    swept = ledger.reconciler().sweep(OWNER, job["id"])
+    assert swept["status"] == "recovery_required" and swept["unknownOutcome"]
+    with pytest.raises(LedgerError):
+        ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=False)
+    retried = ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    assert retried["status"] == "queued" and retried["fence"] > swept["fence"]
+    assert [c["status"] for c in retried["calls"]] == ["unknown"]
+
+
+def test_budget_and_deadline_reservation(env):
+    _, ledger, now = env
+    job = running(env)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                             kind="model", min_remaining_ms=PROFILE_DEFAULT["deadlineMs"] + 1)
+    assert error.value.code == "deadline-budget"
+
+
+def test_watchdog_cannot_complete_and_recovery_window_is_bounded(env):
+    _, ledger, now = env
+    job = running(env)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])
+    now[0] += PROFILE_DEFAULT["recoveryWindowMs"] + 1
+    assert ledger.reconciler().sweep(OWNER, job["id"])["status"] in {"failed", "expired"}
+
+
+def test_call_budget_is_exhausted_at_the_operation_ceiling(env):
+    storage, ledger, _ = env
+    job = admit(ledger, operation="design.release")         # 10 calls, no model stage
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="compile",
+                             kind="model", min_remaining_ms=0)
+    assert error.value.code == "model-not-allowed"
+    for _ in range(10):
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="browser",
+                             kind="browser", min_remaining_ms=0)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="browser",
+                             kind="browser", min_remaining_ms=0)
+    assert error.value.code == "budget-exhausted"
+
+
+def test_token_budget_is_reserved_and_released_by_the_outcome(env):
+    _, ledger, _ = env
+    job = running(env)
+    call = ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                                kind="model", min_remaining_ms=0, max_tokens=300_000)
+    assert call["job"]["budget"]["tokensReserved"] == 300_000
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                             kind="model", min_remaining_ms=0, max_tokens=200_000)
+    assert error.value.code == "token-budget"
+    done = ledger.tool().outcome(OWNER, job["id"], job["attempt"]["id"], job["fence"], call["callId"],
+                                 status="completed", usage={"inputTokens": 1000, "outputTokens": 500})
+    assert done["budget"]["tokensReserved"] == 0 and done["budget"]["tokensUsed"] == 1500
+    again = ledger.tool().outcome(OWNER, job["id"], job["attempt"]["id"], job["fence"], call["callId"],
+                                  status="completed", usage={"inputTokens": 1000, "outputTokens": 500})
+    assert again["version"] == done["version"]
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().outcome(OWNER, job["id"], job["attempt"]["id"], job["fence"], call["callId"],
+                              status="failed", usage=None)
+    assert error.value.code == "operation-changed"
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().outcome(OWNER, job["id"], job["attempt"]["id"], job["fence"], call["callId"],
+                              status="completed", usage={"inputTokens": 1, "outputTokens": 1, "prompt": "x"})
+    assert error.value.code in {"operation-changed", "call-invalid"}
+
+
+def test_retried_intent_with_the_same_operation_id_reserves_once(env):
+    _, ledger, _ = env
+    job = running(env)
+    operation = op_id()
+    args = dict(stage="generate", kind="model", min_remaining_ms=0, max_tokens=1000, operation_id=operation)
+    first = ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], **args)
+    second = ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], **args)
+    assert first["callId"] == second["callId"]
+    assert second["job"]["budget"]["calls"] == 1 and second["job"]["budget"]["tokensReserved"] == 1000
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"],
+                             **{**args, "max_tokens": 2000})
+    assert error.value.code == "operation-changed"
+
+
+def test_production_cost_gate_fails_closed_when_costguard_is_unconfigured(env, monkeypatch):
+    from workspace.execution_ledger import CostGuardGate
+    storage, _, _ = env
+    monkeypatch.delenv("CACHE_TABLE", raising=False)
+    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), cost_gate=CostGuardGate())
+    job = running((storage, ledger, env[2]))
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                             kind="model", min_remaining_ms=0)
+    assert error.value.code == "daily-budget-unavailable"
+    assert storage.get(OWNER, "job", job["id"])["budget"]["calls"] == 0
+
+
+def test_daily_budget_exhaustion_refuses_the_model_call(env, monkeypatch):
+    import types
+    from workspace.execution_ledger import CostGuardGate
+    storage, _, _ = env
+    fake = types.SimpleNamespace(_tbl=object(), budget_ok=lambda: False, add_usage=lambda tokens: tokens)
+    monkeypatch.setenv("CACHE_TABLE", "cache-test")
+    monkeypatch.setitem(sys.modules, "common.costguard", fake)
+    monkeypatch.setitem(sys.modules, "common", types.SimpleNamespace(costguard=fake))
+    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), cost_gate=CostGuardGate())
+    job = running((storage, ledger, env[2]))
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                             kind="model", min_remaining_ms=0)
+    assert error.value.code == "daily-budget"
+
+
+def test_deadline_expiry_releases_quota(env):
+    storage, ledger, now = env
+    job = admit(ledger)
+    now[0] = job["deadlineAt"]
+    assert ledger.reconciler().sweep(OWNER, job["id"])["status"] == "expired"
+    assert quota(storage, job) == ([], [])
+
+
+def test_recovery_window_failure_releases_quota_and_keeps_unknown_outcome(env):
+    storage, ledger, now = env
+    job = running(env)
+    ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                         kind="model", min_remaining_ms=0)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])
+    now[0] += PROFILE_DEFAULT["recoveryWindowMs"] + 1
+    failed = ledger.reconciler().sweep(OWNER, job["id"])
+    assert failed["status"] == "failed" and failed["unknownOutcome"] is True
+    assert quota(storage, job) == ([], [])
+
+
+def test_retry_reacquires_quota_and_proceeds_to_running_within_the_deadline(env):
+    storage, ledger, now = env
+    job = running(env)
+    ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
+                         kind="model", min_remaining_ms=0)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])
+    now[0] += PROFILE_DEFAULT["recoveryWindowMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])                      # failed, quota released
+    admit(ledger, key="other", actor="alice")
+    admit(ledger, key="other2", actor="bob")                         # the project is now full
+    with pytest.raises(LedgerError) as error:
+        ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    assert error.value.code == "concurrency-project"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+    for row in storage.list(OWNER, "job"):
+        if row["id"] != job["id"]:
+            ledger.api().cancel(OWNER, row["id"], actor=row["actor"])
+    retried = ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    assert quota(storage, job) == ([job["id"]], [job["id"]])
+    allocated = ledger.dispatcher().allocate(OWNER, retried["id"])
+    claimed = ledger.tool().claim(OWNER, retried["id"], allocated["attempt"]["id"], allocated["fence"])
+    assert claimed["status"] == "running" and len(claimed["attempts"]) == 1
+
+
+@pytest.mark.parametrize("late", ["deadline", "authorization"])
+def test_retry_after_deadline_or_authorization_expiry_is_refused(env, late):
+    storage, ledger, now = env
+    job = running(env) if late == "deadline" else None
+    if late == "authorization":
+        job = admit(ledger, authorization_expires_at=now[0] + 200_000)
+        job = ledger.dispatcher().allocate(OWNER, job["id"])
+        job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    swept = ledger.reconciler().sweep(OWNER, job["id"])
+    assert swept["status"] == "recovery_required"
+    now[0] = job["deadlineAt"] if late == "deadline" else job["authorizationExpiresAt"]
+    with pytest.raises(LedgerError) as error:
+        ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    assert error.value.code == "retry-expired"
+    assert storage.get(OWNER, "job", job["id"])["version"] == swept["version"]
+    assert quota(storage, job) == ([job["id"]], [job["id"]])
+
+
+def test_superseding_admission_records_the_old_job(env):
+    storage, ledger, now = env
+    job = admit(ledger)
+    ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+    fresh = admit(ledger, key="req-2", supersedes=job["id"])
+    assert fresh["supersedes"] == job["id"]
+
+
+def test_scheduled_sweep_discovers_lost_leases_without_supplied_ids(env):
+    storage, ledger, now = env
+    job = running(env)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().run_due()
+    assert storage.get(OWNER, "job", job["id"])["status"] == "recovery_required"
+    now[0] += PROFILE_DEFAULT["recoveryWindowMs"] + 1
+    ledger.reconciler().run_due()
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+    from workspace.storage import DUE_OWNER
+    assert all(row["status"] == "done" for row in storage.list(DUE_OWNER, "exec_due"))
+
+
+def test_scheduled_sweep_of_a_live_heartbeating_job_reschedules_it(env):
+    storage, ledger, now = env
+    job = running(env)
+    now[0] += 60_000
+    ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    now[0] += 40_000                     # the original lease time passed, the heartbeat extended it
+    ledger.reconciler().run_due()
+    current = storage.get(OWNER, "job", job["id"])
+    assert current["status"] == "running"
+    from workspace.storage import DUE_OWNER
+    pending = [row for row in storage.list(DUE_OWNER, "exec_due") if row["status"] == "pending"]
+    assert [row["id"] for row in pending] == [current["dueId"]]
+    assert pending[0]["dueAt"] == current["attempt"]["leaseExpiresAt"]
+
+
+def test_job_record_stays_bounded_under_heartbeats_and_recorded_operations(env):
+    storage, ledger, _ = env
+    job = running(env)
+    for _ in range(11_000):
+        ledger.tool().heartbeat(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    for _ in range(120):
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate", kind="model",
+                             min_remaining_ms=0, max_tokens=1000, operation_id=op_id())
+    previous = None
+    for index in range(30):
+        r = chained(job, "generate", f"nonce-{index}", previous=previous)
+        ledger.tool().stage(OWNER, job["id"], job["attempt"]["id"], job["fence"], r, operation_id=op_id())
+        previous = schema.digest(r)
+    stored = storage.get(OWNER, "job", job["id"])
+    assert len(stored["ops"]) == 150
+    import json
+    assert len(json.dumps(stored).encode()) < 200_000

@@ -163,6 +163,51 @@ def _run_due(storage, *, limit=100):
     return handled
 
 
+# --- daily cost gate (reuses common.costguard, like the legacy worker) --------------------------------
+
+class CostGuardGate:
+    """Fail closed: an unconfigured or unreadable costguard is not an unlimited budget."""
+
+    @staticmethod
+    def _module():
+        import os
+        try:
+            from common import costguard
+        except Exception as error:  # noqa: BLE001 - absent module means no enforceable gate
+            raise LedgerError("daily-budget-unavailable") from error
+        if not os.environ.get("CACHE_TABLE") or getattr(costguard, "_tbl", None) is None:
+            raise LedgerError("daily-budget-unavailable")
+        return costguard
+
+    def check(self):
+        costguard = self._module()
+        try:
+            ok = costguard.budget_ok()          # also the probe read
+        except Exception as error:  # noqa: BLE001
+            raise LedgerError("daily-budget-unavailable") from error
+        if ok is not True:
+            raise LedgerError("daily-budget")
+
+    def record(self, tokens):
+        try:
+            self._module().add_usage(tokens)
+        except Exception:  # noqa: BLE001 - usage accounting never rewrites the ledger outcome
+            pass
+
+
+class _OfflineCostGate:
+    def __init__(self):
+        if "pytest" not in sys.modules:
+            raise PermissionError("the unlimited cost gate is offline-only")
+        self.recorded = []
+
+    def check(self):
+        return None
+
+    def record(self, tokens):
+        self.recorded.append(tokens)
+
+
 # --- the ledger -------------------------------------------------------------------------------------
 
 _CONSTRUCT = object()
@@ -177,22 +222,23 @@ class _Facade:
 
 
 class Ledger:
-    def __init__(self, storage, verifier, _token, *, offline=False):
+    def __init__(self, storage, verifier, _token, *, offline=False, cost_gate=None):
         if _token is not _CONSTRUCT:
             raise PermissionError("use Ledger.production or Ledger.offline")
         self.storage, self.verifier, self.offline = storage, verifier, offline
+        self.cost_gate = cost_gate or CostGuardGate()
 
     @classmethod
     def production(cls, storage, *, verifier):
         if type(verifier) not in _REGISTERED:
             raise PermissionError("unregistered receipt verifier")
-        return cls(storage, verifier, _CONSTRUCT)
+        return cls(storage, verifier, _CONSTRUCT, cost_gate=CostGuardGate())
 
     @classmethod
-    def offline(cls, storage, *, verifier):
+    def offline(cls, storage, *, verifier, cost_gate=None):
         if "pytest" not in sys.modules or type(verifier).__module__ != "execution_fakes":
             raise PermissionError("offline ledger requires the offline test verifier")
-        return cls(storage, verifier, _CONSTRUCT, offline=True)
+        return cls(storage, verifier, _CONSTRUCT, offline=True, cost_gate=cost_gate or _OfflineCostGate())
 
     def api(self): return _Facade(self, ("admit", "cancel", "retry", "read"))
     def dispatcher(self): return _Facade(self, ("allocate",))
@@ -639,12 +685,183 @@ class Ledger:
         after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
         return self._commit(owner, job, after, checks=[check], op=op, reindex=False)
 
+    # --- tool role: per-call intent and outcome (RUN-03) -----------------------
+    def _intent(self, owner, job_id, attempt_id, fence, *, stage, kind, min_remaining_ms, max_tokens=None,
+                operation_id=None):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "intent", operation_id, {
+            "jobId": job_id, "attemptId": attempt_id, "fence": fence, "stage": stage, "kind": kind,
+            "minRemainingMs": min_remaining_ms, "maxTokens": max_tokens})
+        if replay:
+            return {"callId": replay["value"], "job": replay["job"]}
+        attempt = self._current(job, attempt_id, fence, statuses=("running",))
+        stages = OPERATIONS[job["operation"]]
+        if kind not in ("model", "interpreter", "browser") or stage not in stages:
+            raise LedgerError("call-invalid")
+        if kind == "model" and "generate" not in stages:
+            raise LedgerError("model-not-allowed")
+        if type(min_remaining_ms) is not int or min_remaining_ms < 0:
+            raise LedgerError("call-invalid")
+        budget, profile, now = dict(job["budget"]), job["profileBody"], self.storage.clock()
+        if budget["calls"] >= budget["maxCalls"]:
+            raise LedgerError("budget-exhausted")
+        if job["deadlineAt"] - now < min_remaining_ms + profile["cleanupReserveMs"]:
+            raise LedgerError("deadline-budget")
+        reserve = 0
+        if kind == "model":
+            reserve = 8192 if max_tokens is None else max_tokens
+            if type(reserve) is not int or not 0 < reserve <= budget["tokenBudget"]:
+                raise LedgerError("call-invalid")
+            if budget["tokensUsed"] + budget["tokensReserved"] + reserve > budget["tokenBudget"]:
+                raise LedgerError("token-budget")
+            self.cost_gate.check()
+        call = {"callId": "call-" + secrets.token_hex(16), "stage": stage, "kind": kind, "status": "intent",
+                "at": now, "attemptId": attempt["id"], "reserved": reserve}
+        budget.update(calls=budget["calls"] + 1, tokensReserved=budget["tokensReserved"] + reserve)
+        after = {**job, "calls": [*job["calls"], call], "budget": budget}
+        saved = self._commit(owner, job, after, op=op, value=call["callId"], reindex=False)
+        return {"callId": call["callId"], "job": saved}
+
+    def _outcome(self, owner, job_id, attempt_id, fence, call_id, *, status, usage=None):
+        """Keyed by callId on the call record: the same outcome is idempotent, a different one is refused."""
+        job = self._get(owner, job_id)
+        attempt = self._current(job, attempt_id, fence, statuses=("running",))
+        index = next((i for i, call in enumerate(job["calls"]) if call.get("callId") == call_id), None)
+        if index is None or job["calls"][index].get("attemptId") != attempt["id"]:
+            raise LedgerError("call-invalid")
+        call = job["calls"][index]
+        recorded = {"status": status, "usage": usage}
+        if call["status"] != "intent":
+            if {"status": call["status"], "usage": call.get("usage")} == recorded:
+                return self._projection(job)
+            raise LedgerError("operation-changed")
+        if status not in ("completed", "failed"):
+            raise LedgerError("call-invalid")
+        if usage is not None and (not isinstance(usage, dict) or set(usage) != {"inputTokens", "outputTokens"}
+                                  or any(type(v) is not int or v < 0 for v in usage.values())):
+            raise LedgerError("call-invalid")
+        actual = sum(usage.values()) if usage else 0
+        budget = dict(job["budget"])
+        budget.update(tokensReserved=budget["tokensReserved"] - call.get("reserved", 0),
+                      tokensUsed=budget["tokensUsed"] + actual)
+        calls = list(job["calls"])
+        calls[index] = {**call, "status": status, "usage": usage, "doneAt": self.storage.clock()}
+        saved = self._commit(owner, job, {**job, "calls": calls, "budget": budget}, reindex=False)
+        if call["kind"] == "model" and actual:
+            self.cost_gate.record(actual)
+        return saved
+
+    # --- reconciler role: watchdog sweep -------------------------------------
+    def _sweep(self, owner, job_id, *, operation_id=None):
+        """The watchdog never sets succeeded/needs_changes."""
+        job = self._get(owner, job_id)
+        now, profile = self.storage.clock(), job["profileBody"]
+        if job["status"] in TERMINAL:
+            return self._cleanup(owner, job)
+        unknown = any(call.get("status") == "intent" for call in job["calls"])
+        if now >= job["deadlineAt"]:
+            return self._terminal(owner, job, "expired", error={"code": "deadline"}, bump_fence=True,
+                                  extra={"unknownOutcome": job["unknownOutcome"] or unknown})
+        if job["status"] == "recovery_required":
+            if now >= job["recoveryAt"] + profile["recoveryWindowMs"]:
+                return self._terminal(owner, job, "failed", error={"code": "recovery-window"}, bump_fence=True,
+                                      extra={"unknownOutcome": job["unknownOutcome"] or unknown})
+        elif job["status"] in ("dispatched", "running"):
+            attempt = job["attempt"] or {}
+            hung = any(call.get("status") == "intent" and call["at"] + profile["leaseMs"] <= now
+                       for call in job["calls"])
+            if now >= attempt.get("leaseExpiresAt", 0) or hung:
+                return self._commit(owner, job, {**job, "status": "recovery_required", "recoveryAt": now,
+                                                 "unknownOutcome": job["unknownOutcome"] or unknown})
+        due = self.storage.get(DUE_OWNER, "exec_due", job["dueId"]) if job.get("dueId") else None
+        if due is None or due.get("status") != "pending" or due["dueAt"] <= now:
+            job_after = dict(job)
+            writes = self._due_writes(owner, job, job_after, force=True)
+            return self._put(owner, {**job_after, "clock": now}, job["version"], extra_writes=writes)
+        return job
+
+    def _cleanup(self, owner, job):
+        """Delete fenced output parts of a terminal job, then drop its due entry."""
+        if not job.get("cleanup"):
+            return job
+        for handle_id in job["cleanup"]:
+            handle = (job.get("handles") or {}).get(handle_id) or {}
+            for index in range(len(handle.get("parts", []))):
+                try:
+                    self.storage.s3().delete_object(Bucket=self.storage.bucket, Key=f"{handle['key']}.part{index:04d}")
+                except Exception:  # noqa: BLE001 - a later sweep retries
+                    return job
+        return self._commit(owner, job, {**job, "cleanup": []})
+
+    # --- API role: retry --------------------------------------------------------
+    def _retry(self, owner, job_id, *, actor, acknowledge_unknown_outcome):
+        job = self._get(owner, job_id)
+        retryable = (job["status"] == "recovery_required"
+                     or job["status"] in ("failed", "expired") and job.get("unknownOutcome"))
+        if not retryable:
+            raise LedgerError("not-retryable")
+        now = self.storage.clock()
+        if now >= job["deadlineAt"] or now >= job["authorizationExpiresAt"]:
+            raise LedgerError("retry-expired")
+        if not self._may_act(owner, job, actor):
+            raise LedgerError("forbidden")
+        if job.get("unknownOutcome") and acknowledge_unknown_outcome is not True:
+            raise LedgerError("acknowledge-required")
+        check = self._check_authority(owner, job)
+        quotas = (self._quota_writes(owner, job["actor"], job["projectId"], add=job["id"])
+                  if job["status"] in TERMINAL else [])
+        previous = job.get("attempt")
+        archived = list(job["attempts"])
+        if previous:
+            archived.append({**previous, "stages": [row["receiptHash"] for row in job["stages"]
+                                                    if row.get("attemptId") == previous["id"]], "late": []})
+        calls = [{**call, "status": "unknown"} if call.get("status") == "intent" else call for call in job["calls"]]
+        after = {**job, "status": "queued", "fence": job["fence"] + 1, "attempt": None, "attempts": archived,
+                 "stages": [], "calls": calls, "error": None, "recoveryAt": None,
+                 "retriedBy": {"actor": actor, "at": now, "acknowledgedUnknownOutcome": bool(job.get("unknownOutcome"))}}
+        after["cleanup"] = self._cleanup_for(job)
+        return self._commit(owner, job, after, extra_writes=quotas, checks=[check])
+
     # --- reconciler role -----------------------------------------------------
     def _resolve_orphan(self, due):
         return _resolve_orphan(self.storage, due)
 
     def _run_due(self, *, limit=100):
-        return _run_due(self.storage, limit=limit)
+        """Scheduled pass: orphan reports and due execution jobs, discovered without supplied ids."""
+        now, handled, cursor = self.storage.clock(), 0, None
+        while handled < limit:
+            page = self.storage.list_page(DUE_OWNER, "exec_due", 100, cursor)
+            for due in page["items"]:
+                if due.get("dueAt", now + 1) > now:
+                    return handled
+                if due.get("status") != "pending":
+                    continue
+                try:
+                    if due.get("type") == "report":
+                        _resolve_orphan(self.storage, due)
+                    elif due.get("type") == "job":
+                        self._run_job_due(due)
+                except (Conflict, LedgerError):
+                    continue
+                handled += 1
+                if handled >= limit:
+                    return handled
+            cursor = page.get("cursor")
+            if not cursor:
+                return handled
+        return handled
+
+    def _run_job_due(self, due):
+        owner, job_id = due["targetOwner"], (due.get("ref") or {}).get("id")
+        try:
+            job = self._get(owner, job_id)
+        except LedgerError:
+            job = None
+        if job is None or job.get("dueId") != due["id"]:
+            self.storage.put_many([{"owner": DUE_OWNER, "kind": "exec_due", "item": {**due, "status": "done"},
+                                    "expected_version": due["version"]}], retry_conflicts=False, _writer=_WRITER)
+            return None
+        return self._sweep(owner, job_id)
 
     def _reconcile(self, owner, job_id, attempt_id, **kwargs):
         # Receipt-verified completion of a recovery_required attempt arrives with coupled completion (B0 Task 8).
