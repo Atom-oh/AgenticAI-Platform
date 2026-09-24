@@ -404,3 +404,70 @@ def test_round_and_release_downloads_deny_a_revoked_upstream_admission(env, desi
     for offset in (None, 1):
         assert blob(env, run["id"], "source", offset=offset)[0] == 404
         assert blob(env, release["id"], "source", offset=offset, route="releases")[0] == 404
+
+
+def input_asset(env, identifier="input-1", data=b"Synthetic input brief.\n"):
+    import hashlib
+    owner = f"project:{env.pid}"
+    key = key_for(owner, "asset", identifier, "original")
+    env.api.storage.put_blob_once(key, data, "text/plain")
+    return env.api.storage.put(owner, "asset", {
+        "id": identifier, "projectId": env.pid, "name": identifier + ".txt", "purpose": "guide",
+        "status": "stored", "uploadStatus": "stored", "parseStatus": "complete", "originalKey": key,
+        "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "importRevision": 1})
+
+
+@pytest.fixture
+def bound(env, design):
+    """An approved contract whose `assetIds` and run `assetSnapshots` bind one input asset."""
+    product, _ = design
+    asset = input_asset(env)
+    status, payload = http(env, "POST", "/contracts", {**CONTRACT, "productId": product["id"],
+                                                        "assetIds": [asset["id"]]}, actor="carol")
+    assert status == 201, payload
+    contract = payload["contract"]
+    status, payload = http(env, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                           actor="carol")
+    assert status == 200, payload
+    contract = payload["contract"]
+    assert asset["id"] in contract["assetIds"]
+    run = react_run(env, contract)
+    owner = f"project:{env.pid}"
+    snapshots = [{key: row[key] for key in ("id", "version", "importRevision", "sha256", "name", "size") if key in row}
+                 for row in (env.api.storage.get(owner, "asset", i) for i in contract["assetIds"])]
+    run = env.api.storage.put(owner, "run", {**run, "assetSnapshots": snapshots}, run["version"])
+    return asset, contract, run
+
+
+def test_archived_input_asset_blocks_current_contract_and_round_use(env, bound):
+    """Finding 2: every bound input is reauthorized for current use."""
+    asset, contract, run = bound
+    assert Sources(ctx(env)).resolve(contract_reference(contract))
+    assert Sources(ctx(env)).resolve(run_round_reference(run, 1))
+    owner = f"project:{env.pid}"
+    env.api.storage.put(owner, "asset", {**asset, "archived": True}, asset["version"])
+    assert code(Sources(ctx(env)).resolve, contract_reference(contract)) == (409, "source-upstream-revoked")
+    assert code(Sources(ctx(env)).resolve, run_round_reference(run, 1)) == (409, "source-upstream-revoked")
+    # Archived but readable inputs keep historical diagnostics.
+    assert Sources(ctx(env)).authorize(contract_reference(contract)) is True
+    assert Sources(ctx(env)).authorize(run_round_reference(run, 1)) is True
+
+
+def test_revoked_input_asset_denies_historical_contract_round_and_download(env, bound):
+    """Finding 2: historical authorization follows the bound inputs' access revocation."""
+    asset, contract, run = bound
+    owner = f"project:{env.pid}"
+    env.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert code(Sources(ctx(env)).authorize, contract_reference(contract)) == (404, "not-found")
+    assert code(Sources(ctx(env)).authorize, run_round_reference(run, 1)) == (404, "not-found")
+    assert blob(env, run["id"], "source")[0] == 404
+
+
+def test_run_asset_snapshot_must_match_the_bound_input(env, bound):
+    """Finding 2: the round's exact asset snapshot binding is enforced, not only the contract ID list."""
+    asset, contract, run = bound
+    owner = f"project:{env.pid}"
+    forged = [{**row, "sha256": "0" * 64} if row["id"] == asset["id"] else row for row in run["assetSnapshots"]]
+    run = env.api.storage.put(owner, "run", {**run, "assetSnapshots": forged}, run["version"])
+    assert code(Sources(ctx(env)).resolve, run_round_reference(run, 1)) == (409, "source-upstream-revoked")
+    assert code(Sources(ctx(env)).authorize, run_round_reference(run, 1)) == (404, "not-found")

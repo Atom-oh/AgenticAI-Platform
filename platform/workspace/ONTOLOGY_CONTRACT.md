@@ -156,8 +156,10 @@ live sharing or release evidence.
   `409 source-changed`; an archived run is `409 ontology-source-stale` for current
   use. Current use also requires current upstream lineage: the approved contract
   (through the `ux-contract` rules), every `designManifestInput.admissions` entry
-  (`intake.admission.verify` with matching revision and derivative hash) and the
-  product/guideline criteria (`resolve_generation_context`); otherwise
+  (`intake.admission.verify` with matching revision and derivative hash), every
+  exact input binding in the run's `assetSnapshots` (resolved as an `asset`
+  source at the snapshot import revision and hash) and the product/guideline
+  criteria (`resolve_generation_context`); otherwise
   `409 source-upstream-revoked`. Text requires `location.path` and reads the
   verified source archive (`read_archive` over the stored archive hash).
   `Sources.release_source` returns the verified archive bytes under the same
@@ -175,7 +177,12 @@ live sharing or release evidence.
   contract is `approved` at that version, the approval hash matches and
   `rules.contract_hash` recomputes it (`409 source-changed` otherwise); its
   product/guideline criteria and catalog hash are still current
-  (`Collaboration.is_current`). A draft or foreign contract is `404 not-found`.
+  (`Collaboration.is_current`). Every `assetIds` input resolves as a current
+  `asset` source (archived, revoked or changed input: `409 source-upstream-revoked`).
+  Historical authorization of a contract or round reauthorizes the same inputs
+  (a retained contract revision uses the `assetIds` of its immutable revision
+  blob); a revoked input is `404 not-found`, an archived but readable one keeps
+  diagnostics. A draft or foreign contract is `404 not-found`.
   An edited contract's retained revision, or an approved one whose criteria
   changed, is `409 source-superseded` for current use and readable historically.
 - `published-asset` `{sourceId: publicationId, revision: str(publication revision),

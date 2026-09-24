@@ -15,6 +15,7 @@ _SHARED_AUDIENCE = {"asset", "product-guideline", "package", "run-round", "ux-co
 # edit_design-class roles may inspect draft/failed/needs-changes rounds (AGENTCORE_CONTRACT publishing-handoff/1).
 ROUND_EDITORS = frozenset({"owner", "designer", "developer"})
 MAX_ROUND_ADMISSIONS = 50
+MAX_INPUT_ASSETS = 20
 MAX_ARCHIVE_BYTES = 8_000_000
 _ROUND = re.compile(r"[1-9][0-9]{0,3}\Z")
 _VERSION = re.compile(r"[1-9][0-9]{0,15}\Z")
@@ -300,6 +301,8 @@ class Sources:
             asset = self._remember("asset", self.ctx.get("asset", ref["sourceId"]))
             if asset.get("accessRevoked") or asset.get("tombstone") or asset.get("status") == "deleted":
                 fail(403, "ontology-source-forbidden", "원본의 읽기 권한이 회수되었습니다.")
+            if asset.get("sha256") != ref["sha256"] or str(asset.get("importRevision", 1)) != ref["revision"]:
+                fail(403, "ontology-source-forbidden", "기록된 원본 파일 리비전을 확인하지 못했습니다.")
             if ref["audienceRevision"] != PROJECT_AUDIENCE:
                 fail(403, "ontology-source-forbidden", "기록된 원본 권한을 확인하지 못했습니다.")
         elif kind == "product-guideline":
@@ -451,6 +454,7 @@ class Sources:
             if self._rules().contract_hash(run.get("contract") or {}) != run["contractHash"]:
                 fail(409, "source-changed", "라운드의 규칙 사본이 승인본과 다릅니다.")
             resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read")
+            self._inputs(self._snapshot_refs(run), historical=False)
         except CollaborationError as error:
             if _authority_error(error):
                 raise
@@ -503,6 +507,7 @@ class Sources:
         from intake import admission
         try:
             self._contract(self._contract_ref(run), historical=True)
+            self._inputs(self._snapshot_refs(run), historical=True)
             if run.get("productId"):
                 product = self.ctx.get("product", run["productId"])
                 guideline = self.ctx.get("guideline", run.get("guidelineId") or "-")
@@ -569,6 +574,11 @@ class Sources:
                 digest = None
             if digest != approval.get("hash"):
                 fail(409, "source-changed", "승인 규칙 내용이 승인 해시와 다릅니다.")
+            bound = contract
+        else:
+            bound = self._retained_contract(contract, version, ref["sha256"])
+        # Supplied inputs are lineage: every bound asset is reauthorized (AGENTCORE_CONTRACT).
+        self._inputs(self._contract_asset_refs(bound, historical), historical=historical)
         if historical:
             return contract, current
         if not current:
@@ -582,6 +592,69 @@ class Sources:
         if superseded:
             fail(409, "source-superseded", "승인 규칙의 상품·가이드 기준이 현재 게시본이 아닙니다.")
         return contract, current
+
+    def _retained_contract(self, contract, version, digest):
+        """The exact retained approved revision (immutable blob whose recomputed hash matches)."""
+        item = next(item for item in contract.get("revisions", []) if isinstance(item, dict)
+                    and item.get("version") == version and item.get("hash") == digest)
+        key = item.get("key")
+        try:
+            if not key or not self.storage.owns_key(self.ctx.owner, key):
+                raise ValueError("unowned")
+            if self.storage.blob_info(key)["size"] > 350_000:
+                raise ValueError("too large")
+            retained = json.loads(self.storage.get_blob(key, length=350_000))
+            if not isinstance(retained, dict) or self._rules().contract_hash(retained) != digest:
+                raise ValueError("changed")
+        except (ValueError, TypeError, KeyError, OSError):
+            _not_found()
+        return retained
+
+    def _contract_asset_refs(self, contract, historical):
+        identifiers = contract.get("assetIds", [])
+        if (not isinstance(identifiers, list) or len(identifiers) > MAX_INPUT_ASSETS
+                or any(not isinstance(item, str) for item in identifiers)):
+            _not_found() if historical else fail(409, "source-upstream-revoked", "승인 규칙의 입력 파일 근거를 확인하지 못했습니다.")
+        refs = []
+        for identifier in identifiers:
+            try:
+                asset = self.ctx.get("asset", identifier)
+            except CollaborationError as error:
+                if error.status == 401 or error.code in _AUTHORITY_CODES:
+                    raise
+                _not_found() if historical else fail(409, "source-upstream-revoked", "승인 규칙의 입력 파일이 더 이상 없습니다.")
+            refs.append(asset_reference(asset) if asset.get("sha256") else {
+                "sourceKind": "asset", "sourceId": identifier, "revision": "1", "sha256": "0" * 64,
+                "audienceRevision": PROJECT_AUDIENCE})
+        return refs
+
+    @staticmethod
+    def _snapshot_refs(run):
+        """Exact input bindings retained on the run (`assetSnapshots`)."""
+        snapshots = run.get("assetSnapshots", [])
+        if (not isinstance(snapshots, list) or len(snapshots) > MAX_INPUT_ASSETS
+                or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                       or not isinstance(item.get("sha256"), str) for item in snapshots)):
+            fail(409, "source-upstream-revoked", "라운드의 입력 파일 근거 형식을 확인하지 못했습니다.")
+        return [{"sourceKind": "asset", "sourceId": item["id"], "revision": str(item.get("importRevision", 1)),
+                 "sha256": item["sha256"], "audienceRevision": PROJECT_AUDIENCE} for item in snapshots]
+
+    def _inputs(self, refs, *, historical):
+        """Current use resolves every bound input; historical access requires its current permission."""
+        for ref in refs:
+            try:
+                if historical:
+                    self._authorize(schema.source_ref(ref), remember=False)
+                else:
+                    self.resolve(ref)
+            except CollaborationError as error:
+                if error.status == 401 or error.code in _AUTHORITY_CODES:
+                    raise
+                if historical:
+                    _not_found()
+                fail(409, "source-upstream-revoked", "승인 규칙 또는 라운드의 입력 파일을 현재 사용할 수 없습니다.")
+            except ValueError:
+                _not_found() if historical else fail(409, "source-upstream-revoked", "입력 파일 근거 형식이 올바르지 않습니다.")
 
     @staticmethod
     def _identity(actual, expected):
