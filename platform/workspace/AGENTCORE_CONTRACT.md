@@ -618,7 +618,8 @@ tokens and daily cost-gate usage and marked `usageEstimated: true`; the
 reservation is never released to zero. `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
 stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
-receiptHash, receiptRef, nonce, attemptId, status, service, result, outputs}`.
+receiptHash, receiptRef, nonce, attemptId, status, service, result, inputs,
+outputs}`; `inputs` keeps the consumed `{key, sha256}` pairs.
 `receiptRef` is the immutable object
 `job/{id}/receipts/{attemptId}/{receiptHash}.json` holding the signed receipt's
 canonical bytes (they hash to `receiptHash`), written once at `stage` (and at
@@ -669,7 +670,14 @@ Receipts follow the operation's evidence graph (`STAGE_INPUTS`): each stage's
 (`generate` ← `context`, `compile` ← `generate` or `context`, `browser` ←
 `compile`, `verify` ← `browser` or `generate`, `analyze` ← `context`), so stages
 are staged in order. A `compile` receipt produces exactly one output with role
-`bundle`, and a `browser` receipt must consume exactly that bundle. The
+`bundle`, and a `browser` receipt must consume exactly that bundle.
+Completion validates one complete, current chain: for every required stage its
+latest receipt must be recorded after the latest receipt of its predecessor and
+consume that receipt's outputs (for `browser`, exactly the latest compile's
+bundle). A newer predecessor receipt, such as a recompilation, makes the
+downstream receipts stale until they are re-staged (`evidence-stale`). The
+result manifest and every object it lists must be outputs of that current
+chain. The
 receipt hash is SHA-256 over sorted-key JSON.
 
 Completion (`finish`, and `reconcile` through the same path) re-reads every
@@ -791,6 +799,7 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
 `completion-contention`, `completion-obligations`, `completion-unavailable`,
 `completion-invalid`, `calls-unresolved`, `profile-invalid`, `manifest-invalid`,
+`evidence-stale`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
 

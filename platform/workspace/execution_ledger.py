@@ -834,6 +834,7 @@ class Ledger:
         return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
                 "attemptId": attempt["id"], "status": receipt.get("status", "ok"), "service": binding,
                 "result": copy.deepcopy(receipt.get("result", {})),
+                "inputs": [{"key": entry["key"], "sha256": entry["sha256"]} for entry in inputs],
                 "outputs": [{key: entry[key] for key in ("key", "sha256", "size", "role") if key in entry}
                             for entry in outputs]}
 
@@ -1549,6 +1550,27 @@ class Ledger:
             return {}
         return document if isinstance(document, dict) else {}
 
+    def _current_chain(self, job, stages):
+        """The one complete, current evidence chain (review 3): the latest receipt of every required stage, each
+        recorded after, and consuming the exact outputs of, the latest receipt of its predecessor (a Browser or
+        verify stage the bundle of the latest compile). A newer predecessor makes downstream evidence stale."""
+        latest = {row["stage"]: index for index, row in enumerate(stages)}
+        graph = STAGE_INPUTS.get(job["operation"], {})
+        for stage in OPERATIONS[job["operation"]]:
+            predecessor = graph.get(stage)
+            if predecessor is None:
+                continue
+            here, there = latest[stage], latest[predecessor]
+            produced = stages[there].get("outputs", [])
+            if predecessor == "compile":
+                produced = [entry for entry in produced if entry.get("role") == "bundle"]
+            required = {(entry["key"], entry["sha256"]) for entry in produced}
+            consumed = {(entry["key"], entry["sha256"]) for entry in stages[here].get("inputs", [])}
+            fresh = required <= consumed if predecessor == "compile" else bool(required & consumed)
+            if here < there or not required or not fresh:
+                raise LedgerError("evidence-stale", stage=stage, predecessor=predecessor)
+        return [stages[index] for index in sorted(latest[name] for name in OPERATIONS[job["operation"]])]
+
     def _check_result_manifest(self, job, stages, result):
         chain = {entry["key"]: entry for row in stages for entry in row.get("outputs", [])}
         outputs = {key: entry["sha256"] for key, entry in chain.items()}
@@ -1673,9 +1695,10 @@ class Ledger:
         if any(call.get("attemptId") == attempt["id"] and call.get("status") == "intent" for call in job["calls"]):
             # RUN-02/03: a call without a recorded outcome may have been billed; it stays for recovery/accounting.
             raise LedgerError("calls-unresolved")
+        current = self._current_chain(job, stages)
         if self._terminal_status(job, stages) != status:
             raise LedgerError("status-inconsistent")
-        self._check_result_manifest(job, stages, result)
+        self._check_result_manifest(job, current, result)
         self._reverify_chain(owner, job, stages, attempt)
         self._fresh_obligations(owner, before)
         protected, guard = self._protect(owner, before, recovery=recovery)

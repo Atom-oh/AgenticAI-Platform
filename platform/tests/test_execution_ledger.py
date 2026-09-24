@@ -2241,3 +2241,53 @@ def test_settlement_rejects_unverified_or_mismatched_observations(xfer, case):
         ledger.reconciler().settle(OWNER, job["id"], call, obs)
     assert error.value.code in ("receipt-invalid", "call-invalid")
     assert next(c for c in storage.get(OWNER, "job", job["id"])["calls"] if c["callId"] == call)["status"] == "intent"
+
+
+@pytest.mark.parametrize("manifest_choice", ["new", "old"])
+def test_recompilation_invalidates_downstream_verification(xfer, manifest_choice):
+    """Review 3 finding 1: completion needs one complete current chain; a newer compile makes browser/verify stale."""
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    rebuilt = {**put_output(storage, job, "compile", "bundle-2.js", b"recompiled"), "role": "bundle"}
+    files = [{"key": row["outputs"][0]["key"], "sha256": row["outputs"][0]["sha256"]} for row in job["stages"]
+             if row["stage"] != "compile"] + [{"key": rebuilt["key"], "sha256": rebuilt["sha256"]}]
+    manifest = put_output(storage, job, "compile", "result-manifest-2.json", _json.dumps({"files": files}).encode())
+    again = chained(job, "compile", "n-recompile", previous=result["receipts"][-1], status="ok",
+                    outputs=[rebuilt, manifest], inputs=required_inputs(job, "compile"),
+                    result=GOOD["compile"][1], service=service_call(ledger, job, "compile", "interpreter"))
+    job = ledger.tool().stage(*ids(job), again)
+    hashes = [*result["receipts"], receipt_hash(again)]
+    final = ({"manifestRef": manifest["key"], "manifestHash": manifest["sha256"], "receipts": hashes}
+             if manifest_choice == "new" else {**result, "receipts": hashes})
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", final)
+    assert error.value.code == "evidence-stale"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def test_reverification_of_the_new_bundle_completes(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    previous, hashes = result["receipts"][-1], list(result["receipts"])
+    for stage in ("compile", "browser", "verify"):
+        outputs = [put_output(storage, job, stage, f"{stage}-2.out", f"{stage}-2".encode())]
+        if stage == "compile":
+            outputs[0]["role"] = "bundle"
+        if stage == "verify":
+            current = {row["stage"]: row for row in job["stages"]}
+            files = [{"key": current[name]["outputs"][0]["key"], "sha256": current[name]["outputs"][0]["sha256"]}
+                     for name in ("context", "generate", "compile", "browser")] + [
+                {"key": outputs[0]["key"], "sha256": outputs[0]["sha256"]}]
+            outputs.append(put_output(storage, job, stage, "result-manifest-2.json",
+                                      _json.dumps({"files": files}).encode()))
+        kind = STAGE_SERVICES[stage][0]
+        service = {} if kind == "runtime" else {"service": service_call(ledger, job, stage, kind)}
+        r = chained(job, stage, f"n2-{stage}", previous=previous, status="ok", outputs=outputs,
+                    inputs=required_inputs(job, stage), result=GOOD[stage][1], **service)
+        job = ledger.tool().stage(*ids(job), r)
+        previous = receipt_hash(r)
+        hashes.append(previous)
+    manifest = job["stages"][-1]["outputs"][-1]
+    done = finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
+                                             "receipts": hashes})
+    assert done["status"] == "succeeded"
