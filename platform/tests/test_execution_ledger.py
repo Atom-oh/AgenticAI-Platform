@@ -2393,3 +2393,60 @@ def test_completion_binds_the_deliverable_bundle_and_source_to_their_evidence(xf
     assert stored["deliverables"]["sources"] == [{"key": source["key"], "sha256": source["sha256"],
                                                   "generateReceipt": job["stages"][1]["receiptHash"],
                                                   "compileReceipt": rows["compile"][0]}]
+
+
+def replay_args(operation):
+    return dict(stage="generate", kind="model", min_remaining_ms=0, max_tokens=1000, operation_id=operation)
+
+
+@pytest.mark.parametrize("change", ["withdrawal", "revocation", "lease-loss", "deadline"])
+def test_intent_replay_revalidates_authority_lease_and_time(xfer, change):
+    """Review 4 finding 3: a replayed intent never bypasses the protected-operation guard."""
+    storage, ledger, now, _ = xfer
+    job = run_job(ledger)
+    ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    operation = op_id()
+    first = ledger.tool().intent(*ids(job), **replay_args(operation))
+    if change == "withdrawal":
+        withdraw_admission(storage)
+    elif change == "revocation":
+        revoke_requester(storage)
+    elif change == "lease-loss":
+        now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+        assert ledger.reconciler().sweep(OWNER, job["id"])["status"] == "recovery_required"
+    else:
+        now[0] = storage.get(OWNER, "job", job["id"])["deadlineAt"]
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), **replay_args(operation))
+    assert error.value.code == ("authority-changed" if change in ("withdrawal", "revocation") else "stale-attempt")
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == {"withdrawal": "failed", "revocation": "failed", "lease-loss": "recovery_required",
+                                "deadline": "running"}[change]
+    assert [call["callId"] for call in stored["calls"]] == [first["callId"]]
+    assert stored["budget"]["calls"] == 1 and stored["budget"]["tokensReserved"] in (0, 1000)
+
+
+def test_intent_replay_is_fenced_and_never_authorizes_another_invocation(xfer):
+    storage, ledger, now, _ = xfer
+    job = run_job(ledger)
+    operation = op_id()
+    first = ledger.tool().intent(*ids(job), **replay_args(operation))
+    assert first.get("replayed") is not True
+    before = len(storage.table().transactions)
+    again = ledger.tool().intent(*ids(job), **replay_args(operation))
+    assert again["callId"] == first["callId"] and again["replayed"] is True and again["callStatus"] == "intent"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["budget"]["calls"] == 1 and stored["budget"]["tokensReserved"] == 1000
+    [fence] = storage.table().transactions[before:]
+    assert all("ConditionCheck" in entry for entry in fence["TransactItems"])     # check-only, nothing reserved
+    # The final guard runs at submission: a lease that lapses while the replay is checked is refused.
+    lease = stored["attempt"]["leaseExpiresAt"]
+    original = ledger.cost_gate.check
+
+    def lapse():
+        now[0] = lease
+        return original()
+    ledger.cost_gate.check = lapse
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), **replay_args(operation))
+    assert error.value.code == "stale-attempt"

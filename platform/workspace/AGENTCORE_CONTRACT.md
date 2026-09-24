@@ -764,7 +764,13 @@ These authority predicates are part of the transaction, and its `before_attempt`
 callable runs immediately before each wire submission: it rechecks the
 deadline and authorization expiry (`deadline`), the attempt lease
 (`stale-attempt`), for `intent` the remaining-time reservation
-(`deadline-budget`) and, for a model call, the daily cost gate. For completion
+(`deadline-budget`) and, for a model call, the daily cost gate. A repeated
+`intent` operation ID never reserves again: it requires the same current running
+attempt, lease and deadline (`stale-attempt`), rechecks authority and sources,
+and submits a check-only transaction with the same guard; it returns the
+recorded `callId` with `replayed: true` and `callStatus`. A replay never
+authorizes invoking the call again; an `intent` call stays uncertain until an
+outcome, settlement or `unknown` marking records it. For completion
 the final temporal checks run after `stage_completion` returns: `now < deadlineAt` and the
 authorization expiry (`deadline`), the attempt lease for `finish`
 (`stale-attempt`), and for `reconcile` the recovery bound

@@ -891,7 +891,8 @@ class Ledger:
             "jobId": job_id, "attemptId": attempt_id, "fence": fence, "stage": stage, "kind": kind,
             "minRemainingMs": min_remaining_ms, "maxTokens": max_tokens})
         if replay:
-            return {"callId": replay["value"], "job": replay["job"]}
+            return self._replayed_intent(owner, job, replay, attempt_id, fence, kind=kind,
+                                         min_remaining_ms=min_remaining_ms)
         attempt = self._current(job, attempt_id, fence, statuses=("running",))
         stages = OPERATIONS[job["operation"]]
         if kind not in ("model", "interpreter", "browser") or stage not in stages:
@@ -920,6 +921,23 @@ class Ledger:
         after = {**job, "calls": [*job["calls"], call], "budget": budget}
         saved = self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, value=call["callId"], reindex=False)
         return {"callId": call["callId"], "job": saved}
+
+    def _replayed_intent(self, owner, job, replay, attempt_id, fence, *, kind, min_remaining_ms):
+        """A repeated intent operation ID (review 4, RUN-02/03): the recorded call, never a new reservation.
+
+        The replay is fenced exactly like a first intent: the current running attempt, lease and deadline, the
+        requester's authority and every consumed source (a withdrawn one fails the job), and the final temporal /
+        cost guard, submitted as a check-only transaction. It returns ``replayed: true`` and the call's recorded
+        status; a replay never authorizes invoking the call (again): an ``intent`` call is uncertain until its
+        outcome is recorded, settled or marked unknown.
+        """
+        attempt = self._current(job, attempt_id, fence, statuses=("running",))
+        call = next((row for row in job["calls"] if row.get("callId") == replay["value"]), None)
+        if call is None or call.get("attemptId") != attempt["id"]:
+            raise LedgerError("call-invalid")
+        checks, guard = self._protect(owner, job, min_remaining_ms=min_remaining_ms, cost=kind == "model")
+        self._fence(owner, job, checks, guard)
+        return {"callId": call["callId"], "job": replay["job"], "replayed": True, "callStatus": call["status"]}
 
     def _outcome(self, owner, job_id, attempt_id, fence, call_id, *, status, usage=None, service_session_id=None):
         """Keyed by callId on the call record: the same outcome is idempotent, a different one is refused.
