@@ -1379,3 +1379,58 @@ def test_input_handle_records_the_admission_decision_and_revision(xfer):
     stored = storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]
     assert stored["decisionId"] == "adm-1" and stored["revision"] == "1"
     assert stored["sha256"] == ADM[0]["artifactHash"] == hashlib.sha256(data).hexdigest()
+
+
+def revoke_requester(storage, actor="designer-1"):
+    project = storage.get(OWNER, "project", "p1")
+    members = dict(project["members"]); members.pop(actor)
+    storage.put(OWNER, "project", {**project, "members": members}, project["version"])
+
+
+def last_transaction_checks(storage):
+    return [entry["ConditionCheck"]["Key"]["sk"] for entry in storage.table().transactions[-1]["TransactItems"]
+            if "ConditionCheck" in entry]
+
+
+def test_revocation_stops_chunk_reads_including_retries(xfer):
+    """Finding 1: read_chunk revalidates the requester's current authority and fences its mutation."""
+    storage, ledger, _, data = xfer
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    ledger.tool().read_chunk(*ids(job), handle["handleId"], 0)
+    assert any(sk.startswith("project#") for sk in last_transaction_checks(storage))
+    revoke_requester(storage)
+    for index in (0, 1):                   # a retry of an already-read chunk and a new chunk
+        with pytest.raises(LedgerError) as error:
+            ledger.tool().read_chunk(*ids(job), handle["handleId"], index)
+        assert error.value.code in ("authority-changed", "stale-attempt")
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "failed" and stored["error"]["code"] == "authority-changed"
+    assert stored["transferUsage"]["chunks"] == 1
+
+
+def test_revoked_admission_stops_chunk_reads(xfer):
+    storage, ledger, _, data = xfer
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    ledger.input_resolver = lambda owner, admission: None          # the admission decision was withdrawn
+    for index in (0, 0):
+        with pytest.raises(LedgerError) as error:
+            ledger.tool().read_chunk(*ids(job), handle["handleId"], index)
+        assert error.value.code == "transfer-invalid"
+    assert storage.get(OWNER, "job", job["id"])["transferUsage"]["chunks"] == 0
+
+
+def test_revocation_stops_model_call_intents(env):
+    storage, ledger, _ = env
+    job = running(env)
+    ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate", kind="model",
+                         min_remaining_ms=0)
+    assert any(sk.startswith("project#") for sk in last_transaction_checks(storage))
+    revoke_requester(storage)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate", kind="model",
+                             min_remaining_ms=0)
+    assert error.value.code == "authority-changed"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "failed" and stored["budget"]["calls"] == 1

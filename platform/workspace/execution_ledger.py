@@ -751,11 +751,12 @@ class Ledger:
             if budget["tokensUsed"] + budget["tokensReserved"] + reserve > budget["tokenBudget"]:
                 raise LedgerError("token-budget")
             self.cost_gate.check()
+        check = self._check_authority(owner, job)          # revocation stops further calls (RUN-03)
         call = {"callId": "call-" + secrets.token_hex(16), "stage": stage, "kind": kind, "status": "intent",
                 "at": now, "attemptId": attempt["id"], "reserved": reserve}
         budget.update(calls=budget["calls"] + 1, tokensReserved=budget["tokensReserved"] + reserve)
         after = {**job, "calls": [*job["calls"], call], "budget": budget}
-        saved = self._commit(owner, job, after, op=op, value=call["callId"], reindex=False)
+        saved = self._commit(owner, job, after, checks=[check], op=op, value=call["callId"], reindex=False)
         return {"callId": call["callId"], "job": saved}
 
     def _outcome(self, owner, job_id, attempt_id, fence, call_id, *, status, usage=None):
@@ -790,6 +791,7 @@ class Ledger:
     # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
     def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None):
         """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts."""
+        check = self._check_authority(owner, job)
         try:
             if not isinstance(key, str) or not self.storage.owns_key(owner, key):
                 raise ValueError("foreign key")
@@ -803,8 +805,8 @@ class Ledger:
         handle = {"direction": "in", "source": source, "key": key, "sha256": sha256, "total": len(data),
                   "chunks": chunks, "attemptId": job["attempt"]["id"], "stage": stage, "status": "open", "read": [],
                   **(binding or {})}
-        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, op=op,
-                             value=handle_id, reindex=False)
+        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, checks=[check],
+                             op=op, value=handle_id, reindex=False)
         return {"handleId": handle_id, "total": len(data), "sha256": sha256, "chunks": chunks, "job": saved}
 
     def _replayed_handle(self, replay):
@@ -833,13 +835,44 @@ class Ledger:
         if (prior is None or prior.get("sourceKind") not in ("run-round", "release")
                 or not callable(self.prior_authority)):
             raise LedgerError("transfer-invalid")
-        try:
-            current = self.prior_authority(owner, job, copy.deepcopy(prior)) is True
-        except Exception:  # noqa: BLE001 - an authority failure is a refusal
-            current = False
-        if not current:
+        if not self._prior_current(owner, job, prior):
             raise LedgerError("transfer-invalid")
-        return self._open_read(owner, job, op, source="prior", key=prior["key"], sha256=prior.get("sha256"))
+        return self._open_read(owner, job, op, source="prior", key=prior["key"], sha256=prior.get("sha256"),
+                               binding={"prior": {k: prior[k] for k in ("sourceKind", "sourceId", "revision", "key",
+                                                                         "sha256") if k in prior}})
+
+    def _prior_current(self, owner, job, prior):
+        if not callable(self.prior_authority):
+            return False
+        try:
+            return self.prior_authority(owner, job, copy.deepcopy(prior)) is True
+        except Exception:  # noqa: BLE001 - an authority failure is a refusal
+            return False
+
+    def _resolve_admitted(self, owner, admission):
+        """The resolver's current view of an admitted artifact, or None when it is no longer admitted."""
+        if not callable(self.input_resolver):
+            return None
+        try:
+            blob = self.input_resolver(owner, copy.deepcopy(admission))
+        except Exception:  # noqa: BLE001
+            return None
+        return blob if isinstance(blob, dict) and isinstance(blob.get("key"), str) else None
+
+    def _revalidate_handle(self, owner, job, handle):
+        """Source/admission authority is current for every chunk, including retried chunks (RUN-05)."""
+        if handle.get("source") == "input":
+            admission = next((row for row in job["admissions"] if row.get("decisionId") == handle.get("decisionId")
+                              and row.get("revision") == handle.get("revision")), None)
+            blob = self._resolve_admitted(owner, admission) if admission else None
+            if (blob is None or blob["key"] != handle["key"] or blob.get("sha256") != handle["sha256"]
+                    or admission.get("artifactHash") != handle["sha256"]):
+                raise LedgerError("transfer-invalid")
+        elif handle.get("source") == "prior":
+            if not isinstance(handle.get("prior"), dict) or not self._prior_current(owner, job, handle["prior"]):
+                raise LedgerError("transfer-invalid")
+        elif handle.get("source") != "manifest":
+            raise LedgerError("transfer-invalid")
 
     def _open_input(self, owner, job_id, attempt_id, fence, *, decision_id, stage, operation_id=None):
         job = self._get(owner, job_id)
@@ -852,10 +885,7 @@ class Ledger:
         admission = next((row for row in job["admissions"] if row.get("decisionId") == decision_id), None)
         if admission is None or stage not in OPERATIONS[job["operation"]] or not callable(self.input_resolver):
             raise LedgerError("transfer-invalid")
-        try:
-            blob = self.input_resolver(owner, copy.deepcopy(admission))
-        except Exception:  # noqa: BLE001
-            blob = None
+        blob = self._resolve_admitted(owner, admission)
         # RUN-05: the served bytes are exactly the frozen admission's artifact (decision, revision, hash).
         if (not isinstance(blob, dict) or not isinstance(blob.get("key"), str)
                 or not isinstance(admission.get("artifactHash"), str) or blob.get("sha256") != admission["artifactHash"]):
@@ -884,6 +914,8 @@ class Ledger:
         handle = self._handle(job, handle_id, "in")
         if type(index) is not int or not 0 <= index < handle["chunks"]:
             raise LedgerError("transfer-invalid")
+        check = self._check_authority(owner, job)           # every chunk, including a retried one
+        self._revalidate_handle(owner, job, handle)
         offset = index * CHUNK_BYTES
         try:
             data = self.storage.get_blob(handle["key"], offset, min(CHUNK_BYTES, handle["total"] - offset))
@@ -893,7 +925,8 @@ class Ledger:
         if index not in handle["read"]:
             usage = self._transfer_budget(job, 1, len(data))
             handles = {**job["handles"], handle_id: {**handle, "read": [*handle["read"], index]}}
-            self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, reindex=False)
+            self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=[check],
+                         reindex=False)
         return {"index": index, "data": base64.b64encode(data).decode(), "sha256": digest}
 
     def _open_output(self, owner, job_id, attempt_id, fence, *, stage, name, total, sha256, operation_id=None):
@@ -908,6 +941,7 @@ class Ledger:
                 or stage not in OPERATIONS[job["operation"]] or type(total) is not int or not 0 < total
                 or not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
             raise LedgerError("transfer-invalid")
+        check = self._check_authority(owner, job)
         chunks = -(-total // CHUNK_BYTES)
         self._transfer_budget(job, chunks, total)          # the declared size must fit the remaining budget
         key = self.storage.key_for(owner, "job", job_id, f"out/{attempt['id']}/{stage}/{name}")
@@ -916,8 +950,8 @@ class Ledger:
         handle_id = "hdl-" + secrets.token_hex(16)
         handle = {"direction": "out", "key": key, "stage": stage, "name": name, "total": total, "sha256": sha256,
                   "chunks": chunks, "attemptId": attempt["id"], "status": "open", "parts": [], "partKeys": []}
-        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, op=op,
-                             value=handle_id, reindex=False)
+        saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, checks=[check],
+                             op=op, value=handle_id, reindex=False)
         return {"handleId": handle_id, "key": key, "total": total, "sha256": sha256, "chunks": chunks, "job": saved}
 
     def _write_chunk(self, owner, job_id, attempt_id, fence, handle_id, index, data, *, operation_id=None):
@@ -939,6 +973,7 @@ class Ledger:
         if index != len(handle["parts"]) or index >= handle["chunks"]:
             raise LedgerError("transfer-invalid")
         usage = self._transfer_budget(job, 1, len(raw))
+        check = self._check_authority(owner, job)
         # Parts live under the job's temporary "parts/" prefix, which the bucket lifecycle expires.
         part_key = self.storage.key_for(owner, "job", job_id,
                                         f"parts/out/{handle['attemptId']}/{handle['stage']}/{handle['name']}.part{index:04d}")
@@ -948,7 +983,8 @@ class Ledger:
             raise LedgerError("transfer-invalid") from error
         handles = {**job["handles"], handle_id: {**handle, "parts": [*handle["parts"], digest],
                                                  "partKeys": [*handle["partKeys"], part_key]}}
-        return self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, reindex=False)
+        return self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=[check],
+                            reindex=False)
 
     def _close_output(self, owner, job_id, attempt_id, fence, handle_id, *, operation_id=None):
         job = self._get(owner, job_id)
@@ -958,6 +994,7 @@ class Ledger:
             return replay["job"]
         self._current(job, attempt_id, fence, statuses=("running",))
         handle = self._handle(job, handle_id, "out")
+        check = self._check_authority(owner, job)
         try:
             data = b"".join(self.storage.get_blob(key) for key in handle["partKeys"])
         except (ValueError, FileNotFoundError) as error:
@@ -973,7 +1010,7 @@ class Ledger:
                   "stage": handle["stage"], "attemptId": handle["attemptId"]}
         handles = {**job["handles"], handle_id: {**handle, "status": "closed"}}
         saved = self._commit(owner, job, {**job, "handles": handles, "transfers": [*job["transfers"], output]},
-                             op=op, reindex=False)
+                             checks=[check], op=op, reindex=False)
         for key in handle["partKeys"]:
             try:
                 self.storage.s3().delete_object(Bucket=self.storage.bucket, Key=key)
