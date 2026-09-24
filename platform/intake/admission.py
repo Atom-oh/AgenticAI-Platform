@@ -344,15 +344,17 @@ def _load(host, scope, decision_id):
 
 
 _RECHECK_CODES = {"adm_decision": "decision-not-current", "adm_policy": "policy-changed",
-                  "adm_provenance": "grant-revoked", "adm_grant": "grant-revoked"}
+                  "adm_provenance": "grant-revoked", "adm_grant": "grant-revoked",
+                  "adm_resolver": "resolver-changed"}
 
 
-def _final_recheck(host, reader, checks):
+def _final_recheck(host, reader, checks, *, pending=()):
     """Re-read every admission record and source fence immediately before use.
 
     Each record must still pass its closed schema, be current (status and expiry
-    at the present clock) and keep the exact version observed during `verified`;
-    the current-source fences are rechecked through `Sources.recheck`.
+    at the present clock) and keep the exact version observed earlier; the
+    current-source fences are rechecked through `Sources.recheck`. Decision ids in
+    `pending` must still be `pending-review` and unexpired (the review queue).
     """
     storage = host.storage
     for check in checks:
@@ -364,12 +366,43 @@ def _final_recheck(host, reader, checks):
             row = records.validate(check["kind"], row) if row else None
         except ValueError:
             row = None
-        if not row or row.get("version") != check["version"] or not records.is_current(row, storage.clock()):
+        now = storage.clock()
+        if check["kind"] == "adm_decision" and check["id"] in pending:
+            current = bool(row) and row["status"] == "pending-review" and now < row["expiresAt"]
+        else:
+            current = records.is_current(row, now)
+        if not row or row.get("version") != check["version"] or not current:
             raise AdmissionError(code)
+    if reader is None:
+        return []
     try:
         return reader.recheck()
     except CollaborationError:
         raise AdmissionError("source-changed") from None
+
+
+class Authority:
+    """Authority observed while verifying a decision, for one final recheck at delivery.
+
+    Every delivery path (pages, image chunks, vision input, OCR text, analyzer
+    source, review previews) performs its last read and then calls `recheck()`
+    immediately before returning anything.
+    """
+
+    def __init__(self, host, reader, checks, *, pending=()):
+        self.host, self.reader, self.checks, self.pending = host, reader, list(checks), set(pending)
+
+    def observe(self, owner, kind, record):
+        self.checks.append(_check(owner, kind, record))
+
+    def recheck(self):
+        return _final_recheck(self.host, self.reader, self.checks, pending=self.pending)
+
+
+def authorized(host, scope, decision_id, *, claims=None, sources=None):
+    """Verify an admitted decision; returns (decision, derivative bytes, Authority)."""
+    decision, data, reader, checks = _verified(host, scope, decision_id, claims=claims, sources=sources)
+    return decision, data, Authority(host, reader, checks)
 
 
 def verified(host, scope, decision_id, *, claims=None, sources=None, observe=None):
@@ -463,7 +496,7 @@ def pages_for(host, scope, decision_id, *, cursor=None, max_bytes=400_000, claim
     if type(max_bytes) is not int or not 1024 <= max_bytes <= MAX_RESPONSE_BYTES:
         raise AdmissionError("invalid-batch-size", 400)
     storage, owner = host.storage, scope["owner"]
-    decision, data, reader, checks = _verified(host, scope, decision_id, claims=claims)
+    decision, data, authority = authorized(host, scope, decision_id, claims=claims)
     binding = schema.digest([decision["id"], decision["revision"], decision["derivation"]["derivativeHash"],
                              scope["actor"]])
     start = 0
@@ -501,7 +534,7 @@ def pages_for(host, scope, decision_id, *, cursor=None, max_bytes=400_000, claim
                                                "expiresAt": storage.clock() + CURSOR_MS})
     # Delivery point: recheck source, decision, policy, provenance and grant
     # versions and expiry once more after the derivative and cursor I/O.
-    _final_recheck(host, reader, checks)
+    authority.recheck()
     return {"pages": batch, "cursor": next_cursor, "total": len(pages),
             "derivativeHash": decision["derivation"]["derivativeHash"]}
 

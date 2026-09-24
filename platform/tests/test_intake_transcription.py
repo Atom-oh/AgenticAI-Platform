@@ -420,3 +420,51 @@ def test_review_queue_previews_images_and_transcriptions_by_artifact_kind(env, m
     assert item["derivativePreview"] == "고객사 A 표 전사"
     assert item["tables"] == [["조건", "화면"], ["자격 미충족", "사유 화면"]]
     assert env.term not in json.dumps(listed, ensure_ascii=False)
+
+
+# PR #28 review round 2 ----------------------------------------------------------
+
+def revoke_during_read(env, monkeypatch, suffix, action, occurrence=1):
+    """Run `action` right after the `occurrence`-th blob read whose key ends with `suffix`."""
+    storage, fired, seen = env.api.storage, [], []
+    original = storage.get_blob
+
+    def get_blob(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key.endswith(suffix):
+            seen.append(key)
+            if len(seen) == occurrence:
+                fired.append(key)
+                action()
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    return fired
+
+
+@pytest.mark.parametrize("path, suffix", [("chunk", "vision.png"), ("vision", "ocr.json"), ("descriptor", "ocr.json")])
+def test_grant_revoked_during_the_last_read_blocks_image_delivery(chain, monkeypatch, path, suffix):
+    """Review 2, finding 1: every non-page delivery path rechecks authority after its last read."""
+    image = chain.chain["image"]
+    # The first read of `suffix` is inside `verify`; the second is the delivery read.
+    fired = revoke_during_read(chain, monkeypatch, suffix, lambda: chain.admin(
+        {"op": "revoke_grant", "id": "grant-dana", "expectedRevision": 1}), occurrence=2)
+    calls = {"chunk": lambda: imaging.read_vision_chunk(chain.api, chain.scope(), image["id"], 0),
+             "vision": lambda: imaging.vision_input(chain.api, chain.scope(), image["id"]),
+             "descriptor": lambda: imaging.descriptor(chain.api, chain.scope(), image["id"])}
+    with pytest.raises(AdmissionError) as error:
+        calls[path]()
+    assert fired and error.value.status == 409
+
+
+def test_grant_revoked_during_the_review_queue_read_hides_the_item(env, monkeypatch):
+    """Review 2, finding 1: the review queue rechecks the grant after its last read."""
+    env.policy()
+    env.grant("bob", "grant-bob")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    assert pending["status"] == "pending-review"
+    fired = revoke_during_read(env, monkeypatch, "ocr.json", lambda: env.admin(
+        {"op": "revoke_grant", "id": "grant-bob", "expectedRevision": 1}))
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert fired and (status == 403 or listed["reviews"] == [])

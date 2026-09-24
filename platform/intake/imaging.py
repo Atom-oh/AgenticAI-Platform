@@ -127,23 +127,25 @@ def _ocr(host, scope, decision):
 
 def descriptor(host, scope, decision_id, *, claims=None):
     """Runtime-facing bounded descriptor (`admission.pages` for images): no bytes."""
-    decision = admission.verify(host, scope, decision_id, claims=claims)
+    decision, _, authority = admission.authorized(host, scope, decision_id, claims=claims)
     if decision["artifact"]["kind"] != "image":
         raise AdmissionError("artifact-kind-unsupported", 422)
     value = _ocr(host, scope, decision)
     vision = decision["artifact"]["vision"]
+    authority.recheck()  # after the last read, immediately before delivery
     return {"format": vision["format"], "ocrStatus": value["ocrStatus"], "ocrText": value["ocrText"],
             "visionSha256": vision["sha256"], "size": vision["size"]}
 
 
 def vision_input(host, scope, decision_id, *, claims=None):
     """Trusted server path only: the exact `generate_with_images` image entry."""
-    decision = admission.verify(host, scope, decision_id, claims=claims)
+    decision, _, authority = admission.authorized(host, scope, decision_id, claims=claims)
     if decision["artifact"]["kind"] != "image":
         raise AdmissionError("artifact-kind-unsupported", 422)
     vision = decision["artifact"]["vision"]
     data = admission._read_verified(host.storage, scope["owner"], vision["key"], vision["sha256"], "artifact-changed")
     value = _ocr(host, scope, decision)
+    authority.recheck()
     return decision, {"format": vision["format"], "bytes": data, "ocrStatus": value["ocrStatus"],
                       "ocrText": value["ocrText"]}
 
@@ -157,11 +159,12 @@ def read_vision_chunk(host, scope, decision_id, offset, *, claims=None):
     The B0 ledger's `open_input`/`read_chunk` input handles bind execution/attempt;
     this is the intake side they call for image decisions.
     """
-    decision = admission.verify(host, scope, decision_id, claims=claims)
+    decision, _, authority = admission.authorized(host, scope, decision_id, claims=claims)
     vision = decision["artifact"].get("vision")
     if not vision or type(offset) is not int or not 0 <= offset < vision["size"]:
         raise AdmissionError("invalid-chunk", 400)
     data = admission._read_verified(host.storage, scope["owner"], vision["key"], vision["sha256"], "artifact-changed")
     chunk = data[offset:offset + CHUNK_BYTES]
+    authority.recheck()
     return {"offset": offset, "total": vision["size"], "sha256": hashlib.sha256(chunk).hexdigest(),
             "objectSha256": vision["sha256"], "bytes": chunk}

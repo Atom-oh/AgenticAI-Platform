@@ -321,3 +321,41 @@ def test_member_expanding_beyond_its_declared_size_is_rejected_during_the_read(m
     with pytest.raises(AdmissionError) as error:
         collection._read_zip(data, "")
     assert error.value.code in ("collection-format", "collection-too-large")
+
+
+def test_grant_revoked_during_the_analyzer_source_read_blocks_delivery(env, monkeypatch):
+    """Review 2, finding 1: analyzer source is rechecked after its last read."""
+    decision, _ = admitted_collection(env, {"src/index.ts": "export const x = 1;\n"})
+    storage, fired = env.api.storage, []
+    original = storage.get_blob
+
+    def get_blob(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key.endswith("collection-files.json") and not fired:
+            fired.append(key)
+            env.admin({"op": "revoke_grant", "id": "grant-1", "expectedRevision": 1})
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    with pytest.raises(AdmissionError) as error:
+        collection.analyzer_request(env.api, env.scope(), decision["id"])
+    assert fired and error.value.status == 409
+
+
+def test_resolver_retired_during_the_analyzer_source_read_blocks_delivery(env, monkeypatch):
+    decision, _ = admitted_collection(env, {"src/index.ts": "export const x = 1;\n"})
+    storage, fired = env.api.storage, []
+    original = storage.get_blob
+
+    def get_blob(key, *args, **kwargs):
+        data = original(key, *args, **kwargs)
+        if key.endswith("collection-files.json") and not fired:
+            fired.append(key)
+            row = storage.get(INTAKE_OWNER, "adm_resolver", "resolver-1")
+            env.admin({"op": "retire_resolver_profile", "id": "resolver-1", "expectedRevision": row["revision"]})
+        return data
+
+    monkeypatch.setattr(storage, "get_blob", get_blob)
+    with pytest.raises(AdmissionError) as error:
+        collection.analyzer_request(env.api, env.scope(), decision["id"])
+    assert fired and error.value.status == 409

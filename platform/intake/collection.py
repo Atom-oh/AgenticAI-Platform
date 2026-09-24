@@ -309,7 +309,7 @@ def _private(host, scope, decision, suffix):
         raise AdmissionError("artifact-changed") from None
 
 
-def check_resolver(host, scope, decision):
+def check_resolver(host, scope, decision, authority=None):
     """`source.analyze` recheck: the profile is current and unchanged, and re-applying
     the private mapping to it yields exactly the derivative resolver."""
     binding = decision["artifact"].get("resolver")
@@ -321,6 +321,8 @@ def check_resolver(host, scope, decision):
         raise AdmissionError("resolver-changed") from None
     if profile["revision"] != binding["profile"]["revision"] or profile["hash"] != binding["profile"]["hash"]:
         raise AdmissionError("resolver-changed")
+    if authority is not None:
+        authority.observe(INTAKE_OWNER, "adm_resolver", profile)
     index = _private(host, scope, decision, "collection-index.json")
     mapping = _private(host, scope, decision, "collection-mapping.json")["packages"]
     derived = index["resolver"]
@@ -343,8 +345,8 @@ def check_resolver(host, scope, decision):
 
 def analyzer_request(host, scope, decision_id, *, claims=None):
     """Build the analyzer request from the verified private objects (derivative only)."""
-    decision, _ = admission.verified(host, scope, decision_id, claims=claims)
-    index = check_resolver(host, scope, decision)
+    decision, _, authority = admission.authorized(host, scope, decision_id, claims=claims)
+    index = check_resolver(host, scope, decision, authority)
     contents = {f["path"]: f["text"] for f in _private(host, scope, decision, "collection-files.json")["files"]}
     files = []
     for entry in index["files"]:
@@ -358,4 +360,6 @@ def analyzer_request(host, scope, decision_id, *, claims=None):
     payload = analyzer_payload(files, index["resolver"])
     if request_size(payload) > MAX_REQUEST_BYTES:
         raise AdmissionError("collection-too-large", 422)
+    # Sources, decision, policy, grant/provenance and resolver profile, after the last read.
+    authority.recheck()
     return payload

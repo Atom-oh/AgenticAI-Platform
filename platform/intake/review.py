@@ -162,9 +162,10 @@ def list_pending(host, scope, *, claims=None):
             if (decision["projectId"] != project_id or decision["status"] != "pending-review"
                     or decision["expiresAt"] <= storage.clock() or decision["policy"]["id"] not in policies):
                 continue
+            reader = Sources(inspect.context(host, scope, claims))
             try:
-                admission._policy_current(storage, decision, project_id)
-                _source_access(host, scope, decision, Sources(inspect.context(host, scope, claims)))
+                policy = admission._policy_current(storage, decision, project_id)
+                _source_access(host, scope, decision, reader)
                 data = admission._read_verified(storage, owner, decision["artifact"]["key"],
                                                 decision["derivation"]["derivativeHash"], "artifact-changed")
                 receipt = json.loads(admission._read_verified(
@@ -174,11 +175,20 @@ def list_pending(host, scope, *, claims=None):
                 continue
             try:
                 preview = _preview(host, scope, decision, data)
-            except (AdmissionError, ValueError, KeyError, TypeError, IndexError):
-                continue  # one unreadable derivative never breaks the whole queue
+                title = _title(host, scope, decision)
+                # After the last read: the pending decision, its policy, the actor's
+                # grants for that policy and the source fences must all still hold.
+                authority = admission.Authority(host, reader, [
+                    admission._check(owner, "adm_decision", decision),
+                    admission._check(INTAKE_OWNER, "adm_policy", policy),
+                    *(admission._check(INTAKE_OWNER, "adm_grant", g) for g in grants
+                      if g["policyId"] == decision["policy"]["id"])], pending={decision["id"]})
+                authority.recheck()
+            except (AdmissionError, CollaborationError, ValueError, KeyError, TypeError, IndexError):
+                continue  # one unreadable or revoked item never breaks the whole queue
             items.append({"id": decision["id"], "revision": decision["revision"],
                           "source": {k: decision["source"][k] for k in ("sourceKind", "sourceId", "revision")},
-                          "title": _title(host, scope, decision), "dataClass": decision["dataClass"],
+                          "title": title, "dataClass": decision["dataClass"],
                           "artifactKind": decision["artifact"]["kind"],
                           "pageCount": decision["artifact"].get("pages", preview.pop("count")),
                           "inspection": {k: receipt[k] for k in ("pages", "chars", "pii", "identifiers", "blocking")},

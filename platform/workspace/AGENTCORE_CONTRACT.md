@@ -677,8 +677,13 @@ live evidence and the privacy redaction adapter remain outstanding.
   for model use, in bounded batches (≤ 400 000 bytes by default, never above
   512 KiB) with a 5-minute cursor bound to decision, revision, derivative hash
   and actor, and reruns `verify` for every batch. Every verification ends with
-  a final recheck after all reads, and `pages_for` repeats it immediately
-  before delivery: the source fences (`Sources.recheck`) and the exact decision,
+  a final recheck after all reads, and every delivery path repeats it through
+  one shared `admission.Authority.recheck()` after its last read, immediately
+  before returning anything: `pages_for`, `imaging.read_vision_chunk`,
+  `imaging.vision_input`, `imaging.descriptor` (OCR text),
+  `collection.analyzer_request` (which also fences the `adm_resolver` profile)
+  and each `GET /intake/reviews` item (pending decision, policy, the actor's
+  grants and source fences): the source fences (`Sources.recheck`) and the exact decision,
   policy, provenance and grant versions must still be current, schema-valid and
   unexpired. Grants and provenance pass `records.validate` on every use; a
   grant must name `review-internal` for the reviewing actor and provenance must
