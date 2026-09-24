@@ -1158,7 +1158,7 @@ def test_combined_finish_commits_ontology_marker_artifact_and_job_in_one_transac
     before = len(storage.table().transactions)
     done = finish(ledger, job, "succeeded", result, stage_completion=staged_publication(storage, job),
                   operation_id=op_id())
-    assert len(storage.table().transactions) == before + 1
+    assert len(storage.table().transactions) == before + 2      # the durable submission count, then the completion
     kinds = [entry["Put"]["Item"]["sk"].split("#")[0] for entry in storage.table().transactions[-1]["TransactItems"]
              if "Put" in entry]
     assert {"job", "ontology", "wb_artifact", "exec_quota"} <= set(kinds)
@@ -1265,8 +1265,9 @@ class FlakyTable(FakeTable):
         self.meta.client.transact_write_items = self.flaky
 
     def flaky(self, **kwargs):
+        statuses = ("succeeded", "failed") if self.mode == "contention-settlement" else ("succeeded",)
         finishing = any("Put" in entry and entry["Put"]["Item"]["sk"].startswith("job#")
-                        and entry["Put"]["Item"].get("status") == "succeeded" for entry in kwargs["TransactItems"])
+                        and entry["Put"]["Item"].get("status") in statuses for entry in kwargs["TransactItems"])
         if not finishing:
             return self.transact_write_items(**kwargs)
         self.wire += 1
@@ -1280,7 +1281,7 @@ class FlakyTable(FakeTable):
             if self.mode == "timeout-after":
                 self.transact_write_items(**kwargs)
                 raise ReadTimeoutError(endpoint_url="https://dynamodb.invalid")
-            if self.mode == "contention":
+            if self.mode in ("contention", "contention-settlement"):
                 error = TransactionFailure.__new__(TransactionFailure)
                 ClientError.__init__(error, {"Error": {"Code": "TransactionCanceledException"},
                                              "CancellationReasons": [{"Code": "TransactionConflict"}]
@@ -1363,7 +1364,7 @@ def test_exhausted_contention_preserves_a_concurrent_cancellation():
     table.meta.client.transact_write_items = cancel_on_last
     with pytest.raises(LedgerError) as error:
         finish(ledger, job, "succeeded", result, operation_id=op_id())
-    assert error.value.code == "completion-contention"
+    assert error.value.code in ("completion-contention", "terminal")
     stored = storage.get(OWNER, "job", job["id"])
     assert stored["status"] == "cancelled" and stored["error"]["code"] == "cancelled"
 
@@ -2067,3 +2068,23 @@ def test_service_case_controls_are_accepted(env):
     job = ledger.tool().stage(*ids(job), chained(job, "verify", "n1", previous=job["stages"][-1]["receiptHash"],
                                                  status="ok", inputs=required_inputs(job, "verify")))
     assert [row["stage"] for row in job["stages"]][-2:] == ["browser", "verify"]
+
+
+def test_failed_contention_settlement_cannot_permit_further_completion_submissions():
+    """Review 2 finding 8: the attempt's completion submissions are counted durably before each submission."""
+    env = flaky_env("contention-settlement", failures=6)     # 3 completion + 3 settlement submissions contend
+    storage, ledger, _ = env
+    job, result = chain(env)
+    operation = op_id()
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, operation_id=operation)
+    assert error.value.code == "completion-contention"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["attempt"]["completionSubmissions"] == 3
+    for again in (operation, op_id()):
+        with pytest.raises(LedgerError) as error:
+            finish(ledger, job, "succeeded", result, operation_id=again)
+        assert error.value.code in ("completion-contention", "terminal", "stale-attempt")
+    completions = [t for t in storage.table().transactions
+                   if any("Put" in e and e["Put"]["Item"].get("status") == "succeeded" for e in t["TransactItems"])]
+    assert completions == [] and storage.get(OWNER, "job", job["id"])["status"] == "failed"

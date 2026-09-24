@@ -1505,6 +1505,12 @@ class Ledger:
 
     def _complete(self, owner, before, job, *, status, result, op, stage_completion, recovery=False):
         """Checks, prepares and submits the terminal transition plus staged writes in ONE transaction."""
+        limit = before["profileBody"]["completionRetries"] + 1
+        if (before.get("attempt") or {}).get("completionSubmissions", 0) >= limit:
+            # The attempt's bounded submissions are spent (durably counted): settle and refuse (ontology-tools/1).
+            self._contention_failure(owner, before["id"], before["attempt"]["id"],
+                                     ("recovery_required",) if recovery else ("dispatched", "running"))
+            raise LedgerError("completion-contention")
         if job["operation"] in _COMPLETION_UNAVAILABLE:
             # ontology-tools/1: source analysis publishes ontology/artifact state only through the staging adapter
             # (publish_candidate(_stage=True)), which B0 does not provide. Refuse rather than complete without it.
@@ -1551,6 +1557,16 @@ class Ledger:
         checks = self._check_obligations(job, writes, checks, staged)
         if len(writes) + len(checks) > TRANSACTION_LIMIT:
             raise LedgerError("execution-completion-scope", limits={"transaction": TRANSACTION_LIMIT})
+        # Count this submission durably BEFORE it is sent, so no later failure (even of the contention
+        # settlement) can allow more than `completionRetries + 1` submissions for the attempt.
+        counted_attempt = {**before["attempt"],
+                           "completionSubmissions": before["attempt"].get("completionSubmissions", 0) + 1}
+        before = self._commit(owner, before, {**before, "attempt": counted_attempt}, reindex=False)
+        prepared_job["attempt"] = {**prepared_job["attempt"],
+                                   "completionSubmissions": counted_attempt["completionSubmissions"]}
+        if op is not None:
+            prepared_job["ops"][op[0]]["version"] = before["version"] + 1
+        writes[0] = {**writes[0], "item": prepared_job, "expected_version": before["version"]}
         try:
             return self.storage.put_many(writes, checks, retry_conflicts=False, _writer=_WRITER,
                                          before_attempt=guard)[0]
@@ -1617,7 +1633,7 @@ class Ledger:
 
     def _finish(self, owner, job_id, attempt_id, fence, *, status, result, operation_id=None, stage_completion=None):
         args = {"jobId": job_id, "attemptId": attempt_id, "fence": fence, "status": status, "result": result}
-        for attempt_number in range(PROFILE_DEFAULT["completionRetries"] + 1):
+        for attempt_number in range(PROFILE_DEFAULT["completionRetries"] + 2):
             job = self._get(owner, job_id)
             op, replay = self._op(job, "finish", operation_id, args)
             if replay:
@@ -1630,11 +1646,11 @@ class Ledger:
             try:
                 return self._complete(owner, job, job, status=status, result=result, op=op,
                                       stage_completion=stage_completion)
-            except _storage.TransactionContention as error:
-                # Proven contention wrote nothing: retry with fresh actor, deadline and attempt checks.
-                if attempt_number >= job["profileBody"]["completionRetries"]:
-                    self._contention_failure(owner, job_id, attempt_id, ("dispatched", "running"))
-                    raise LedgerError("completion-contention") from error
+            except _storage.TransactionContention:
+                # Proven contention wrote nothing: retry with fresh actor, deadline and attempt checks. The durable
+                # attempt counter (checked first in _complete) bounds the submissions and settles the failure.
+                continue
+        self._contention_failure(owner, job_id, attempt_id, ("dispatched", "running"))
         raise LedgerError("completion-contention")
 
     def _contention_failure(self, owner, job_id, attempt_id, statuses):
@@ -1703,7 +1719,7 @@ class Ledger:
                    stage_completion=None):
         """Complete a recovery_required attempt from receipts verified exactly as stage verifies them."""
         args = {"jobId": job_id, "attemptId": attempt_id, "receipts": receipts, "status": status, "result": result}
-        for attempt_number in range(PROFILE_DEFAULT["completionRetries"] + 1):
+        for attempt_number in range(PROFILE_DEFAULT["completionRetries"] + 2):
             job = self._get(owner, job_id)
             op, replay = self._op(job, "reconcile", operation_id, args)
             if replay:
@@ -1728,8 +1744,7 @@ class Ledger:
             try:
                 return self._complete(owner, job, staged, status=status, result=result, op=op,
                                       stage_completion=stage_completion, recovery=True)
-            except _storage.TransactionContention as error:
-                if attempt_number >= job["profileBody"]["completionRetries"]:
-                    self._contention_failure(owner, job_id, attempt_id, ("recovery_required",))
-                    raise LedgerError("completion-contention") from error
+            except _storage.TransactionContention:
+                continue
+        self._contention_failure(owner, job_id, attempt_id, ("recovery_required",))
         raise LedgerError("completion-contention")

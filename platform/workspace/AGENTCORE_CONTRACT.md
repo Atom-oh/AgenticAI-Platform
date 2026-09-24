@@ -609,7 +609,7 @@ module-private ledger writer token):
 | `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
-heartbeatAt, startedAt}`. Call: `{callId, stage, kind, status: intent|completed|
+heartbeatAt, startedAt, completionSubmissions?}`. Call: `{callId, stage, kind, status: intent|completed|
 failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?}`; usage
 holds only `{inputTokens, outputTokens}`. `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
@@ -713,7 +713,12 @@ authorization expiry (`deadline`), the attempt lease for `finish`
 `now < recoveryAt + recoveryWindowMs` (`recovery-window`), which `reconcile`
 also checks on entry independently of the watchdog.
 Proven transaction contention is retried at most `completionRetries` (2)
-times with fresh checks. On exhaustion the ledger persists a fenced
+times with fresh checks. Each completion submission is first counted durably
+in `attempt.completionSubmissions` (a ledger-only conditional write after all
+local checks pass), so at most `completionRetries + 1` submissions exist per
+attempt even when the failure settlement itself contends; once the count is
+spent, `finish`/`reconcile` retries only the settlement and returns
+`completion-contention`. On exhaustion the ledger persists a fenced
 `failed` transition with error `completion-contention` (fence bumped, quota
 released) for the still-current attempt, and returns `completion-contention`;
 later submissions for that attempt get `stale-attempt`/`terminal`. A job that
