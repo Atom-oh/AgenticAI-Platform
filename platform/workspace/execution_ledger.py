@@ -1172,7 +1172,23 @@ class Ledger:
                 if not self._verify_object(None, entry, ("key", "sha256", "size", "role")):
                     raise LedgerError("receipt-invalid")
 
-    def _complete(self, owner, before, job, *, status, result, op, stage_completion):
+    def _temporal_guard(self, before, *, recovery):
+        """Final temporal checks, run by put_many immediately before each wire submission (RUN-02)."""
+        attempt, profile = before["attempt"] or {}, before["profileBody"]
+
+        def guard():
+            now = self.storage.clock()
+            if now >= before["deadlineAt"] or now >= before["authorizationExpiresAt"]:
+                raise LedgerError("deadline")
+            if recovery:
+                # The five-minute recovery bound holds independently of whether the watchdog has run.
+                if now >= before["recoveryAt"] + profile["recoveryWindowMs"]:
+                    raise LedgerError("recovery-window")
+            elif now >= attempt.get("leaseExpiresAt", 0):
+                raise LedgerError("stale-attempt")
+        return guard
+
+    def _complete(self, owner, before, job, *, status, result, op, stage_completion, recovery=False):
         """Checks, prepares and submits the terminal transition plus staged writes in ONE transaction."""
         if status not in ("succeeded", "needs_changes"):
             raise LedgerError("status-inconsistent")
@@ -1208,7 +1224,8 @@ class Ledger:
         if len(writes) + len(checks) > TRANSACTION_LIMIT:
             raise LedgerError("execution-completion-scope", limits={"transaction": TRANSACTION_LIMIT})
         try:
-            return self.storage.put_many(writes, checks, retry_conflicts=False, _writer=_WRITER)[0]
+            return self.storage.put_many(writes, checks, retry_conflicts=False, _writer=_WRITER,
+                                         before_attempt=self._temporal_guard(before, recovery=recovery))[0]
         except _storage.TransactionContention:
             raise
         except Conflict as error:
@@ -1321,12 +1338,15 @@ class Ledger:
             op, replay = self._op(job, "reconcile", operation_id, args)
             if replay:
                 return replay["job"]
-            if self.storage.clock() >= job["deadlineAt"]:
+            now = self.storage.clock()
+            if now >= job["deadlineAt"]:
                 raise LedgerError("deadline")
             attempt = job.get("attempt") or {}
             if (job["status"] != "recovery_required" or attempt.get("id") != attempt_id
                     or attempt.get("fence") != job["fence"]):
                 raise LedgerError("stale-attempt")
+            if now >= job["recoveryAt"] + job["profileBody"]["recoveryWindowMs"]:
+                raise LedgerError("recovery-window")
             if not isinstance(receipts, list) or len(receipts) > 16:
                 raise LedgerError("receipt-invalid")
             staged = copy.deepcopy(job)
@@ -1336,7 +1356,7 @@ class Ledger:
                 staged["nonces"].append(entry["nonce"])
             try:
                 return self._complete(owner, job, staged, status=status, result=result, op=op,
-                                      stage_completion=stage_completion)
+                                      stage_completion=stage_completion, recovery=True)
             except _storage.TransactionContention as error:
                 if attempt_number >= job["profileBody"]["completionRetries"]:
                     raise LedgerError("conflict") from error

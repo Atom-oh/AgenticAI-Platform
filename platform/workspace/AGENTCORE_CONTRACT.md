@@ -635,6 +635,12 @@ Completion (`finish`, and `reconcile` through the same path) re-reads every
 chain output of the current attempt, including the result manifest and every
 object it lists, and requires the stored hash and size to match before any
 terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
+The final temporal checks run inside the transaction attempt (`put_many`
+`before_attempt`), after `stage_completion` returns: `now < deadlineAt` and the
+authorization expiry (`deadline`), the attempt lease for `finish`
+(`stale-attempt`), and for `reconcile` the recovery bound
+`now < recoveryAt + recoveryWindowMs` (`recovery-window`), which `reconcile`
+also checks on entry independently of the watchdog.
 
 | Facade (caller role) | Methods |
 |---|---|
@@ -661,7 +667,7 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `daily-budget`, `daily-budget-unavailable`, `transfer-invalid`,
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
-`unknown-outcome`, `terminal`, `deadline`, `retry-expired`,
+`unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
 
 Supporting storage kinds:

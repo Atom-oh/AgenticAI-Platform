@@ -1448,3 +1448,52 @@ def test_finish_rechecks_every_result_object_before_publishing(xfer, victim):
     assert error.value.code == "receipt-invalid"
     stored = storage.get(OWNER, "job", job["id"])
     assert stored["status"] == "running" and stored["result"] is None
+
+
+def test_deadline_passing_during_completion_staging_is_refused_at_submission(xfer):
+    """Finding 7: final temporal checks run inside the transaction attempt (before_attempt)."""
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer)
+
+    def slow(prepared):
+        now[0] = job["deadlineAt"] + 1
+        return {"writes": [], "checks": []}
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, stage_completion=slow)
+    assert error.value.code == "deadline"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def recovering(xfer):
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer)
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    swept = ledger.reconciler().sweep(OWNER, job["id"])
+    assert swept["status"] == "recovery_required"
+    return job, result, swept
+
+
+def test_reconcile_after_the_recovery_window_is_refused_before_the_deadline(xfer):
+    storage, ledger, now, _ = xfer
+    job, result, swept = recovering(xfer)
+    now[0] = swept["recoveryAt"] + PROFILE_DEFAULT["recoveryWindowMs"] + 1
+    assert now[0] < job["deadlineAt"]
+    with pytest.raises(LedgerError) as error:
+        ledger.reconciler().reconcile(OWNER, job["id"], job["attempt"]["id"], receipts=[], status="succeeded",
+                                      result=result)
+    assert error.value.code == "recovery-window"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "recovery_required"
+
+
+def test_recovery_window_passing_during_reconcile_staging_is_refused(xfer):
+    storage, ledger, now, _ = xfer
+    job, result, swept = recovering(xfer)
+
+    def slow(prepared):
+        now[0] = swept["recoveryAt"] + PROFILE_DEFAULT["recoveryWindowMs"]
+        return {"writes": [], "checks": []}
+    with pytest.raises(LedgerError) as error:
+        ledger.reconciler().reconcile(OWNER, job["id"], job["attempt"]["id"], receipts=[], status="succeeded",
+                                      result=result, stage_completion=slow)
+    assert error.value.code == "recovery-window"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "recovery_required"
