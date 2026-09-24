@@ -631,6 +631,11 @@ Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `previous` are validated when present. Any other field is rejected. The
 receipt hash is SHA-256 over sorted-key JSON.
 
+Completion (`finish`, and `reconcile` through the same path) re-reads every
+chain output of the current attempt, including the result manifest and every
+object it lists, and requires the stored hash and size to match before any
+terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
+
 | Facade (caller role) | Methods |
 |---|---|
 | `api()` (authenticated API) | `admit`, `cancel`, `retry`, `read` |

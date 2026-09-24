@@ -1434,3 +1434,17 @@ def test_revocation_stops_model_call_intents(env):
     assert error.value.code == "authority-changed"
     stored = storage.get(OWNER, "job", job["id"])
     assert stored["status"] == "failed" and stored["budget"]["calls"] == 1
+
+
+@pytest.mark.parametrize("victim", ["listed-output", "result-manifest"])
+def test_finish_rechecks_every_result_object_before_publishing(xfer, victim):
+    """Finding 5: a deleted stage output referenced by the result manifest blocks completion."""
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    key = job["stages"][1]["outputs"][0]["key"] if victim == "listed-output" else result["manifestRef"]
+    storage.s3().delete_object(Bucket=storage.bucket, Key=key)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "receipt-invalid"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "running" and stored["result"] is None

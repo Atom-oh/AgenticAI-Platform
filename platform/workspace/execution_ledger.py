@@ -1165,6 +1165,12 @@ class Ledger:
         for entry in listed:
             if not isinstance(entry, dict) or outputs.get(entry.get("key")) != entry.get("sha256"):
                 raise LedgerError("receipt-invalid")
+        # RUN-04: every chain output (hence every listed result/evidence object) still exists with its
+        # server-computed hash and size before any terminal pointer is published.
+        for row in stages:
+            for entry in row.get("outputs", []):
+                if not self._verify_object(None, entry, ("key", "sha256", "size", "role")):
+                    raise LedgerError("receipt-invalid")
 
     def _complete(self, owner, before, job, *, status, result, op, stage_completion):
         """Checks, prepares and submits the terminal transition plus staged writes in ONE transaction."""
