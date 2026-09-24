@@ -388,4 +388,3 @@ def _walk(c):
     from .composition import walk
     for path, node, _ in walk(c):
         yield path, node
-

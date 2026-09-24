@@ -160,4 +160,3 @@ class Registry:
                    fields={key: f"{entry['key']}-f{n}" for key, n in entry["fields"].items()},
                    nodes={key: f"{entry['key']}-n{n}" for key, n in entry["nodes"].items()})
         return out
-
