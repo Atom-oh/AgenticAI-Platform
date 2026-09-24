@@ -128,3 +128,18 @@ def test_unpaginated_sources_get_stable_bounded_logical_pages(api):
     assert covered[0][0] == "p000001" and covered[-1][1] == "p000007"
     for index, text in enumerate(paragraphs):
         assert sum(text in p["text"] for p in pages) == 1  # a paragraph is never split
+
+
+@pytest.mark.parametrize("name,body", [
+    ("guide.txt", "Synthetic guide one.\n\nSecond paragraph.\n"),
+    ("guide.md", "# Synthetic guide\n\nA paragraph.\n\n- item\n"),
+    ("guide.html", "<html><body><h1>Synthetic guide</h1><p>A paragraph.</p></body></html>"),
+])
+def test_unpaginated_formats_get_positive_logical_pages_the_contract_accepts(api, name, body):
+    from workspace.rules import _integer
+    pid = project(api)
+    ref = approved(api, pid, body.encode(), name=name)
+    pages = intake_inspect.resolve(api, scope(api, "alice", pid), ref)["pages"]
+    assert pages and all(page["logical"] is True for page in pages)
+    for page in pages:
+        assert _integer(page["page"], "출처 페이지", 1, 10000) == page["page"]
