@@ -635,6 +635,18 @@ Completion (`finish`, and `reconcile` through the same path) re-reads every
 chain output of the current attempt, including the result manifest and every
 object it lists, and requires the stored hash and size to match before any
 terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
+The frozen `completionScope` is enforced as an obligation. `stage_completion`
+returns `{writes, checks, sourceChecks, sourceBindings}`: `sourceChecks` must
+list exactly `completionScope.sourceChecks` distinct transactional version
+checks (`version` an existing record's int version) that are also submitted in
+`checks`, and `sourceBindings` exactly `completionScope.sourceBindings` distinct
+`{sourceKind, sourceId, revision, audience, documentId?}` bindings; otherwise
+`completion-obligations` with no transaction. Non-source operations (all writes
+and checks minus the declared source checks) above
+`completionScope.nonSourceOperations` return `execution-completion-scope`.
+`source.analyze` completion (`finish` and `reconcile`) returns
+`completion-unavailable` (`reason: source-staging-adapter`) until the ontology
+staging adapter supplies its manifest, request-marker and artifact publication.
 The final temporal checks run inside the transaction attempt (`put_many`
 `before_attempt`), after `stage_completion` returns: `now < deadlineAt` and the
 authorization expiry (`deadline`), the attempt lease for `finish`
@@ -679,7 +691,8 @@ Error codes: `request-changed`, `admission-required`, `authority-changed`,
 `daily-budget`, `daily-budget-unavailable`, `transfer-invalid`,
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
-`completion-contention`,
+`completion-contention`, `completion-obligations`, `completion-unavailable`,
+`completion-invalid`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
 
@@ -718,7 +731,8 @@ Not yet implemented in B0:
 
 - the staging mode of `publish_candidate`. `ontology_store.py` is owned by
   Unit A. `finish` accepts a `stage_completion` callable whose writes and
-  checks commit with the terminal job.
+  checks commit with the terminal job. Until the staging adapter exists,
+  `source.analyze` completion is refused with `completion-unavailable`.
 - the admitted-input resolver and the run-round prior-authority adapter. They
   come from the B0 intake and sharing units. Until then, production refuses
   input and prior transfers.

@@ -962,8 +962,6 @@ def finish(ledger, job, status="succeeded", result=None, **kwargs):
 
 
 RULES = [
-    ("source.analyze", {}, "succeeded", True), ("source.analyze", {"analyze": ("ok", {})}, "succeeded", False),
-    ("source.analyze", {}, "needs_changes", False),
     ("design.extract", {}, "succeeded", True),
     ("design.extract", {"verify": ("ok", {"issues": ["missing citation"]})}, "needs_changes", True),
     ("design.extract", {"verify": ("ok", {"issues": ["missing citation"]})}, "succeeded", False),
@@ -1044,18 +1042,15 @@ def test_substituted_result_manifest_is_refused(xfer):
 
 def test_manifest_listing_a_non_chain_object_is_refused(xfer):
     storage, ledger, _, _ = xfer
-    job = run_job(ledger, operation="source.analyze")
-    stray = put_output(storage, job, "analyze", "stray.bin", b"stray")
-    previous, hashes = None, []
-    for stage in ("context", "analyze"):
-        outputs = [put_output(storage, job, stage, f"{stage}.out", stage.encode())]
-        if stage == "analyze":
-            body = _json.dumps({"files": [{"key": stray["key"], "sha256": stray["sha256"]}]}).encode()
-            outputs.append(put_output(storage, job, stage, "result-manifest.json", body))
-        r = chained(job, stage, "n-" + stage, previous=previous, outputs=outputs, status="ok", result=GOOD[stage][1])
-        job = ledger.tool().stage(*ids(job), r)
-        previous = receipt_hash(r)
-        hashes.append(previous)
+    job, result = chain(xfer, "design.extract", skip=("verify",))
+    stray = put_output(storage, job, "verify", "stray.bin", b"stray")
+    body = _json.dumps({"files": [{"key": stray["key"], "sha256": stray["sha256"]}]}).encode()
+    outputs = [put_output(storage, job, "verify", "verify.out", b"verify"),
+               put_output(storage, job, "verify", "result-manifest.json", body)]
+    r = chained(job, "verify", "n-verify", previous=result["receipts"][-1], outputs=outputs, status="ok",
+                result=GOOD["verify"][1])
+    job = ledger.tool().stage(*ids(job), r)
+    hashes = [*result["receipts"], receipt_hash(r)]
     manifest = job["stages"][-1]["outputs"][-1]
     with pytest.raises(LedgerError) as error:
         finish(ledger, job, "succeeded", {"manifestRef": manifest["key"], "manifestHash": manifest["sha256"],
@@ -1553,3 +1548,81 @@ def test_concurrent_heartbeat_does_not_defeat_unknown_outcome_recovery():
     stored = storage.get(OWNER, "job", job["id"])
     assert stored["status"] == "recovery_required" and stored["unknownOutcome"] is True
     assert stored["attempt"]["id"] == job["attempt"]["id"] and stored["attempt"]["heartbeatAt"] is not None
+
+
+def test_source_analysis_completion_is_unavailable_until_its_staging_adapter_exists(xfer):
+    """Finding 6: no source.analyze completion without ontology/artifact publication."""
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer, "source.analyze")
+    for status in ("succeeded", "needs_changes"):
+        with pytest.raises(LedgerError) as error:
+            finish(ledger, job, status, result)
+        assert error.value.code == "completion-unavailable"
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    ledger.reconciler().sweep(OWNER, job["id"])
+    with pytest.raises(LedgerError) as error:
+        ledger.reconciler().reconcile(OWNER, job["id"], job["attempt"]["id"], receipts=[], status="succeeded",
+                                      result=result)
+    assert error.value.code == "completion-unavailable"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["status"] == "recovery_required" and stored["result"] is None
+
+
+WIDE_SCOPE = {"nonSourceOperations": 12, "sourceChecks": 88, "sourceBindings": 50}
+
+
+def source_fences(storage, checks=88, bindings=50):
+    records = [storage.put(OWNER, "asset", {"id": f"src-{i}", "status": "ready"}) for i in range(checks)]
+    fenced = [{"owner": OWNER, "kind": "asset", "id": row["id"], "version": row["version"]} for row in records]
+    bound = [{"sourceKind": "asset", "sourceId": f"src-{i}", "revision": "1", "audience": "project"}
+             for i in range(bindings)]
+    return fenced, bound
+
+
+@pytest.mark.parametrize("supplied", ["none", "project-only", "short-checks", "short-bindings", "undeclared"])
+def test_frozen_source_fences_cannot_be_omitted_at_completion(xfer, supplied):
+    storage, ledger, _, _ = xfer
+    job, result = chain_with_scope(xfer, WIDE_SCOPE)
+    fenced, bound = source_fences(storage)
+    staged = {"none": None,
+              "project-only": {"writes": [], "checks": [], "sourceChecks": [], "sourceBindings": []},
+              "short-checks": {"writes": [], "checks": fenced[:-1], "sourceChecks": fenced[:-1], "sourceBindings": bound},
+              "short-bindings": {"writes": [], "checks": fenced, "sourceChecks": fenced, "sourceBindings": bound[:-1]},
+              "undeclared": {"writes": [], "checks": fenced[1:], "sourceChecks": fenced, "sourceBindings": bound}}[supplied]
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result,
+               stage_completion=None if staged is None else (lambda prepared: staged))
+    assert error.value.code == "completion-obligations"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def chain_with_scope(xfer, scope):
+    """chain() for a job admitted with a frozen completion scope."""
+    import functools
+    original = globals()["admit"]
+    globals()["admit"] = functools.partial(original, completion_scope=scope)
+    try:
+        return chain(xfer, key="req-scoped")
+    finally:
+        globals()["admit"] = original
+
+
+def test_complete_frozen_source_fences_commit_with_the_terminal_job(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain_with_scope(xfer, WIDE_SCOPE)
+    fenced, bound = source_fences(storage)
+    done = finish(ledger, job, "succeeded", result, stage_completion=lambda prepared: {
+        "writes": [], "checks": fenced, "sourceChecks": fenced, "sourceBindings": bound})
+    assert done["status"] == "succeeded"
+    assert len([e for e in storage.table().transactions[-1]["TransactItems"] if "ConditionCheck" in e]) == 89
+
+
+def test_non_source_operations_beyond_the_frozen_scope_are_refused(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)                      # default scope: 10 non-source operations
+    extra = lambda prepared: {"writes": [{"owner": OWNER, "kind": "wb_artifact", "item": {"id": f"w{i}"},
+                                          "expected_version": None} for i in range(6)], "checks": []}
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result, stage_completion=extra)
+    assert error.value.code == "execution-completion-scope"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"

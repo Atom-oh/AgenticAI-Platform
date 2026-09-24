@@ -36,6 +36,8 @@ OPERATIONS = {"design.extract": ("context", "generate", "verify"),
               "intake.transcribe": ("context", "generate", "verify"),
               "source.analyze": ("context", "analyze")}
 
+# Operations whose coupled publication adapter is not available yet: completion is refused explicitly.
+_COMPLETION_UNAVAILABLE = {"source.analyze": "source-staging-adapter"}
 TERMINAL = frozenset({"succeeded", "needs_changes", "failed", "cancelled", "expired"})
 ACTIVE = frozenset({"queued", "dispatched", "running", "recovery_required"})
 QUOTA_OWNER = "execution:quota"
@@ -1188,8 +1190,43 @@ class Ledger:
                 raise LedgerError("stale-attempt")
         return guard
 
+    def _check_obligations(self, job, writes, checks, staged):
+        """The frozen completion scope is an obligation, not a ceiling (ONTOLOGY_CONTRACT completion scope).
+
+        Every frozen source check must be present as a transactional version check of an existing record, and
+        every frozen source binding must be declared; nothing may be omitted or shrunk at finish. Non-source
+        operations may not exceed the reserved count.
+        """
+        scope = job["completionScope"]
+        declared, bindings = staged.get("sourceChecks", []), staged.get("sourceBindings", [])
+        submitted = {json.dumps(row, sort_keys=True, default=str) for row in checks if isinstance(row, dict)}
+        identities, binding_keys = set(), set()
+        for row in declared:
+            if (not isinstance(row, dict) or set(row) != {"owner", "kind", "id", "version"}
+                    or type(row["version"]) is not int or row["version"] < 1
+                    or json.dumps(row, sort_keys=True, default=str) not in submitted):
+                raise LedgerError("completion-obligations")
+            identities.add((row["owner"], row["kind"], row["id"]))
+        for row in bindings:
+            if (not isinstance(row, dict) or not {"sourceKind", "sourceId", "revision", "audience"} <= set(row)
+                    or set(row) - {"sourceKind", "sourceId", "revision", "audience", "documentId"}
+                    or not all(isinstance(value, str) and value for value in row.values())):
+                raise LedgerError("completion-obligations")
+            binding_keys.add(json.dumps(row, sort_keys=True))
+        if (len(identities) != len(declared) or len(identities) != scope["sourceChecks"]
+                or len(binding_keys) != len(bindings) or len(binding_keys) != scope["sourceBindings"]):
+            raise LedgerError("completion-obligations", expected={"sourceChecks": scope["sourceChecks"],
+                                                                  "sourceBindings": scope["sourceBindings"]})
+        if len(writes) + len(checks) - len(declared) > scope["nonSourceOperations"]:
+            raise LedgerError("execution-completion-scope",
+                              limits={"nonSourceOperations": scope["nonSourceOperations"]})
+
     def _complete(self, owner, before, job, *, status, result, op, stage_completion, recovery=False):
         """Checks, prepares and submits the terminal transition plus staged writes in ONE transaction."""
+        if job["operation"] in _COMPLETION_UNAVAILABLE:
+            # ontology-tools/1: source analysis publishes ontology/artifact state only through the staging adapter
+            # (publish_candidate(_stage=True)), which B0 does not provide. Refuse rather than complete without it.
+            raise LedgerError("completion-unavailable", reason=_COMPLETION_UNAVAILABLE[job["operation"]])
         if status not in ("succeeded", "needs_changes"):
             raise LedgerError("status-inconsistent")
         if not isinstance(result, dict) or set(result) != {"manifestRef", "manifestHash", "receipts"}:
@@ -1214,15 +1251,19 @@ class Ledger:
         writes = [{"owner": owner, "kind": "job", "item": prepared_job, "expected_version": before["version"]},
                   *ledger_writes]
         checks = [check]
+        staged = {}
         if stage_completion is not None:
             staged = stage_completion({"job": copy.deepcopy(prepared_job), "writes": copy.deepcopy(writes),
                                        "checks": copy.deepcopy(checks)})
-            if not isinstance(staged, dict) or set(staged) - {"writes", "checks"}:
+            if (not isinstance(staged, dict) or set(staged) - {"writes", "checks", "sourceChecks", "sourceBindings"}
+                    or not all(isinstance(staged.get(name, []), list)
+                               for name in ("writes", "checks", "sourceChecks", "sourceBindings"))):
                 raise LedgerError("completion-invalid")
             writes.extend(staged.get("writes", []))
             checks.extend(staged.get("checks", []))
         if len(writes) + len(checks) > TRANSACTION_LIMIT:
             raise LedgerError("execution-completion-scope", limits={"transaction": TRANSACTION_LIMIT})
+        self._check_obligations(job, writes, checks, staged)
         try:
             return self.storage.put_many(writes, checks, retry_conflicts=False, _writer=_WRITER,
                                          before_attempt=self._temporal_guard(before, recovery=recovery))[0]
