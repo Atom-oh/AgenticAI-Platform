@@ -20,13 +20,52 @@ XFER_DATA = bytes(range(256)) * 2048 + b"tail"            # the admitted derivat
 ADM = [{"decisionId": "adm-1", "revision": "1", "artifactHash": _hashlib.sha256(XFER_DATA).hexdigest()}]
 
 
+def admitted_sources(storage):
+    """The admitted derivative, its admission-decision record, and resolver/prior-authority adapters.
+
+    Both adapters return the transactional authority predicate of the record that grants access; withdrawing
+    the decision (status != "ready") or revoking a run round makes them refuse.
+    """
+    key = storage.key_for(OWNER, "asset", "adm-src", "derivative.bin")
+    try:
+        storage.put_blob_once(key, XFER_DATA, "application/octet-stream")
+    except Exception:
+        pass
+    if storage.get(OWNER, "asset", "adm-src") is None:
+        storage.put(OWNER, "asset", {"id": "adm-src", "status": "ready", "decisionId": "adm-1"})
+
+    def resolver(owner, admission):
+        record = storage.get(OWNER, "asset", "adm-src")
+        if admission.get("decisionId") != "adm-1" or not record or record.get("status") != "ready":
+            return None
+        return {"key": key, "sha256": _hashlib.sha256(XFER_DATA).hexdigest(),
+                "check": {"owner": OWNER, "kind": "asset", "id": "adm-src", "version": record["version"]}}
+
+    def prior_authority(owner, job, prior):
+        if prior.get("sourceId") == "revoked-round":
+            return None
+        record = storage.get(OWNER, "run", prior["sourceId"])
+        if record is None:
+            record = storage.put(OWNER, "run", {"id": prior["sourceId"], "status": "ready"})
+        if record.get("status") != "ready":
+            return None
+        return {"owner": OWNER, "kind": "run", "id": record["id"], "version": record["version"]}
+    return resolver, prior_authority
+
+
+def offline_ledger(storage, **kwargs):
+    resolver, prior_authority = admitted_sources(storage)
+    return Ledger.offline(storage, verifier=TestKeyVerifier(), input_resolver=resolver,
+                          prior_authority=prior_authority, **kwargs)
+
+
 @pytest.fixture
 def env():
     now = [1_800_000_000_000]
     storage = Storage(table=FakeTable(), s3=FakeS3(), bucket="private-test", clock=lambda: now[0])
     storage.put(OWNER, "project", {"id": "p1", "status": "active", "members": {
         a: {"role": "designer"} for a in ("designer-1", "alice", "bob", "carol")}})
-    return storage, Ledger.offline(storage, verifier=TestKeyVerifier()), now
+    return storage, offline_ledger(storage), now
 
 
 def bump_authority(storage, project_id):
@@ -518,7 +557,7 @@ def test_production_cost_gate_fails_closed_when_costguard_is_unconfigured(env, m
     from workspace.execution_ledger import CostGuardGate
     storage, _, _ = env
     monkeypatch.delenv("CACHE_TABLE", raising=False)
-    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), cost_gate=CostGuardGate())
+    ledger = offline_ledger(storage, cost_gate=CostGuardGate())
     job = running((storage, ledger, env[2]))
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
@@ -535,7 +574,7 @@ def test_daily_budget_exhaustion_refuses_the_model_call(env, monkeypatch):
     monkeypatch.setenv("CACHE_TABLE", "cache-test")
     monkeypatch.setitem(sys.modules, "common.costguard", fake)
     monkeypatch.setitem(sys.modules, "common", types.SimpleNamespace(costguard=fake))
-    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), cost_gate=CostGuardGate())
+    ledger = offline_ledger(storage, cost_gate=CostGuardGate())
     job = running((storage, ledger, env[2]))
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(OWNER, job["id"], job["attempt"]["id"], job["fence"], stage="generate",
@@ -681,20 +720,7 @@ def xfer():
     storage.put(OWNER, "project", {"id": "p1", "status": "active", "members": {
         a: {"role": "designer"} for a in ("designer-1", "alice", "bob", "carol")}})
     data = XFER_DATA                                      # 512 KiB + 4 bytes -> 3 chunks
-    key = storage.key_for(OWNER, "asset", "adm-src", "derivative.bin")
-    storage.put_blob_once(key, data, "application/octet-stream")
-    admitted = {"adm-1": {"key": key, "sha256": hashlib.sha256(data).hexdigest()}}
-    grants = []
-
-    def resolver(owner, admission):
-        return admitted.get(admission["decisionId"])
-
-    def prior_authority(owner, job, prior):
-        grants.append(prior["sourceId"])
-        return prior.get("sourceId") != "revoked-round"
-    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), input_resolver=resolver,
-                            prior_authority=prior_authority)
-    return storage, ledger, now, data
+    return storage, offline_ledger(storage), now, data
 
 
 def run_job(ledger, **over):
@@ -1230,8 +1256,7 @@ def flaky_env(mode, failures=1):
     now = [1_800_000_000_000]
     storage = Storage(table=FlakyTable(mode, failures), s3=FakeS3(), bucket="private-test", clock=lambda: now[0])
     storage.put(OWNER, "project", {"id": "p1", "status": "active", "members": {"designer-1": {"role": "designer"}}})
-    ledger = Ledger.offline(storage, verifier=TestKeyVerifier())
-    return storage, ledger, now
+    return storage, offline_ledger(storage), now
 
 
 def test_unknown_transport_outcome_is_one_wire_attempt_then_recovery(monkeypatch):
@@ -1457,11 +1482,14 @@ def test_revoked_admission_stops_chunk_reads(xfer):
     job = run_job(ledger)
     handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
     ledger.input_resolver = lambda owner, admission: None          # the admission decision was withdrawn
-    for index in (0, 0):
-        with pytest.raises(LedgerError) as error:
-            ledger.tool().read_chunk(*ids(job), handle["handleId"], index)
-        assert error.value.code == "transfer-invalid"
-    assert storage.get(OWNER, "job", job["id"])["transferUsage"]["chunks"] == 0
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().read_chunk(*ids(job), handle["handleId"], 0)
+    assert error.value.code == "authority-changed"
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().read_chunk(*ids(job), handle["handleId"], 0)
+    assert error.value.code == "stale-attempt"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["transferUsage"]["chunks"] == 0 and stored["status"] == "failed"
 
 
 def test_revocation_stops_model_call_intents(env):
@@ -1620,7 +1648,7 @@ def test_complete_frozen_source_fences_commit_with_the_terminal_job(xfer):
     done = finish(ledger, job, "succeeded", result, stage_completion=lambda prepared: {
         "writes": [], "checks": fenced, "sourceChecks": fenced, "sourceBindings": bound})
     assert done["status"] == "succeeded"
-    assert len([e for e in storage.table().transactions[-1]["TransactItems"] if "ConditionCheck" in e]) == 89
+    assert len([e for e in storage.table().transactions[-1]["TransactItems"] if "ConditionCheck" in e]) == 90   # project + admission + 88 source
 
 
 def test_non_source_operations_beyond_the_frozen_scope_are_refused(xfer):
@@ -1760,9 +1788,49 @@ def test_intent_rechecks_lease_and_deadline_immediately_before_submission(env, c
                               "leaseExpiresAt": stored["deadlineAt"]}}, stored["version"])
         now[0] = job["deadlineAt"] - 65_000
         step, expected = 70_000, "deadline"
-    ledger = Ledger.offline(storage, verifier=TestKeyVerifier(), cost_gate=ClockAdvancingGate(now, step),
-                            input_resolver=env[1].input_resolver)
+    ledger = offline_ledger(storage, cost_gate=ClockAdvancingGate(now, step))
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
     assert error.value.code == expected
     assert storage.get(OWNER, "job", job["id"])["calls"] == []
+
+
+def withdraw_admission(storage):
+    record = storage.get(OWNER, "asset", "adm-src")
+    storage.put(OWNER, "asset", {**record, "status": "withdrawn"}, record["version"])
+
+
+def test_admission_withdrawal_stops_intents(xfer):
+    """Review 2 finding 1: every consumed admission is revalidated by the protected-operation guard."""
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    withdraw_admission(storage)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    assert error.value.code == "authority-changed"
+    stored = storage.get(OWNER, "job", job["id"])
+    assert stored["calls"] == [] and stored["status"] == "failed"
+
+
+def test_admission_withdrawal_stops_completion(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer)
+    withdraw_admission(storage)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+
+
+def test_admission_authority_is_a_transaction_predicate(xfer):
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    assert "asset#adm-src" in last_transaction_checks(storage)
+    # A withdrawal racing the submission aborts it.
+    table = storage.table()
+    table.before_transaction = lambda: withdraw_admission(storage)
+    with pytest.raises(LedgerError):
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    assert len(storage.get(OWNER, "job", job["id"])["calls"]) == 1

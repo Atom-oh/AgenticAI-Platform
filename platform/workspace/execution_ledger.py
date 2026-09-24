@@ -392,11 +392,20 @@ class Ledger:
     def _protect(self, owner, job, *, recovery=False, min_remaining_ms=None, cost=False):
         """Shared guard for intent, chunk reads, stage, transfers and completion.
 
-        Returns (checks, guard): the transactional authority predicates (current actor membership) and a
+        Returns (checks, guard): the transactional authority predicates (current actor membership, every consumed
+        admission decision and every opened prior grant; a withdrawn one fails the job) and a
         callable that put_many runs immediately before each wire submission, rechecking lease/recovery bound,
         authorization, deadline, the per-call deadline reservation and the daily cost gate.
         """
-        checks = [self._check_authority(owner, job)]
+        checks, seen = [], {}
+        for check in [self._check_authority(owner, job), *self._source_checks(owner, job)]:
+            identity = (check["owner"], check["kind"], check["id"])
+            if identity in seen:
+                if seen[identity] != check["version"]:
+                    raise LedgerError("conflict")
+                continue
+            seen[identity] = check["version"]
+            checks.append(check)
         return checks, self._temporal_guard(job, recovery=recovery, min_remaining_ms=min_remaining_ms, cost=cost)
 
     def _prepare(self, owner, before, job, *, extra_writes=(), op=None, value=None, reindex=True):
@@ -892,29 +901,64 @@ class Ledger:
         if (prior is None or prior.get("sourceKind") not in ("run-round", "release")
                 or not callable(self.prior_authority)):
             raise LedgerError("transfer-invalid")
-        if not self._prior_current(owner, job, prior):
+        if self._prior_current(owner, job, prior) is None:
             raise LedgerError("transfer-invalid")
         return self._open_read(owner, job, op, source="prior", key=prior["key"], sha256=prior.get("sha256"),
                                binding={"prior": {k: prior[k] for k in ("sourceKind", "sourceId", "revision", "key",
                                                                          "sha256") if k in prior}})
 
+    @staticmethod
+    def _authority_check(value):
+        """A transactional authority predicate {owner, kind, id, version} returned by an adapter, or None."""
+        if (not isinstance(value, dict) or set(value) != {"owner", "kind", "id", "version"}
+                or not all(isinstance(value[key], str) and value[key] for key in ("owner", "kind", "id"))
+                or type(value["version"]) is not int or value["version"] < 1):
+            return None
+        return dict(value)
+
     def _prior_current(self, owner, job, prior):
+        """The prior's current grant predicate, or None when it is no longer granted."""
         if not callable(self.prior_authority):
-            return False
+            return None
         try:
-            return self.prior_authority(owner, job, copy.deepcopy(prior)) is True
+            return self._authority_check(self.prior_authority(owner, job, copy.deepcopy(prior)))
         except Exception:  # noqa: BLE001 - an authority failure is a refusal
-            return False
+            return None
 
     def _resolve_admitted(self, owner, admission):
-        """The resolver's current view of an admitted artifact, or None when it is no longer admitted."""
-        if not callable(self.input_resolver):
+        """The resolver's current view of an admitted artifact ({key, sha256, check}), or None when withdrawn."""
+        if not callable(self.input_resolver) or not isinstance(admission, dict):
             return None
         try:
             blob = self.input_resolver(owner, copy.deepcopy(admission))
         except Exception:  # noqa: BLE001
             return None
-        return blob if isinstance(blob, dict) and isinstance(blob.get("key"), str) else None
+        if (not isinstance(blob, dict) or not isinstance(blob.get("key"), str)
+                or self._authority_check(blob.get("check")) is None):
+            return None
+        return blob
+
+    def _source_checks(self, owner, job):
+        """Every consumed admission and every opened prior must still be granted; returns their predicates."""
+        checks = []
+        for admission in job["admissions"]:
+            blob = self._resolve_admitted(owner, admission)
+            if blob is None or blob.get("sha256") != admission.get("artifactHash"):
+                self._source_revoked(owner, job, {"decisionId": admission.get("decisionId")})
+            checks.append(self._authority_check(blob["check"]))
+        for handle in (job.get("handles") or {}).values():
+            if handle.get("direction") == "in" and handle.get("source") == "prior":
+                check = self._prior_current(owner, job, handle.get("prior") or {})
+                if check is None:
+                    self._source_revoked(owner, job, {"prior": (handle.get("prior") or {}).get("sourceId")})
+                checks.append(check)
+        return checks
+
+    def _source_revoked(self, owner, job, source):
+        if job["status"] not in TERMINAL:
+            self._terminal(owner, job, "failed", error={"code": "authority-changed", "source": source},
+                           bump_fence=True)
+        raise LedgerError("authority-changed", source=source)
 
     def _revalidate_handle(self, owner, job, handle):
         """Source/admission authority is current for every chunk, including retried chunks (RUN-05)."""
@@ -926,7 +970,7 @@ class Ledger:
                     or admission.get("artifactHash") != handle["sha256"]):
                 raise LedgerError("transfer-invalid")
         elif handle.get("source") == "prior":
-            if not isinstance(handle.get("prior"), dict) or not self._prior_current(owner, job, handle["prior"]):
+            if not isinstance(handle.get("prior"), dict) or self._prior_current(owner, job, handle["prior"]) is None:
                 raise LedgerError("transfer-invalid")
         elif handle.get("source") != "manifest":
             raise LedgerError("transfer-invalid")

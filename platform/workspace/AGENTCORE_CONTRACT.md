@@ -665,8 +665,13 @@ and checks minus the declared source checks) above
 `completion-unavailable` (`reason: source-staging-adapter`) until the ontology
 staging adapter supplies its manifest, request-marker and artifact publication.
 Protected operations (`intent`, `stage`, `open_*`, `read_chunk`,
-`write_chunk`, `close_output`, `finish`, `reconcile`) share one guard. Its
-authority predicates are part of the transaction, and its `before_attempt`
+`write_chunk`, `close_output`, `finish`, `reconcile`) share one guard. It
+revalidates the requester's membership, every consumed admission (the
+`input_resolver` must still return `{key, sha256, check}` with `sha256` equal to
+the frozen `artifactHash`) and every opened prior (`prior_authority` must still
+return a `check`), where `check` is the `{owner, kind, id, version}` predicate of
+the granting record. A withdrawn source fails the job with `authority-changed`.
+These authority predicates are part of the transaction, and its `before_attempt`
 callable runs immediately before each wire submission: it rechecks the
 deadline and authorization expiry (`deadline`), the attempt lease
 (`stale-attempt`), for `intent` the remaining-time reservation
