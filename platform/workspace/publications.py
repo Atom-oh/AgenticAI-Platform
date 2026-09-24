@@ -158,9 +158,10 @@ def _bindings(node_ids, revision_bindings):
 
 def _origin_nodes(ctx, kind, node_ids, revision_bindings, *, denied):
     """Read exact approved origin nodes through current source authority."""
-    from workspace.ontology_store import Ontology
+    from workspace.ontology_store import CURRENT, Ontology
     ontology = Ontology(ctx)
-    visible = {node["id"]: node for node in ontology.read(node_ids)["nodes"]}
+    page = ontology.read(node_ids)
+    visible = {node["id"]: node for node in page["nodes"]}
     if set(visible) != set(node_ids):
         denied()
     nodes = []
@@ -177,7 +178,13 @@ def _origin_nodes(ctx, kind, node_ids, revision_bindings, *, denied):
         nodes.append(node)
     checks = ontology.sources.recheck()
     sharing, fences = _sharing_bindings(ctx.storage, ctx.project_id, nodes)
-    return nodes, [*checks, *fences], sharing
+    # The reviewed manifest is fenced into the transaction: any ontology change after
+    # the node read (deprecation, re-review) fails the proposal/approval commit.
+    manifest = ctx.storage.get(ctx.owner, "ontology", CURRENT)
+    if not manifest or manifest.get("generation") != page["generation"]:
+        fail(409, "ontology-changed", "게시할 노드를 읽은 뒤 온톨로지가 변경되었습니다. 다시 확인하세요.")
+    fences.append({"owner": ctx.owner, "kind": "ontology", "id": CURRENT, "version": manifest["version"]})
+    return nodes, [*checks, *fences], sharing, page["generation"]
 
 
 def propose(ctx, *, kind, node_ids, revision_bindings):
@@ -191,7 +198,7 @@ def propose(ctx, *, kind, node_ids, revision_bindings):
 
     def denied():
         _not_found()
-    nodes, checks, sharing = _origin_nodes(ctx, kind, node_ids, revision_bindings, denied=denied)
+    nodes, checks, sharing, generation = _origin_nodes(ctx, kind, node_ids, revision_bindings, denied=denied)
     summary = [{"id": n["id"], "revision": n["revision"], "contentHash": n["contentHash"],
                 "type": n["type"], "sourceRefs": n["sourceRefs"]} for n in nodes]
     identifier = origin_prefix(ctx.project_id) + schema.digest([ctx.project_id, kind, node_ids])[:32]
@@ -205,7 +212,7 @@ def propose(ctx, *, kind, node_ids, revision_bindings):
     history = list((previous or {}).get("history", []))
     record = {"id": identifier, "projectId": ctx.project_id, "originProject": ctx.project_id, "kind": kind,
               "revision": revision, "nodes": summary, "sharing": sharing, "status": "proposed",
-              "proposedBy": ctx.actor,
+              "proposedBy": ctx.actor, "ontologyGeneration": generation,
               "grants": list((previous or {}).get("grants", [])), "history": history[-MAX_HISTORY:]}
     record["hash"] = _hash(record)
     saved = ctx.commit([_write(PUBLICATION_OWNER, "publication", record, previous["version"] if previous else None)],
@@ -262,10 +269,10 @@ def approve(ctx, publication_id):
     node_ids = [n["id"] for n in record["nodes"]]
     bindings = {n["id"]: {"revision": n["revision"], "contentHash": n["contentHash"]} for n in record["nodes"]}
     try:
-        nodes, checks, sharing = _origin_nodes(ctx, kind, node_ids, bindings, denied=denied)
+        nodes, checks, sharing, generation = _origin_nodes(ctx, kind, node_ids, bindings, denied=denied)
     except CollaborationError as error:
         if error.status in (401,) or error.code in ("publication-binding-stale", "publication-authority-required",
-                                                   "publication-source-policy-required"):
+                                                   "publication-source-policy-required", "ontology-changed"):
             raise
         fail(403, "publication-authority-required", "게시할 원본을 현재 권한으로 확인하지 못했습니다.")
     if sharing != record.get("sharing"):
@@ -281,6 +288,7 @@ def approve(ctx, publication_id):
              "capability": {"id": capability["id"], "revision": capability["revision"]}, "sharing": sharing}
     updated = {**{k: v for k, v in record.items() if k not in ("version", "createdAt", "updatedAt")},
                "status": "published", "approvedBy": ctx.actor, "approvedAt": approved_at,
+               "ontologyGeneration": generation,
                "capability": {"id": capability["id"], "revision": capability["revision"]},
                "snapshotKey": key, "snapshotSha256": info["sha256"],
                "history": [*record.get("history", []), entry][-MAX_HISTORY:]}

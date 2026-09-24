@@ -643,3 +643,29 @@ def test_replayed_approve_and_withdraw_apply_current_source_authorization(org):
                                   project=org.origin)
         assert status == 200 and payload["publication"]["status"] == "withdrawn"
         assert secret not in json.dumps(payload) and "nodes" not in payload["publication"]
+
+
+@pytest.mark.parametrize("stage", ["propose", "approve"])
+def test_ontology_change_after_the_node_read_fails_the_publication_commit(org, monkeypatch, stage):
+    """Review 2 #8: proposal/approval transactions fence the reviewed ontology manifest."""
+    pub = proposed(org) if stage == "approve" else None
+    capability(org.api, "carol")
+    original = Ontology.read
+    armed = {"on": True}
+
+    def racing(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        if armed["on"]:
+            armed["on"] = False
+            identifier = sorted(org.nodes)[0]
+            Ontology(ctx(org.api, "carol", org.origin)).review_node(
+                identifier, expected_generation=result["generation"], revision=org.nodes[identifier]["revision"],
+                decision="deprecated", reason="retired", request_id="race-deprecate")
+        return result
+    monkeypatch.setattr(Ontology, "read", racing)
+    if stage == "propose":
+        assert denied(proposed, org)[0] == 409
+        assert org.api.storage.list(publications.PUBLICATION_OWNER, "publication") == []
+    else:
+        assert denied(publications.approve, ctx(org.api, "carol", org.origin), pub["id"])[0] == 409
+        assert org.api.storage.get(publications.PUBLICATION_OWNER, "publication", pub["id"])["status"] == "proposed"
