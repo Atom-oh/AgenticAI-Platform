@@ -707,7 +707,10 @@ live evidence and the privacy redaction adapter remain outstanding.
   verified scope's `authorizationExpiresAt` or the token `exp`, never extended
   by the five-minute fallback used only when neither is known; its id and
   request hash exclude the token deadline, so a refreshed token replays it
-  while the job keeps its deadline; the job also persists every observed
+  while the job keeps its deadline; a repeated request requeues a job whose
+  dispatch failed before it started, with that request's own earliest deadline,
+  and every response reports the actual outcome: `queued`, `processing`,
+  `failed` with its `errorCode`, or the decision's status; the job also persists every observed
   source record version, part of its id, so a revoked and restored asset is a
   new request), the Worker's `intake-image` processing and commit (the scope
   keeps the job's authorization deadline; the frozen epoch and the observed
