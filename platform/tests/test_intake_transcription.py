@@ -696,3 +696,32 @@ def test_image_access_revoked_and_restored_during_generation_records_nothing(env
         transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
     assert error.value.code == "source-changed"
     assert len(adapter.calls) == 1 and _transcriptions(env) == []
+
+
+# PR #28 review round 5 ----------------------------------------------------------
+
+def test_image_admission_expiring_during_the_publish_transaction_publishes_nothing(chain, monkeypatch):
+    """Review 5, finding 3: admission expiry reaches the ontology commit's before_attempt guard."""
+    from workbench.service import Service
+    from workspace.ontology_store import CURRENT, Ontology
+    assert library_review(chain, "bob")[0] == 200
+    ref = doc_ref(chain)
+    storage = chain.api.storage
+    image = storage.get(chain.chain["owner"], "adm_decision", chain.chain["image"]["id"])
+    original, clock = storage.put_many, storage.clock
+
+    def put_many(writes, checks=None, **kwargs):
+        if any(w["kind"] == "ontology" for w in writes):
+            # Expiry changes no version: only a before_attempt deadline check sees it.
+            storage.clock = lambda: image["expiresAt"] + 1
+        return original(writes, checks, **kwargs)
+
+    monkeypatch.setattr(storage, "put_many", put_many)
+    try:
+        with pytest.raises(CollaborationError) as error:
+            Ontology(Service(chain.api, chain.scope(), {"sub": "alice"})).publish_candidate(
+                "guide-rules", rule_graph(chain, ref), expected_generation=None, request_id="rules-5")
+    finally:
+        storage.clock = clock
+    assert error.value.status == 409
+    assert storage.get(chain.chain["owner"], "ontology", CURRENT) is None

@@ -22,10 +22,27 @@ def fail(status, code, message):
     raise CollaborationError(status, code, message)
 
 
+UPSTREAM_ADMISSION_KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision")
+
+
 def check_source_deadlines(storage, checks, claims=None):
     """Recheck the aggregate deadline after reads and transaction preparation."""
     deadlines = []
+    now = storage.clock()
     for check in checks:
+        if check["kind"] in UPSTREAM_ADMISSION_KINDS:
+            # Upstream intake authority (image/transcription admission, policy,
+            # provenance, grant) expires without a version change: every commit
+            # attempt rechecks its schema, exact version, status and expiry.
+            from intake import records
+            row = storage.get(check["owner"], check["kind"], check["id"])
+            try:
+                row = records.validate(check["kind"], row) if row else None
+            except ValueError:
+                row = None
+            if not row or row["version"] != check["version"] or not records.is_current(row, now):
+                fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
+            continue
         if check["kind"] != "wb_source":
             continue
         source = storage.get(check["owner"], check["kind"], check["id"])
@@ -36,7 +53,6 @@ def check_source_deadlines(storage, checks, claims=None):
     expiry = (claims or {}).get("exp")
     if expiry is None and not deadlines:
         return
-    now = storage.clock()
     if expiry is not None and int(expiry) * 1000 <= now:
         fail(401, "authorization-expired", "인증이 만료되었습니다.")
     if deadlines and min(deadlines) <= now:
