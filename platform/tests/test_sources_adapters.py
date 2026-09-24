@@ -501,3 +501,32 @@ def test_changed_catalog_after_resolution_fails_the_final_recheck(env, design, m
     monkeypatch.setattr(component_catalog, "read_catalog", lambda: {**original, "hash": "f" * 64})
     for reader in readers:
         assert code(reader.recheck) == (409, "ontology-package-stale")
+
+
+# Fix round 2 (PR #29 review 2) ----------------------------------------------
+
+def test_criteria_republished_right_after_validation_cannot_be_fenced_as_current(env, design, monkeypatch):
+    """Review 2 #9: the exact product/guideline versions used by validation are the fenced ones."""
+    import workspace.criteria as criteria
+    product, contract = design
+    run = react_run(env, contract)
+    collaboration = env.api.collaboration
+    original = type(collaboration).is_current
+    armed = {"on": False}
+
+    def racing(self, scope, value):
+        result = original(self, scope, value)
+        if armed["on"]:
+            armed["on"] = False
+            republish(env, product)
+        return result
+    monkeypatch.setattr(type(collaboration), "is_current", racing)
+    for ref in (contract_reference(contract), run_round_reference(run, 1)):
+        armed["on"] = True
+        reader = Sources(ctx(env))
+
+        def attempt():
+            reader.resolve(ref)
+            reader.recheck()
+        assert code(attempt)[0] == 409
+        product = env.api.storage.get(f"project:{env.pid}", "product", product["id"])

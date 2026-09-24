@@ -69,11 +69,11 @@ def share(api, pid, ref, expected=None):
         "audience": "organization", "expiresAt": api.storage.clock() + 30 * DAY}})
 
 
-def approved_nodes(api, pid, *, documents=1, request="collection"):
+def approved_nodes(api, pid, *, documents=1, request="collection", extra_refs=()):
     """Seed approved design nodes whose sources are approved document revisions."""
     refs = [approved(api, pid, f"Synthetic design source {i}.\n".encode(), name=f"design-{i}.txt",
                      request=f"{request}-{i}") for i in range(documents)]
-    nodes = [node(f"atom-{i}", "Atom", project=pid, sourceRefs=[ref]) for i, ref in enumerate(refs)]
+    nodes = [node(f"atom-{i}", "Atom", project=pid, sourceRefs=[ref, *extra_refs]) for i, ref in enumerate(refs)]
     graph = {"schemaVersion": 1, "projectId": pid, "nodes": nodes, "edges": []}
     result = Ontology(ctx(api, "alice", pid)).publish_candidate("collection", graph, expected_generation=None,
                                                                 request_id=request)
@@ -561,3 +561,34 @@ def test_sharing_policy_expiry_is_rechecked_at_approval_commit(org, monkeypatch)
     monkeypatch.setattr(storage, "put_blob_once", slow_snapshot)
     assert denied(publications.approve, ctx(org.api, "carol", org.origin), pub["id"]) == (
         409, "source-upstream-revoked")
+
+
+# Fix round 2 (PR #29 review 2) ----------------------------------------------
+
+def package_ref():
+    from workspace.component_catalog import read_catalog
+    catalog = read_catalog()
+    return {"sourceKind": "package", "sourceId": catalog["id"], "revision": catalog["version"],
+            "sha256": catalog["hash"], "audienceRevision": "platform-package-v1"}
+
+
+def test_published_package_sources_join_the_package_recheck_set(api, monkeypatch):
+    """Review 2 #9: publication package checks populate `package_hashes`."""
+    from workspace import component_catalog
+    monkeypatch.setattr(admin_handler, "storage_factory", lambda: api.storage)
+    people = ("alice", "bob", "carol", "dana", "erin", "frank", "gina")
+    api.collaboration.directory = lambda q: [{"sub": x, "displayName": x} for x in people if q in x]
+    origin = new_project(api, "origin", MEMBERS)
+    dest = new_project(api, "dest", {"erin": "owner", "frank": "planner", "gina": "designer"})
+    nodes, refs = approved_nodes(api, origin, extra_refs=[package_ref()])
+    for ref in refs:
+        share(api, origin, ref)
+    org = SimpleNamespace(api=api, origin=origin, dest=dest, nodes=nodes, refs=refs)
+    pub = published(org)
+    ref = publications.published_asset_reference(pub, granted(org, pub))
+    reader = Sources(ctx(api, "gina", dest))
+    reader.resolve(ref)
+    assert reader.package_hashes
+    original = component_catalog.read_catalog()
+    monkeypatch.setattr(component_catalog, "read_catalog", lambda: {**original, "hash": "f" * 64})
+    assert denied(reader.recheck) == (409, "ontology-package-stale")

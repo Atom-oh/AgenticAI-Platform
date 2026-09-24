@@ -453,6 +453,7 @@ class Sources:
             self._contract(self._contract_ref(run), historical=False)
             if self._rules().contract_hash(run.get("contract") or {}) != run["contractHash"]:
                 fail(409, "source-changed", "라운드의 규칙 사본이 승인본과 다릅니다.")
+            self._fence_criteria(run)
             resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read")
             self._fence_criteria(run)
             self._inputs(self._snapshot_refs(run), historical=False)
@@ -586,10 +587,10 @@ class Sources:
             fail(409, "source-superseded", "새 규칙 리비전으로 대체된 승인 규칙입니다.")
         criteria = {key: contract[key] for key in ("projectId", "productId", "guidelineId", "ontologyHash")
                     if key in contract}
+        # Fence the criteria records before validation and re-read them after it: a
+        # republication between the two reads (or later) can never be fenced as current.
+        self._fence_criteria(contract)
         superseded = not self.ctx.collaboration.is_current(self.ctx.scope, criteria)
-        if not superseded and contract.get("catalogHash"):
-            from workspace.component_catalog import read_catalog
-            superseded = read_catalog()["hash"] != contract["catalogHash"]
         if superseded:
             fail(409, "source-superseded", "승인 규칙의 상품·가이드 기준이 현재 게시본이 아닙니다.")
         self._fence_criteria(contract)
@@ -600,7 +601,9 @@ class Sources:
 
         A later republication changes the product (and guideline) record version,
         and a catalog change leaves the package recheck set, so `recheck()` and
-        the commit fence reject an answer built on superseded criteria.
+        the commit fence reject an answer built on superseded criteria. Callers
+        fence before validating and call again afterwards; a changed version
+        between the two reads fails `ontology-source-changed`.
         """
         if value.get("productId"):
             self._remember("product", self.ctx.get("product", value["productId"]))

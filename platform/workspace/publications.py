@@ -553,6 +553,8 @@ def resolve_published(sources, ref, *, historical=False, text=False):
         for source in node.get("sourceRefs", []):
             upstream_ref = schema.source_ref(source)
             upstream = _upstream(storage, record["originProject"], upstream_ref)
+            if upstream is not None and upstream_ref["sourceKind"] == "package":
+                sources.package_hashes.add(upstream_ref["sha256"])
             if upstream is not None and upstream_ref["sourceKind"] != "package":
                 # The versioned organization-sharing policy bound at approval must still be current.
                 policy = sharing_policy(storage, record["originProject"], upstream_ref)

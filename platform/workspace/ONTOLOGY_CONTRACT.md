@@ -188,7 +188,10 @@ live sharing or release evidence.
   Current `ux-contract` and `run-round` resolution retains the consulted product
   and guideline records as observed versions and adds the consulted catalog hash
   to the package recheck set, so a republication or catalog change between
-  resolution and return/commit fails `recheck()` and the commit fence.
+  resolution and return/commit fails `recheck()` and the commit fence. The
+  records are fenced before criteria validation and re-read after it, so the
+  fenced versions are exactly those validation used (`ontology-source-changed`
+  otherwise). `published-asset` package sources join the same package set.
 - `published-asset` `{sourceId: publicationId, revision: str(publication revision),
   sha256: publication hash, audienceRevision: str(grant revision)}`. Resolution
   requires an active destination grant for this publication revision naming the
