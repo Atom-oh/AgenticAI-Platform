@@ -974,10 +974,24 @@ GOOD = {"context": ("ok", {}), "generate": ("ok", {}), "compile": ("ok", {"sourc
                           "passed": True, "compositionHashes": ["h1"], "judgeEvidence": {"h1": "ev-1"}})}
 
 
-def release_manifest(storage):
-    body = _json.dumps({"admissions": ADM, "approved": {"sourceHash": "s" * 64, "bundleHash": "u" * 64},
-                        "priors": []}).encode()
-    key = storage.key_for(OWNER, "run", "run-r", "release-manifest.json")
+APPROVED_SHOT = b"approved-screenshot-png"
+
+
+def approved_screenshot(storage):
+    key = storage.key_for(OWNER, "run", "run-r", "approved/screenshot.png")
+    try:
+        storage.put_blob_once(key, APPROVED_SHOT, "image/png")
+    except Exception:
+        pass
+    return {"key": key, "sha256": hashlib.sha256(APPROVED_SHOT).hexdigest()}
+
+
+def release_manifest(storage, screenshot=True):
+    approved = {"sourceHash": "s" * 64, "bundleHash": "u" * 64}
+    if screenshot:
+        approved["screenshot"] = approved_screenshot(storage)
+    body = _json.dumps({"admissions": ADM, "approved": approved, "priors": []}).encode()
+    key = storage.key_for(OWNER, "run", "run-r", "release-manifest.json" if screenshot else "release-noshot.json")
     try:
         storage.put_blob_once(key, body, "application/json")
     except Exception:
@@ -985,10 +999,10 @@ def release_manifest(storage):
     return {"ref": key, "hash": hashlib.sha256(body).hexdigest()}
 
 
-def chain(env, operation="design.generate", results=None, skip=(), key="req-1"):
+def chain(env, operation="design.generate", results=None, skip=(), key="req-1", manifest=None, comparison=True):
     """Drive a complete verified receipt chain; returns (job, finish result)."""
     storage, ledger = env[0], env[1]
-    over = {"manifest": release_manifest(storage)} if operation == "design.release" else {}
+    over = {"manifest": manifest or release_manifest(storage)} if operation == "design.release" else {}
     job = run_job(ledger, operation=operation, key=key, **over)
     results = {**GOOD, **(results or {})}
     previous, hashes, files = None, [], []
@@ -1005,8 +1019,13 @@ def chain(env, operation="design.generate", results=None, skip=(), key="req-1"):
         status, result = results[stage]
         kind = STAGE_SERVICES[stage][0]
         service = {} if kind == "runtime" else {"service": service_call(ledger, job, stage, kind)}
+        inputs = required_inputs(job, stage)
+        if operation == "design.release" and stage == "browser" and comparison and job.get("releaseBaseline"):
+            baseline = job["releaseBaseline"]          # the Browser compares against the approved screenshot
+            inputs = [*inputs, {**baseline, "size": len(APPROVED_SHOT)}]
+            result = {**result, "comparison": {"key": baseline["key"], "sha256": baseline["sha256"]}}
         r = chained(job, stage, f"n-{stage}", previous=previous, outputs=outputs, status=status, result=result,
-                    inputs=required_inputs(job, stage), **service)
+                    inputs=inputs, **service)
         job = ledger.tool().stage(*ids(job), r)
         previous = receipt_hash(r)
         hashes.append(previous)
@@ -2754,3 +2773,40 @@ def test_final_submission_checks_run_after_the_final_signature_verification(xfer
         finish(ledger, job, "succeeded", result)
     assert error.value.code == ("stale-attempt" if change == "lease-expiry" else "receipt-invalid")
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+@pytest.mark.parametrize("case", ["no-approved-screenshot", "bundle-only-browser", "other-comparison"])
+def test_release_completion_requires_the_frozen_approved_screenshot_comparison(xfer, case):
+    """Review 5 finding 4: release success binds the Browser comparison to the approved screenshot frozen at
+    admission."""
+    storage, ledger, _, _ = xfer
+    if case == "no-approved-screenshot":
+        job, result = chain(xfer, "design.release", manifest=release_manifest(storage, screenshot=False))
+        assert job["releaseBaseline"] is None
+    elif case == "bundle-only-browser":
+        job, result = chain(xfer, "design.release", comparison=False)
+    else:
+        job, result = chain(xfer, "design.release",
+                            results={"browser": ("ok", {"visualDiff": 0.0, "comparison": {
+                                "key": storage.key_for(OWNER, "run", "run-r", "other.png"), "sha256": "0" * 64}})},
+                            comparison=False)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "status-inconsistent"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def test_release_admission_freezes_the_approved_screenshot(xfer):
+    storage, ledger, _, _ = xfer
+    job, result = chain(xfer, "design.release")
+    assert job["releaseBaseline"] == approved_screenshot(storage)
+    assert finish(ledger, job, "succeeded", result)["status"] == "succeeded"
+    body = _json.dumps({"admissions": ADM, "approved": {"sourceHash": "s" * 64, "bundleHash": "u" * 64,
+                                                        "screenshot": {**approved_screenshot(storage),
+                                                                       "sha256": "0" * 64}}}).encode()
+    key = storage.key_for(OWNER, "run", "run-r", "bad-shot-manifest.json")
+    storage.put_blob_once(key, body, "application/json")
+    with pytest.raises(LedgerError) as error:
+        admit(ledger, key="req-bad-shot", actor="alice", operation="design.release",
+              manifest={"ref": key, "hash": hashlib.sha256(body).hexdigest()})
+    assert error.value.code == "manifest-invalid"

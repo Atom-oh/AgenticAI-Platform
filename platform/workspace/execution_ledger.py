@@ -540,6 +540,7 @@ class Ledger:
                 or schema.digest(members) != project_authority.get("membershipDigest")):
             raise LedgerError("authority-changed")
         obligations, source_checks = self._admitted_manifest(owner, manifest, admissions, scope)
+        baseline = self._release_baseline(owner, manifest) if operation == "design.release" else None
         job_id = "exec-" + secrets.token_hex(16)
         quotas = self._quota_writes(owner, actor, project_id, add=job_id)   # raises concurrency-actor/-project
         job = {"id": job_id, "task": TASK, "executionSchemaVersion": SCHEMA_VERSION, "requestKey": request_key,
@@ -555,7 +556,7 @@ class Ledger:
                "deadlineAt": min(now + profile["deadlineMs"], authorization_expires_at),
                "authorizationExpiresAt": authorization_expires_at, "result": None, "error": None,
                "unknownOutcome": False, "authority": project_authority, "completionScope": scope,
-               "obligations": obligations,
+               "obligations": obligations, "releaseBaseline": baseline,
                "supersedes": supersedes, "ops": {}, "clock": now, "dueId": None}
         marker_write = {"owner": owner, "kind": "exec_request",
                         "item": {"id": marker_id, "jobId": job_id, "inputHash": input_hash}, "expected_version": None}
@@ -605,6 +606,34 @@ class Ledger:
             if not current or current.get("version") != row["version"]:
                 raise LedgerError("authority-changed")
         return {"sourceChecks": frozen, "sourceBindings": copy.deepcopy(bindings)}, frozen
+
+    def _release_baseline(self, owner, manifest):
+        """The approved screenshot a release is compared with, frozen at admission (review 5, SPEC 7-1/RUN-04).
+
+        ``approved.screenshot = {key, sha256}`` in the immutable input manifest must name an owned object whose
+        stored bytes hash to ``sha256`` (otherwise ``manifest-invalid``). A manifest without one freezes ``None``,
+        and such a release can never complete as succeeded.
+        """
+        try:
+            document = json.loads(self.storage.get_blob(manifest["ref"]))
+        except (ValueError, FileNotFoundError, RuntimeError, TypeError) as error:
+            raise LedgerError("manifest-invalid") from error
+        approved = document.get("approved") if isinstance(document, dict) else None
+        shot = approved.get("screenshot") if isinstance(approved, dict) else None
+        if shot is None:
+            return None
+        if (not isinstance(shot, dict) or set(shot) != {"key", "sha256"} or not isinstance(shot["key"], str)
+                or not isinstance(shot["sha256"], str) or not _SHA256.fullmatch(shot["sha256"])):
+            raise LedgerError("manifest-invalid")
+        try:
+            if not self.storage.owns_key(owner, shot["key"]):
+                raise ValueError("foreign screenshot")
+            data = self.storage.get_blob(shot["key"])
+        except (ValueError, FileNotFoundError, RuntimeError) as error:
+            raise LedgerError("manifest-invalid") from error
+        if hashlib.sha256(data).hexdigest() != shot["sha256"]:
+            raise LedgerError("manifest-invalid")
+        return {"key": shot["key"], "sha256": shot["sha256"]}
 
     def _may_act(self, owner, job, actor):
         if actor == job["actor"]:
@@ -690,6 +719,8 @@ class Ledger:
 
     def _allowed_inputs(self, owner, job):
         allowed = {job["manifest"]["ref"]: job["manifest"]["hash"]}
+        if job.get("releaseBaseline"):
+            allowed[job["releaseBaseline"]["key"]] = job["releaseBaseline"]["sha256"]
         for row in job.get("stages", []):
             for output in row.get("outputs", []):
                 allowed[output["key"]] = output["sha256"]
@@ -1644,7 +1675,13 @@ class Ledger:
         if operation == "design.release":
             approved = self._manifest_document(job).get("approved") or {}
             diff = result["browser"].get("visualDiff")
-            if (approved and result["compile"].get("sourceHash") == approved.get("sourceHash")
+            # The Browser comparison input is exactly the approved screenshot frozen at admission: the receipt
+            # consumed it and its result names it (review 5). A release without a frozen baseline never succeeds.
+            baseline = job.get("releaseBaseline")
+            compared = baseline is not None and result["browser"].get("comparison") == baseline and any(
+                entry.get("key") == baseline["key"] and entry.get("sha256") == baseline["sha256"]
+                for entry in last["browser"].get("inputs", []))
+            if (approved and compared and result["compile"].get("sourceHash") == approved.get("sourceHash")
                     and result["compile"].get("bundleHash") == approved.get("bundleHash")
                     and isinstance(diff, (int, float)) and not isinstance(diff, bool) and diff <= 0.02):
                 return "succeeded"

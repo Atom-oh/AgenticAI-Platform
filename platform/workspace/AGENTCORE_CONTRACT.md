@@ -614,6 +614,7 @@ module-private ledger writer token):
 | `deliverables` | Set at completion: the result manifest's bundle and sources bound to their compile, Browser and generate receipt hashes |
 | `accounting` | Pending daily-usage obligations `[{id: "chg-"+40 hex, tokens, callId}]`, committed in the same write as the outcome that charges them |
 | `verifiedKeyRevision` | The verifier key-registry revision the completed chain was verified and submitted under |
+| `releaseBaseline` | `design.release` only: the approved screenshot `{key, sha256}` frozen at admission from the input manifest's `approved.screenshot` (verified owned object and hash, else `manifest-invalid`), or `null` when absent |
 | `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
@@ -687,6 +688,13 @@ must equal the pinned tool profile (`TOOL_PROFILES`, frozen in
 `status: ok` requires `exitCode` 0 (when present) and a `completed` call. The
 `profileHash` must equal the job's profile hash. Any mismatch is
 `receipt-invalid`.
+
+`design.release` succeeds only against its frozen `releaseBaseline`: the
+current Browser receipt must consume that screenshot as an input (it is an
+allowed input of the job) and its `result.comparison` must equal
+`{key, sha256}` of it, in addition to the approved source/bundle hashes and
+`visualDiff <= 0.02`. A missing baseline or another comparison input makes the
+requested `succeeded` status `status-inconsistent`.
 
 Receipts follow the operation's evidence graph (`STAGE_INPUTS`): each stage's
 `inputs` must include an output of the latest receipt of its predecessor stage
