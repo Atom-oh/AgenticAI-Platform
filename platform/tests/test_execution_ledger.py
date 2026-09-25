@@ -2892,3 +2892,48 @@ def test_release_success_requires_explicit_valid_approved_and_observed_hashes(xf
         finish(ledger, job, "succeeded", result)
     assert error.value.code == "status-inconsistent"
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+@pytest.mark.parametrize("outage", ["persists", "recovers"])
+def test_pending_accounting_is_settled_before_another_paid_intent(xfer, monkeypatch, outage):
+    """Review 6 finding 3: an uncharged obligation never lets a further model call past the daily cap."""
+    import types
+    from workspace.execution_ledger import CostGuardGate
+    storage, _, _, _ = xfer
+
+    class Client:
+        exceptions = types.SimpleNamespace()
+
+        def __init__(self):
+            self.tokens, self.markers, self.down = 0, set(), False
+
+        def transact_write_items(self, TransactItems):
+            if self.down:
+                raise OSError("synthetic accounting-write outage")
+            marker = TransactItems[0]["Put"]["Item"]["pk"]
+            if marker not in self.markers:
+                self.markers.add(marker)
+                self.tokens += TransactItems[1]["Update"]["ExpressionAttributeValues"][":t"]
+
+    client = Client()
+    table = types.SimpleNamespace(name="cache-test", meta=types.SimpleNamespace(client=client))
+    fake = types.SimpleNamespace(_tbl=table, budget_ok=lambda: client.tokens < 300, _today=lambda: "2027-01-15")
+    monkeypatch.setenv("CACHE_TABLE", "cache-test")
+    monkeypatch.setitem(sys.modules, "common.costguard", fake)
+    monkeypatch.setitem(sys.modules, "common", types.SimpleNamespace(costguard=fake))
+    ledger = offline_ledger(storage, cost_gate=CostGuardGate())
+    job = run_job(ledger)
+    call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                max_tokens=1000)["callId"]
+    client.down = True
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().outcome(*ids(job), call, status="completed", usage={"inputTokens": 100, "outputTokens": 200})
+    assert error.value.code == "accounting-pending" and client.tokens == 0
+    client.down = outage == "persists"
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0, max_tokens=10)
+    assert error.value.code == ("accounting-pending" if outage == "persists" else "daily-budget")
+    stored = storage.get(OWNER, "job", job["id"])
+    assert len(stored["calls"]) == 1
+    assert client.tokens == (0 if outage == "persists" else 300)
+    assert len(stored["accounting"]) == (1 if outage == "persists" else 0)

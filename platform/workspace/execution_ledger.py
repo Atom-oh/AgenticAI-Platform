@@ -1037,6 +1037,10 @@ class Ledger:
     def _intent(self, owner, job_id, attempt_id, fence, *, stage, kind, min_remaining_ms, max_tokens=None,
                 operation_id=None):
         job = self._get(owner, job_id)
+        if job.get("accounting"):
+            # Review 6 (RUN-03): an uncharged obligation must reach the enforced daily counter before any further
+            # paid call is authorized; a failed settlement refuses the intent (accounting-pending).
+            job = self._settle_accounting(owner, job)
         op, replay = self._op(job, "intent", operation_id, {
             "jobId": job_id, "attemptId": attempt_id, "fence": fence, "stage": stage, "kind": kind,
             "minRemainingMs": min_remaining_ms, "maxTokens": max_tokens})
@@ -1051,6 +1055,8 @@ class Ledger:
             raise LedgerError("model-not-allowed")
         if type(min_remaining_ms) is not int or min_remaining_ms < 0:
             raise LedgerError("call-invalid")
+        if job.get("accounting"):
+            raise LedgerError("accounting-pending", charges=[entry["id"] for entry in job["accounting"]])
         budget, profile, now = dict(job["budget"]), job["profileBody"], self.storage.clock()
         if budget["calls"] >= budget["maxCalls"]:
             raise LedgerError("budget-exhausted")

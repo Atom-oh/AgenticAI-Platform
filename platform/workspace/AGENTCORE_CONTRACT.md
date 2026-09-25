@@ -632,7 +632,10 @@ transaction, so a retried charge counts once) and removes it with a CAS. A
 failed usage write is never swallowed: the call returns `accounting-pending`
 with the outcome committed and the obligation retained. Repeating the identical
 `outcome`, or the reconciler's `sweep` (a terminal job keeps a due entry while
-`accounting` is pending), settles it. `outcome` for an `interpreter` or
+`accounting` is pending), settles it. `intent` first settles the job's pending
+obligations so they reach the enforced daily counter before the cost gate is
+consulted; while any remain unsettled no further call is authorized
+(`accounting-pending`). `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
 stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
 receiptHash, receiptRef, nonce, attemptId, status, service, result, inputs,
