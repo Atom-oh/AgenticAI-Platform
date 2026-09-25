@@ -463,21 +463,22 @@ class Collaboration:
             if parts[2] == "ontology" and method == "GET":
                 context = self._context(scope, product, query.get("revision") or product.get("publishedGuidelineId"))
                 return 200, {"ontology": context["ontology"]}
-            if parts[2] == "impact" and method == "GET":
-                page = self.storage.list_page(scope["owner"], "run", cursor=query.get("cursor"))
-                current = product.get("publishedGuidelineId")
-                affected = []
-                for run in page["items"]:
-                    if run.get("productId") != product["id"]:
-                        continue
-                    if (run.get("projectId") != scope["project"]["id"] or not current
-                            or run.get("guidelineId") != current
-                            or run.get("ontologyHash") != product.get("ontologyHash")):
-                        affected.append({key: run[key] for key in (
-                            "id", "status", "projectId", "productId", "guidelineId", "approval") if key in run}
-                                        | {"needsRevalidation": True})
-                return 200, {"currentGuidelineId": current, "affectedRuns": affected, **self._cursor(page)}
+            # `GET /products/:id/impact` lists run metadata: it is served by the workspace
+            # response gate (`workspace.http.ROUTES`), which authorizes each run through
+            # the shared source reader; this module only supplies `impact_summary`.
         raise CollaborationError(404, "not-found", "Route not found")
+
+    @staticmethod
+    def impact_summary(scope, product, run):
+        """The affected-run summary of one run for a product's republication, or None if unaffected."""
+        if not isinstance(run, dict) or run.get("productId") != product["id"]:
+            return None
+        current = product.get("publishedGuidelineId")
+        if (run.get("projectId") == scope["project"]["id"] and current and run.get("guidelineId") == current
+                and run.get("ontologyHash") == product.get("ontologyHash")):
+            return None
+        return {key: run[key] for key in ("id", "status", "projectId", "productId", "guidelineId", "approval")
+                if key in run} | {"needsRevalidation": True}
 
     def _publish(self, scope, product, version):
         if version != product["version"]:

@@ -410,9 +410,18 @@ def test_new_guideline_marks_bound_runs_stale_without_changing_historical_approv
     second = publish(collab, project, edit)
     assert second["guideline"]["revision"] == 2
     assert collab.is_current(scope, run) is False
-    impact = call(collab, "GET", f"products/{edit['id']}/impact", project=project["id"])
-    assert impact["currentGuidelineId"] == second["guideline"]["id"]
-    assert [row["id"] for row in impact["affectedRuns"]] == ["r1"]
+    # `GET /products/:id/impact` itself is served by the workspace response gate
+    # (`workspace.http.ROUTES`), which authorizes each run through the shared source
+    # reader before including it (see test_workspace_project_react_flow.py for that
+    # end-to-end path, including a revoked run's exclusion). Here, Collaboration owns
+    # only the affected/stale computation for one already-authorized run.
+    assert second["product"]["publishedGuidelineId"] != run["guidelineId"]
+    summary = collab.impact_summary(scope, second["product"], run)
+    assert summary == {"id": "r1", "status": "approved", "projectId": project["id"],
+                       "productId": first["product"]["id"], "guidelineId": first["guideline"]["id"],
+                       "approval": {"actor": "carol", "round": 1}, "needsRevalidation": True}
+    assert collab.impact_summary(scope, second["product"], {**run, "guidelineId": second["guideline"]["id"],
+                                 "ontologyHash": second["ontology"]["hash"]}) is None
     assert storage.get(scope["owner"], "run", "r1") == run
     old = call(collab, "GET", f"products/{edit['id']}/ontology", project=project["id"],
                query={"revision": first["guideline"]["id"]})["ontology"]

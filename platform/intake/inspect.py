@@ -114,8 +114,11 @@ def resolve(host, scope, source_ref, *, claims=None, sources=None):
     reader = sources or Sources(context(host, scope, claims))
     kind = ref["sourceKind"]
     if kind in RESERVED_KINDS:
-        reader.resolve(ref)  # fails 503 ontology-source-adapter-unavailable until B0 sharing
-        fail(503, "ontology-source-adapter-unavailable", "이 원본 유형의 권한 연결이 아직 준비되지 않았습니다.")
+        # B0 sharing installs these kinds' ontology authority adapters, but
+        # source-admission/1 has no intake adapter for them. Refuse before any
+        # lookup so intake never becomes an existence oracle for rounds,
+        # contracts or publications.
+        fail(503, "ontology-source-adapter-unavailable", "이 원본 유형의 반입 연결이 아직 준비되지 않았습니다.")
     if kind == "document-revision":
         from documents.errors import DocumentError
         from documents.library import Library

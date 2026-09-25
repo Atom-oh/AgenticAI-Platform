@@ -22,6 +22,15 @@ def fail(status, code, message):
     raise CollaborationError(status, code, message)
 
 
+_TIMED_AUTHORITY = {
+    "capability": ("publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다."),
+    "adm_sharing": ("source-upstream-revoked", "원본의 조직 공유 정책이 만료되었거나 회수되었습니다."),
+    # Admission lineage observed by the shared source reader: expiry changes no version.
+    "adm_decision": ("source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다."),
+    "adm_policy": ("source-upstream-revoked", "원본 반입 정책이 만료되었거나 회수되었습니다."),
+    "adm_provenance": ("source-upstream-revoked", "원본 출처 등록이 만료되었거나 회수되었습니다."),
+    "adm_grant": ("source-upstream-revoked", "원본 검토 권한이 만료되었거나 회수되었습니다."),
+}
 UPSTREAM_ADMISSION_KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision")
 
 
@@ -29,12 +38,13 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
     """Recheck the aggregate deadline after reads and transaction preparation.
 
     Every deadline (source access, upstream admission/policy/provenance/grant
-    expiry, the token `exp`, and `deadline`, the verified scope's
+    expiry, IAM-administered organization publication capability and sharing
+    policy expiry, the token `exp`, and `deadline`, the verified scope's
     `authorizationExpiresAt` in ms, which binds even when the claims carry no
     `exp`) is collected during the reads and compared with one fresh clock read
     taken after the last read, immediately before the transaction attempt.
     """
-    authorization, upstream, sources = [], [], []
+    authorization, upstream, sources, capability = [], [], [], []
     if deadline is not None:
         if type(deadline) is not int:
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
@@ -46,10 +56,11 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
         except (ValueError, TypeError, OverflowError):
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
     for check in checks:
-        if check["kind"] in UPSTREAM_ADMISSION_KINDS:
+        if check["kind"] in _TIMED_AUTHORITY:
             # Upstream intake authority (image/transcription admission, policy,
-            # provenance, grant) expires without a version change: every commit
-            # attempt rechecks its schema, exact version, status and expiry.
+            # provenance, grant) and IAM-administered organization publication
+            # capability/sharing policy expire without a version change: every
+            # commit attempt rechecks their schema, exact version, status and expiry.
             from intake import records
             row = storage.get(check["owner"], check["kind"], check["id"])
             try:
@@ -58,8 +69,9 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
                 row = None
             if (not row or row["version"] != check["version"] or row.get("status") not in ("active", "admitted")
                     or type(row.get("expiresAt")) is not int):
-                fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
-            upstream.append(row["expiresAt"])
+                code, message = _TIMED_AUTHORITY[check["kind"]]
+                fail(403 if check["kind"] == "capability" else 409, code, message)
+            (capability if check["kind"] == "capability" else upstream).append(row["expiresAt"])
             continue
         if check["kind"] != "wb_source":
             continue
@@ -71,6 +83,8 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
     now = storage.clock()  # after the last read
     if authorization and min(authorization) <= now:
         fail(401, "authorization-expired", "인증이 만료되었습니다.")
+    if capability and min(capability) <= now:
+        fail(403, "publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다.")
     if upstream and min(upstream) <= now:
         fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
     if sources and min(sources) <= now:

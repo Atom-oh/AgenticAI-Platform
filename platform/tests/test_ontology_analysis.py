@@ -559,3 +559,21 @@ def test_terminal_job_and_partition_publish_in_one_transaction_without_later_upd
     job = wb.storage.get(wb.owner, "job", queued["job"]["id"])
     assert publications == [job["result"]]
     assert job["result"]["generation"] == wb.storage.get(wb.owner, "ontology", "project-current")["generation"]
+
+
+def test_raw_workbench_job_is_authorized_by_its_inputs(wb):
+    """PR #29 review 5 #4: /jobs/{id} of a self-authorized task applies its owning authority."""
+    import json as _json
+    wb.api.ontology_analyzer_ready = True
+    queued = submit(context(wb), {"requestId": "job-gate", "name": "example", "files": collection(wb)})
+
+    def job(identifier):
+        event = {"rawPath": "/studio-api/jobs/" + identifier, "headers": {"X-Workspace-Project": wb.project["id"]},
+                 "requestContext": {"http": {"method": "GET"}, "authorizer": {"jwt": {"claims": {
+                     "sub": "alice", "token_use": "access", "exp": wb.now // 1000 + 3600}}}}}
+        result = wb.api.handle(event)
+        return result["statusCode"], _json.loads(result["body"])
+    assert job(queued["job"]["id"])[0] == 200
+    source = wb.storage.get(wb.owner, "asset", "code-app")
+    wb.storage.put(wb.owner, "asset", {**source, "accessRevoked": True}, source["version"])
+    assert job(queued["job"]["id"]) == job("job-absent")
