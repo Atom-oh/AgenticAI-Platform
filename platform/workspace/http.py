@@ -808,6 +808,23 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Resource not found")
         return run
 
+    def _authorized_contract(self, owner, identifier, gate=None):
+        """The current, accessible contract, or a 404 identical to a missing one.
+
+        A contract whose own lineage (its referenced assets, historically, or its
+        change-request baseline) is revoked must never be distinguishable from a
+        missing/foreign one by a DIFFERENT, content-dependent status (a
+        criteria/catalog-compatibility check reached using its stale
+        catalogHash/guidelineId/version before authorization) -- authorize it the
+        same way a plain GET's response gate would, before any of its fields are
+        read for that purpose.
+        """
+        stored = self._get(owner, "contract", identifier)
+        contract = gate.authorize("contract", stored) if gate is not None else stored
+        if contract is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        return contract
+
     def _run_view(self, owner, record, scope, cache=None, seen=()):
         """Report current criteria independently of the browser's product filter."""
         cache = {} if cache is None else cache
@@ -1018,7 +1035,7 @@ class WorkspaceAPI:
             return _json(200, {"connections": public_connections(self.git_connections())})
         if parts == ["batches"] and method == "POST":
             from workspace.batches import create_batch
-            return create_batch(self, owner, _body(event), scope)
+            return create_batch(self, owner, _body(event), scope, gate=gate)
         if parts == ["batches"] and method == "GET":
             return self._listing(gate, owner, "batch", "batches", query, scope)
         if len(parts) == 2 and parts[0] == "batches" and method == "GET":
@@ -1730,7 +1747,7 @@ class WorkspaceAPI:
         if job:
             existing_run = self._get(owner, "run", job["input"]["runId"])
             if job.get("errorCode") == "dispatch-failed" and existing_run.get("outputType") == "react":
-                self._criteria(owner, {}, scope, self._get(owner, "contract", existing_run["contractId"]))
+                self._criteria(owner, {}, scope, self._authorized_contract(owner, existing_run["contractId"], gate))
             job = self._retry_dispatch(owner, job)
             run = self._get(owner, "run", job["input"]["runId"])
             self._invoke(owner, job)
@@ -1740,7 +1757,7 @@ class WorkspaceAPI:
             raise HTTPError(409, "request-expired",
                             "The operational job expired. Open the stored run or start a new request.")
         self._worker_ready()
-        contract = self._get(owner, "contract", data["contractId"])
+        contract = self._authorized_contract(owner, data["contractId"], gate)
         output_type = "html" if mode == "verify" else data.get("outputType", "react" if contract.get("catalogHash") else "html")
         if output_type == "react":
             if not contract.get("catalogHash"):

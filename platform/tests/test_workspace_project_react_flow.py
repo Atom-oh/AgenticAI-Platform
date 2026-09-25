@@ -826,3 +826,63 @@ def test_propose_validation_never_leaks_a_guide_hash_match_via_a_revocation_race
                               "requestId": "propose-revoked"}, actor="carol", project=project["id"])
     assert not armed["on"]
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_revoked_contract_404s_instead_of_a_criteria_changed_status():
+    """PR #33 review 4: `_run_create`/`create_batch` resolved the supplied
+    `contractId` with plain `_get()` -- existence only, never authorized --
+    before its stale catalogHash/guidelineId/version fields drove the
+    criteria-compatibility check. `GET /contracts/:id` on a contract whose own
+    guideline asset was revoked already 404s, but naming that SAME contract
+    in `POST /runs` or `POST /batches` returned 409 criteria-changed instead
+    (reached via `_criteria`'s guidelineId comparison, using the stale
+    contract read before authorization) -- an existence oracle distinguishable
+    from a missing/foreign contractId's 404. Authorize the contract (the same
+    lineage check a plain GET's response gate applies, closing over its
+    referenced assets AND its change-request baseline) before any of its
+    fields are read for that purpose, in both entry points."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    owner = "project:" + project["id"]
+    assert request(api, "GET", f"/contracts/{contract['id']}", actor="carol", project=project["id"])[0] == 200
+    # Republish the product (a new guideline) and revoke the OLD guideline
+    # asset the approved contract actually cites -- the contract is now
+    # genuinely inaccessible (not merely stale), like the "revoked run input"
+    # tests' mechanism.
+    _, changed = request(api, "PUT", f"/products/{product['id']}", {"version": product["version"], "description": "변경된 기준"},
+                          actor="bob", project=project["id"])
+    assert request(api, "POST", f"/products/{product['id']}/publish", {"version": changed["product"]["version"]},
+                   actor="bob", project=project["id"])[0] == 200
+    asset = api.storage.get(owner, "asset", publication["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", f"/contracts/{contract['id']}", actor="carol", project=project["id"])[0] == 404
+    run_body = {"contractId": contract["id"], "contractVersion": contract["version"], "requestId": "run-revoked"}
+    status, payload = request(api, "POST", "/runs", run_body, actor="carol", project=project["id"])
+    status_missing, payload_missing = request(api, "POST", "/runs",
+                                              {**run_body, "contractId": "does-not-exist", "requestId": "run-missing"},
+                                              actor="carol", project=project["id"])
+    assert (status, payload.get("code")) == (status_missing, payload_missing.get("code"))
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+    batch_body = {"contractId": contract["id"], "contractVersion": contract["version"], "requestId": "batch-revoked"}
+    status, payload = request(api, "POST", "/batches", batch_body, actor="carol", project=project["id"])
+    status_missing, payload_missing = request(api, "POST", "/batches",
+                                              {**batch_body, "contractId": "does-not-exist", "requestId": "batch-missing"},
+                                              actor="carol", project=project["id"])
+    assert (status, payload.get("code")) == (status_missing, payload_missing.get("code"))
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)

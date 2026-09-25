@@ -8,7 +8,7 @@ from workspace.storage import Conflict
 VARIANTS = ("layout", "dense", "emphasis", "flow", "information")
 
 
-def create_batch(api, owner, body, scope):
+def create_batch(api, owner, body, scope, gate=None):
     from engine import model_catalog
     from workspace.http import HTTPError, _integer, _json
     mode = body.get("mode", "guided")
@@ -27,7 +27,12 @@ def create_batch(api, owner, body, scope):
     batch = api.storage.get(owner, "batch", identifier)
     if batch and batch.get("requestHash") != fingerprint:
         raise HTTPError(409, "request-changed", "이 비교 요청의 입력이 변경되었습니다.")
-    contract = api._get(owner, "contract", data["contractId"])
+    # Authorize the referenced contract (the same lineage check a plain GET's
+    # response gate would apply) before any of its stale fields are read to
+    # decide readiness/criteria compatibility -- inaccessible (e.g. a revoked
+    # guideline asset) must 404 identically to a missing contract, never this
+    # 409 or the criteria-changed one below.
+    contract = api._authorized_contract(owner, data["contractId"], gate)
     if (contract.get("status") != "approved" or contract["version"] != data["contractVersion"]
             or not contract.get("catalogHash")):
         raise HTTPError(409, "code-criteria-required", "현재 React 코드·상품 기준이 승인된 규칙을 선택하세요.")
