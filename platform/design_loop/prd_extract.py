@@ -12,7 +12,7 @@ import re
 from workspace import ontology_schema as schema
 
 from .financial import SIGNS, is_value
-from .guide_rules import cited_pages
+from .guide_rules import admitted
 from .model_call import call
 
 PRODUCT_TYPES = frozenset({"수신", "여신"})
@@ -60,7 +60,9 @@ def _located(page_text, quote):
 
 class _Checker:
     def __init__(self, pages):
-        self.keyed = cited_pages(pages)
+        self.keyed = admitted(pages)
+        if self.keyed is None:
+            raise ValueError("Admitted derivative page shape")
         self.order = {key: i for i, key in enumerate(self.keyed)}
         self.texts = {key: _norm(p["text"]) for key, p in self.keyed.items()}
         self.issues = []
@@ -130,6 +132,8 @@ def _entries(checker, prd, name, limit):
 
 
 def extract_prd(pages, deps, *, model):
+    if admitted(pages) is None:      # validated before the prompt exists: zero model calls (PR #30 review 1, #3)
+        return {"prd": None, "issues": [{"field": "*", "code": "admission-invalid"}], "blocked": "admission-invalid"}
     text, blocked = call(deps, _SYSTEM, _prompt(pages))
     if blocked:
         return {"prd": None, "issues": [{"field": "*", "code": blocked}], "blocked": blocked}

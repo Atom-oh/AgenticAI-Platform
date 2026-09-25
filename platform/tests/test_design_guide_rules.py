@@ -153,3 +153,14 @@ def test_conditional_rule_keeps_applies_when_after_publish(wb):
     stored = view["nodes"][0]
     assert stored["properties"]["appliesWhen"] == "cond:eligible"
     assert stored["properties"]["citation"]["page"] == 1
+
+
+def test_malformed_admission_blocks_before_any_model_call():
+    """PR #30 review 1, #3: same admission-shape precondition as PRD extraction, zero model calls."""
+    for pages in ([{k: v for k, v in PAGES[0].items() if k != "admissionId"}], [{**PAGES[0], "sourceRef": None}],
+                  ["page"], []):
+        calls = []
+        deps = {"generate": lambda s, u, t: calls.append(u) or '{"rules": []}', "normalize": lambda t: calls.append(t)}
+        out = extract_rules(pages, deps, asset_ids=[], model="m")
+        assert out["blocked"] == "admission-invalid" and out["rules"] == [], pages
+        assert calls == [], pages

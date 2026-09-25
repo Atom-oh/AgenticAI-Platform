@@ -152,3 +152,19 @@ def test_shared_quantity_grammar():
 def test_seed_pages_are_the_admitted_fixture():
     from design_fixtures import pages
     assert pages() == PAGES
+
+
+MALFORMED_PAGES = ([{k: v for k, v in PAGES[0].items() if k != "admissionId"}], [{**PAGES[0], "admissionId": ""}],
+                   [{**PAGES[0], "derivativeHash": "nope"}], [{**PAGES[0], "sourceRef": None}],
+                   [{**PAGES[0], "text": None}], [{**PAGES[0], "page": 0}], [PAGES[0], PAGES[0]], ["page"], [])
+
+
+def test_malformed_admission_blocks_before_any_model_call():
+    """PR #30 review 1, #3: admission shape is validated before a prompt is built or sent."""
+    for pages in MALFORMED_PAGES:
+        calls = []
+        deps = {"generate": lambda s, u, t: calls.append(u) or json.dumps(GOOD, ensure_ascii=False),
+                "normalize": lambda t: calls.append(t)}
+        out = extract_prd(pages, deps, model="m")
+        assert out["blocked"] == "admission-invalid" and out["prd"] is None, pages
+        assert calls == [], pages

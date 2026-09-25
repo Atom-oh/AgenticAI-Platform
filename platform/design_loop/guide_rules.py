@@ -33,8 +33,13 @@ def _norm(text):
 
 def cited_pages(pages):
     """The single `(sourceId, page)` key shape used by extraction and by citation verification (review round 8, AB4)."""
+    if not isinstance(pages, (list, tuple)) or not pages:
+        raise ValueError("No admitted derivative pages")
     out = {}
     for p in pages:
+        if not isinstance(p, dict) or not isinstance(p.get("sourceRef"), dict) \
+                or not isinstance(p["sourceRef"].get("sourceId"), str) or not p["sourceRef"]["sourceId"]:
+            raise ValueError("Admitted derivative page shape")
         page = p.get("page")
         if type(page) is not int or page < 1:
             raise ValueError("Admitted pages carry a positive (logical) page number")
@@ -46,6 +51,15 @@ def cited_pages(pages):
             raise ValueError("Ambiguous admitted page key")
         out[key] = p
     return out
+
+
+def admitted(pages):
+    """`cited_pages(pages)`, or None when any page is not an admitted derivative. Extractors call this BEFORE a
+    prompt is built, so a malformed admission is blocked with zero model calls (PR #30 review 1, #3)."""
+    try:
+        return cited_pages(pages)
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _prompt(pages, asset_ids, condition_ids):
@@ -63,7 +77,9 @@ def _valid_fields(r):
 
 
 def extract_rules(pages, deps, *, asset_ids, model, prompt_version=PROMPT_VERSION, condition_ids=()):
-    keyed = cited_pages(pages)
+    keyed = admitted(pages)
+    if keyed is None:
+        return {"rules": [], "rejected": [], "blocked": "admission-invalid"}
     allowed, conditions = list(asset_ids), set(condition_ids)
     text, blocked = call(deps, _SYSTEM, _prompt(pages, allowed, sorted(conditions)))
     if blocked:
