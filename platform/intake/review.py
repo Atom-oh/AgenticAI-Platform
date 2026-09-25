@@ -116,8 +116,10 @@ def _approve_transcription(host, scope, write, checks, authority):
     try:
         library, writes = prepare_transcription(host, scope, write["item"])
         # The pending decision, the reviewing grant, the policy and sources are
-        # rechecked (with expiry) before every commit attempt, with the lineage guard.
-        return library.commit([write, *writes], extra_checks=checks, guard=authority.recheck)[0]
+        # rechecked (with expiry) before every commit attempt, combined with the
+        # library's own upstream (image) lineage guard into one aggregate
+        # compared with a single fresh clock read taken after both have read.
+        return library.commit([write, *writes], extra_checks=checks, guard=authority)[0]
     except DocumentError as error:
         raise AdmissionError(error.code, error.status) from None
     except Conflict:
@@ -222,17 +224,22 @@ def list_pending(host, scope, *, claims=None):
         cursor = page.get("cursor")
         if not cursor or scanned >= 5000:
             break
-    # Response-wide final recheck after ALL reads: an item accumulated earlier is
-    # returned only if its whole authority still holds now.
+    # Response-wide final recheck after ALL reads: each item's own reads only
+    # collect its deadlines here; a deadline crossed while a later item is being
+    # rechecked must also retire an earlier item's already-collected preview, so
+    # every retained item is compared with ONE fresh clock read taken after the
+    # very last item's last read, not a clock read taken fresh per item.
     _any_grant(storage, scope["actor"], project_id)
-    final = []
+    retained = []
     for item, authority in zip(items, authorities):
         try:
-            authority.recheck()
+            _, deadlines = authority.collect_deadlines()
         except (AdmissionError, CollaborationError):
             continue
-        final.append(item)
-    return {"reviews": final}
+        retained.append((item, deadlines))
+    now = storage.clock()  # after every retained item's last read
+    return {"reviews": [item for item, deadlines in retained
+                        if not any(expiry <= now for expiry, _code in deadlines)]}
 
 
 def route(host, scope, claims, method, parts, body, query):
