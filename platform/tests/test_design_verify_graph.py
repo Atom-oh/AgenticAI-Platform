@@ -448,3 +448,33 @@ def test_engine_modules_import_only_stdlib_pure_schema_and_the_lazy_verifier_hel
         for item in top:                           # the verifier helpers are imported lazily, never at module level
             if isinstance(item, ast.ImportFrom) and item.level == 0:
                 assert item.module not in {"workspace.rules", "workspace.react_quality"}, (name, item.module)
+
+
+def _with_rule(targets, rid="r-review-template"):
+    k = copy.deepcopy(K)
+    k.rules[rid] = {"id": rid, "ruleId": rid, "statement": "템플릿 공통 고지를 유지한다", "required": True,
+                    "severity": "critical", "targets": list(targets), "citation": None, "appliesWhen": None,
+                    "reviewState": "approved", "revision": 1, "contentHash": "c" * 64}
+    return k
+
+
+def test_required_rule_on_a_page_template_is_judged_on_every_consuming_page():
+    """PR #30 review 1, #4: a PageTemplate target resolves to the screens composed from it."""
+    tid = K.screens[FLOW["screens"][0]]["templateId"]
+    assert tid in K.templates
+    k = _with_rule([tid])
+    seen = []
+    judge = {"llm_judge": lambda item, ctx: seen.append((item["id"], ctx["flowText"].split("]")[0])) or
+             {"verdict": "pass", "evidence": "ok"}, "normalize": OK}
+    r = verify(bundle(checklist=design_checklist(GOOD, k)), k, judge)
+    consuming = {s for s in FLOW["screens"] if k.screens[s]["templateId"] == tid}
+    judged = {page[1:].split(":")[0] for item, page in seen if item == "d-rule-r-review-template"}
+    assert consuming and judged == consuming, (judged, consuming)
+    assert r["verdict"] == "pass"
+
+
+def test_unresolved_required_rule_target_blocks():
+    k = _with_rule(["no-such-node"])
+    r = verify(bundle(checklist=design_checklist(GOOD, k)), k, JUDGE)
+    assert r["verdict"] == "blocked" and "reviewer" in r["unavailable"] and not r["approvable"]
+    assert any(i.get("reason") == "target-unresolved" for i in r["roles"]["reviewer"]["incomplete"])

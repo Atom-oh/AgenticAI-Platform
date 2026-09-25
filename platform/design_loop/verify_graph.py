@@ -245,14 +245,31 @@ def _page_order(bundle):
     return sorted(bundle["screens"], key=lambda key: (order.get(key[0], len(order)), key[1] != "default", key[1]))
 
 
+def _unresolved_targets(item, k):
+    """Targets that are not a known Screen, renderable asset, PageTemplate or Procedure of this knowledge."""
+    known = (k.screens, k.assets, k.templates, getattr(k, "procedures", {}))
+    return sorted(t for t in item.get("targets") or [] if not any(t in table for table in known))
+
+
 def _item_pages(item, bundle, k):
+    """Pages an item targets: the screen itself, a screen that renders the target asset, a screen composed from
+    the target PageTemplate, or a screen of the target Procedure (PR #30 review 1, #4)."""
     pages = _page_order(bundle)
     targets = item.get("targets")
     if not targets:
         return pages
     from .route import shown_assets
     wanted = set(targets)
-    return [(s, st) for s, st in pages if s in wanted or (s in k.screens and wanted & set(shown_assets(k, s)))]
+
+    def hit(s):
+        screen = k.screens.get(s)
+        if s in wanted:
+            return True
+        if screen is None:
+            return False
+        return (screen.get("templateId") in wanted or screen.get("procedureId") in wanted
+                or bool(wanted & set(shown_assets(k, s))))
+    return [(s, st) for s, st in pages if hit(s)]
 
 
 def _reviewer(bundle, k, deps, mode, judgments):
@@ -286,6 +303,10 @@ def _reviewer(bundle, k, deps, mode, judgments):
     calls = 0
     by_page = {}
     for item in llm:
+        unresolved = _unresolved_targets(item, k)
+        if unresolved:                  # a required target that names nothing known cannot be reviewed: block
+            incomplete.append({"item": item["id"], "reason": "target-unresolved", "targets": unresolved})
+            continue
         for page in _item_pages(item, bundle, k):
             by_page.setdefault(page, []).append(item)
     for (screen, state), items in by_page.items():
