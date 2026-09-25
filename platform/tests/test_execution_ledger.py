@@ -3304,3 +3304,32 @@ def test_retry_preserves_consumed_prior_bindings_across_a_lost_lease(env):
         ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
     assert error.value.code == "authority-changed"
     assert storage.get(OWNER, "job", job["id"])["calls"] == []
+
+
+# === PR #32 review round 1 regressions =================================================================
+
+def test_manifest_rejects_conflicting_duplicate_prior_descriptors_for_the_same_key(env):
+    """Review 10 finding 1: a manifest naming the same key twice with a CONFLICTING descriptor (different
+    hash/source) must be rejected outright — never resolved by authorizing an input against one descriptor
+    while the durable consumed-prior binding silently uses (or omits) a different one."""
+    storage, ledger, now = env
+    key = storage.key_for(OWNER, "run", "run-a", "rounds/1/source.zip")
+    data_a = b"prior A round source bytes"
+    try:
+        storage.put_blob_once(key, data_a, "application/zip")
+    except Exception:
+        pass
+    prior_a = {"sourceKind": "run-round", "sourceId": "run-a", "revision": "1", "key": key,
+              "sha256": hashlib.sha256(data_a).hexdigest()}
+    prior_b = {"sourceKind": "run-round", "sourceId": "run-b", "revision": "1", "key": key,
+              "sha256": hashlib.sha256(b"prior B round source bytes").hexdigest()}
+    entry = {"key": key, "sha256": prior_a["sha256"], "size": len(data_a)}
+    job = admit(ledger, manifest_extra={"priors": [prior_a, prior_b]})
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    out = put_output(storage, job, "context", "context.json", b"{}")
+    first = chained(job, "context", "n1", inputs=[entry], outputs=[out], status="ok")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(*ids(job), first)
+    assert error.value.code == "manifest-invalid"
+    assert storage.get(OWNER, "job", job["id"])["stages"] == []

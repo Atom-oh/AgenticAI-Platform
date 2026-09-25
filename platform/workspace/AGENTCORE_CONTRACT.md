@@ -686,9 +686,12 @@ while the manifest (or an open handle) is necessarily still readable (review
 8): later revalidation always reads this durable binding, never re-fetching
 the manifest, so a manifest deleted or corrupted afterward cannot erase it.
 Input authorization and this binding are derived from exactly ONE manifest
-read (review 9, #1); reading it twice let a deletion between the reads
-authorize an input against a manifest-listed prior while the second, now-
-failed read left the binding empty. The job itself also keeps a durable,
+read (review 9, #1), keyed into exactly ONE validated key -> descriptor
+mapping (`_keyed_priors`; review 10, #1): a manifest naming the same key
+twice with a CONFLICTING descriptor (a different hash, source or revision)
+is rejected outright (`manifest-invalid`), never resolved by authorizing the
+input against one descriptor while the binding silently used, or omitted, a
+different one. The job itself also keeps a durable,
 job-level accumulator of every consumed prior's descriptor (`consumedPriors`
 on the job record, distinct from a stage entry's own field of the same name;
 review 9, #2), merged in the same transaction whenever a stage or completion

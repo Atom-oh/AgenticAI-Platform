@@ -837,17 +837,18 @@ class Ledger:
             raise LedgerError("code-invalid")
         return self._terminal(owner, job, "failed", error={"code": code}, bump_fence=True, op=op)
 
-    def _allowed_inputs(self, owner, job, manifest_priors):
+    def _allowed_inputs(self, owner, job, keyed_priors):
         """Authorized inputs: key -> {sha256, size} (size None when only the stored object can establish it).
 
-        ``manifest_priors``: the ONE manifest read shared with the durable consumed-prior binding (review 9,
-        #1) — reading the manifest twice let a deletion between the reads authorize an input against a prior
-        that the second, now-failed read then silently dropped from the binding.
+        ``keyed_priors``: the ONE validated key -> descriptor mapping shared with the durable consumed-prior
+        binding (review 9, #1; review 10, #1) — reading the manifest twice, or resolving a duplicate key
+        differently for each purpose, let an input be authorized against a descriptor that the binding then
+        silently dropped or mismatched.
         """
         allowed = {job["manifest"]["ref"]: {"sha256": job["manifest"]["hash"], "size": None}}
         if job.get("releaseBaseline"):
             allowed[job["releaseBaseline"]["key"]] = {"sha256": job["releaseBaseline"]["sha256"], "size": None}
-        for prior in manifest_priors:
+        for prior in keyed_priors.values():
             ref = _object_ref({k: prior[k] for k in ("key", "sha256", "size") if k in prior},
                               optional=("size",))
             if ref is not None and ref["key"] not in allowed:
@@ -889,6 +890,24 @@ class Ledger:
         except (ValueError, AttributeError):
             return []
         return [prior for prior in priors if isinstance(prior, dict)] if isinstance(priors, list) else []
+
+    @staticmethod
+    def _keyed_priors(manifest_priors):
+        """One key -> full descriptor mapping, shared by input authorization, the durable consumed-prior
+        binding and ``open_prior`` (review 10, #1): a manifest naming the same key twice with a CONFLICTING
+        descriptor (a different hash, source or revision) is rejected outright — never resolved by silently
+        picking the first descriptor for one purpose and the last for another, which let an input be
+        authorized against one descriptor while its consumed-prior binding silently used (or omitted) a
+        different one."""
+        keyed = {}
+        for prior in manifest_priors:
+            if not isinstance(prior, dict) or not _is_key(prior.get("key")):
+                continue
+            existing = keyed.get(prior["key"])
+            if existing is not None and existing != prior:
+                raise LedgerError("manifest-invalid")
+            keyed[prior["key"]] = prior
+        return keyed
 
     def _verify_object(self, owner, entry, fields):
         if _object_ref(entry, required=("key", "sha256", "size"),
@@ -976,11 +995,12 @@ class Ledger:
         binding = self._service_binding(job, receipt, attempt, stages) if all(checks) else None
         if binding is None:
             raise LedgerError("receipt-invalid")
-        # One manifest read shared by input authorization AND the durable consumed-prior binding below (review
-        # 9, #1): reading it twice let a deletion between the reads authorize an input against a manifest-
-        # listed prior that the second, now-failed read then silently dropped from the binding.
-        manifest_priors = self._manifest_priors(owner, job)
-        allowed = self._allowed_inputs(owner, job, manifest_priors)
+        # One manifest read, keyed into ONE validated mapping, shared by input authorization AND the durable
+        # consumed-prior binding below (review 9, #1; review 10, #1): reading the manifest twice, or resolving
+        # a duplicate key differently for each purpose, let an input be authorized against one descriptor
+        # while its binding silently used (or omitted) a different one.
+        keyed_priors = self._keyed_priors(self._manifest_priors(owner, job))
+        allowed = self._allowed_inputs(owner, job, keyed_priors)
         inputs = receipt.get("inputs", [])
         if not isinstance(inputs, list) or len(inputs) > 100:
             raise LedgerError("receipt-invalid")
@@ -1002,8 +1022,8 @@ class Ledger:
         self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages)
         # Freeze the full descriptor of every consumed prior now, while the manifest (or its handle) is
         # necessarily still readable (review 8, #1): later revalidation reads this, never the manifest again.
-        # Uses the SAME manifest_priors snapshot as the authorization check above (review 9, #1).
-        available = self._input_priors(owner, job, manifest_priors)
+        # Uses the SAME keyed_priors mapping as the authorization check above (review 9/10, #1).
+        available = self._input_priors(owner, job, keyed_priors)
         consumed_priors = {available[entry["key"]]["key"]: available[entry["key"]] for entry in inputs
                            if entry.get("key") in available and entry.get("sha256") == available[entry["key"]]["sha256"]}
         return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
@@ -1342,7 +1362,7 @@ class Ledger:
         if replay:
             return self._replayed_handle(replay)
         self._current(job, attempt_id, fence, statuses=("running",))
-        prior = next((row for row in self._manifest_priors(owner, job) if row.get("key") == ref), None)
+        prior = self._keyed_priors(self._manifest_priors(owner, job)).get(ref)
         if (prior is None or prior.get("sourceKind") not in ("run-round", "release")
                 or not _is_key(prior.get("key")) or not _is_sha(prior.get("sha256"))
                 or not callable(self.prior_authority)):
@@ -1430,17 +1450,16 @@ class Ledger:
         expiries.extend(consumed_expiries)
         return checks, expiries
 
-    def _input_priors(self, owner, job, manifest_priors):
+    def _input_priors(self, owner, job, keyed_priors):
         """Full descriptors of a prior a receipt input might name: manifest-listed and every currently open
         prior handle (review 8, #1) — a fallback that keeps a descriptor available while a handle is open even
         when the manifest itself is momentarily unavailable.
 
-        ``manifest_priors``: the SAME single manifest read used to authorize inputs (review 9, #1); reading
-        the manifest again here let a deletion between the two reads produce an authorized input with no
-        durable prior descriptor to bind.
+        ``keyed_priors``: the SAME validated key -> descriptor mapping used to authorize inputs (review 9, #1;
+        review 10, #1); reading the manifest again, or resolving a duplicate key differently, let an
+        authorized input end up with no durable prior descriptor to bind (or the wrong one).
         """
-        priors = {prior["key"]: prior for prior in manifest_priors
-                  if _is_key(prior.get("key")) and _is_sha(prior.get("sha256"))}
+        priors = {key: prior for key, prior in keyed_priors.items() if _is_sha(prior.get("sha256"))}
         for handle in (job.get("handles") or {}).values():
             prior = handle.get("prior")
             if (handle.get("direction") == "in" and handle.get("source") == "prior" and isinstance(prior, dict)
