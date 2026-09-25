@@ -223,6 +223,8 @@ class Worker:
         self.clock = clock or time.monotonic
         from workbench.runtime import install
         install(self)
+        from ontology_runtime.dispatch import install as install_ontology
+        install_ontology(self)
 
     def _update(self, owner, kind, identifier, **fields):
         for _ in range(3):

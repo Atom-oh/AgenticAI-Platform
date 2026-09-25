@@ -21,6 +21,7 @@ KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership", "
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
                    "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
                    "wb_artifact", "wb_pension", "wb_report", "wb_tool",
+                   "ac_execution", "ac_operation", "ac_key", "ac_admission",
                    "document", "docrevision", "docbinding", "docaudit", "docanalysis", "docdecision"})
 MAX_BLOB_BYTES = 50 * 1024 * 1024
 MAX_RECORD_BYTES = 350_000
@@ -152,6 +153,11 @@ class Storage:
             if type(expiry) is not int or not now < expiry <= now + 300000:
                 raise ValueError("An ontology cursor requires a bounded expiry")
             data["ttl"] = expiry // 1000
+        if kind in {"ac_execution", "ac_operation"}:
+            expiry = item.get("ttl")
+            if type(expiry) is not int or not now // 1000 < expiry <= now // 1000 + 31 * 86400:
+                raise ValueError("Runtime records require a bounded retention deadline")
+            data["ttl"] = expiry
         data.setdefault("status", {"asset": "uploading", "contract": "draft", "job": "queued",
                                   "run": "queued", "product": "draft"}.get(kind, "active"))
         encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, default=str).encode()
