@@ -180,7 +180,7 @@ def handler(event, context):
                 base_html = body.read().decode("utf-8", "ignore")
             parent_id = base["draftId"]
 
-        # 공개 게시 게이트 (engine plan E2 3a): deny-list 가 없으면 모델 호출 전에 실패한다.
+        # 공개 게시 게이트 (engine plan E2 3a): deny-list 가 없으면 경고 후 식별자 검사만 생략한다(정적화·CSP·미디어 검사는 유지).
         patterns = public_scan.load_patterns()
 
         def publish(job_id: str, n: int, html: str) -> str:

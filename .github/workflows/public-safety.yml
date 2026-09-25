@@ -5,7 +5,8 @@ on:
     branches: [main]
   workflow_call:
     secrets:
-      PUBLIC_DENYLIST: { required: true }
+      # Optional: without it the scan warns and passes (user decision, PR #30 fix round 1).
+      PUBLIC_DENYLIST: { required: false }
 permissions: { contents: read }
 jobs:
   scan:
@@ -17,5 +18,8 @@ jobs:
       - name: Tracked files and names
         env: { PUBLIC_DENYLIST: '${{ secrets.PUBLIC_DENYLIST }}' }
         run: |
+          # No deny-list configured -> warn and pass; a configured deny-list stays fail-closed.
+          allow=
+          if [ -z "$PUBLIC_DENYLIST" ]; then allow=--allow-missing-patterns; fi
           umask 077; printf '%s\n' "$PUBLIC_DENYLIST" > "$RUNNER_TEMP/denylist.txt"
-          python3 scripts/check_public_identifiers.py --patterns-file "$RUNNER_TEMP/denylist.txt"
+          python3 scripts/check_public_identifiers.py --patterns-file "$RUNNER_TEMP/denylist.txt" $allow

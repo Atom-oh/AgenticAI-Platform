@@ -502,12 +502,21 @@ def main(argv=None):
     ap.add_argument("--site", default="")
     ap.add_argument("--no-tree", action="store_true")
     ap.add_argument("--asset-registry", default="")   # tests only; CI uses the tracked registry
-    ap.add_argument("--allow-missing-config", action="store_true")
+    # Only when NO private deny-list is configured (CI: the PUBLIC_DENYLIST secret is absent or empty) the scan warns
+    # and passes. A configured deny-list keeps every fail-closed rule (hits, incomplete scans, unreviewed media).
+    ap.add_argument("--allow-missing-patterns", "--allow-missing-config", dest="allow_missing_patterns",
+                    action="store_true")
     args = ap.parse_args(argv)
     patterns = _patterns(args.patterns_file) if args.patterns_file else []
     if not patterns:
         print("public identifier deny-list is not configured", file=sys.stderr)
-        return 0 if args.allow_missing_config else 2
+        if args.allow_missing_patterns:
+            print("::warning title=Public identifier scan skipped::No private deny-list is configured "
+                  "(PUBLIC_DENYLIST is empty); identifiers, incomplete scans and unreviewed media were NOT checked.")
+            print("WARNING: public identifier scan skipped: deny-list not configured (--allow-missing-patterns)",
+                  file=sys.stderr)
+            return 0
+        return 2
     hits = []
     if not args.no_tree:
         files = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True,

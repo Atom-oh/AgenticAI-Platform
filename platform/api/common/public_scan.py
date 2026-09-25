@@ -21,12 +21,17 @@ loaded from its own path. The approved-media registry is always read explicitly 
 registry blocks publication instead of silently allowing media.
 
 The deny-list lives only in the deployment's private SSM parameter named by `PUBLIC_DENYLIST_PARAM`.
-A missing, empty or unreadable deny-list blocks publication. Matched text is never logged or returned.
+User decision (PR #30 fix round 1): when NO deny-list is configured (parameter name unset, parameter unreadable or
+empty) `load_patterns()` logs a warning and returns `[]`; the identifier scan is then skipped, but sanitization, the
+CSP and the approved-media registry stay mandatory (unreviewed media in the published text still blocks). With a
+configured deny-list every rule stays fail-closed: hits, incomplete scans and unreviewed media block.
+Matched text is never logged or returned.
 """
 from __future__ import annotations
 
 import base64
 import importlib.util
+import logging
 import os
 import re
 import time
@@ -57,6 +62,7 @@ REGISTRY_PATH = core.REGISTRY
 PARAM_ENV = "PUBLIC_DENYLIST_PARAM"
 _CACHE_TTL_S = 300
 _cache: dict = {}
+_log = logging.getLogger(__name__)
 
 
 class PublicationBlocked(Exception):
@@ -76,33 +82,39 @@ def _fetch_parameter(name: str) -> str:
     return boto3.client("ssm").get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
 
 
+def _unconfigured(reason: str) -> list:
+    _log.warning("public identifier deny-list %s; identifier scan skipped (static sanitization and the media "
+                 "registry still apply)", reason)
+    return []
+
+
 def load_patterns() -> list:
-    """Deny-list from the private SSM parameter. Not configured, unreadable or empty → PublicationBlocked."""
+    """Deny-list from the private SSM parameter. Not configured, unreadable or empty -> `[]` with a warning
+    (user decision, PR #30 fix round 1); the caller then publishes only sanitized, media-checked HTML."""
     name = os.environ.get(PARAM_ENV, "").strip()
     if not name:
-        raise PublicationBlocked("public identifier deny-list is not configured")
+        return _unconfigured("is not configured")
     hit = _cache.get(name)
     if hit and time.time() - hit[0] < _CACHE_TTL_S:
         return list(hit[1])
     try:
         raw = _fetch_parameter(name)
-    except Exception as error:  # noqa: BLE001 — any failure to read the deny-list blocks publication
-        raise PublicationBlocked("public identifier deny-list is unreadable") from error
+    except Exception:  # noqa: BLE001 - an unreadable deny-list counts as not configured (warned, never logged)
+        return _unconfigured("is not configured (unreadable)")
     patterns = [line.strip() for line in str(raw or "").splitlines() if line.strip() and not line.startswith("#")]
     if not patterns:
-        raise PublicationBlocked("public identifier deny-list is empty")
+        return _unconfigured("is not configured (empty)")
     _cache[name] = (time.time(), patterns)
     return list(patterns)
 
 
 def check_publishable(text: str, patterns: list, *, language: str = "html", media: set | None = None) -> None:
     """Scan `text` exactly as it will be published. Any hit, unreviewed media (index 0) or incomplete scan
-    blocks. Only pattern indexes are reported."""
-    if not patterns:
-        raise PublicationBlocked("public identifier deny-list is not configured")
+    blocks. Only pattern indexes are reported. With no deny-list (`[]`) only the media registry is enforced
+    (an incomplete scan still blocks, because media could not be verified)."""
     reviewed = registry() if media is None else media
     try:
-        hits = core.scan_string(text, patterns, language=language, registry=reviewed)
+        hits = core.scan_string(text, list(patterns or []), language=language, registry=reviewed)
     except ScanIncomplete as error:
         raise PublicationBlocked("public identifier scan incomplete") from error
     if hits:
@@ -117,9 +129,11 @@ def prepare_static_html(html: str, patterns: list) -> str:
     over-depth embedded resources), blocks publication even though the sanitizer would remove the vector.
     Unreviewed media in the original is not a block by itself: the sanitizer removes it, and the sanitized
     output is then held to the registry like any other published byte."""
-    if not patterns:
-        raise PublicationBlocked("public identifier deny-list is not configured")
-    reviewed = registry()
+    reviewed = registry()                  # mandatory with or without a deny-list
+    if not patterns:                       # no deny-list configured: warned by load_patterns; no identifier scan
+        clean = _with_csp(sanitize_static(html, media=reviewed))
+        check_publishable(clean, [], language="html", media=reviewed)
+        return clean
     try:
         original_hits = [i for i in core.scan_string(html, patterns, language="html", registry=reviewed) if i]
     except ScanIncomplete as error:

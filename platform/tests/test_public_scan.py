@@ -56,23 +56,33 @@ def blocked(html):
 
 # ------------------------------------------------------------------ gate core
 
-def test_missing_or_unreadable_deny_list_blocks(monkeypatch):
+def test_missing_unreadable_or_empty_deny_list_warns_and_scans_nothing(monkeypatch, caplog):
+    """User decision (PR #30 fix round 1): no configured deny-list -> warn, identifier scan skipped."""
     monkeypatch.delenv(ps.PARAM_ENV, raising=False)
-    with pytest.raises(ps.PublicationBlocked):
-        ps.load_patterns()
+    with caplog.at_level("WARNING"):
+        assert ps.load_patterns() == []
+    assert "not configured" in caplog.text
     monkeypatch.setenv(ps.PARAM_ENV, "/test/denylist-" + uuid.uuid4().hex)
     monkeypatch.setattr(ps, "_fetch_parameter", lambda name: (_ for _ in ()).throw(RuntimeError("AccessDenied")))
-    with pytest.raises(ps.PublicationBlocked):
-        ps.load_patterns()
+    assert ps.load_patterns() == []
     monkeypatch.setenv(ps.PARAM_ENV, "/test/denylist-" + uuid.uuid4().hex)
     monkeypatch.setattr(ps, "_fetch_parameter", lambda name: "# comment only\n\n")
-    with pytest.raises(ps.PublicationBlocked):
-        ps.load_patterns()
+    assert ps.load_patterns() == []
     monkeypatch.setenv(ps.PARAM_ENV, "/test/denylist-" + uuid.uuid4().hex)
     monkeypatch.setattr(ps, "_fetch_parameter", lambda name: "ACME\n# c\nOther Name\n")
     assert ps.load_patterns() == ["ACME", "Other Name"]
-    with pytest.raises(ps.PublicationBlocked):
-        ps.prepare_static_html("<p>clean</p>", [])
+
+
+def test_without_a_deny_list_the_static_safety_still_applies():
+    """No deny-list: identifiers are not scanned, but sanitization, CSP and the media registry stay mandatory."""
+    out = ps.prepare_static_html("<p>ACME</p><script>x=1</script><img onerror=alert(1) src=/x.png>", [])
+    assert "<p>ACME</p>" in out and "<script" not in out and "onerror" not in out and out.startswith(ps.CSP_META)
+    unknown = base64.b64encode(_other_png()).decode()
+    out = ps.prepare_static_html(f'<img alt="a" src="data:image/png;base64,{unknown}">', [])
+    assert unknown not in out
+    ps.check_publishable("<p>ACME</p>", [])
+    with pytest.raises(ps.PublicationBlocked):          # unreviewed media still blocks the published text
+        ps.check_publishable(f'<img src="data:image/png;base64,{unknown}">', [])
 
 
 def test_clean_static_draft_is_published_unchanged():
@@ -238,7 +248,7 @@ def _run(html):
 
 
 def _no_patterns():
-    raise ps.PublicationBlocked("public identifier deny-list is not configured")
+    return []            # load_patterns() without a configured deny-list (warns; user decision, fix round 1)
 
 
 FORBIDDEN_DRAFTS = ("<p>ACME</p>", "<p>A&#67;ME</p>", "<span>A</span><span>CME</span>",
@@ -262,10 +272,10 @@ def test_design_store_run_gate(monkeypatch):
     with pytest.raises(ps.PublicationBlocked):     # identifiers in the published run report JSON block too
         design.store_run("r3", {**_run("<p>ok</p>"), "report": {"summary": "ACME"}}, {})
     assert writes == []
-    design, writes = _design(monkeypatch, _no_patterns)
-    with pytest.raises(ps.PublicationBlocked):
-        design.store_run("r4", _run("<p>clean</p>"), {})
-    assert writes == []
+    design, writes = _design(monkeypatch, _no_patterns)      # no deny-list: sanitized page still publishes
+    design.store_run("r4", _run("<p>clean</p><script>x=1</script>"), {})
+    html = dict(writes)["design-runs/r4/intro.html"].decode()
+    assert "<p>clean</p>" in html and "<script" not in html and ps.CSP_META in html
 
 
 def test_design_store_run_without_bucket_needs_no_deny_list(monkeypatch):
@@ -281,7 +291,7 @@ def test_worker_publish_gate(monkeypatch):
                                        (lambda: list(PATTERNS), "<html><body><p>A&#67;ME</p></body></html>", False),
                                        (lambda: list(PATTERNS), "<html><body><span>A</span><span>CME</span></body></html>", False),
                                        (lambda: list(PATTERNS), f'<html><body><img src="{_b64svg(ACME_SVG)}"></body></html>', False),
-                                       (_no_patterns, "<html><body><p>clean</p></body></html>", False)):
+                                       (_no_patterns, "<html><body><p>안내</p><script>x=1</script></body></html>", True)):
         apigw, s3, store = tw._Apigw(), tw._S3(), tw.StudioStore()
         tw._wire(monkeypatch, apigw, s3, store)
         monkeypatch.setattr(ps, "load_patterns", patterns)

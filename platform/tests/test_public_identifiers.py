@@ -26,6 +26,34 @@ def test_missing_config_fails_closed(tmp_path):
     assert r.returncode == 2 and "deny-list" in r.stderr
 
 
+def test_allow_missing_patterns_warns_and_passes_only_without_a_deny_list(tmp_path):
+    """User decision (PR #30 fix round 1): no deny-list configured -> warn and pass; configured -> fail closed."""
+    empty = tmp_path / "empty.txt"
+    empty.write_text("\n", encoding="utf-8")
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text(f"<p>{SENTINEL}</p>", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--patterns-file", str(empty), "--no-tree", "--site", str(site),
+                        "--allow-missing-patterns"], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0 and "::warning" in r.stdout and "not configured" in r.stderr, (r.stdout, r.stderr)
+    configured = tmp_path / "list.txt"
+    configured.write_text(SENTINEL + "\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--patterns-file", str(configured), "--no-tree", "--site",
+                        str(site), "--allow-missing-patterns"], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 1 and SENTINEL not in r.stdout + r.stderr
+
+
+def test_workflows_warn_only_when_the_secret_is_absent():
+    """The flag is passed only when PUBLIC_DENYLIST is empty; the reusable workflow no longer requires the secret."""
+    safety = (ROOT / ".github/workflows/public-safety.yml").read_text(encoding="utf-8")
+    docs = (ROOT / ".github/workflows/deploy-docs.yml").read_text(encoding="utf-8")
+    assert "PUBLIC_DENYLIST: { required: false }" in safety
+    for text in (safety, docs):
+        assert 'if [ -z "$PUBLIC_DENYLIST" ]; then allow=--allow-missing-patterns; fi' in text
+        assert text.count("--allow-missing-patterns") == text.count('allow=--allow-missing-patterns')
+        assert "$allow" in text
+
+
 def test_identifiers_split_across_inline_elements_are_detected():
     assert cpi.scan_string("<span>A</span><span>CME</span>", ["ACME"]) == [1]
     assert cpi.scan_string("A<b>CM</b>E", ["ACME"]) == [1]

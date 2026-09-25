@@ -172,7 +172,8 @@ def store_run(run_id: str, result: dict, meta: dict) -> dict:
     flow = result.get("flow") or {}
     from studio.artifacts import secure_html
     # 공개 게시 게이트 (engine plan E2 3a): 사설 deny-list 로 정적화·검사를 모두 마친 뒤에만 쓴다.
-    # 설정 누락·적중·불완전 검사는 PublicationBlocked 로 쓰기 0건 — 호출부가 storeError 로 보고한다.
+    # deny-list 가 설정돼 있으면 적중·불완전 검사·미검토 미디어는 PublicationBlocked 로 쓰기 0건(호출부가 storeError 로 보고).
+    # 설정이 없으면 경고 후 식별자 검사만 생략하고 정적화·CSP·미디어 레지스트리는 그대로 적용한다.
     patterns = public_scan.load_patterns() if WEB_BUCKET else []
     pages: List[tuple] = []
     for s in flow.get("steps") or []:
