@@ -291,7 +291,10 @@ def request(host, scope, source_ref, *, data_class, claims=None, kind="document-
         return _blocked(["denylist-unavailable"])
     resolved = inspect.resolve(host, scope, source_ref, claims=claims)
     receipt = inspect.inspect(resolved["pages"], denylist=denylist)
-    derived = derivative.normalize(resolved["pages"], denylist)
+    try:
+        derived = derivative.normalize(resolved["pages"], denylist)
+    except derivative.NormalizationInvariant as error:
+        return _blocked([error.code])
     rest = derivative.residual(derived["pages"], denylist)
     blocking = (["residual-identifiers"] if rest["identifiers"] else []) + (
         ["redaction-required"] if rest["pii"] else [])
@@ -379,8 +382,35 @@ def request_image(host, scope, source_ref, *, data_class, claims=None):
     # the same job (current access was rechecked above; the job keeps its deadline).
     identity = {key: value for key, value in data.items() if key != "authorizationExpiresAt"}
     job = host._new_job(scope["owner"], job_id, "intake-image", data, request_hash=schema.digest(identity))
-    host._invoke(scope["owner"], job)
-    return {"status": "queued", "decisionId": data["decisionId"], "job": {"id": job["id"], "status": job["status"]}}
+    if job.get("status") == "failed" and job.get("errorCode") == "dispatch-failed" and not job.get("startedAt"):
+        # A job that was never delivered is requeued by the repeated request, which
+        # rechecked current authority above and carries its own earliest deadline.
+        job = _requeue_image_job(storage, scope["owner"], job, authorization)
+    host._invoke(scope["owner"], job)  # dispatches only a queued job
+    return _image_outcome(host, scope, data["decisionId"], job)
+
+
+def _requeue_image_job(storage, owner, job, authorization):
+    item = {**job, "status": "queued", "progress": 0, "error": None, "errorCode": None,
+            "input": {**job["input"], "authorizationExpiresAt": authorization}}
+    try:
+        return storage.put(owner, "job", item, expected_version=job["version"])
+    except Conflict:
+        return storage.get(owner, "job", job["id"]) or job
+
+
+def _image_outcome(host, scope, decision_id, job):
+    """The actual state of an image request: queued, processing, failed, or the decision."""
+    base = {"decisionId": decision_id, "job": {"id": job["id"], "status": job["status"]}}
+    if job["status"] == "completed":
+        decision = _load(host, scope, decision_id)
+        outcome = {**base, "status": decision["status"]}
+        if decision["status"] == "blocked":
+            outcome["blocking"] = list(decision.get("blocking", []))
+        return outcome
+    if job["status"] == "failed":
+        return {**base, "status": "failed", "errorCode": job.get("errorCode") or "job-failed"}
+    return {**base, "status": "queued" if job["status"] == "queued" else "processing"}
 
 
 def _source_current(host, scope, decision, reader):

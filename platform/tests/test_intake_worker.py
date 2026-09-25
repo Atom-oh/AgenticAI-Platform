@@ -373,3 +373,43 @@ def test_asset_revoked_and_restored_after_queueing_cannot_complete_the_job(env, 
     job = storage.get(owner, "job", queued["job"]["id"])
     assert job["status"] == "failed"
     assert job["input"]["observed"] == [{"owner": owner, "kind": "asset", "id": "flow", "version": 1}]
+
+
+# PR #28 review round 6 ----------------------------------------------------------
+
+def test_repeated_image_request_retries_a_failed_dispatch_and_reports_the_outcome(env):
+    """Review 6, finding 2 (Minor): a dispatch failure is recoverable by repeating the request."""
+    from types import SimpleNamespace
+    from workspace.http import HTTPError
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    transport = env.api.lambda_client
+    env.api.lambda_client = SimpleNamespace(invoke=lambda **kw: {"StatusCode": 500})
+    with pytest.raises(HTTPError) as error:
+        admission.request(env.api, env.scope(), ref, data_class="synthetic", kind="image")
+    assert error.value.status == 503
+    failed = storage.list(owner, "job")[0]
+    assert failed["status"] == "failed" and failed["errorCode"] == "dispatch-failed"
+    env.api.lambda_client = transport
+    calls = len(transport.calls)
+    queued, invoked = _queue(env, ref)  # asserts status "queued"
+    assert queued["job"] == {"id": failed["id"], "status": "queued"} and len(transport.calls) == calls + 1
+    outcome = worker_for(env).handle(invoked)
+    assert outcome["status"] == "completed"
+    # A repeated request now reports the actual outcome, not "queued".
+    again = admission.request(env.api, env.scope(), ref, data_class="synthetic", kind="image")
+    assert again["status"] == "admitted" and again["job"]["status"] == "completed"
+    assert again["decisionId"] == queued["decisionId"]
+
+
+def test_repeated_image_request_reports_a_failed_job(env):
+    """Review 6, finding 2 (Minor): a job that failed in the Worker is reported as failed."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    assert worker_for(env, ocr_status="incomplete").handle(invoked)["status"] == "failed"
+    again = admission.request(env.api, env.scope(), ref, data_class="synthetic", kind="image")
+    assert again["status"] == "failed" and again["job"]["status"] == "failed"

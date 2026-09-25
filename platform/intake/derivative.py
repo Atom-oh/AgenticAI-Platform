@@ -46,6 +46,16 @@ class NormalizationBlocked(Exception):
                          ", ".join(f"{kind}={count}" for kind, count in self.counts.items()))
 
 
+class NormalizationInvariant(Exception):
+    """Normalization would change text outside a replaced identifier (for example a
+    numeric/financial value), or the page buffer could not be kept consistent."""
+
+    code = "normalization-invariant"
+
+    def __init__(self):
+        super().__init__("Normalization would change the source outside replaced identifiers")
+
+
 def _entries(raw):
     try:
         values = json.loads(raw) if isinstance(raw, (str, bytes)) else None
@@ -173,24 +183,99 @@ def _replace_links(text, denylist):
     """One string: internal links, then deny-listed hosts, become the link alias."""
     count = 0
     for finder in (_link_spans, _host_spans):
+        text = unicodedata.normalize("NFC", text)
         spans = finder(text, denylist)
         count += len(spans)
-        text = _apply([text], spans)[0]
+        text = _replace_checked([text], spans)[0]
     return text, count
 
 
 def _replace_terms(text, denylist):
+    text = unicodedata.normalize("NFC", text)
     spans = _term_spans(text, denylist)
-    return _apply([text], spans)[0], len(spans)
+    return _replace_checked([text], spans)[0], len(spans)
+
+
+_NUMERIC = re.compile(r"\d(?:[\d,.]*\d)?")
+_JUNCTION = 32      # context checked on each side of a page junction
+_MAX_SHIFT = 64     # characters that may move across one junction
+
+
+def _numbers(text):
+    return [match.group() for match in _NUMERIC.finditer(text)]
+
+
+def _buffer(texts):
+    """NFC pages whose concatenation is exactly the NFC form of the joined input.
+
+    A composition that spans a page boundary (for example a leading Hangul jamo
+    at the end of one page and its vowel at the start of the next) is attributed
+    to the following page: the unstable tail moves across the junction. Page
+    numbers and order never change. Any junction that cannot be stabilized, or a
+    buffer that differs from the NFC of the whole input, is refused.
+    """
+    pages = [unicodedata.normalize("NFC", text) for text in texts]
+    for index in range(len(pages) - 1):
+        moved = 0
+        while True:
+            left, right = pages[index][-_JUNCTION:], pages[index + 1][:_JUNCTION]
+            if unicodedata.normalize("NFC", left + right) == left + right:
+                break
+            if not pages[index] or moved >= _MAX_SHIFT:
+                raise NormalizationInvariant()
+            pages[index], pages[index + 1] = pages[index][:-1], unicodedata.normalize(
+                "NFC", pages[index][-1] + pages[index + 1])
+            moved += 1
+    if "".join(pages) != unicodedata.normalize("NFC", "".join(texts)):
+        raise NormalizationInvariant()
+    return pages
+
+
+def _replace_checked(texts, spans):
+    """Apply `spans` (offsets into the joined buffer) and verify the result.
+
+    Hard invariant: the output is exactly the buffer with each span substituted,
+    and every numeric/financial token outside a replaced identifier appears
+    unchanged, in order, in the output.
+    """
+    whole = "".join(texts)
+    result = _apply(texts, spans)
+    output = "".join(result)
+    expected, gaps, cursor = [], [], 0
+    for start, end, replacement in spans:
+        gaps.append(whole[cursor:start])
+        expected.extend([whole[cursor:start], replacement])
+        cursor = end
+    gaps.append(whole[cursor:])
+    expected.append(whole[cursor:])
+    if output != "".join(expected):
+        raise NormalizationInvariant()
+    position, found = 0, []
+    for index, gap in enumerate(gaps):
+        found.append(output[position:position + len(gap)])
+        position += len(gap) + (len(spans[index][2]) if index < len(spans) else 0)
+    if [_numbers(gap) for gap in gaps] != [_numbers(text) for text in found]:
+        raise NormalizationInvariant()
+    return result
 
 
 def _normalize_pages(texts, denylist):
-    """Links, deny-listed hosts, then terms, each matched over the joined text."""
-    texts, total = [unicodedata.normalize("NFC", text) for text in texts], 0
+    """Links, deny-listed hosts, then terms, each matched and replaced on one NFC buffer.
+
+    Spans are computed on the joined NFC buffer and applied to that same buffer's
+    page split, so offsets never refer to a differently normalized text.
+    """
+    original = list(texts)
+    texts, total = _buffer(original), 0
+    if _numbers("".join(texts)) != _numbers("".join(original)):
+        raise NormalizationInvariant()
     for finder in (_link_spans, _host_spans, _term_spans):
         spans = finder("".join(texts), denylist)
         total += len(spans)
-        texts = _apply(texts, spans)
+        replaced = _replace_checked(texts, spans)
+        texts = _buffer(replaced)  # an alias junction may need recomposition
+        if _numbers("".join(texts)) != _numbers("".join(replaced)):
+            raise NormalizationInvariant()
     return texts, total
 
 

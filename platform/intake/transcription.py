@@ -168,9 +168,13 @@ def transcribe(host, scope, pending, *, model_id, generate=None, claims=None, tr
     raw = _parse(output)
     flat = [raw["text"], *[cell for row in raw["tables"] for cell in row]]
     receipt = inspect.inspect([{"page": 1, "text": "\n".join(flat)}], denylist=denylist)
-    normalized = {"kind": raw["kind"],
-                  "text": derivative._normalize_one(raw["text"], denylist)[0],
-                  "tables": [[derivative._normalize_one(cell, denylist)[0] for cell in row] for row in raw["tables"]]}
+    try:
+        normalized = {"kind": raw["kind"],
+                      "text": derivative._normalize_one(raw["text"], denylist)[0],
+                      "tables": [[derivative._normalize_one(cell, denylist)[0] for cell in row]
+                                 for row in raw["tables"]]}
+    except derivative.NormalizationInvariant as error:
+        return admission._blocked([error.code])
     rest = derivative.residual([{"page": 1, "text": "\n".join(
         [normalized["text"], *[c for row in normalized["tables"] for c in row]])}], denylist)
     blocking = (["residual-identifiers"] if rest["identifiers"] else []) + (
