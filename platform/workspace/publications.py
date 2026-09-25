@@ -426,13 +426,40 @@ def _destination_view(ctx, record, aggregate=None):
     return None
 
 
-def publication_visible(ctx, record, aggregate=None):
-    """Response-gate view: origin members with current source access, or an effective destination grant."""
+def publication_visible(ctx, record, aggregate=None, payload=None):
+    """Response-gate view of the EXACT returned revision.
+
+    Origin: the payload must be the current record's revision (revision, hash and
+    status), its own sources must be readable now, and the record version is fenced
+    into `aggregate`. Destination: an active grant naming the caller's role for the
+    payload's revision, intersected with current upstream, must yield exactly the
+    payload (hash and nodes); the grant and publication are fenced. An intervening
+    change never authorizes a different revision's payload.
+    """
     if not isinstance(record, dict):
         return False
     if record.get("originProject") == ctx.project_id:
-        return _origin_readable(ctx, record, aggregate)
-    return _destination_view(ctx, record, aggregate) is not None
+        exact = record
+        if payload is not None:
+            if (payload.get("revision") != record.get("revision") or payload.get("hash") != record.get("hash")
+                    or payload.get("status") != record.get("status")):
+                return False
+            if "nodes" in payload:
+                exact = {"nodes": payload["nodes"]}
+        if not _origin_readable(ctx, exact, aggregate):
+            return False
+        if aggregate is not None:
+            aggregate._remember_owned(PUBLICATION_OWNER, "publication", record)
+        return True
+    if payload is None:
+        return _destination_view(ctx, record, aggregate) is not None
+    revision = payload.get("revision")
+    if type(revision) is not int:
+        return False
+    row = ctx.storage.get(ctx.owner, "pub_grant", grant_id(record["id"], revision))
+    value = _granted_view(ctx, row, aggregate)
+    return (value is not None and value.get("hash") == payload.get("hash")
+            and value.get("nodes") == payload.get("nodes"))
 
 
 def grant_visible(ctx, row, aggregate=None):

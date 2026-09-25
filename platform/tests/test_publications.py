@@ -803,3 +803,57 @@ def test_cross_project_impact_rechecks_every_destination_reader(org, monkeypatch
     with pytest.raises(CollaborationError):
         publications.impact(ctx(org.api, "alice", org.origin), pub["id"])
     assert len(seen) == 2
+
+
+# Fix round 5 (PR #29 review 5) -----------------------------------------------
+
+def _replacement_revision(org, ref):
+    """Revise the single origin node to bind a different (replacement) source, as
+    revision 2, leaving the original source (`org.refs[0]`) free to be restricted
+    independently of the new revision."""
+    pid = org.origin
+    current = Ontology(ctx(org.api, "alice", pid)).current()
+    graph = {"schemaVersion": 1, "projectId": pid, "edges": [],
+             "nodes": [node("atom-0", "Atom", project=pid, sourceRefs=[ref], title="replacement", revision=2)]}
+    result = Ontology(ctx(org.api, "alice", pid)).publish_candidate(
+        "collection", graph, expected_generation=current["generation"], request_id="collection-replacement")
+    identifier, generation = result["identities"]["atom-0"], result["generation"]
+    for decision in ("reviewed", "approved"):
+        generation = Ontology(ctx(org.api, "carol", pid)).review_node(
+            identifier, expected_generation=generation, revision=2, decision=decision, reason="checked",
+            request_id=f"replacement-{decision}")["generation"]
+    return {n["id"]: n for n in Ontology(ctx(org.api, "alice", pid)).read([identifier])["nodes"]}
+
+
+def test_publication_detail_authorizes_the_exact_returned_revision(org, monkeypatch):
+    """Review 5 #5: the gate must authorize the payload's OWN revision, not whatever the
+    record has become by the time it checks. Reproduced: detail builds its response from
+    revision 1; before the gate's final authorization re-fetches the record, revision 2
+    (bound to a replacement source) is proposed and approved, and revision 1's original
+    source is restricted. The stale revision-1 payload must not be released with 200, even
+    though the now-current revision 2 remains genuinely accessible."""
+    pub = published(org)
+    replacement = approved(org.api, org.origin, b"Replacement design source.\n", name="design-1.txt",
+                           request="design-replacement")
+    share(org.api, org.origin, replacement)
+    revised = _replacement_revision(org, replacement)
+    original_view = publications.view
+    armed = {"on": True}
+
+    def racing(record):
+        result = original_view(record)
+        if armed["on"] and record.get("revision") == 1:
+            armed["on"] = False
+            pub2 = publications.propose(ctx(org.api, "carol", org.origin), kind="design",
+                                        node_ids=sorted(revised), revision_bindings=bindings(revised))
+            publications.approve(ctx(org.api, "carol", org.origin), pub2["id"])
+            restrict(org, ["owner", "planner"])  # excludes carol (designer) from the original source
+        return result
+    monkeypatch.setattr(publications, "view", racing)
+    status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}", actor="carol", project=org.origin)
+    assert status == 404, payload
+    # Revision 2 (bound to the replacement source, never restricted) is genuinely reachable.
+    status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}", actor="carol", project=org.origin)
+    assert status == 200 and payload["publication"]["revision"] == 2, payload
+
+

@@ -489,9 +489,12 @@ class ResponseGate:
             if view in ("publication", "publication-withdrawn"):
                 record = publications._publication(storage, item.get("id") if isinstance(item, dict) else None)
                 if view == "publication":
-                    return item if publications.publication_visible(ctx, record, self.aggregate) else None
-                if not record or record.get("originProject") != ctx.project_id:
+                    # The exact returned revision (and its sources) is authorized and fenced.
+                    return item if publications.publication_visible(ctx, record, self.aggregate, item) else None
+                if (not record or record.get("originProject") != ctx.project_id
+                        or any(item.get(key) != record.get(key) for key in ("revision", "hash", "status"))):
                     return None
+                self.aggregate._remember_owned(publications.PUBLICATION_OWNER, "publication", record)
                 if not publications._origin_readable(ctx, record, self.aggregate):
                     item = {key: value for key, value in item.items() if key not in ("nodes", "sharing")}
                 return item
