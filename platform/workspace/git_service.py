@@ -7,7 +7,7 @@ import os
 import re
 
 from workspace.criteria import resolve_generation_context
-from workspace.git_export import GitExporter, GitExportError
+from workspace.git_export import GitExportDeliveredUnverified, GitExporter, GitExportError
 from workspace.react_artifacts import read_archive
 from workspace.releases import approved_artifacts
 from workspace.storage import Conflict
@@ -169,6 +169,19 @@ def process_export(worker, owner, job):
                                          release.get("productId") or release["runId"],
                                          commit_time=exported["createdAt"] // 1000,
                                          **({"guard": authority_guard(reader)} if reader is not None else {}))
+    except GitExportDeliveredUnverified as delivered:
+        # The remote branch/commit genuinely exists now (cannot be undone), but a
+        # guard revocation blocked confirming its content matches what was requested.
+        # Persist the observed receipt for attribution/recovery -- never "committed"
+        # (that would claim verified success for a possibly-wrong delivery) -- then
+        # fail the job normally; the generic failure path below only sets status and
+        # error, so these fields are retained even after it runs.
+        if (delivered.sha and re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", delivered.sha)
+                and delivered.source_hash == release["sourceHash"]):
+            worker._update(owner, "gitexport", exported["id"], status="delivered-unverified",
+                           commitSha=delivered.sha, branch=delivered.branch, baseSha=delivered.base,
+                           sourceHash=delivered.source_hash, connectionId=connection["id"])
+        raise ValueError("Git 배포가 이루어졌지만 내용을 확인하지 못했습니다. 별도로 검증하세요.") from None
     except GitExportError as error:
         raise ValueError(f"Git 내보내기를 완료하지 못했습니다: {error.code}") from None
     if (not isinstance(result, dict) or result.get("status") != "committed"

@@ -1157,6 +1157,55 @@ def test_git_export_preserves_the_delivered_commit_after_a_revocation_racing_pub
     assert storage.get(owner, "gitexport", requeued["id"])["status"] != "committed"
 
 
+def test_git_export_gitlab_revocation_during_verify_never_claims_committed_on_mismatch(env, queued_export, monkeypatch):
+    """Review 7 #5: the round-6 fix for #6 treated ANY `ProtectedCallRefused` racing
+    GitLab's atomic create (which delivers commit+branch in one call) as "already
+    delivered, report committed" -- but a guard-blocked verify and a genuine content
+    mismatch are indistinguishable from that call site: the guard fires before the
+    verify's own network read, whether or not the committed content actually matches.
+    Reproduced: a fake GitLab provider silently commits MISMATCHED source bytes (the
+    same tampering `test_remote_success_response_with_wrong_source_is_not_committed_
+    evidence` uses, with no guard at all), combined with revoking the admission grant
+    at the exact moment `POST /commits` (delivery) returns -- the guard then blocks
+    the verify before it ever reads the tampered tree back. The export must never be
+    reported/persisted as "committed" (that would launder the mismatch as verified
+    success); it must fail, while the observed (possibly-wrong) commit SHA is still
+    retained on the record for attribution -- never silently lost either."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote, blob_id
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    revoked = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if method == "POST" and url.endswith("/commits"):
+            # A misbehaving provider silently commits different bytes than requested.
+            sha = result["id"]
+            tree = service.trees[service.commits[sha]["tree"]]
+            tree["generated/studio/run-1/src/App.tsx"] = ("100644", "blob", blob_id(b"wrong source"))
+            revoked["on"] = True
+            _grant_revoked(env)
+        return result
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert revoked["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The observed (possibly-wrong) SHA is retained for attribution, never silently lost.
+    assert exported.get("commitSha") == delivered_sha, exported
+
+
 def approvable_run(env, contract, run_id, admissions=None):
     """A React run whose round carries stored passing evidence (verifier checks stubbed by the caller)."""
     import hashlib

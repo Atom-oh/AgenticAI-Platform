@@ -63,6 +63,20 @@ class GitExportError(Exception):
         super().__init__(message)
 
 
+class GitExportDeliveredUnverified(Exception):
+    """The remote branch/commit now genuinely exists (delivery already happened and
+    cannot be undone), but a guard revocation raced the follow-up integrity
+    verification, so its content was never confirmed against what was requested.
+    Deliberately NOT a `GitExportError`: the caller must persist the observed
+    receipt for attribution/recovery without ever treating this as verified
+    success -- a real content mismatch must still fail loudly, never silently
+    reported as "committed"."""
+    def __init__(self, branch, base, sha, source_hash, target):
+        super().__init__("delivered-unverified")
+        self.branch, self.base, self.sha = branch, base, sha
+        self.source_hash, self.target = source_hash, target
+
+
 def _fail(code):
     raise GitExportError(code, _MESSAGES[code])
 
@@ -584,10 +598,15 @@ class GitExporter:
         # objects first and only deliver at `backend.publish` (`POST /git/refs` / the
         # local ref transaction). A guard revocation between delivery and any further
         # guarded call raises `ProtectedCallRefused` (never `GitExportError`, so the
-        # `except` below does not see it) -- once delivery has genuinely happened,
-        # that must not discard the one record of an action that already cannot be
-        # undone, while a revocation BEFORE delivery must keep blocking it exactly as
-        # it always has.
+        # `except` below does not see it). For GitHub/local nothing has been delivered
+        # yet at this point, so it must keep blocking exactly as it always has. For
+        # GitLab the branch+commit already exist and cannot be undone, but the guard
+        # also blocked the ONLY calls that could have confirmed their content matches
+        # what was requested -- a genuine mismatch and a guard-blocked confirmation are
+        # indistinguishable here, so this must never be reported as verified "committed"
+        # success (that would silently launder a possibly-wrong delivery); instead the
+        # caller gets the observed facts to persist for attribution/recovery without
+        # claiming they were verified.
         try:
             sha = backend.create(base, tree, target, files, message, when, branch)
             delivered = self.connection["provider"] == "gitlab"
@@ -598,7 +617,7 @@ class GitExporter:
                 backend.publish(branch, sha, self.connection["baseBranch"], base)
             except ProtectedCallRefused:
                 if delivered:
-                    return self._result(branch, base, sha, source_hash, target)
+                    raise GitExportDeliveredUnverified(branch, base, sha, source_hash, target) from None
                 raise
         except GitExportError:
             occupied = backend.ref(branch)
