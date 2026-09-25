@@ -856,4 +856,3 @@ def test_publication_detail_authorizes_the_exact_returned_revision(org, monkeypa
     status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}", actor="carol", project=org.origin)
     assert status == 200 and payload["publication"]["revision"] == 2, payload
 
-
