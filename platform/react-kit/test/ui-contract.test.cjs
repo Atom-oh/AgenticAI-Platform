@@ -45,7 +45,7 @@ test('fixed component markup ignores caller class/style/raw HTML', () => {
     })));
   assert(markup.includes('data-studio-component="Panel"'));
   assert(markup.includes('data-studio-component="Button"'));
-  assert(markup.includes('data-studio-version="1.0.0"'));
+  assert(markup.includes('data-studio-version="1.2.0"'));
   assert(markup.includes('data-testid="continue"'));
   assert(markup.includes('type="button"'));
   assert(markup.includes('&lt;script&gt;문자 그대로&lt;/script&gt;'));
