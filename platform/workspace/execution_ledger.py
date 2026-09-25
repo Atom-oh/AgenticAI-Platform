@@ -204,14 +204,15 @@ class CostGuardGate:
         try:
             table = costguard._tbl
             client, ttl = table.meta.client, int(time.time()) + 3 * 86400
+            # costguard._tbl is a boto3 resource Table: its client marshals native Python values itself
+            # (review 5, #1); pre-marshaled {"S": ...} maps would be serialized a second time.
             client.transact_write_items(TransactItems=[
                 {"Put": {"TableName": table.name, "ConditionExpression": "attribute_not_exists(pk)",
-                         "Item": {"pk": {"S": "usage-charge#" + charge_id}, "tokens": {"N": str(tokens)},
-                                  "ttl": {"N": str(ttl)}}}},
-                {"Update": {"TableName": table.name, "Key": {"pk": {"S": "usage#" + costguard._today()}},
+                         "Item": {"pk": "usage-charge#" + charge_id, "tokens": tokens, "ttl": ttl}}},
+                {"Update": {"TableName": table.name, "Key": {"pk": "usage#" + costguard._today()},
                             "UpdateExpression": "ADD tokens :t SET #ttl = :ttl",
                             "ExpressionAttributeNames": {"#ttl": "ttl"},
-                            "ExpressionAttributeValues": {":t": {"N": str(tokens)}, ":ttl": {"N": str(ttl)}}}}])
+                            "ExpressionAttributeValues": {":t": tokens, ":ttl": ttl}}}])
         except Exception as error:  # noqa: BLE001 - classified below; never swallowed
             reasons = getattr(error, "response", {}).get("CancellationReasons") or []
             if reasons and isinstance(reasons[0], dict) and reasons[0].get("Code") == "ConditionalCheckFailed":

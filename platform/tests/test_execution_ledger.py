@@ -2556,11 +2556,11 @@ def test_production_cost_gate_records_each_charge_once_and_surfaces_failures(mon
         def transact_write_items(self, TransactItems):
             if self.down:
                 raise OSError("costguard unreachable")
-            marker = TransactItems[0]["Put"]["Item"]["pk"]["S"]
+            marker = TransactItems[0]["Put"]["Item"]["pk"]
             if marker in self.markers:
                 raise Canceled("ConditionalCheckFailed")
             self.markers.add(marker)
-            self.tokens += int(TransactItems[1]["Update"]["ExpressionAttributeValues"][":t"]["N"])
+            self.tokens += TransactItems[1]["Update"]["ExpressionAttributeValues"][":t"]
 
     client = Client()
     table = types.SimpleNamespace(name="cache-test", meta=types.SimpleNamespace(client=client))
@@ -2678,3 +2678,38 @@ def test_negative_output_chunk_indexes_are_refused(xfer):
         with pytest.raises(LedgerError) as error:
             ledger.tool().write_chunk(*ids(job), handle["handleId"], index, b64(data))
         assert error.value.code == "transfer-invalid"
+
+
+# === PR #27 review round 5 regressions ===============================================================
+
+def test_production_daily_charge_serializes_native_values_through_the_real_resource_client(monkeypatch):
+    """Review 5 finding 1: costguard._tbl is a boto3 resource; the charge must be marshaled exactly once."""
+    import json
+    import types
+    import boto3
+    from botocore.stub import Stubber
+    from workspace.execution_ledger import CostGuardGate
+    table = boto3.resource("dynamodb", region_name="us-east-1", aws_access_key_id="test-only",
+                           aws_secret_access_key="test-only").Table("cache-test")
+    client = table.meta.client
+    captured = []
+    client.meta.events.register_first(
+        "before-call.*.*", lambda params, model, **kwargs: captured.append(json.loads(params["body"]))
+        if model.name == "TransactWriteItems" else None)
+    fake = types.SimpleNamespace(_tbl=table, budget_ok=lambda: True, _today=lambda: "2027-01-15")
+    monkeypatch.setenv("CACHE_TABLE", "cache-test")
+    monkeypatch.setitem(sys.modules, "common.costguard", fake)
+    monkeypatch.setitem(sys.modules, "common", types.SimpleNamespace(costguard=fake))
+    with Stubber(client) as stub:
+        stub.add_response("transact_write_items", {})
+        stub.add_client_error("transact_write_items", "TransactionCanceledException",
+                              response_meta={}, modeled_fields={"CancellationReasons": [
+                                  {"Code": "ConditionalCheckFailed"}, {"Code": "None"}]})
+        CostGuardGate().record(300, charge_id="chg-1")
+        CostGuardGate().record(300, charge_id="chg-1")          # already recorded: idempotent, no error
+        stub.assert_no_pending_responses()
+    put, update = captured[0]["TransactItems"][0]["Put"], captured[0]["TransactItems"][1]["Update"]
+    assert put["Item"]["pk"] == {"S": "usage-charge#chg-1"} and put["Item"]["tokens"] == {"N": "300"}
+    assert update["Key"] == {"pk": {"S": "usage#2027-01-15"}}
+    assert update["ExpressionAttributeValues"][":t"] == {"N": "300"}
+    assert set(update["ExpressionAttributeValues"][":ttl"]) == {"N"}
