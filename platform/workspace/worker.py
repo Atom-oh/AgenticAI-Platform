@@ -271,11 +271,15 @@ class Worker:
             elif task == "document-analysis":
                 from documents.analysis import process_analysis
                 result = process_analysis(self, owner, job)
+            elif task == "intake-image":
+                from intake.worker import process_image
+                result = process_image(self, owner, job)
             else:
                 raise ValueError("지원하지 않는 작업입니다.")
             # These tasks commit their result and terminal job state under
             # the same authority fence; do not add a later unfenced write.
-            if task.startswith("document-") or task == "workbench" and job["input"].get("operation") == "ontology-analyze":
+            if (task.startswith("document-") or task == "intake-image"
+                    or task == "workbench" and job["input"].get("operation") == "ontology-analyze"):
                 current_job = self.storage.get(owner, "job", identifier)
                 if not current_job or current_job.get("status") != "completed":
                     raise ValueError("문서 작업의 원자적 완료 기록을 확인하지 못했습니다.")
@@ -283,6 +287,23 @@ class Worker:
                 self._update(owner, "job", identifier, status="completed", progress=100, result=result)
             return {"status": "completed", "jobId": identifier}
         except Exception as error:
+            if job.get("task") == "intake-image":
+                # Never overwrite a committed outcome (decision + job in one transaction).
+                try:
+                    current_job = self.storage.get(owner, "job", identifier)
+                    if current_job and current_job.get("status") == "completed":
+                        return {"status": "completed", "jobId": identifier}
+                    from intake.worker import IntakeBlocked
+                    message = str(error)[:300] if isinstance(error, IntakeBlocked) else "이미지 반입을 완료하지 못했습니다."
+                    code = "intake-blocked" if isinstance(error, IntakeBlocked) else "intake-image-failed"
+                    fields = {"status": "failed", "error": message, "errorCode": code}
+                    if isinstance(error, IntakeBlocked):
+                        fields["result"] = {"decisionId": job["input"].get("decisionId"), "status": "blocked",
+                                            "blocking": error.reasons}
+                    self._update(owner, "job", identifier, **fields)
+                except Exception:
+                    return {"status": "failed", "jobId": identifier, "failurePersisted": False}
+                return {"status": "failed", "jobId": identifier}
             if job.get("task") == "workbench" and job.get("input", {}).get("operation") == "ontology-analyze":
                 # A read/response failure after the atomic commit must never
                 # turn an already published analysis into a failed job.

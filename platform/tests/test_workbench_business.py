@@ -304,3 +304,34 @@ def test_pension_report_approval_is_exact_and_stale_sources_cannot_approve():
     with pytest.raises(CollaborationError):
         call(route, api, scope, "POST", f"reports/{report['id']}/approve",
              {"version": report["version"], "contentHash": report["contentHash"]})
+
+
+def test_source_expiry_during_the_final_deadline_read_blocks_the_commit(wb, monkeypatch):
+    """PR #28 review 7: the deadline check compares with a clock read after its last read."""
+    wb.storage.clock = lambda: wb.now
+    src = source(wb)
+    run(wb, queue(wb, src))
+    current = wb.storage.get(wb.owner, "wb_source", src["id"])
+    wb.now = current["accessExpiresAt"] - 1
+    identifier = project_call(wb, "GET", "knowledge")["items"][0]["id"]
+    get, put_many, state = wb.storage.get, wb.storage.put_many, {"attempt": False}
+
+    def reading(owner, kind, identifier_):
+        row = get(owner, kind, identifier_)
+        if state["attempt"] and kind == "wb_source":
+            wb.now += 2  # time crosses the source expiry during the guard's own read
+        return row
+
+    def attempt(writes, checks=None, **kwargs):
+        state["attempt"] = any(w["kind"] == "wb_report" for w in writes)
+        try:
+            return put_many(writes, checks, **kwargs)
+        finally:
+            state["attempt"] = False
+
+    monkeypatch.setattr(wb.storage, "get", reading)
+    monkeypatch.setattr(wb.storage, "put_many", attempt)
+    with pytest.raises(CollaborationError) as error:
+        project_call(wb, "POST", "reports", {"requestId": "expiry-during-guard", "type": "regulation",
+            "title": "Source expiry during the guard read", "evidenceIds": [identifier]})
+    assert error.value.code == "stale-evidence"

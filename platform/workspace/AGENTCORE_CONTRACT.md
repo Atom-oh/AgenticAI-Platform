@@ -604,6 +604,141 @@ The implementation must record the concrete private module/storage/entry-point
 bindings before installation. Source admission reads revalidate current policy,
 grant where required, source audience and the exact artifact/inspection hashes.
 
+#### Concrete bindings (B0 intake; offline code, not deployed)
+
+These bindings are implemented and tested offline. `IntakeAdminFn` is
+synthesized only with `-c intakeAdmin=true` and is deployed with B1; G0-ADMISSION
+live evidence and the privacy redaction adapter remain outstanding.
+
+- **Module.** `platform/intake/*`: `records` (closed schemas, `seal`,
+  `validate`, `is_current`), `admin_handler` (IAM-only administration),
+  `inspect` (current-authority resolution and metadata-only receipts),
+  `derivative` (`identifier-normalization-1`), `images` (v1 image profile),
+  `imaging` (image and vision derivatives), `admission` (`request`, `decide`,
+  `verify`, `pages_for`, `admission_ref`), `review` (reviewer decisions),
+  `collection` (code collections), `prompts` (prompt text), `transcription`
+  (diagram/table transcription), `audit` (metadata-only export), `worker`
+  (Worker task `intake-image`).
+- **Storage kinds and partitions.** `adm_policy`, `adm_provenance`, `adm_grant`,
+  `adm_resolver` (code-collection resolver profiles; IAM-administered, packages
+  verified against the platform package registry) and `adm_audit` (one metadata
+  event per administration operation) in the owner partition `intake:deployment`;
+  `adm_decision` in the project partition `project:<id>`. Derivatives,
+  inspection receipts and private mappings are blobs under
+  `Storage.key_for(owner, "adm_decision", <id>, ...)`. Every record has an
+  immutable `revision`, `hash` (canonical digest of the record without `hash`
+  and storage fields), `status` and `expiresAt`; unknown fields, kinds, statuses
+  and values fail closed.
+- **IAM-only entry point.** `IntakeAdminFn` (`infra/lib/intake.ts`, handler
+  `intake.admin_handler.handler`) with operations `put_policy`,
+  `activate_policy`, `retire_policy`, `register_provenance`,
+  `revoke_provenance`, `grant_reviewer`, `revoke_grant`,
+  `put_resolver_profile` and `retire_resolver_profile`. Events shaped like API
+  Gateway or a Function URL, or a context without `invoked_function_arn`, are
+  refused (`forbidden-transport`) with no write; `operator` is an audit label
+  only. It has no API route, Function URL or `apigateway.amazonaws.com`
+  permission, no `lambda:InvokeFunction` on other functions, and table access is
+  limited by `dynamodb:LeadingKeys` to the `intake:deployment` partition
+  (asserted by `workspace/check_infra.py`). Whenever intake is configured
+  (`intakeAdmin`, `intakeDenylistParam` or `intakeDeployment` context), the
+  Workspace API and Worker roles carry an explicit Deny of `PutItem`,
+  `UpdateItem`, `DeleteItem`, `BatchWriteItem` and PartiQL writes on that
+  partition (`ForAnyValue:StringEquals dynamodb:LeadingKeys`); reads and
+  `ConditionCheckItem` fences remain. `check_infra.py` fails any other policy
+  that can write the workspace table without that Deny. Without intake context
+  the admission path has no deployment scope (`policy-unavailable`) and the
+  main-stack template is unchanged. With intake configured, the Workspace API
+  (reviewer routes and document admission), the Worker and IntakeAdminFn all
+  receive the same `INTAKE_DEPLOYMENT` (`intakeDeployment` context, default the
+  stack name); `check_infra.py` checks each function's environment on its own.
+- **Reviewer routes.** `GET /studio-api/intake/reviews` and
+  `POST /studio-api/intake/reviews/{decisionId}` require the workspace JWT, a
+  current `adm_grant` covering the project with `review-internal`, **and**
+  current source access through `Sources.resolve`. The grant never confers
+  source access; project ownership and in-app groups confer nothing. Previews
+  show derivative text only.
+- **Profile `identifier-normalization-1`.** The private deny-list is read only
+  from the SSM SecureString named by `INTAKE_DENYLIST_PARAM` or the private S3
+  key named by `INTAKE_DENYLIST_KEY`; a missing, unreadable or invalid list
+  blocks (`denylist-unavailable`). Replacement is longest-term-first,
+  NFC-normalized and ASCII case-insensitive (default aliases `고객사 A` for names
+  and `[내부 링크]` for internal URLs and deny-listed hosts); numbers are
+  untouched. Spans are found and applied on one NFC buffer of the joined pages
+  (a composition across a page boundary belongs to the following page), and a
+  hard invariant requires the output to equal that buffer with only the spans
+  substituted and every numeric token outside them unchanged; any violation
+  blocks (`normalization-invariant`). Admission requires a clean residual scan (no deny-list term,
+  internal URL or `pii.scan_rules` hit). Code collections use one neutral
+  identifier-safe alias per matched term (`neutral_<n>`) consistently across
+  file text, path segments, package scopes and the derived resolver.
+- **Decisions.** Synthetic/public inputs require a current, in-scope
+  `adm_provenance` matching the exact source revision and byte hash;
+  internal-non-sensitive inputs, prompt text and transcriptions are
+  `pending-review` until a reviewer admits them. A `diagram-transcription`
+  decision binds its admitted image decision (`lineage`); verifying it
+  recursively verifies that image decision and fences its records, so revoking
+  either reviewer grant invalidates the transcription and its library revision. Expiry is
+  `min(policy, provenance/grant, now + 30 days)`. A repeated request returns its recorded
+  decision; `request(..., generation=n)` (1..1000) is an explicit fresh
+  evaluation under a new decision id (for example after provenance
+  registration), and earlier decisions remain as history. `verify` raises
+  `decision-not-current`, `policy-changed`, `grant-revoked`, `source-changed`,
+  `artifact-changed` or `inspection-changed`. `pages_for` is the only text read
+  for model use, in bounded batches (≤ 400 000 bytes by default, never above
+  512 KiB) with a 5-minute cursor bound to decision, revision, derivative hash
+  and actor, and reruns `verify` for every batch. Every verification ends with
+  a final recheck after all reads (every record expiry and the authorization
+  deadline are collected during the reads and compared with one clock read
+  taken after the last read, as in each commit attempt's deadline guard), and every delivery path repeats it through
+  one shared `admission.Authority.recheck()` after its last read, immediately
+  before returning anything: `pages_for`, `imaging.read_vision_chunk`,
+  `imaging.vision_input`, `imaging.descriptor` (OCR text),
+  `collection.analyzer_request` (which also fences the `adm_resolver` profile
+  and uses only the verified index), each `GET /intake/reviews` item and the
+  whole response after all reads (pending decision, policy, the actor's grants,
+  transcription image lineage and source fences). Model calls and commits use
+  the same recheck: `transcription.transcribe` (which sends the region in the
+  delivered vision image's coordinates, checking that image's PNG dimensions
+  against the recorded `downscale-WxH` transform, while the decision's
+  lineage keeps the canonical normalized-image region) immediately before `generate`
+  and again before its commit, keeping the original `Sources` reader so the
+  pre-generation source observations fence the commit,
+  `admission.decide` (every admission path) before and on each commit attempt,
+  `request_image` before queueing (the job freezes the project
+  `authorityRevision` and the earliest known authorization deadline, the
+  verified scope's `authorizationExpiresAt` or the token `exp`, never extended
+  by the five-minute fallback used only when neither is known; its id and
+  request hash exclude the token deadline, so a refreshed token replays it
+  while the job keeps its deadline; a repeated request requeues a job whose
+  dispatch failed before it started, with that request's own earliest deadline,
+  and every response reports the actual outcome: `queued`, `processing`,
+  `failed` with its `errorCode`, or the decision's status; the job also persists every observed
+  source record version, part of its id, so a revoked and restored asset is a
+  new request), the Worker's `intake-image` processing and commit (the scope
+  keeps the job's authorization deadline; the frozen epoch and the observed
+  source versions are required before processing and on every attempt), and review
+  approval/publication on each attempt: the source fences (`Sources.recheck`) and the exact decision,
+  policy, provenance and grant versions must still be current, schema-valid and
+  unexpired. Grants and provenance pass `records.validate` on every use; a
+  grant must name `review-internal` for the reviewing actor and provenance must
+  be a `fixture` for synthetic data or a `public-reference` for public data.
+- **Code-collection ZIPs.** The ZIP asset is at most 8 MiB. Before any member
+  is decompressed, the central directory must show at most 100 selected files,
+  100 KiB per text file, 2 MiB of text and 8 MiB expanded in total including
+  assets; reads are then bounded by each member's declared size and the
+  remaining budget (`collection-too-large` / `collection-format`).
+- **Image normalization evidence.** Every image decision binds
+  `artifact.normalization.sha256`, the hash of a closed
+  `image-normalization-1` receipt blob (`normalization.json`:
+  original/normalized hashes, dimensions, mode, EXIF orientation and
+  transposition, ICC handling and conversion, metadata stripping, vision
+  transform), validated by `records.validate_normalization` on every `verify`.
+- **Redaction.** PII redaction is `unavailable`: an input whose inspection or
+  residual scan finds PII is `blocked: redaction-required` until the privacy
+  adapter for source documents is reviewed. Sanitized SVG is blocked
+  (`svg-sanitizer-unavailable`) until a reviewed sanitizer lands, so SRC-05 is
+  partial.
+
 ## Phase 0: mandatory capability gates
 
 ### Resolved implementation choices

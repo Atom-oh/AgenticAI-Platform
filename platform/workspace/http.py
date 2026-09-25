@@ -31,7 +31,7 @@ _EDITABLE = ("schemaVersion", "title", "brief", "assetIds", "viewport", "rules",
 _BASE_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
 _JOB_TARGETS = {"finalize": ("asset", "assetId"), "run": ("run", "runId"), "release": ("release", "releaseId"),
                 "git": ("gitexport", "exportId"), "document-finalize": ("docrevision", "revisionId"),
-                "document-analysis": ("docanalysis", "analysisId")}
+                "document-analysis": ("docanalysis", "analysisId"), "intake-image": ("adm_decision", "decisionId")}
 
 
 class HTTPError(Exception):
@@ -166,6 +166,14 @@ class WorkspaceAPI:
             scope = self.collaboration.resolve_scope(owner, project_id)
             if segments[0] == "ontology":
                 from workspace.ontology_api import route
+                scope = self.collaboration.require(scope, "read")
+                result = route(self, scope, claims, method, segments[1:],
+                               _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
+                return _json(result[0], result[1])
+            if segments[0] == "intake":
+                # Reviewer routes only: JWT + a current IAM-administered grant.
+                # Policy/provenance/grant administration is never reachable here.
+                from intake.review import route
                 scope = self.collaboration.require(scope, "read")
                 result = route(self, scope, claims, method, segments[1:],
                                _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
