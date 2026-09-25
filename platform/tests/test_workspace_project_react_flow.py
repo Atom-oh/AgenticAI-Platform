@@ -739,3 +739,31 @@ def test_contract_validation_recheck_closes_a_race_between_two_assets_own_reads(
                               actor="carol", project=project["id"])
     assert calls["other"] == 2
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_revoked_base_run_404s_instead_of_a_refine_criteria_status(monkeypatch):
+    """PR #33 review 3 #1: `baseRunId` was resolved with plain `_get()` --
+    existence only, never authorized -- before its stale fields (outputType,
+    contractId, contractVersion, visualPolicy) drove the refinement-
+    compatibility check. A revoked base run's own GET already 404s, but
+    naming the SAME run as `baseRunId` (matching contract/version, an
+    explicit outputType mismatch) let the check read its still-stored react
+    outputType and raise 409 refine-criteria-changed instead -- an existence
+    oracle distinguishable from a missing/foreign baseRunId's 404. Authorize
+    the base run (the same lineage check a plain GET's response gate
+    applies) before any of its fields are read for that purpose."""
+    api = make_api()
+    project = shared(api)
+    publication, run = _queued_run(api, project, "base-revoked")
+    owner = "project:" + project["id"]
+    asset = api.storage.get(owner, "asset", publication["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", "/runs/" + run["id"], actor="carol", project=project["id"])[0] == 404
+    body = {"contractId": run["contractId"], "contractVersion": run["contractVersion"],
+            "outputType": "html", "baseRunId": run["id"], "requestId": "refine-revoked"}
+    status, payload = request(api, "POST", "/runs", body, actor="carol", project=project["id"])
+    status_missing, payload_missing = request(api, "POST", "/runs",
+                                               {**body, "baseRunId": "does-not-exist", "requestId": "refine-missing"},
+                                               actor="carol", project=project["id"])
+    assert (status, payload.get("code")) == (status_missing, payload_missing.get("code"))
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)

@@ -792,6 +792,22 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Resource not found")
         return record
 
+    def _authorized_run(self, owner, identifier, gate=None):
+        """The current, accessible run (its round list already filtered by
+        permission), or a 404 identical to a missing one.
+
+        A run whose own upstream lineage is revoked must never be distinguishable
+        from a missing/foreign one by a DIFFERENT, content-dependent status (e.g.
+        a refinement-compatibility or base-round check reached using its stale
+        fields) -- authorize it the same way a plain GET's response gate would,
+        before any of its fields are read for that purpose.
+        """
+        stored = self._get(owner, "run", identifier)
+        run = gate.authorize("run", stored) if gate is not None else stored
+        if run is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        return run
+
     def _run_view(self, owner, record, scope, cache=None, seen=()):
         """Report current criteria independently of the browser's product filter."""
         cache = {} if cache is None else cache
@@ -1633,7 +1649,7 @@ class WorkspaceAPI:
         from engine import model_catalog
         inherited_policy = None
         if body.get("baseRunId"):
-            base_run = self._get(owner, "run", body["baseRunId"])
+            base_run = self._authorized_run(owner, body["baseRunId"], gate)
             if (base_run.get("outputType") == "react" and body.get("contractId") == base_run.get("contractId")
                     and body.get("contractVersion") == base_run.get("contractVersion")):
                 body = dict(body)
@@ -1737,7 +1753,7 @@ class WorkspaceAPI:
         if "baseRound" in data and not data.get("baseRunId"):
             raise HTTPError(400, "invalid-base", "Select a base run for the requested round")
         if data.get("baseRunId"):
-            base = self._get(owner, "run", data["baseRunId"])
+            base = self._authorized_run(owner, data["baseRunId"], gate)
             number = _integer(data.get("baseRound", base.get("bestRound")), "Base round", 1, 5)
             selected = next((row for row in base.get("rounds", []) if row.get("number") == number), None)
             if not selected or not selected.get("htmlKey") or not selected.get("artifactSha256"):
