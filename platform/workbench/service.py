@@ -28,13 +28,23 @@ UPSTREAM_ADMISSION_KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_de
 def check_source_deadlines(storage, checks, claims=None, deadline=None):
     """Recheck the aggregate deadline after reads and transaction preparation.
 
-    `deadline` is the verified scope's `authorizationExpiresAt` (ms), which binds
-    even when the claims carry no `exp` (a server-side context for deferred work).
+    Every deadline (source access, upstream admission/policy/provenance/grant
+    expiry, the token `exp`, and `deadline`, the verified scope's
+    `authorizationExpiresAt` in ms, which binds even when the claims carry no
+    `exp`) is collected during the reads and compared with one fresh clock read
+    taken after the last read, immediately before the transaction attempt.
     """
-    deadlines = []
-    now = storage.clock()
-    if deadline is not None and (type(deadline) is not int or deadline <= now):
-        fail(401, "authorization-expired", "인증이 만료되었습니다.")
+    authorization, upstream, sources = [], [], []
+    if deadline is not None:
+        if type(deadline) is not int:
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        authorization.append(deadline)
+    expiry = (claims or {}).get("exp")
+    if expiry is not None:
+        try:
+            authorization.append(int(expiry) * 1000)
+        except (ValueError, TypeError, OverflowError):
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
     for check in checks:
         if check["kind"] in UPSTREAM_ADMISSION_KINDS:
             # Upstream intake authority (image/transcription admission, policy,
@@ -46,8 +56,10 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
                 row = records.validate(check["kind"], row) if row else None
             except ValueError:
                 row = None
-            if not row or row["version"] != check["version"] or not records.is_current(row, now):
+            if (not row or row["version"] != check["version"] or row.get("status") not in ("active", "admitted")
+                    or type(row.get("expiresAt")) is not int):
                 fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
+            upstream.append(row["expiresAt"])
             continue
         if check["kind"] != "wb_source":
             continue
@@ -55,13 +67,13 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
         if (not source or source["version"] != check["version"]
                 or type(source.get("accessExpiresAt")) is not int):
             fail(409, "stale-evidence", "검증한 원본 권한이 변경되었습니다.")
-        deadlines.append(source["accessExpiresAt"])
-    expiry = (claims or {}).get("exp")
-    if expiry is None and not deadlines:
-        return
-    if expiry is not None and int(expiry) * 1000 <= now:
+        sources.append(source["accessExpiresAt"])
+    now = storage.clock()  # after the last read
+    if authorization and min(authorization) <= now:
         fail(401, "authorization-expired", "인증이 만료되었습니다.")
-    if deadlines and min(deadlines) <= now:
+    if upstream and min(upstream) <= now:
+        fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
+    if sources and min(sources) <= now:
         fail(409, "stale-evidence", "검증한 원본의 유효 기간이 만료되었습니다.")
 
 

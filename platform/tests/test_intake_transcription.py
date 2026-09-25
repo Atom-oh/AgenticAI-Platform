@@ -779,3 +779,42 @@ def test_service_commit_attempt_enforces_the_scope_deadline_without_token_expiry
         storage.clock = clock
     assert error.value.status == 401
     assert storage.get(f"project:{env.pid}", "comment", "probe-audit") is None
+
+
+# PR #28 review round 7 ----------------------------------------------------------
+
+def test_image_admission_expiring_during_the_guard_read_publishes_nothing(chain, monkeypatch):
+    """Review 7, finding 1: the commit guard compares every deadline with a clock read after its reads."""
+    from workbench.service import Service
+    from workspace.ontology_store import CURRENT, Ontology
+    assert library_review(chain, "bob")[0] == 200
+    ref = doc_ref(chain)
+    storage = chain.api.storage
+    image_id = chain.chain["image"]["id"]
+    expires = storage.get(chain.chain["owner"], "adm_decision", image_id)["expiresAt"]
+    get, put_many, clock = storage.get, storage.put_many, storage.clock
+    state = {"attempt": False}
+
+    def reading(owner, kind, identifier):
+        row = get(owner, kind, identifier)
+        if state["attempt"] and kind == "adm_decision" and identifier == image_id:
+            storage.clock = lambda: expires + 1  # expiry crossed during the guard's own read
+        return row
+
+    def attempt(writes, checks=None, **kwargs):
+        state["attempt"] = any(w["kind"] == "ontology" for w in writes)
+        try:
+            return put_many(writes, checks, **kwargs)
+        finally:
+            state["attempt"] = False
+
+    monkeypatch.setattr(storage, "get", reading)
+    monkeypatch.setattr(storage, "put_many", attempt)
+    try:
+        with pytest.raises(CollaborationError) as error:
+            Ontology(Service(chain.api, chain.scope(), {"sub": "alice"})).publish_candidate(
+                "guide-rules", rule_graph(chain, ref), expected_generation=None, request_id="rules-7")
+    finally:
+        storage.clock = clock
+    assert error.value.status == 409
+    assert get(chain.chain["owner"], "ontology", CURRENT) is None
