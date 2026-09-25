@@ -828,12 +828,16 @@ class Sources:
         """Run metadata under the same lineage authority as its rounds.
 
         A revoked run-level upstream denies the whole record (`404 not-found`); a
-        round whose own admission lineage is revoked is omitted.
+        round whose own admission lineage is revoked, or whose publishing-handoff/1
+        state restricts it from this role (`_round_permission`), is omitted.
         """
         self._fresh()
         self._run_upstream_historical(run)
         rounds = []
         for row in run.get("rounds", []):
+            if not isinstance(row, dict) or (round_state(run, row) not in ("reviewable", "approved")
+                                             and self.ctx.scope["role"] not in ROUND_EDITORS):
+                continue  # The same content permission as the run-round adapter and downloads.
             probe = Sources(self.ctx)
             try:
                 probe._row_admissions_historical(row if isinstance(row, dict) else {})

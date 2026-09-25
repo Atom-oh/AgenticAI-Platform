@@ -168,7 +168,8 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
 - Content-bearing JSON routes use the same reader in a project scope:
   `GET /contracts/:id` (`Sources.contract_access`: bound `assetIds` and baseline
   still permitted), `GET /runs/:id` (`Sources.run_access`: run-level lineage; rounds
-  whose own admission lineage is revoked are omitted), `GET /releases/:id`, the
+  whose own admission lineage is revoked, or whose publishing-handoff/1 state
+  (draft/failed/needs-changes) is restricted from the caller's role, are omitted), `GET /releases/:id`, the
   `/contracts`, `/runs` and `/releases` listings and `/batches/:id` runs. An
   inaccessible record is `404 not-found` or omitted; listings page only authorized
   rows with an opaque `pagecur-…` cursor (5-minute `ontology_cursor` record bound

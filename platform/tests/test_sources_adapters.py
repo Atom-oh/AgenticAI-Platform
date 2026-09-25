@@ -1155,3 +1155,14 @@ def test_revocation_before_approval_storage_never_persists_the_approval(env, des
     status, payload = http(env, "POST", f"/runs/{run['id']}/approve", body, actor="carol")
     assert status != 200 and not armed["on"], payload
     assert "approval" not in storage.get(owner, "run", run["id"])
+
+
+def test_run_json_and_listings_apply_round_state_permission(env, design):
+    """Review 5 #3: restricted rounds never appear in run detail or listings for other roles."""
+    failed = react_run(env, design[1], run_id="run-failed", status="needs_changes", passed=False)
+    status, payload = http(env, "GET", f"/runs/{failed['id']}", actor="bob")
+    assert status == 200 and payload["run"]["rounds"] == [], payload
+    status, listed = http(env, "GET", "/runs", actor="bob")
+    row = next(item for item in listed["runs"] if item["id"] == failed["id"])
+    assert row["rounds"] == []
+    assert [r["number"] for r in http(env, "GET", f"/runs/{failed['id']}", actor="carol")[1]["run"]["rounds"]] == [1]
