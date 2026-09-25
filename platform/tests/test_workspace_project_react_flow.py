@@ -1,4 +1,5 @@
 import os
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -215,3 +216,66 @@ def test_page_comment_inherits_its_produced_rounds_authorization():
     status, data = request(api, "POST", "/comments", {**body, "requestId": "page-comment-2"}, actor="bob",
                            project=project["id"])
     assert status == 404, data
+
+
+def test_batch_authorizes_its_pinned_contract_revision_not_the_current_one():
+    """Review 6 #3: batch authorization checked whatever the contract currently is,
+    ignoring the batch's own pinned revision (and the run references it exposes).
+    Reproduced: after the batch pins revision 1 (explicitly bound to a reference
+    asset, alongside the mandatory guideline asset), edit the contract to drop that
+    reference asset from `assetIds` (a new unapproved revision 2, guideline
+    unchanged), then revoke it. Each run the batch created (still bound to the OLD
+    pinned revision 1 and its full input set) now denies GET individually; batch
+    detail and listing must deny identically, not still disclose runIds/baselineRunId/
+    slots for a pin whose bound input no longer authorizes."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    ref_bytes = b"abc"
+    status, data = request(api, "POST", "/assets", {"name": "reference.txt", "size": len(ref_bytes),
+                           "sha256": hashlib.sha256(ref_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    reference = data["asset"]
+    original = api.storage.key_for(owner, "asset", reference["id"], "original")
+    api.storage.put_blob(original, ref_bytes, "text/plain")
+    reference = api.storage.put(owner, "asset", {**reference, "status": "stored", "uploadStatus": "stored",
+                                "parseStatus": "complete", "originalKey": original,
+                                "projectId": project["id"]}, expected_version=reference["version"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내",
+                           "rules": [rule], "assetIds": [reference["id"]]}, actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    assert reference["id"] in contract["assetIds"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    status, data = request(api, "POST", "/batches", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "mode": "guided", "variationCount": 2, "requestId": "batch-pin-gate"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    batch, runs = data["batch"], data["runs"]
+    assert batch["runIds"] and batch["baselineRunId"] in batch["runIds"] and len(runs) == len(batch["runIds"])
+    status, data = request(api, "GET", f"/batches/{batch['id']}", actor="dana", project=project["id"])
+    assert status == 200 and data["batch"]["runIds"] == batch["runIds"]
+    # Edit the contract to drop the reference asset from `assetIds` (guideline is
+    # unchanged, so this edit is allowed) -- a new, unapproved draft revision 2.
+    status, data = request(api, "PUT", f"/contracts/{contract['id']}", {"version": contract["version"],
+                           "assetIds": []}, actor="carol", project=project["id"])
+    assert status == 200 and data["contract"]["status"] == "draft", data
+    assert reference["id"] not in data["contract"]["assetIds"]
+    api.storage.put(owner, "asset", {**reference, "accessRevoked": True}, reference["version"])
+    for run in runs:
+        assert request(api, "GET", "/runs/" + run["id"], actor="dana", project=project["id"])[0] == 404
+    status, payload = request(api, "GET", f"/batches/{batch['id']}", actor="dana", project=project["id"])
+    assert status == 404, payload
+    status, payload = request(api, "GET", "/batches", actor="dana", project=project["id"])
+    assert status == 200 and batch["id"] not in {row["id"] for row in payload["batches"]}, payload

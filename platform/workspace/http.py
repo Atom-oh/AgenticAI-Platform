@@ -284,11 +284,12 @@ class ResponseGate:
         if kind == "asset":
             return reader.asset_access(record)
         if kind == "batch":
-            contract = (storage.get(self.owner, "contract", record["contractId"])
-                        if isinstance(record.get("contractId"), str) else None)
-            if contract is None:
-                return None
-            reader.contract_access(contract)
+            # The batch's OWN pinned contract revision, not whatever the contract has
+            # since become: the exact same reference and check a run's own contract
+            # lineage uses (`_contract_ref` + historical `_contract`), so an edited-away
+            # or revoked pinned input denies the batch exactly like it denies its runs.
+            ref = reader._contract_ref(record)
+            reader._contract(ref, historical=True)
             return record
         if kind == "export":
             release = (storage.get(self.owner, "release", record["releaseId"])
@@ -521,6 +522,18 @@ class ResponseGate:
                 numbers = {row.get("number") for row in authorized.get("rounds", []) if isinstance(row, dict)}
                 item = {**item, "rounds": [row for row in item.get("rounds", [])
                                            if isinstance(row, dict) and row.get("number") in numbers]}
+            elif view == "batch":
+                # The pinned-contract check above only gates the batch as a whole; each
+                # emitted run reference (runIds, baselineRunId, slots) is independently
+                # authorized too, so a run inaccessible on its own (e.g. its own upstream
+                # revoked) never surfaces its ID here either.
+                visible = {run_id for run_id in item.get("runIds", [])
+                          if isinstance(run_id, str) and self._run_visible(run_id)}
+                item = {**item, "runIds": [run_id for run_id in item.get("runIds", []) if run_id in visible],
+                       "baselineRunId": item.get("baselineRunId") if item.get("baselineRunId") in visible else None,
+                       "slots": [dict(slot, runId=None) if isinstance(slot, dict) and slot.get("runId")
+                                and slot["runId"] not in visible else slot
+                                for slot in item["slots"]] if isinstance(item.get("slots"), list) else item.get("slots")}
             return item
         if view == "baseline":
             if not isinstance(item, dict):
