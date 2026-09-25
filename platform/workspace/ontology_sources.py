@@ -1111,7 +1111,18 @@ class Sources:
             self.resolve(ref)
         return self.recheck() if recheck else list(self.observed.values())
 
-    def recheck(self):
+    def recheck_deadlines(self):
+        """Like `recheck`, but returns `(fences, deadlines)` instead of comparing
+        them: every non-deadline check (workbench refs, historical refs, the
+        component package, each observed record's version and status) still
+        fails immediately. Each observed upstream admission record's expiry and
+        the reader's own authorization bound are only collected here, as
+        `(expiresAt, code)` pairs, for the caller to compare with one fresh
+        clock read taken after every read it has collected — by itself
+        (`recheck`), or together with other reads collected first (a response
+        that must retire several already-read items with one clock read taken
+        after the last of them, or an admission guard that also fences its own
+        records)."""
         self._fresh()
         if self.workbench_refs:
             from workbench import knowledge
@@ -1124,13 +1135,30 @@ class Sources:
             from workspace.component_catalog import read_catalog
             if self.package_hashes != {read_catalog()["hash"]}:
                 fail(409, "ontology-package-stale", "조회 중 컴포넌트 기준이 변경되었습니다.")
+        deadlines = []
         for check in self.observed.values():
             row = self.storage.get(check["owner"], check["kind"], check["id"])
             if not row or row["version"] != check["version"]:
                 fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
             if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "capability",
                                  "adm_sharing"):
-                from intake.records import is_current
-                if not is_current(row, self.storage.clock()):
+                if row.get("status") not in ("active", "admitted") or type(row.get("expiresAt")) is not int:
                     fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
-        return list(self.observed.values())
+                deadlines.append((row["expiresAt"], "source-upstream-revoked"))
+        bound = self.ctx.scope.get("authorizationExpiresAt")
+        if bound is not None:
+            if type(bound) is not int:
+                fail(401, "authorization-expired", "인증이 만료되었습니다.")
+            deadlines.append((bound, "authorization-expired"))
+        return list(self.observed.values()), deadlines
+
+    def recheck(self):
+        fences, deadlines = self.recheck_deadlines()
+        now = self.storage.clock()  # after the last read
+        if deadlines:
+            expiry, code = min(deadlines, key=lambda item: item[0])
+            if expiry <= now:
+                if code == "authorization-expired":
+                    fail(401, code, "인증이 만료되었습니다.")
+                fail(409, code, "원본 반입 승인이 만료되었거나 회수되었습니다.")
+        return fences

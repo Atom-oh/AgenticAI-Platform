@@ -52,6 +52,11 @@ def process(worker, owner, job):
         fail(503, "workbench-processing-failed", "Workbench 작업을 완료하지 못했습니다.")
 
 
+def _refusal(kind, identifier):
+    from workspace.storage import ReservedRecord
+    return ReservedRecord(kind, identifier, "marked-artifact")
+
+
 def _mark_failed(worker, owner, job, code):
     """System recovery records only failure metadata, even for a revoked actor.
 
@@ -60,6 +65,9 @@ def _mark_failed(worker, owner, job, code):
     newer source. The parent's existing machinery owns the job terminal status.
     """
     if not isinstance(job, dict) or not isinstance(job.get("input"), dict):
+        return
+    from workspace.storage import is_reserved
+    if is_reserved(job):
         return
     data = job["input"]
     operation = data.get("operation")
@@ -75,6 +83,10 @@ def _mark_failed(worker, owner, job, code):
         identifier = (data.get("batchId") if operation == "index" else data.get("artifactId")
                       if operation in {"skill-execute", "ontology-analyze"} else data.get("skillId"))
         current = worker.storage.get(owner, kind, identifier)
+        if is_reserved(current):
+            # A missing job never makes a marked artifact legacy (platform-execution/1).
+            worker.storage._report(owner, _refusal(kind, identifier))
+            return
         if (not current or current.get("jobId") != job.get("id")
                 or current.get("status") in {"completed", "failed", "cancelled", "FAILED", "DRAFT", "APPROVED", "DEPRECATED"}):
             return

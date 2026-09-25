@@ -11,10 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_intake_admission import env, guide, internal_admitted  # noqa: F401,E402
 from intake_support import api  # noqa: F401,E402
 from intake import admission, audit  # noqa: E402
+from workspace import execution_ledger as _ledger_module  # noqa: E402
 
 
 def ledger_job(env, decision, *, at):
-    """A job in the B0 ledger record shape (`execution_ledger` job fields; that unit writes it)."""
+    """A job in the B0 ledger record shape (`execution_ledger` job fields; that unit writes it).
+
+    This mimics an execution-ledger write, so it uses the ledger's own writer token
+    (`platform-execution/1`); a plain write would be refused as a reserved record.
+    """
     ref = admission.admission_ref(decision)
     owner = f"project:{env.pid}"
     return env.api.storage.put(owner, "job", {
@@ -27,7 +32,7 @@ def ledger_job(env, decision, *, at):
         "transfers": [{"handleId": "h-1", "attemptId": "att-1", "decisionId": decision["id"],
                        "artifactHash": ref["artifactHash"], "stage": "context", "at": at,
                        "text": "SECRET-TRANSFER-TEXT"}],
-        "result": {"text": "SECRET-RESULT"}})
+        "result": {"text": "SECRET-RESULT"}}, _writer=_ledger_module._WRITER)
 
 
 def test_export_contains_ids_and_hashes_for_decisions_and_ledger_transfers(env):

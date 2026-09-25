@@ -1160,6 +1160,9 @@ class WorkspaceAPI:
             return self._get(owner, "job", job["id"])
 
     def _new_job(self, owner, identifier, task, data, request_hash=None):
+        from workspace.storage import RESERVED_TASKS
+        if task in RESERVED_TASKS:
+            raise HTTPError(400, "reserved-task", "이 작업 유형은 별도 실행 경로에서만 생성됩니다.")
         record = {"id": identifier, "task": task, "input": data, "status": "queued", "progress": 0}
         if request_hash:
             record["requestHash"] = request_hash
@@ -1399,7 +1402,10 @@ class WorkspaceAPI:
             if len(writes) + len(checks) > 100:
                 raise HTTPError(409, "approval-scope-limit", "승인 근거가 한 번에 확인할 수 있는 범위를 넘습니다.")
             before_attempt = reader.recheck
-        return self.storage.put_many(writes, checks=checks, before_attempt=before_attempt)[0]
+        # Human approval may update a design-linked run; outcome statuses remain ledger-only.
+        from workspace import storage as storage_module
+        return self.storage.put_many(writes, checks=checks, before_attempt=before_attempt,
+                                     _writer=storage_module._human_writer())[0]
 
     def _contract_approve(self, owner, record, body, scope=None, gate=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)
