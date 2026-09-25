@@ -27,7 +27,10 @@ from fixtures.make_design_pass import seed_screens
 from test_design_prd_extract import GOOD, OK, PAGES
 
 CHROMIUM = "/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell"
-JUDGE = {"llm_judge": lambda item, ctx: {"verdict": "pass", "evidence": "ok"}, "normalize": OK}
+from workspace.react_quality import react_report_passes as _passes  # noqa: E402  production adapters (injected)
+from workspace.rules import contract_hash as _contract_hash  # noqa: E402
+JUDGE = {"llm_judge": lambda item, ctx: {"verdict": "pass", "evidence": "ok"}, "normalize": OK,
+         "react_report_passes": _passes, "contract_hash": _contract_hash}
 
 
 @pytest.fixture
@@ -87,11 +90,11 @@ def test_offline_engine_chain_from_ontology_to_handoff(local_browser):
     dist = {name: base64.b64decode(value) for name, value in build["files"].items()}
     browser = evaluate_bundle(dist, contract, expected_hash=build["bundleHash"])
     assert browser["passed"], ([c for c in browser["checks"] if c["status"] != "pass"], browser["blockingFindings"])
-    report = assemble(build, browser, contract=contract)
+    report = assemble(build, browser, contract=contract, contract_hash_fn=_contract_hash)
     # 8b. the large-text second pass (V-02) over the same bundle and contract
     large = evaluate_bundle(dist, contract, expected_hash=build["bundleHash"], text_scale=2)
     assert large["largeText"]["status"] == "pass" and large["passed"], (large["largeText"], large["blockingFindings"])
-    large_report = assemble(build, large, contract=contract)
+    large_report = assemble(build, large, contract=contract, contract_hash_fn=_contract_hash)
     # 9. verification graph: pass and approvable with the full design checklist
     bundle = {"prd": prd, "flow": flow, "expectation": expectation, "screens": screens, "binding_values": values,
               "contract": contract, "browser_report": report, "large_text_report": large_report,

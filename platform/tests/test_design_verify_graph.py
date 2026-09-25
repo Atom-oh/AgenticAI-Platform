@@ -32,7 +32,11 @@ CONTRACT_FULL, PASS_REPORT = _FIX["contract"], _FIX["report"]
 LARGE_REPORT = {**copy.deepcopy(PASS_REPORT), "textScale": 2.0,
                 "largeText": {"status": "pass", "overflow": [], "unscaled": []}}
 OK = lambda text: text  # noqa: E731  verify-only normalization fake (Global Constraints; as in E6/E7)
-JUDGE = {"llm_judge": lambda item, ctx: {"verdict": "pass", "evidence": "ok"}, "normalize": OK}
+# The production verifier adapters C/B2 inject (design_loop never imports them; PR #30 review 1, #9).
+from workspace.react_quality import react_report_passes as _passes  # noqa: E402
+from workspace.rules import contract_hash as _contract_hash  # noqa: E402
+PROD = {"react_report_passes": _passes, "contract_hash": _contract_hash}
+JUDGE = {"llm_judge": lambda item, ctx: {"verdict": "pass", "evidence": "ok"}, "normalize": OK, **PROD}
 CHROMIUM = "/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell"
 needs = pytest.mark.skipif(not (ROOT / "react-kit" / "node_modules").exists() or not shutil.which("node"), reason="react-kit")
 
@@ -71,7 +75,7 @@ def test_missing_judge_is_blocked():
 
 
 def test_missing_normalization_hook_is_blocked():
-    r = verify(bundle(), K, {"llm_judge": JUDGE["llm_judge"]})
+    r = verify(bundle(), K, {"llm_judge": JUDGE["llm_judge"], **PROD})
     assert r["verdict"] == "blocked" and r["unavailable"] == ["reviewer"]
 
 
@@ -255,7 +259,7 @@ def test_rules_v2_predicates():
 
 def test_the_judge_sees_one_page_and_the_step_list():
     seen = []
-    deps = {"llm_judge": lambda item, ctx: seen.append((item, ctx)) or {"verdict": "pass", "evidence": "ok"}, "normalize": OK}
+    deps = {"llm_judge": lambda item, ctx: seen.append((item, ctx)) or {"verdict": "pass", "evidence": "ok"}, "normalize": OK, **PROD}
     assert verify(bundle(), K, deps)["verdict"] == "pass"
     item, ctx = next((i, c) for i, c in seen if c["flowText"].startswith("[amount:default]"))
     assert item["target"] == "screen"
@@ -268,7 +272,7 @@ def test_the_judge_sees_one_page_and_the_step_list():
         ids = [i["id"] for i in json.loads(user)["items"]]
         return json.dumps({"verdicts": {i: {"verdict": "pass", "evidence": "ok"} for i in ids}})
 
-    assert verify(bundle(), K, {"generate": generate, "normalize": OK})["verdict"] == "pass"
+    assert verify(bundle(), K, {"generate": generate, "normalize": OK, **PROD})["verdict"] == "pass"
     user = json.loads(next(u for u in users if "[confirm:default]" in u))
     assert "예금자보호법에 따라 보호됩니다" in user["flowText"] and "[amount:default]" not in user["flowText"]
     assert [s["id"] for s in user["steps"]] == FLOW["screens"]
@@ -340,7 +344,7 @@ def test_judge_budget_three_fill_variants_by_ten_pages():
         ids = [i["id"] for i in json.loads(user)["items"]]
         return json.dumps({"verdicts": {i: {"verdict": "pass", "evidence": "ok"} for i in ids}})
 
-    deps, judgments, gui_calls = {"generate": generate, "normalize": OK, "verify_lineage": CURRENT}, {}, 0
+    deps, judgments, gui_calls = {"generate": generate, "normalize": OK, "verify_lineage": CURRENT, **PROD}, {}, 0
     for variant in ("a", "b", "c"):
         screens = {}
         for s in FLOW["screens"]:
@@ -363,16 +367,16 @@ def test_assemble_mirrors_the_runtime_and_raises_on_mismatch():
     build = {**PASS_REPORT["build"], "previewHtml": "<html>x</html>", "files": {"a": "b"}, "sourceFiles": {}}
     browser = {k: v for k, v in PASS_REPORT.items() if k not in ("build", "sourceHash", "catalogHash", "artifactSha256",
                                                                  "contractHash", "outputType")}
-    report = assemble(build, browser, contract=CONTRACT_FULL)
+    report = assemble(build, browser, contract=CONTRACT_FULL, contract_hash_fn=_contract_hash)
     assert "files" not in report["build"] and "previewHtml" not in report["build"] and "sourceFiles" not in report["build"]
     assert report["contractHash"] == contract_hash(CONTRACT_FULL) and report["outputType"] == "react"
     assert report["artifactSha256"] == __import__("hashlib").sha256(b"<html>x</html>").hexdigest()
     with pytest.raises(ValueError):
-        assemble(build, {**browser, "bundleHash": "0" * 64}, contract=CONTRACT_FULL)
+        assemble(build, {**browser, "bundleHash": "0" * 64}, contract=CONTRACT_FULL, contract_hash_fn=_contract_hash)
     with pytest.raises(ValueError):
-        assemble(build, browser, contract={**CONTRACT_FULL, "catalogHash": "0" * 64})
+        assemble(build, browser, contract={**CONTRACT_FULL, "catalogHash": "0" * 64}, contract_hash_fn=_contract_hash)
     with pytest.raises(ValueError):
-        assemble({**build, "ok": False}, browser, contract=CONTRACT_FULL)
+        assemble({**build, "ok": False}, browser, contract=CONTRACT_FULL, contract_hash_fn=_contract_hash)
 
 
 @pytest.fixture
@@ -410,7 +414,7 @@ def test_real_run_approval_accepts_a_round_whose_report_came_from_assemble(local
                                               contract=payload["contract"]))
         dist = {n: base64.b64decode(v) for n, v in build["files"].items()}
         browser = evaluate_bundle(dist, payload["contract"], expected_hash=build["bundleHash"])
-        report = assemble(build, browser, contract=payload["contract"])
+        report = assemble(build, browser, contract=payload["contract"], contract_hash_fn=_contract_hash)
         assembled.append(copy.deepcopy(report))
         assert report["artifactSha256"] == hashlib.sha256(preview_html(dist).encode()).hexdigest()
         return report
@@ -481,7 +485,7 @@ def test_required_rule_on_a_page_template_is_judged_on_every_consuming_page():
     k = _with_rule([tid])
     seen = []
     judge = {"llm_judge": lambda item, ctx: seen.append((item["id"], ctx["flowText"].split("]")[0])) or
-             {"verdict": "pass", "evidence": "ok"}, "normalize": OK}
+             {"verdict": "pass", "evidence": "ok"}, "normalize": OK, **PROD}
     r = verify(bundle(checklist=design_checklist(GOOD, k)), k, judge)
     consuming = {s for s in FLOW["screens"] if k.screens[s]["templateId"] == tid}
     judged = {page[1:].split(":")[0] for item, page in seen if item == "d-rule-r-review-template"}
@@ -542,13 +546,27 @@ def test_reviewer_cache_is_not_reused_without_a_current_lineage_verifier():
         calls.append(1)
         ids = [i["id"] for i in json.loads(user)["items"]]
         return json.dumps({"verdicts": {i: {"verdict": "pass", "evidence": "ok"} for i in ids}})
-    for deps, reused in (({"generate": generate, "normalize": OK}, False),
-                         ({"generate": generate, "normalize": OK, "verify_lineage": lambda s: 1 / 0}, False),
-                         ({"generate": generate, "normalize": OK, "verify_lineage": lambda s: False}, False),
-                         ({"generate": generate, "normalize": OK, "verify_lineage": CURRENT}, True)):
+    for deps, reused in (({"generate": generate, "normalize": OK, **PROD}, False),
+                         ({"generate": generate, "normalize": OK, "verify_lineage": lambda s: 1 / 0, **PROD}, False),
+                         ({"generate": generate, "normalize": OK, "verify_lineage": lambda s: False, **PROD}, False),
+                         ({"generate": generate, "normalize": OK, "verify_lineage": CURRENT, **PROD}, True)):
         judgments = {}
         assert verify(bundle(), K, deps, judgments=judgments)["verdict"] == "pass"
         first = len(calls)
         assert verify(bundle(), K, deps, judgments=judgments)["verdict"] == "pass"
         assert (len(calls) == first) is reused, deps.keys()
         calls.clear()
+
+
+def test_missing_production_adapters_block_the_tester():
+    """PR #30 review 1, #9: the tester's predicate and contract hasher are injected; missing -> blocked."""
+    from design_loop.evidence import EvidenceUnavailable, assemble
+    for drop in ("react_report_passes", "contract_hash"):
+        deps = {k: v for k, v in JUDGE.items() if k != drop}
+        r = verify(bundle(), K, deps)
+        assert r["verdict"] == "blocked" and "tester" in r["unavailable"], drop
+    r = verify(bundle(), K, {**JUDGE, "react_report_passes": lambda c, rep: 1 / 0})
+    assert r["verdict"] == "blocked" and "tester" in r["unavailable"]
+    build = {**PASS_REPORT["build"], "previewHtml": "<html>x</html>"}
+    with pytest.raises(EvidenceUnavailable):
+        assemble(build, {"bundleHash": build["bundleHash"]}, contract=CONTRACT_FULL)

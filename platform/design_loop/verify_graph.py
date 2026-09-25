@@ -8,8 +8,9 @@ V-01, V-02, V-04, V-05; Codex #11, #22, #23).
   `deps["verify_lineage"]` confirms its lineage is current. No judge, no normalization hook, an empty checklist, a
   page text over 6 000 characters or any `incomplete` item makes the reviewer `unavailable`.
 - **Tester:** the assembled report (`evidence.assemble`) must match the bundle's build (`stale-evidence`), carry the
-  contract's catalog and contract hashes, and satisfy the production predicate
-  `workspace.react_quality.react_report_passes`. Failed required checks are critical, accessibility violations
+  contract's catalog and contract hashes, and satisfy the production predicate injected as
+  `deps["react_report_passes"]` (`workspace.react_quality.react_report_passes`), with the contract hash from
+  `deps["contract_hash"]` (`workspace.rules.contract_hash`). Failed required checks are critical, accessibility violations
   major. The large-text second pass (`large_text_report`, text_scale >= 2, same bundle and contract hash) must
   pass with empty `overflow`/`unscaled`; anything else is critical. No report or contract means the tester is
   `unavailable`.
@@ -19,9 +20,9 @@ V-01, V-02, V-04, V-05; Codex #11, #22, #23).
 otherwise. `approvable` needs `pass` and no `new-asset-candidate` finding. `run` repairs only `fail` verdicts, always
 rebuilds the evidence after a regeneration, and escalates at the cap without ever granting approvability.
 
-The tester needs the production predicate (`workspace.react_quality`, `workspace.rules`). They are imported lazily,
-only inside the tester, so this module still loads with just the standard library and the pure schema modules; an
-image without the workspace verifier modules makes the tester `unavailable` (fail closed), never a pass.
+`design_loop` imports only the standard library and the pure schema modules (PR #30 review 1, #9), so the tester's
+production predicate and contract hasher are injected through `deps`; a missing adapter makes the tester
+`unavailable` (blocked), never a pass.
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ from . import coverage as coverage_mod
 from . import rules_v2
 from .composition import text_of, validate
 from .convention import Registry
+from .evidence import EvidenceUnavailable, contract_hash
 from .model_call import call
 
 RESOURCES = Path(__file__).resolve().parent / "resources"
@@ -354,27 +356,25 @@ def _reviewer(bundle, k, deps, mode, judgments):
     return findings, incomplete, {"items": len(checklist), "judgeCalls": calls}
 
 
-def _predicates():
-    try:
-        from workspace.react_quality import react_report_passes
-
-        from .evidence import contract_hash
-    except ImportError:                               # pragma: no cover - stripped image
+def _predicates(deps):
+    """The injected production adapters, or None (tester unavailable) when either is missing."""
+    passes, hasher = (deps or {}).get("react_report_passes"), (deps or {}).get("contract_hash")
+    if not callable(passes) or not callable(hasher):
         return None
-    return react_report_passes, contract_hash
+    return passes, hasher
 
 
-def _tester(bundle):
+def _tester(bundle, deps):
     report, contract = bundle.get("browser_report"), bundle.get("contract")
     if not isinstance(report, dict) or not isinstance(contract, dict):
         return [], "missing-evidence"
     build = bundle.get("build")
     if not isinstance(build, dict) or build.get("bundleHash") != report.get("bundleHash"):
         return [_finding("tester", "critical", "stale-evidence", "the Browser report is not for this build")], "stale"
-    predicates = _predicates()
+    predicates = _predicates(deps)
     if predicates is None:
         return [], "predicate-unavailable"
-    passes, chash = predicates
+    passes, hasher = predicates
     findings = []
     inner = report.get("build") or {}
     if (inner.get("bundleHash") != report.get("bundleHash") or inner.get("catalogHash") != contract.get("catalogHash")
@@ -382,9 +382,11 @@ def _tester(bundle):
         findings.append(_finding("tester", "critical", "react-evidence-mismatch",
                                  "report, build and contract catalog/bundle hashes must match"))
     try:
-        expected_hash = chash(contract)
+        expected_hash = contract_hash(contract, hasher)
     except ValueError:
         expected_hash = None
+    except EvidenceUnavailable:
+        return [], "predicate-unavailable"
     if expected_hash is None or report.get("contractHash") != expected_hash:
         findings.append(_finding("tester", "critical", "contract-hash-mismatch", "the report is not for this contract"))
     required = {r["id"] for r in contract.get("rules", []) if r.get("required", True)}
@@ -395,7 +397,11 @@ def _tester(bundle):
     for v in (report.get("accessibility") or {}).get("violations") or []:
         findings.append(_finding("tester", "major", "accessibility-violation", "",
                                  rule=v.get("id") if isinstance(v, dict) else str(v)))
-    if not passes(contract, report) and not any(f["severity"] == "critical" for f in findings):
+    try:
+        passed = passes(contract, report) is True
+    except Exception:  # noqa: BLE001 - a predicate that cannot run is missing evidence
+        return findings, "predicate-unavailable"
+    if not passed and not any(f["severity"] == "critical" for f in findings):
         findings.append(_finding("tester", "critical", "react-report-failed",
                                  "the report does not satisfy react_report_passes"))
     findings += _large_text(bundle.get("large_text_report"), build, expected_hash)
@@ -435,7 +441,7 @@ def verify(bundle, k, deps, *, mode="fill", required=ROLES, judgments=None):
     if r_incomplete:
         unavailable.append("reviewer")
     roles["reviewer"] = {"status": "unavailable" if r_incomplete else "ran", "incomplete": r_incomplete, **r_meta}
-    t_findings, t_missing = _tester(bundle)
+    t_findings, t_missing = _tester(bundle, deps)
     findings += t_findings
     if t_missing:
         unavailable.append("tester")

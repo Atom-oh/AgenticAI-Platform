@@ -51,6 +51,7 @@ def chain(k=None, prd=None, *, screens=None, criteria=None, convention=None):
     from design_loop.contract import derive
     from design_loop.convention import Registry
     from design_loop.evidence import assemble
+    from workspace.rules import contract_hash
     from design_loop.flow import build_flow, enumerate_cases, expected
     from design_loop.prd_extract import bindings
     from design_loop.react_project import compile_local, compile_request, kit_catalog_hash, project
@@ -80,7 +81,7 @@ def chain(k=None, prd=None, *, screens=None, criteria=None, convention=None):
         raise RuntimeError(f"compile failed: {build.get('diagnostics')}")
     dist = {name: base64.b64decode(value) for name, value in build["files"].items()}
     browser = evaluate_bundle(dist, contract, expected_hash=build["bundleHash"])
-    report = assemble(build, browser, contract=contract)
+    report = assemble(build, browser, contract=contract, contract_hash_fn=contract_hash)
     return {"k": k, "prd": prd, "values": values, "flow": flow, "expectation": expectation, "cases": cases,
             "registry": registry, "contract": contract, "screens": screens, "files": files, "build": build, "meta": meta,
             "browser": browser, "report": report}
