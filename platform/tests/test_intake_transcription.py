@@ -849,17 +849,18 @@ def test_transcription_admission_expiring_during_the_image_grant_read_blocks_dow
     did = "d-" + fingerprint(["intake-transcription", validated["id"]])[:40]
     revision = storage.get(owner, "docrevision", did + "--r000001")
 
-    # `_upstream_current` (the commit guard, run right before the transaction
-    # attempt) re-reads every upstream record a second time; the earlier read
-    # (inside `_lineage`, building the fence list) must not trip this hook.
+    # `_upstream_deadlines` (the commit guard's own read collector, run right
+    # before the transaction attempt) re-reads every upstream record a second
+    # time; the earlier read (inside `_lineage`, building the fence list) must
+    # not trip this hook.
     get = storage.get
     state = {"in_upstream_current": False}
-    original_upstream_current = Library._upstream_current
+    original_upstream_deadlines = Library._upstream_deadlines
 
-    def upstream_current(self):
+    def upstream_deadlines(self):
         state["in_upstream_current"] = True
         try:
-            return original_upstream_current(self)
+            return original_upstream_deadlines(self)
         finally:
             state["in_upstream_current"] = False
 
@@ -869,7 +870,7 @@ def test_transcription_admission_expiring_during_the_image_grant_read_blocks_dow
             storage.clock = lambda: short + 1  # transcription admission crossed during a later upstream read
         return row
 
-    monkeypatch.setattr(Library, "_upstream_current", upstream_current)
+    monkeypatch.setattr(Library, "_upstream_deadlines", upstream_deadlines)
     monkeypatch.setattr(storage, "get", reading)
     path = f"/documents/{revision['documentId']}/revisions/{revision['id']}/blob"
     status, payload, _ = call(env.api, "GET", path, project=env.pid, query={"offset": "0"})
@@ -994,3 +995,65 @@ def test_grant_expiring_during_a_later_document_items_recheck_returns_no_earlier
     monkeypatch.setattr(storage, "get", reading)
     status, listed = env.http("GET", "/intake/reviews", actor="bob")
     assert status == 200 and listed["reviews"] == [], listed
+
+
+# PR #31 review round 3 -----------------------------------------------------------
+
+def test_image_grant_expiring_during_the_review_authoritys_asset_read_blocks_publication(env, monkeypatch):
+    """PR #31 review 3: Library._guard() combines its own upstream (image)
+    lineage deadlines with the caller-supplied review-authority guard's own
+    deadlines into ONE aggregate, compared with one fresh clock read taken
+    after BOTH have read - including the review-authority callback's own
+    later (asset) read - so an image reviewer's grant already collected by
+    _upstream_deadlines is still caught if it only expires later, during that
+    callback's own reads."""
+    from documents.library import Library, fingerprint
+    env.policy()
+    # grant-dana's short window is comfortably longer than this test's own setup
+    # but, unlike grant-bob/policy/both decisions below, comfortably shorter
+    # than 30 days: it must be the one deadline that ever crosses `now`.
+    short = env.api.storage.clock() + 3000
+    env.admin({"op": "grant_reviewer", "record": {
+        "id": "grant-dana", "actor": "dana", "policyId": "policy-1", "scope": {"projectIds": [env.pid]},
+        "operations": ["review-internal"], "expiresAt": short}})
+    env.grant("bob", "grant-bob")
+    ref = image_asset(env)
+    pending_image = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending_image["id"], approve=True, reason="image checked")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 10, "top": 10, "width": 300, "height": 180, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "diagram", "text": DIAGRAM_TEXT, "tables": []}, ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    assert transcribed["status"] == "pending-review"
+    storage = env.api.storage
+
+    # `_upstream_deadlines` (the library's own guard reads) runs first inside
+    # the commit attempt; only after it returns does the review-authority
+    # guard (`authority.collect_deadlines`) perform its own reads, including
+    # the source's asset read. Gate the clock crossing on that window.
+    state = {"after_upstream": False}
+    original_upstream_deadlines = Library._upstream_deadlines
+
+    def upstream_deadlines(self):
+        result = original_upstream_deadlines(self)
+        state["after_upstream"] = True
+        return result
+
+    get = storage.get
+
+    def reading(owner_, kind_, identifier_):
+        row = get(owner_, kind_, identifier_)
+        if state["after_upstream"] and kind_ == "asset" and identifier_ == ref["sourceId"]:
+            storage.clock = lambda: short + 1  # crossed during the review-authority guard's own asset read
+        return row
+
+    monkeypatch.setattr(Library, "_upstream_deadlines", upstream_deadlines)
+    monkeypatch.setattr(storage, "get", reading)
+    status, payload = env.http("POST", f"/intake/reviews/{transcribed['id']}",
+                               {"approve": True, "reason": "matches image"}, actor="bob")
+    assert status == 409 and payload["code"] == "source-upstream-revoked", payload
+    owner = f"project:{env.pid}"
+    assert storage.get(owner, "adm_decision", transcribed["id"])["status"] == "pending-review"
+    did = "d-" + fingerprint(["intake-transcription", transcribed["id"]])[:40]
+    assert storage.get(owner, "document", did) is None

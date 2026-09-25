@@ -116,8 +116,10 @@ def _approve_transcription(host, scope, write, checks, authority):
     try:
         library, writes = prepare_transcription(host, scope, write["item"])
         # The pending decision, the reviewing grant, the policy and sources are
-        # rechecked (with expiry) before every commit attempt, with the lineage guard.
-        return library.commit([write, *writes], extra_checks=checks, guard=authority.recheck)[0]
+        # rechecked (with expiry) before every commit attempt, combined with the
+        # library's own upstream (image) lineage guard into one aggregate
+        # compared with a single fresh clock read taken after both have read.
+        return library.commit([write, *writes], extra_checks=checks, guard=authority)[0]
     except DocumentError as error:
         raise AdmissionError(error.code, error.status) from None
     except Conflict:

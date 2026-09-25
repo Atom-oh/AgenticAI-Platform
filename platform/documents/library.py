@@ -384,26 +384,43 @@ class Library:
             self.storage.put_many([], checks=checks, **self._guard())
 
     def _guard(self, extra=None):
-        """Transcription lineage adds an upstream-expiry guard to every commit attempt;
-        `extra` (a caller's final authority recheck) runs with it on every attempt."""
-        guards = ([self._upstream_current] if self._upstream else []) + ([extra] if extra else [])
-        if not guards:
+        """Transcription lineage adds an upstream-expiry guard to every commit
+        attempt; `extra` (a caller's own deferred-deadline guard, e.g.
+        `admission.Authority`, exposing `collect_deadlines()`) joins the SAME
+        aggregate as this library's own upstream deadlines, compared with one
+        fresh clock read taken after BOTH have performed their reads on every
+        attempt — including `extra`'s own later reads (e.g. its source/asset
+        read), which must not let an already-collected upstream deadline (the
+        transcription's own admission, its reviewer grant, the image admission
+        and its reviewer grant) go unchecked."""
+        if not self._upstream and extra is None:
             return {}
 
         def before_attempt():
-            for guard in guards:
-                guard()
+            deadlines = self._upstream_deadlines()
+            if extra is not None:
+                from intake.admission import AdmissionError
+                _, extra_deadlines = extra.collect_deadlines()
+                deadlines.extend(
+                    (expiry, AdmissionError(code) if code else AdmissionError("authorization-expired", 401))
+                    for expiry, code in extra_deadlines)
+            now = self.storage.clock()  # after every guard's reads
+            if deadlines:
+                expiry, error = min(deadlines, key=lambda item: item[0])
+                if expiry <= now:
+                    raise error
         return {"before_attempt": before_attempt}
 
-    def _upstream_current(self):
+    def _upstream_deadlines(self):
         """Version fences cannot see expiry: before every commit attempt (including
         retries) each upstream admission record (the transcription's own admission,
         its reviewer grant, the image admission and its reviewer grant, and any
         policy/provenance in between) must still be schema-valid, current (status)
-        and at its observed version. Every record's expiry is collected during
-        these reads and compared with one fresh clock read taken after the last
-        read, immediately before the attempt; a clock read taken fresh for each
-        check could miss one that expired while a later check was being read."""
+        and at its observed version. These reads only collect: each record's
+        expiry is returned as one `(expiresAt, error)` pair for the caller to
+        compare with a fresh clock read taken after every read it has collected
+        — this guard's own (`_upstream_current`), or together with another
+        guard's own later reads (`Library._guard`)."""
         from intake import records
         kinds = ("adm_decision", "adm_policy", "adm_provenance", "adm_grant")
         deadlines = []
@@ -419,11 +436,20 @@ class Library:
                     or row.get("status") not in ("active", "admitted") or type(row.get("expiresAt")) is not int):
                 raise DocumentError(409, "source-upstream-revoked",
                                     "The transcription's original image or its admission is no longer current")
-            deadlines.append(row["expiresAt"])
+            deadlines.append((row["expiresAt"], DocumentError(
+                409, "source-upstream-revoked",
+                "The transcription's original image or its admission is no longer current")))
+        return deadlines
+
+    def _upstream_current(self):
+        """`_upstream_deadlines`, comparing its collected deadlines with one
+        fresh clock read taken after the last read."""
+        deadlines = self._upstream_deadlines()
         now = self.storage.clock()  # after the last read
-        if deadlines and min(deadlines) <= now:
-            raise DocumentError(409, "source-upstream-revoked",
-                                "The transcription's original image or its admission is no longer current")
+        if deadlines:
+            expiry, error = min(deadlines, key=lambda item: item[0])
+            if expiry <= now:
+                raise error
 
     def write(self, kind, item, expected_version=None):
         return {"owner": self.owner, "kind": kind, "item": item, "expected_version": expected_version}
