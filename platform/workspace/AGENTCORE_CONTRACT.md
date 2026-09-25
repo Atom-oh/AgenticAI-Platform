@@ -635,7 +635,15 @@ with the outcome committed and the obligation retained. Repeating the identical
 `accounting` is pending), settles it. `intent` first settles the job's pending
 obligations so they reach the enforced daily counter before the cost gate is
 consulted; while any remain unsettled no further call is authorized
-(`accounting-pending`). `outcome` for an `interpreter` or
+(`accounting-pending`). Every added or settled obligation is also mirrored, in
+the same transaction, into the global pending-charge registry (`exec_quota`
+record `pending-charges` in partition `execution:quota`, `{charges: {id:
+{tokens, owner, jobId}}}`), so an unrecorded charge of any job, including a
+cancelled, failed or superseded one, counts as used: a model `intent` (and its
+`before_attempt` guard) passes the registry total to the cost gate, which
+requires `usage_today + pending < DAILY_TOKEN_CAP` (`daily-budget`), and the
+registry version is a predicate of the reservation. An unreadable or oversized
+(more than 1000 entries) registry is `daily-budget-unavailable`. `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
 stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
 receiptHash, receiptRef, nonce, attemptId, status, service, result, inputs,

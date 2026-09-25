@@ -67,6 +67,8 @@ TERMINAL = frozenset({"succeeded", "needs_changes", "failed", "cancelled", "expi
 ACTIVE = frozenset({"queued", "dispatched", "running", "recovery_required"})
 QUOTA_OWNER = "execution:quota"
 ACCOUNTING_RETRY_MS = 60_000
+# Global registry of unrecorded daily charges (review 7): {id: {tokens, owner, jobId}} in partition QUOTA_OWNER.
+PENDING_CHARGES_ID, MAX_PENDING_CHARGES = "pending-charges", 1000
 MAX_ACTOR_ACTIVE, MAX_PROJECT_ACTIVE = 1, 2
 MAX_SOURCE_CHECKS, MAX_SOURCE_BINDINGS, TRANSACTION_LIMIT = 90, 50, 100
 DEFAULT_COMPLETION_SCOPE = {"nonSourceOperations": 10, "sourceChecks": 0, "sourceBindings": 0}
@@ -228,10 +230,16 @@ class CostGuardGate:
             raise LedgerError("daily-budget-unavailable")
         return costguard
 
-    def check(self):
+    def check(self, pending=0):
+        """``pending``: durable, not yet recorded daily charges of every job (review 7); they count as used."""
         costguard = self._module()
         try:
             ok = costguard.budget_ok()          # also the probe read
+            if ok is True and pending:
+                usage, cap = costguard.usage_today(), costguard.DAILY_TOKEN_CAP
+                if type(usage) is not int or type(cap) is not int:
+                    raise ValueError("unreadable daily usage")
+                ok = usage + pending < cap
         except Exception as error:  # noqa: BLE001
             raise LedgerError("daily-budget-unavailable") from error
         if ok is not True:
@@ -269,7 +277,7 @@ class _OfflineCostGate:
             raise PermissionError("the unlimited cost gate is offline-only")
         self.recorded, self.charges = [], set()
 
-    def check(self):
+    def check(self, pending=0):
         return None
 
     def record(self, tokens, charge_id=None):
@@ -472,10 +480,48 @@ class Ledger:
                 entry["value"] = value
             ops[operation_id] = entry
             job["ops"] = ops
-        writes = list(extra_writes)
+        writes = [*list(extra_writes), *self._pending_writes(owner, before, job)]
         if reindex:
             writes = [*self._due_writes(owner, before, job), *writes]
         return job, writes
+
+    # --- the cross-job pending-charge registry (review 7, RUN-03) ------------------------------------------
+    def _pending_writes(self, owner, before, job):
+        """Mirror every added or settled accounting obligation into the global pending-charge registry, in the
+        same transaction as the job write, so unrecorded charges of ANY job (also cancelled or superseded ones)
+        count against the enforced daily budget."""
+        added = {entry["id"]: entry for entry in job.get("accounting") or []}
+        prior = {entry["id"] for entry in (before or {}).get("accounting") or []}
+        if set(added) == prior:
+            return []
+        current = self.storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+        charges = dict((current or {}).get("charges") or {})
+        for identifier in prior - set(added):
+            charges.pop(identifier, None)
+        for identifier in set(added) - prior:
+            charges[identifier] = {"tokens": added[identifier]["tokens"], "owner": owner, "jobId": job["id"]}
+        return [{"owner": QUOTA_OWNER, "kind": "exec_quota", "expected_version": current["version"] if current else None,
+                 "item": {**(current or {"id": PENDING_CHARGES_ID}), "charges": charges}}]
+
+    def _pending_tokens(self):
+        """Total durable, not yet recorded daily charges across all jobs; an oversized registry fails closed."""
+        current = self.storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+        charges = (current or {}).get("charges") or {}
+        if not isinstance(charges, dict) or len(charges) > MAX_PENDING_CHARGES:
+            raise LedgerError("daily-budget-unavailable")
+        total = 0
+        for entry in charges.values():
+            if not isinstance(entry, dict) or not _is_size(entry.get("tokens")):
+                raise LedgerError("daily-budget-unavailable")
+            total += entry["tokens"]
+        return total
+
+    def _cost_check(self):
+        pending = self._pending_tokens()
+        if pending:
+            self.cost_gate.check(pending=pending)
+        else:
+            self.cost_gate.check()
 
     def _terminal(self, owner, job, status, *, error=None, bump_fence=False, checks=(), op=None, extra=None):
         if job["status"] in TERMINAL:
@@ -1071,8 +1117,13 @@ class Ledger:
                 raise LedgerError("call-invalid")
             if budget["tokensUsed"] + budget["tokensReserved"] + reserve > budget["tokenBudget"]:
                 raise LedgerError("token-budget")
-            self.cost_gate.check()
+            self._cost_check()                  # includes every job's unrecorded charges (review 7)
         checks, guard = self._protect(owner, job, min_remaining_ms=min_remaining_ms, cost=kind == "model")          # revocation stops further calls (RUN-03)
+        if kind == "model":
+            # The pending-charge registry read by the cost check is a predicate of the reservation (review 7).
+            registry = self.storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+            checks = self._merge_checks(checks, [{"owner": QUOTA_OWNER, "kind": "exec_quota", "id": PENDING_CHARGES_ID,
+                                                  "version": registry["version"] if registry else None}])
         call = {"callId": "call-" + secrets.token_hex(16), "stage": stage, "kind": kind, "status": "intent",
                 "at": now, "attemptId": attempt["id"], "reserved": reserve}
         budget.update(calls=budget["calls"] + 1, tokensReserved=budget["tokensReserved"] + reserve)
@@ -1932,7 +1983,7 @@ class Ledger:
 
         def guard():
             if cost:
-                self.cost_gate.check()
+                self._cost_check()
             now = self.storage.clock()
             if now >= before["deadlineAt"] or now >= before["authorizationExpiresAt"]:
                 raise LedgerError("deadline")

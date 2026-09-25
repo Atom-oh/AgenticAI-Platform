@@ -3034,3 +3034,63 @@ def test_consumed_priors_are_revalidated_without_an_open_handle(xfer, when):
         finish(ledger, job, "succeeded", result)
     assert error.value.code == "authority-changed"
     assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+
+
+def pending_costguard(monkeypatch, cap=300):
+    import types
+
+    class Client:
+        exceptions = types.SimpleNamespace()
+
+        def __init__(self):
+            self.tokens, self.markers, self.down = 0, set(), False
+
+        def transact_write_items(self, TransactItems):
+            if self.down:
+                raise OSError("synthetic accounting-write outage")
+            marker = TransactItems[0]["Put"]["Item"]["pk"]
+            if marker not in self.markers:
+                self.markers.add(marker)
+                self.tokens += TransactItems[1]["Update"]["ExpressionAttributeValues"][":t"]
+
+    client = Client()
+    table = types.SimpleNamespace(name="cache-test", meta=types.SimpleNamespace(client=client))
+    fake = types.SimpleNamespace(_tbl=table, budget_ok=lambda: client.tokens < cap, usage_today=lambda: client.tokens,
+                                 DAILY_TOKEN_CAP=cap, _today=lambda: "2027-01-15")
+    monkeypatch.setenv("CACHE_TABLE", "cache-test")
+    monkeypatch.setitem(sys.modules, "common.costguard", fake)
+    monkeypatch.setitem(sys.modules, "common", types.SimpleNamespace(costguard=fake))
+    return client
+
+
+@pytest.mark.parametrize("then", ["cancel", "retry-replacement"])
+def test_pending_charges_of_other_jobs_count_against_the_daily_budget(xfer, monkeypatch, then):
+    """Review 7 finding 2: an unrecorded charge of a cancelled/replaced job still blocks further paid calls."""
+    from workspace.execution_ledger import CostGuardGate, QUOTA_OWNER, PENDING_CHARGES_ID
+    storage, _, now, _ = xfer
+    client = pending_costguard(monkeypatch)
+    ledger = offline_ledger(storage, cost_gate=CostGuardGate())
+    job = run_job(ledger)
+    call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                max_tokens=1000)["callId"]
+    client.down = True
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().outcome(*ids(job), call, status="completed", usage={"inputTokens": 100, "outputTokens": 200})
+    assert error.value.code == "accounting-pending"
+    registry = storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+    assert [row["tokens"] for row in registry["charges"].values()] == [300]
+    ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+    client.down = False                                   # the counter is readable; the charge is still unrecorded
+    other = run_job(ledger, key="req-other")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(other), stage="generate", kind="model", min_remaining_ms=0, max_tokens=10)
+    assert error.value.code == "daily-budget"
+    assert storage.get(OWNER, "job", other["id"])["calls"] == []
+    if then == "retry-replacement":
+        # Once the reconciler records the retained charge, the registry empties and the counter enforces the cap.
+        ledger.reconciler().sweep(OWNER, job["id"])
+        assert client.tokens == 300
+        assert storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)["charges"] == {}
+        with pytest.raises(LedgerError) as error:
+            ledger.tool().intent(*ids(other), stage="generate", kind="model", min_remaining_ms=0, max_tokens=10)
+        assert error.value.code == "daily-budget"
