@@ -1460,9 +1460,10 @@ class Ledger:
         if index < len(handle["parts"]):
             if handle["parts"][index] != digest:
                 raise LedgerError("transfer-invalid")
+            checks, guard = self._protect(owner, job)          # every retry, like a first write (review 6)
             if not bound:
+                self._fence(owner, job, checks, guard)          # check-only: nothing is written
                 return self._projection(job)
-            checks, guard = self._protect(owner, job)
             handles = {**job["handles"], handle_id: {**handle, "chunkOps": {**(handle.get("chunkOps") or {}), **bound}}}
             return self._commit(owner, job, {**job, "handles": handles}, checks=checks, before_attempt=guard,
                                 reindex=False)

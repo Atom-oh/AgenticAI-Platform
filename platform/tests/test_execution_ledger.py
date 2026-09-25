@@ -2937,3 +2937,25 @@ def test_pending_accounting_is_settled_before_another_paid_intent(xfer, monkeypa
     assert len(stored["calls"]) == 1
     assert client.tokens == (0 if outage == "persists" else 300)
     assert len(stored["accounting"]) == (1 if outage == "persists" else 0)
+
+
+@pytest.mark.parametrize("change", ["withdrawal", "lease-expiry"])
+def test_pure_output_chunk_retry_runs_the_shared_guard(xfer, change):
+    """Review 6 finding 4: an already-written chunk repeated with its operation ID is fenced like a first write."""
+    storage, ledger, now, _ = xfer
+    job = run_job(ledger)
+    ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    data = b"z" * 10
+    handle = open_out(ledger, job, data)
+    operation = op_id()
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
+    before = len(storage.table().transactions)
+    ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
+    assert len(storage.table().transactions) == before + 1          # the retry submitted its fence
+    if change == "withdrawal":
+        withdraw_admission(storage)
+    else:
+        now[0] = storage.get(OWNER, "job", job["id"])["attempt"]["leaseExpiresAt"]
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
+    assert error.value.code == ("authority-changed" if change == "withdrawal" else "stale-attempt")

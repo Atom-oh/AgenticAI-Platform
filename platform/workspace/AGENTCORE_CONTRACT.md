@@ -670,7 +670,8 @@ chunk is fenced after its bytes are read: a first read commits its usage with
 the guard's predicates, and a pure retry (already read, same operation ID)
 submits a check-only transaction (unchanged job version plus the guard's
 predicates and `before_attempt` checks) that charges no usage; a failure
-returns no bytes.
+returns no bytes. A pure `write_chunk` retry (already written, same hash and
+operation ID) runs the same guard and check-only transaction.
 
 Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,
