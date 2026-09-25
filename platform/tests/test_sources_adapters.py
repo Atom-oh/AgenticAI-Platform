@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
 import time
 import zipfile
@@ -1103,6 +1104,57 @@ def test_git_export_rechecks_before_every_outbound_transfer(env, queued_export):
     assert len(service.calls) == 1 and all(call_[0] == "GET" for call_ in service.calls), service.calls
     exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
     assert exported.get("status") != "committed"
+
+
+def test_git_export_preserves_the_delivered_commit_after_a_revocation_racing_publish(env, queued_export, monkeypatch):
+    """Review 6 #6: a guard revocation racing the branch's own creation (the exporter's
+    `publish`) must not lose the delivered commit. `ProtectedCallRefused` (raised by the
+    guard, never a `GitExportError`) used to escape both `_export`'s own except clause
+    and `process_export`'s -- the branch existed on the remote (delivery cannot be
+    undone), but the gitexport record stayed "running" forever with no commitSha.
+    Reproduced: revoke the admission grant exactly as the `POST /git/refs` call (branch
+    creation) returns successfully."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    # `Remote`'s fake project-tree assertions are keyed to its own module's TARGET
+    # constant ("project-a"); `queued_export`'s run/release use run id "run-1" as the
+    # project key here (no productId), so align the fake to that for this delivery.
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("github")
+    delivered = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if method == "POST" and url.endswith("/git/refs"):
+            delivered["on"] = True
+            _grant_revoked(env)  # The branch now genuinely exists on the remote.
+        return result
+
+    def factory(connection, token):
+        # Keep the actually-registered connection's own id (checked by process_export
+        # against the gitexport record) while shaping the rest to what the fake github
+        # provider service expects.
+        merged = {**connection, "provider": "github", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    result = process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert delivered["on"]
+    assert result["status"] == "committed" and re.fullmatch(r"[a-f0-9]{40}", result["commitSha"])
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    assert service.refs[branch] == result["commitSha"]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] == "committed" and exported["commitSha"] == result["commitSha"]
+    # A further, separate transfer attempt is still blocked by the now-revoked grant --
+    # the fix preserves an already-delivered result, it does not stop blocking new ones.
+    storage = env.api.storage
+    owner = queued_export.owner
+    requeued = storage.put(owner, "gitexport", {**exported, "status": "queued"}, exported["version"])
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, owner, queued_export.job)
+    assert storage.get(owner, "gitexport", requeued["id"])["status"] != "committed"
 
 
 def approvable_run(env, contract, run_id, admissions=None):
