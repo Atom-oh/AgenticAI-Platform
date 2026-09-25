@@ -449,3 +449,27 @@ def test_built_site_is_scanned(tmp_path):
     r = subprocess.run([sys.executable, str(SCRIPT), "--patterns-file", str(pats), "--site", str(site), "--no-tree"],
                        capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 1 and "pattern #1" in r.stdout and "ACME" not in r.stdout
+
+
+def test_tenant_replacements_use_the_neutral_alias():
+    """PR #30 review 1, #2: an account number is prefixed by the neutral alias, and the seeded agent's asset ids
+    resolve to the renamed seed assets (no leftover short form of the customer name)."""
+    import re as _re
+    import json
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    canvas = (repo / "demo/uiux-studio/design-canvas/TransferSingle.dc.html").read_text(encoding="utf-8")
+    prefixes = {m.group(1).strip() for m in _re.finditer(r"·\s*([^<·]*?)\s*\d{3}-\d{6}-\d{5}", canvas)}
+    assert prefixes == {"고객사 A"}, prefixes
+    sys.path.insert(0, str(repo / "demo/uiux-studio"))
+    try:
+        from feedback.assets_api import _slug
+        spec = importlib.util.spec_from_file_location("seed_assets", repo / "demo/uiux-studio/scripts/seed_assets.py")
+        seed = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(seed)
+    finally:
+        sys.path.remove(str(repo / "demo/uiux-studio"))
+    seeded = {f"{s['type']}:{_slug(s['name'])}" for s in seed.SAMPLES}
+    for sample in seed.SAMPLES:
+        if sample["type"] == "agent":
+            ids = json.loads(sample["content"])["asset_ids"]
+            assert ids and set(ids) <= seeded, ids
