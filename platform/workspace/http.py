@@ -300,7 +300,7 @@ class ResponseGate:
         storage = self.api.storage
         task, data = job.get("task"), job.get("input") if isinstance(job.get("input"), dict) else {}
         if task in self.SELF_AUTHORIZED_TASKS:
-            return job
+            return self._module_job(reader, task, data, job)
         if task == "propose":
             reader.inputs_access(data)
         elif task == "run":
@@ -321,6 +321,69 @@ class ResponseGate:
         else:
             return None
         return job
+
+    def _module_job(self, reader, task, data, job):
+        """Jobs whose inputs are owned by another module: that module's read authority applies.
+
+        Every observation joins the response's aggregate reader (retained until the
+        final recheck); an inaccessible input makes the job a missing one.
+        """
+        ctx, storage = self.context, self.api.storage
+        if task == "finalize":
+            asset = storage.get(self.owner, "asset", data["assetId"]) if isinstance(data.get("assetId"), str) else None
+            return job if asset is not None and reader.asset_access(asset) else None
+        if task == "intake-image":
+            if data.get("projectId") != ctx.project_id or not isinstance(data.get("sourceRef"), dict):
+                return None
+            reader.authorize(data["sourceRef"])
+            return job
+        if task in ("document-finalize", "document-analysis"):
+            from documents.errors import DocumentError
+            from documents.library import authorize_job
+            try:
+                checks = authorize_job(self.api, self.scope, job)
+            except DocumentError as error:
+                # The document library's own contract decides the denial (creator-only 403).
+                raise HTTPError(error.status, error.code, error.message) from None
+            for check in checks or []:
+                reader._remember_owned(check["owner"], check["kind"], check)
+            return job
+        # workbench
+        if data.get("projectId") != ctx.project_id:
+            return None
+        operation = data.get("operation")
+        if operation == "ontology-analyze":
+            refs = data.get("sourceRefs")
+            if not isinstance(refs, list) or not refs:
+                return None
+            for ref in refs:
+                reader.authorize(ref)
+            return job
+        if operation in ("index", "skill-propose", "skill-validate", "skill-execute"):
+            from workbench import knowledge
+            versions = data.get("sourceVersions")
+            if not isinstance(versions, dict):
+                return None
+            for source_id in versions:
+                source = ctx.get("wb_source", source_id)
+                if not knowledge.source_current(ctx, source):
+                    return None
+                reader._remember("wb_source", source)
+            if operation != "index":
+                skill = (storage.get(self.owner, "wb_skill", data["skillId"])
+                         if isinstance(data.get("skillId"), str) else None)
+                if skill is None or skill.get("projectId") != ctx.project_id:
+                    return None
+                refs = skill.get("sourceRefs", [])
+                authority = "canonical" if refs and all(isinstance(r, dict) and "sourceKind" in r for r in refs) \
+                    else "legacy"
+                for check in knowledge.authorize_refs(ctx, refs, authority=authority) or []:
+                    reader._remember_owned(check["owner"], check["kind"], check)
+            return job
+        if operation == "pension_ask":
+            # A private answer job: readable only by the member who asked.
+            return job if data.get("actor") == ctx.actor else None
+        return None
 
     def round(self, run_id, number):
         """publishing-handoff/1 delivery gate for one round (state permission + upstream lineage)."""
