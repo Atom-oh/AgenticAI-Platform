@@ -1309,7 +1309,13 @@ class WorkspaceAPI:
             raise HTTPError(400, "invalid-assets", "Select at most 20 distinct assets")
         assets = [self._get(owner, "asset", identifier) for identifier in identifiers]
         for asset in assets:
-            if asset.get("archived") or asset.get("uploadStatus") != "stored":
+            # Current access (never revoked/tombstoned/deleted) is required before
+            # any content -- including a rule's own quoted text -- is read from or
+            # compared against this asset; a contract-validation error must fail
+            # the exact same way whether or not a quote would have matched a
+            # restricted asset's text (never a content oracle on it).
+            if (asset.get("archived") or asset.get("uploadStatus") != "stored" or asset.get("accessRevoked")
+                    or asset.get("tombstone") or asset.get("status") == "deleted"):
                 raise HTTPError(409, "asset-not-ready", "Selected files must be stored and not archived")
             info = self.storage.blob_info(self._blob_key(owner, asset.get("originalKey")))
             if info["size"] != asset["size"] or info["sha256"] != asset["sha256"]:

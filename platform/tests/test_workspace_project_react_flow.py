@@ -461,3 +461,49 @@ def test_contract_creation_response_authorizes_its_own_exact_revision(monkeypatc
                            "rules": [rule], "assetIds": [reference["id"]]}, actor="carol", project=project["id"])
     assert status == 404, data
     assert not armed["on"]
+
+
+def test_contract_creation_never_leaks_a_revoked_assets_text_via_quote_matching():
+    """Review 7 #1: an explicit rule's quoted source text was read from, and
+    compared against, the cited asset's OWN analysis text before the response
+    gate -- or anything else -- authorized that asset's current access at all. A
+    revoked asset's own GET already 404s, but submitting a matching quote through
+    contract creation behaved differently from a non-matching one (only the
+    non-match failed immediately, with 400 invalid-contract; a match let creation
+    proceed), a content oracle letting a caller learn restricted text one probe at
+    a time. Both must now fail identically and immediately (409 asset-not-ready),
+    before any quote is ever compared."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    secret_text = "기밀 원본 문장입니다."
+    asset_bytes = secret_text.encode()
+    status, data = request(api, "POST", "/assets", {"name": "secret.txt", "size": len(asset_bytes),
+                           "sha256": hashlib.sha256(asset_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    asset = data["asset"]
+    original = api.storage.key_for(owner, "asset", asset["id"], "original")
+    analysis = api.storage.key_for(owner, "asset", asset["id"], "analysis.json")
+    api.storage.put_blob(original, asset_bytes, "text/plain")
+    api.storage.put_blob(analysis, json.dumps({"text": secret_text, "parseStatus": "complete"}).encode(),
+                         "application/json")
+    asset = api.storage.put(owner, "asset", {**asset, "status": "stored", "uploadStatus": "stored",
+                            "parseStatus": "complete", "originalKey": original, "analysisKey": analysis,
+                            "projectId": project["id"], "accessRevoked": True}, expected_version=asset["version"])
+    assert request(api, "GET", f"/assets/{asset['id']}", actor="carol", project=project["id"])[0] == 404
+    matching_rule = {"id": "R1", "title": "확인", "source": {"kind": "explicit", "assetId": asset["id"],
+                     "quote": secret_text}, "steps": [{"action": "expectVisible", "target": "x", "value": True}]}
+    status_match, payload_match = request(api, "POST", "/contracts", {"productId": product["id"], "title": "t",
+                                          "rules": [matching_rule], "assetIds": [asset["id"]]},
+                                          actor="carol", project=project["id"])
+    nonmatching_rule = {**matching_rule, "source": {**matching_rule["source"], "quote": "이 문장은 존재하지 않습니다"}}
+    status_nomatch, payload_nomatch = request(api, "POST", "/contracts", {"productId": product["id"], "title": "t",
+                                              "rules": [nonmatching_rule], "assetIds": [asset["id"]]},
+                                              actor="carol", project=project["id"])
+    assert (status_match, payload_match.get("code")) == (status_nomatch, payload_nomatch.get("code"))
+    assert status_match == 409 and payload_match.get("code") == "asset-not-ready", (status_match, payload_match)
