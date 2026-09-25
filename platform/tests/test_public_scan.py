@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -80,7 +81,7 @@ def test_clean_static_draft_is_published_unchanged():
              '<body><main class="card"><h1>예금 가입</h1><p>금리 &amp; 기간을 확인하세요.</p>'
              '<a href="/next">다음</a><img alt="로고" src="data:image/png;base64,'
              + base64.b64encode(ONE_PX).decode() + '"></main></body></html>')
-    assert ps.prepare_static_html(draft, PATTERNS) == draft
+    assert ps.prepare_static_html(draft, PATTERNS) == draft.replace("<!doctype html>", "<!doctype html>" + ps.CSP_META, 1)
 
 
 def test_plain_and_encoded_identifiers_are_blocked():
@@ -294,3 +295,85 @@ def test_worker_publish_gate(monkeypatch):
         else:
             assert bodies == [], draft[:40]
             assert store.get_job("job123456789")["status"] == "failed"
+
+
+# ------------------------------------------------------------------ foreign content and parser differentials (PR #30 review 1, #1)
+
+MUTATION_DRAFTS = (
+    "<svg><style><img src=x onerror=\"window.__fired=1\">ACME</style></svg>",
+    "<math><mtext><table><mglyph><style><img src=x onerror=\"window.__fired=1\"></style></mglyph></table></mtext></math>",
+    "<svg></p><style><a id=\"</style><img src=x onerror='window.__fired=1'>\"></style></svg>",
+    "<xmp><a title=\"</xmp><img src=x onerror='window.__fired=1'>\"></xmp>",
+    "<noembed><a title=\"</noembed><img src=x onerror='window.__fired=1'>\"></noembed>",
+    "<noframes><a title=\"</noframes><img src=x onerror='window.__fired=1'>\"></noframes>",
+    "<svg><style/><img src=x onerror=\"window.__fired=1\"></svg>",
+    "<textarea><b title=\"</textarea><img src=x onerror='window.__fired=1'>\"></b></textarea>",
+    "<img src=x \"onerror=window.__fired=1>",
+)
+
+
+def test_svg_style_markup_cannot_survive_sanitization():
+    for draft in MUTATION_DRAFTS:
+        out = ps.sanitize_static(draft, media=set())
+        assert not re.search(r"<[^>]*onerror", out, re.I), (draft, out)
+        style = out.lower().split("<style", 1)[1].split("</style", 1)[0] if "<style" in out.lower() else ""
+        assert "<" not in style.split(">", 1)[-1], (draft, out)
+
+
+def test_published_static_html_forbids_scripts_by_csp():
+    out = ps.prepare_static_html("<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>", PATTERNS)
+    assert out.startswith("<!doctype html>" + ps.CSP_META), out[:200]
+    assert "script-src 'none'" in ps.CSP_META
+    assert ps.prepare_static_html("<p>x</p>", PATTERNS).startswith(ps.CSP_META)
+
+
+def _chromium():
+    path = os.environ.get("WORKSPACE_CHROMIUM_PATH") or \
+        "/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell"
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("playwright is not installed")
+    return sync_playwright, (path if os.path.isfile(path) else None)
+
+
+def test_sanitized_mutation_drafts_do_not_execute_in_chromium():
+    sync_playwright, path = _chromium()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=path) if path else p.chromium.launch()
+        try:
+            def load(html):
+                page = browser.new_page()
+                page.route("**/*", lambda route: route.abort())
+                page.set_content(html)
+                page.wait_for_timeout(100)
+                fired, text = page.evaluate("[window.__fired, document.body ? document.body.innerText : '']")
+                page.close()
+                return fired, text
+            # Unsanitized controls fire, so the probe is meaningful.
+            assert load(MUTATION_DRAFTS[0])[0] == 1 and load(MUTATION_DRAFTS[3])[0] == 1
+            for draft in MUTATION_DRAFTS:
+                fired, text = load(ps.sanitize_static(draft, media=set()))
+                assert fired is None and "ACME" not in text, draft
+            # The published page carries script-src 'none': an inline handler behind it is refused.
+            published = ps.prepare_static_html("<p>x</p>", PATTERNS)
+            assert load(published + "<img src=x onerror=\"window.__fired=1\">")[0] is None
+        finally:
+            browser.close()
+
+
+def test_both_publishers_neutralize_foreign_content(monkeypatch):
+    design, writes = _design(monkeypatch, lambda: [SENTINEL])
+    design.store_run("r6", _run("<html><body>" + MUTATION_DRAFTS[0].replace("ACME", "") + "</body></html>"), {})
+    html = dict(writes)["design-runs/r6/intro.html"].decode()
+    assert not re.search(r"<[^>]*onerror", html, re.I) and ps.CSP_META in html
+    import test_studio_worker as tw
+    apigw, s3, store = tw._Apigw(), tw._S3(), tw.StudioStore()
+    tw._wire(monkeypatch, apigw, s3, store)
+    monkeypatch.setattr(ps, "load_patterns", lambda: [SENTINEL])
+    draft = "<html><body><p>안내</p>" + MUTATION_DRAFTS[3] + "</body></html>"
+    monkeypatch.setattr(tw.w, "_generate", lambda system, user, max_tokens, _d=draft, **kw: tw.FakeStream(["```html\n", _d, "\n```"]))
+    store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
+    tw.w.handler(tw._event(maxRounds=1), None)
+    bodies = [b.decode() for (bucket, key), b in s3.objects.items() if key.startswith("studio/drafts/")]
+    assert bodies and all(not re.search(r"<[^>]*onerror", b, re.I) and ps.CSP_META in b for b in bodies)

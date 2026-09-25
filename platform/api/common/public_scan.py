@@ -7,8 +7,13 @@ Before every put they call this module:
 - `sanitize_static(html)` removes executable and generated-content vectors (scripts, event handlers,
   `javascript:` and unreviewed `data:` URLs, frames/objects, CSS `content:` and `@import`), so the visible
   text of the published page is fully determined by its markup.
-- `prepare_static_html(html, patterns)` sanitizes and then scans with the same `scan_string` views as the
-  repository scan. It raises `PublicationBlocked` on any identifier hit, unreviewed media or incomplete scan.
+  Every start tag is re-serialized from its parsed attributes and all text is re-escaped, so the published
+  bytes parse the same way in a browser as in this parser (no mutation through raw-text elements, SVG/MathML
+  foreign content or malformed attribute names). `<style>` text never contains `<`, because inside SVG or MathML
+  foreign content a browser parses it as markup (PR #30 review 1, #1).
+- `prepare_static_html(html, patterns)` sanitizes, prepends `CSP_META` (`script-src 'none'`) and then scans with
+  the same `scan_string` views as the repository scan. It raises `PublicationBlocked` on any identifier hit,
+  unreviewed media or incomplete scan.
 
 This is not a second scanner. The core is `scripts/check_public_identifiers.py`: `deploy.sh` copies it into
 `api-dist/common/public_scan_core.py` together with `public-assets.sha256`; in the repository the script is
@@ -21,7 +26,6 @@ A missing, empty or unreadable deny-list blocks publication. Matched text is nev
 from __future__ import annotations
 
 import base64
-import html as _html
 import importlib.util
 import os
 import re
@@ -122,16 +126,36 @@ def prepare_static_html(html: str, patterns: list) -> str:
         raise PublicationBlocked("public identifier scan incomplete") from error
     if original_hits:
         raise PublicationBlocked("public identifier scan hit: " + ",".join(f"#{i}" for i in original_hits))
-    clean = sanitize_static(html, media=reviewed)
+    clean = _with_csp(sanitize_static(html, media=reviewed))
     check_publishable(clean, patterns, language="html", media=reviewed)
     return clean
+
+
+# Defence in depth for the static-only rule: even markup the sanitizer missed cannot run a script.
+CSP_META = ('<meta http-equiv="Content-Security-Policy" '
+            'content="script-src \'none\'; object-src \'none\'; base-uri \'none\'; form-action \'none\'">')
+_LEADING_DOCTYPE = re.compile(r"\A\s*<!doctype[^>]*>", re.I)
+
+
+def _with_csp(html: str) -> str:
+    """Insert CSP_META first in the document (after a leading doctype). A meta before `<html>`/`<head>` is
+    placed in the implied head by the HTML parser, where a CSP meta takes effect."""
+    m = _LEADING_DOCTYPE.match(html)
+    at = m.end() if m else 0
+    return html[:at] + CSP_META + html[at:]
 
 
 # ---------------------------------------------------------------- sanitizer
 
 _DROP_WITH_CONTENT = {"script", "noscript", "template", "iframe", "object", "frame", "frameset", "applet",
-                      "animate", "animatemotion", "animatetransform", "set", "handler", "listener", "foreignobject"}
+                      "animate", "animatemotion", "animatetransform", "set", "handler", "listener", "foreignobject",
+                      # raw-text elements whose content a browser never parses as markup (parser differentials)
+                      "xmp", "noembed", "noframes", "plaintext"}
 _DROP_VOID = {"embed", "base", "param"}
+_RCDATA = {"textarea", "title"}          # text only: nested markup is dropped, never re-emitted
+_VOID = {"area", "br", "col", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+_ATTR_NAME = re.compile(r"\A[a-z_:][-a-z0-9_:.]*\Z")
+_TAG_NAME = re.compile(r"\A[a-z][-a-z0-9_:.]*\Z")
 _URL_ATTRS = core._URL_ATTRS | {"to", "from", "values", "by", "formaction", "imagesrcset", "srcdoc"}
 _SRCSET = {"srcset", "imagesrcset"}
 _UNSAFE_SCHEMES = ("javascript:", "vbscript:", "livescript:")
@@ -195,14 +219,24 @@ def _clean_css(css: str, media: set, depth: int) -> str:
     return _CSS_STRING.sub(string, css)
 
 
+def _attr(value: str) -> str:
+    """Double-quoted attribute text: `&`, `"`, `<` and `>` are escaped; nothing else changes."""
+    return value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class _Sanitizer(HTMLParser):
     def __init__(self, media: set, depth: int):
         super().__init__(convert_charrefs=False)
         self.media, self.depth, self.out, self.skip, self.in_style = media, depth, [], 0, False
+        self.rcdata = None
 
     def _attrs(self, tag, attrs):
-        kept, changed = [], False
+        kept, changed, seen = [], False, set()
         for name, value in attrs:
+            if not _ATTR_NAME.match(name) or name in seen:   # malformed names never reach the output
+                changed = True
+                continue
+            seen.add(name)
             if name.startswith("on"):          # event handlers
                 changed = True
                 continue
@@ -229,28 +263,37 @@ class _Sanitizer(HTMLParser):
         return kept, changed
 
     def _emit_tag(self, tag, attrs, close):
-        kept, changed = self._attrs(tag, attrs)
+        """Always re-serialized (never the source text), so attribute values cannot smuggle markup that a
+        browser would read differently inside a raw-text or foreign-content context."""
+        kept, _changed = self._attrs(tag, attrs)
         if kept is None:
-            return
-        if not changed:
-            self.out.append(self.get_starttag_text())
-            return
-        parts = "".join(f" {n}" if v is None else f' {n}="{_html.escape(v, quote=True)}"' for n, v in kept)
-        self.out.append(f"<{tag}{parts}{' /' if close else ''}>")
+            return False
+        parts = "".join(f" {n}" if v is None else f' {n}="{_attr(v)}"' for n, v in kept)
+        if close and tag in _VOID:
+            self.out.append(f"<{tag}{parts} />")
+        elif close:                  # a browser ignores "/>" on HTML elements: close explicitly
+            self.out.append(f"<{tag}{parts}></{tag}>")
+        else:
+            self.out.append(f"<{tag}{parts}>")
+        return True
 
     def handle_starttag(self, tag, attrs):
         if self.skip or tag in _DROP_WITH_CONTENT:
             if tag in _DROP_WITH_CONTENT:
                 self.skip += 1
             return
-        if tag in _DROP_VOID:
+        if tag in _DROP_VOID or not _TAG_NAME.match(tag):
             return
-        self._emit_tag(tag, attrs, close=False)
-        if tag == "style":
-            self.in_style = True
+        if self.rcdata:              # markup inside textarea/title is text to a browser: never re-emit it
+            return
+        if self._emit_tag(tag, attrs, close=False):
+            if tag == "style":
+                self.in_style = True
+            elif tag in _RCDATA:
+                self.rcdata = tag
 
     def handle_startendtag(self, tag, attrs):
-        if self.skip or tag in _DROP_WITH_CONTENT or tag in _DROP_VOID:
+        if self.skip or self.rcdata or tag in _DROP_WITH_CONTENT or tag in _DROP_VOID or not _TAG_NAME.match(tag):
             return
         self._emit_tag(tag, attrs, close=True)
 
@@ -259,8 +302,11 @@ class _Sanitizer(HTMLParser):
             if self.skip:
                 self.skip -= 1
             return
-        if self.skip or tag in _DROP_VOID:
+        if self.skip or tag in _DROP_VOID or not _TAG_NAME.match(tag):
             return
+        if self.rcdata and tag != self.rcdata:
+            return
+        self.rcdata = None
         if tag == "style":
             self.in_style = False
         self.out.append(f"</{tag}>")
@@ -268,19 +314,23 @@ class _Sanitizer(HTMLParser):
     def handle_data(self, data):
         if self.skip:
             return
-        self.out.append(_clean_css(data, self.media, self.depth) if self.in_style else data)
+        if self.in_style:
+            # In SVG/MathML foreign content a browser tokenizes <style> text as markup; without "<" it is text.
+            self.out.append(_clean_css(data, self.media, self.depth).replace("<", ""))
+        else:
+            self.out.append(data.replace("<", "&lt;").replace(">", "&gt;"))
 
     def handle_entityref(self, name):
-        if not self.skip:
+        if not self.skip and not self.in_style and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name):
             self.out.append(f"&{name};")
 
     def handle_charref(self, name):
-        if not self.skip:
+        if not self.skip and not self.in_style and re.fullmatch(r"[0-9]+|[xX][0-9A-Fa-f]+", name):
             self.out.append(f"&#{name};")
 
     def handle_decl(self, decl):
-        if not self.skip and self.depth == 0:
-            self.out.append(f"<!{decl}>")
+        if not self.skip and self.depth == 0 and decl.strip().lower().startswith("doctype"):
+            self.out.append("<!doctype html>" if decl.strip().lower() == "doctype html" else "<!DOCTYPE html>")
 
     def handle_comment(self, data):
         return        # comments are dropped: conditional comments and hidden text never publish
