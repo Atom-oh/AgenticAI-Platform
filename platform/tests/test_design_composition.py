@@ -158,6 +158,12 @@ def test_split_label_and_value_financial_literal_is_still_critical():
     assert codes(c) == {"literal-financial-value"}
     c = summary(items=[{"label": "만기 (개월)", "value": "12"}])
     assert codes(c) == {"literal-financial-value"}
+    # PR #30 review round 3, #1: the unit annotation is not only parenthesized; other punctuation and no
+    # punctuation at all must be caught too, since the underlying grammar is punctuation-independent.
+    c = summary(items=[{"label": "추가 한도 [만원]", "value": "999"}])
+    assert codes(c) == {"literal-financial-value"}
+    c = summary(items=[{"label": "추가 한도 만원", "value": "999"}])
+    assert codes(c) == {"literal-financial-value"}
     # A bare number with no sibling unit annotation, and ordinary text with no sibling number, both stay clean.
     c = summary(items=[{"label": "가입자 수", "value": "999"}])
     assert codes(c) == set()
