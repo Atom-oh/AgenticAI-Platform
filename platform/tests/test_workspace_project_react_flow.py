@@ -767,3 +767,62 @@ def test_revoked_base_run_404s_instead_of_a_refine_criteria_status(monkeypatch):
                                                actor="carol", project=project["id"])
     assert (status, payload.get("code")) == (status_missing, payload_missing.get("code"))
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_propose_validation_never_leaks_a_guide_hash_match_via_a_revocation_race(monkeypatch):
+    """PR #33 review 3 #2: `_propose`'s `validate_selection()` raised `ValueError`
+    (a guide page whose textSha256 no longer matches) straight into the outer
+    handler, skipping the response gate entirely -- review 8 #3 / review 1 #2
+    only applied the aggregate-recheck-after-validation-failure pattern to
+    `_validated_contract`, never to `_propose`'s own validation path.
+    Reproduced: revoke the guide asset from inside `load_pack` itself (after
+    `_assets` already passed it, during the SAME retrieval a matching hash
+    would also need), then submit a mismatching textSha256: the fix rechecks
+    the gate's aggregate once, strictly after that read, so this returns 404
+    like any other revoked asset, never the content-revealing 400."""
+    import workspace.guidelines as guidelines_module
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    page_text = "Keep entered values when returning to the form."
+    pack = {"format": "ux-guidelines", "schemaVersion": 1, "sources": [
+        {"id": "interaction", "name": "guide.pdf", "sha256": "a" * 64, "category": "interaction", "pageCount": 1,
+         "pages": [{"page": 1, "text": page_text, "textSha256": guidelines_module.text_hash(page_text),
+                    "truncated": False}]}]}
+    pack_bytes = json.dumps(pack).encode()
+    guide_bytes = b"guide reference bytes"
+    status, data = request(api, "POST", "/assets", {"name": "guide.pdf", "size": len(guide_bytes),
+                           "sha256": hashlib.sha256(guide_bytes).hexdigest(), "purpose": "guide"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    guide = data["asset"]
+    original = api.storage.key_for(owner, "asset", guide["id"], "original")
+    guidelines_key = api.storage.key_for(owner, "asset", guide["id"], "guidelines.json")
+    api.storage.put_blob(original, guide_bytes, "text/plain")
+    api.storage.put_blob(guidelines_key, pack_bytes, "application/json")
+    guide = api.storage.put(owner, "asset", {**guide, "status": "stored", "uploadStatus": "stored",
+                            "parseStatus": "complete", "originalKey": original, "guidelinesKey": guidelines_key,
+                            "guidelinesSha256": guidelines_module.text_hash(pack_bytes.decode("utf-8")),
+                            "projectId": project["id"]}, expected_version=guide["version"])
+    original_load_pack = guidelines_module.load_pack
+    armed = {"on": True}
+
+    def racing(storage, owner_arg, asset):
+        result = original_load_pack(storage, owner_arg, asset)
+        if armed["on"]:
+            armed["on"] = False
+            current = api.storage.get(owner, "asset", guide["id"])
+            api.storage.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+        return result
+    monkeypatch.setattr(guidelines_module, "load_pack", racing)
+    mismatched_ref = {"assetId": guide["id"], "sourceId": "interaction", "page": 1,
+                      "sourceSha256": "a" * 64, "textSha256": hashlib.sha256(b"wrong text").hexdigest()}
+    status, payload = request(api, "POST", "/contracts/propose", {"productId": product["id"],
+                              "assetIds": [guide["id"]], "brief": "요약", "guideRefs": [mismatched_ref],
+                              "requestId": "propose-revoked"}, actor="carol", project=project["id"])
+    assert not armed["on"]
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)

@@ -1639,7 +1639,30 @@ class WorkspaceAPI:
             self._worker_ready()
             assets = self._assets(owner, data["assetIds"], gate=gate)
             from workspace.guidelines import validate_selection
-            validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
+            try:
+                validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
+            except ValueError as error:
+                # A validation failure (e.g. a guide page whose textSha256 no
+                # longer matches) must never be distinguishable from an asset
+                # revoked while ITS OWN or a LATER asset's guideline pack was
+                # being read for that same comparison (same shape as review 8
+                # #3 / review 1 #2's fix for `_validated_contract`, never
+                # applied here). Every asset above already joined this gate's
+                # aggregate reader; recheck it as a single aggregate ONCE,
+                # strictly after every read this validation performed, so a
+                # revocation racing ANY of them raises the same 404 a plain
+                # GET (or the matching-hash path's own later gate recheck)
+                # would, instead of this content-revealing 400.
+                if gate is not None and gate.aggregate is not None:
+                    from workspace.collaboration import CollaborationError
+                    from workspace.ontology_sources import _AUTHORITY_CODES
+                    try:
+                        gate.aggregate.recheck()
+                    except CollaborationError as changed:
+                        if changed.status == 401 or changed.code in _AUTHORITY_CODES:
+                            raise
+                        raise HTTPError(404, "not-found", "Resource not found") from None
+                raise HTTPError(400, "invalid-input", str(error)[:240]) from error
             job = self._new_job(owner, identifier, "propose", {
                 **data, "assetSnapshots": self._snapshot_assets(assets)}, fingerprint)
         self._invoke(owner, job)
