@@ -571,6 +571,9 @@ class WorkspaceAPI:
             return self._get(owner, "job", job["id"])
 
     def _new_job(self, owner, identifier, task, data, request_hash=None):
+        from workspace.storage import RESERVED_TASKS
+        if task in RESERVED_TASKS:
+            raise HTTPError(400, "reserved-task", "이 작업 유형은 별도 실행 경로에서만 생성됩니다.")
         record = {"id": identifier, "task": task, "input": data, "status": "queued", "progress": 0}
         if request_hash:
             record["requestHash"] = request_hash
@@ -788,7 +791,9 @@ class WorkspaceAPI:
                 raise Conflict("Baseline changed during approval")
             unique[key] = check
         checks = list(unique.values())
-        return self.storage.put_many(writes, checks=checks)[0]
+        # Human approval may update a design-linked run; outcome statuses remain ledger-only.
+        from workspace import storage as storage_module
+        return self.storage.put_many(writes, checks=checks, _writer=storage_module._human_writer())[0]
 
     def _contract_approve(self, owner, record, body, scope=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)

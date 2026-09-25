@@ -84,8 +84,10 @@ def create_release(api, owner, body, scope):
     if release is None:
         api._worker_ready()
         try:
+            from workspace import storage as storage_module
             release = api.storage.put(owner, "release", {**data, "id": identifier, "status": "queued",
-                                                        "requestHash": fingerprint, "jobId": identifier})
+                                                        "requestHash": fingerprint, "jobId": identifier},
+                                      _writer=storage_module._human_writer())
         except Conflict:
             release = api._get(owner, "release", identifier)
             if release.get("requestHash") != fingerprint:

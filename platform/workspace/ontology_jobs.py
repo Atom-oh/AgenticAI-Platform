@@ -13,6 +13,10 @@ from workspace.ontology_store import Ontology
 
 def reconcile(ctx, artifact):
     """Read-triggered recovery never reruns paid work or revives old authorization."""
+    from workspace.storage import is_reserved, ReservedRecord
+    if is_reserved(artifact):
+        ctx.storage._report(ctx.owner, ReservedRecord("wb_artifact", artifact["id"], "marked-artifact"))
+        return artifact
     if artifact.get("status") not in {"queued", "processing"}:
         return artifact
     job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
@@ -116,9 +120,9 @@ def process(ctx, pinned, job=None):
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
     if not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
-    # Unit A intentionally admits only this exact offline implementation.
-    # The separately reviewed cloud adapter must install its own pinned factory;
-    # an arbitrary callable's mutable backend label confers no execution trust.
+    # Unit A admits only this exact offline analyzer. AgentCore source analysis is a
+    # new-ledger Runtime execution (AGENTCORE_CONTRACT platform-execution/1), never an
+    # analyzer injected here.
     if analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
     backend = "local-offline"

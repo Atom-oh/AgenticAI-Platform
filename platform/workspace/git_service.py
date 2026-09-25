@@ -107,6 +107,7 @@ def create_export(api, owner, release, body, scope):
         raise HTTPError(409, "request-changed", "Git 요청의 대상 또는 승인본이 변경되었습니다.")
     if exported is None:
         api._worker_ready()
+        from workspace import storage as storage_module
         for attempt in range(3):
             current = api._get(owner, "release", release["id"])
             record = {**data, "id": identifier, "status": "queued", "requestHash": fingerprint, "jobId": identifier}
@@ -117,7 +118,7 @@ def create_export(api, owner, release, body, scope):
                     {"owner": owner, "kind": "gitexport", "item": record, "expected_version": None},
                     {"owner": owner, "kind": "release", "item": {**current, "git": pending, "gitExports": history},
                      "expected_version": current["version"]},
-                ])[0]
+                ], _writer=storage_module._human_writer())[0]
                 break
             except Conflict:
                 exported = api.storage.get(owner, "gitexport", identifier)
