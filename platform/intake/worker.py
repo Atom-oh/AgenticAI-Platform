@@ -48,9 +48,12 @@ def process_image(worker, owner, job):
     def current_authority():
         """The membership epoch and every source record version observed at queueing
         must still hold: a removed and restored member (a later epoch) or a revoked
-        and restored asset (a later version) cannot resurrect the queued request."""
-        if storage.clock() >= deadline:
-            raise IntakeBlocked(["authorization-expired"])
+        and restored asset (a later version) cannot resurrect the queued request.
+
+        The deadline is compared with one fresh clock read taken after every read
+        this callback performs (the scope rebuild and every observed version),
+        immediately before the caller's commit attempt; a clock read taken before
+        those reads could miss a deadline crossed during them."""
         fresh = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
         if type(frozen) is not int or fresh["project"].get("authorityRevision", 0) != frozen:
             raise IntakeBlocked(["authority-changed"])
@@ -58,6 +61,8 @@ def process_image(worker, owner, job):
             row = storage.get(check["owner"], check["kind"], check["id"])
             if not row or row.get("version") != check["version"]:
                 raise IntakeBlocked(["source-changed"])
+        if storage.clock() >= deadline:  # after every read above
+            raise IntakeBlocked(["authorization-expired"])
 
     current_authority()
     current = storage.get(owner, "job", job["id"])

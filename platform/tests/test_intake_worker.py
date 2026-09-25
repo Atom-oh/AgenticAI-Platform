@@ -413,3 +413,62 @@ def test_repeated_image_request_reports_a_failed_job(env):
     assert worker_for(env, ocr_status="incomplete").handle(invoked)["status"] == "failed"
     again = admission.request(env.api, env.scope(), ref, data_class="synthetic", kind="image")
     assert again["status"] == "failed" and again["job"]["status"] == "failed"
+
+
+# PR #28 review round 8 -----------------------------------------------------------
+
+def test_deadline_expiring_during_the_final_callback_read_commits_nothing(env):
+    """Review 8: `current_authority`'s deadline is compared with a clock read taken
+    after its own reads (the rebuilt scope and every observed version), immediately
+    before the commit attempt, not with a clock read taken before those reads."""
+    policy = env.policy()
+    ref = put_asset(env, flowchart_png(), "flow.png", "flow")
+    env.provenance(ref, policy, kind="fixture")
+    queued, invoked = _queue(env, ref)
+    storage, owner = env.api.storage, f"project:{env.pid}"
+    deadline = storage.get(owner, "job", queued["job"]["id"])["input"]["authorizationExpiresAt"]
+    worker = worker_for(env)
+    put_many, state = storage.put_many, {"attempt": False}
+
+    def attempt(writes, checks=None, **kwargs):
+        # `before_attempt` (the commit guard) runs only for the decision's own
+        # transaction, not for any earlier, unrelated write.
+        state["attempt"] = any(w["kind"] == "adm_decision" for w in writes)
+        try:
+            return put_many(writes, checks, **kwargs)
+        finally:
+            state["attempt"] = False
+
+    # `admission.Authority.recheck` (the decision's own guard) runs first inside
+    # that same `before_attempt`; only after it returns does `current_authority`
+    # (the Worker's own guard) perform its own reads (the rebuilt scope, then
+    # every observed version). Gate the clock crossing on that window so it lands
+    # inside `current_authority`'s own reads, not inside an earlier guard's.
+    phase = {"after_authority_recheck": False}
+    original_recheck = admission.Authority.recheck
+
+    def recheck(self):
+        phase["after_authority_recheck"] = False
+        try:
+            return original_recheck(self)
+        finally:
+            phase["after_authority_recheck"] = True
+
+    get = storage.get
+
+    def reading(owner_, kind_, identifier_):
+        row = get(owner_, kind_, identifier_)
+        if state["attempt"] and phase["after_authority_recheck"] and kind_ == "asset" and identifier_ == "flow":
+            storage.clock = lambda: deadline + 1  # crossed during current_authority's own asset read
+        return row
+
+    storage.put_many, storage.get = attempt, reading
+    admission.Authority.recheck = recheck
+    try:
+        outcome = worker.handle(invoked)
+    finally:
+        storage.put_many, storage.get = put_many, get
+        admission.Authority.recheck = original_recheck
+    assert outcome["status"] == "failed"
+    assert storage.get(owner, "adm_decision", queued["decisionId"]) is None
+    assert storage.get(owner, "job", queued["job"]["id"])["status"] == "failed"
