@@ -1719,7 +1719,11 @@ class WorkspaceAPI:
             source = next((asset for asset in assets if asset["id"] == data.get("sourceAssetId")), None)
             if not source:
                 if data.get("sourceAssetId"):
-                    self._get(owner, "asset", data["sourceAssetId"])
+                    # Resolve access before existence: a revoked/tombstoned/deleted
+                    # asset that just is not one of the contract's own selected
+                    # inputs must 404 identically to a foreign/missing id, never
+                    # the distinguishable 409 below.
+                    self._authorized_asset(owner, data["sourceAssetId"], gate)
                 raise HTTPError(409, "source-not-selected", "확정된 규칙에 포함된 HTML 파일을 선택하세요.")
             if (source["name"].rsplit(".", 1)[-1].lower() not in ("html", "htm")
                     or source.get("parseStatus") not in ("complete", "partial")):
@@ -1755,8 +1759,14 @@ class WorkspaceAPI:
         if data.get("referenceAssetId"):
             reference = next((asset for asset in assets if asset["id"] == data["referenceAssetId"]), None)
             if reference is None:
-                # Resolve ownership first so a foreign identifier never becomes an existence oracle.
-                self._get(owner, "asset", data["referenceAssetId"])
+                # Resolve access before existence (review 2 #2): plain ownership/
+                # existence alone let a revoked/tombstoned/deleted-but-unselected
+                # asset return this 409 while a truly missing one 404s --
+                # distinguishable. Authorize it the same way `assetIds` is, so
+                # every inaccessible reason 404s identically; only an asset that
+                # is genuinely accessible yet not one of the contract's own
+                # selected inputs reaches the 409 below.
+                self._authorized_asset(owner, data["referenceAssetId"], gate)
                 raise HTTPError(409, "reference-not-selected", "The reference must be an approved contract asset")
             page = _integer(data.get("referencePage", 1), "Reference page", 1, 10000)
             preview = next((row for row in reference.get("previews", []) if row.get("page") == page), None)
