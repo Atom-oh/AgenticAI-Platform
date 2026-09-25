@@ -393,6 +393,16 @@ def _origin_readable(ctx, record, aggregate=None):
     return _passes(check)
 
 
+def _origin_impact_recheck(ctx, record):
+    """Retained for `impact()`'s response gate: re-verifies origin source access
+    fresh, right before the complete response is released, exactly like every
+    contributing destination reader already does."""
+    def check():
+        if not _origin_readable(ctx, record):
+            _not_found()
+    return check
+
+
 def _grant_reference(row):
     return {"sourceKind": "published-asset", "sourceId": row["publicationId"],
             "revision": str(row["publicationRevision"]), "sha256": row["publicationHash"],
@@ -497,6 +507,13 @@ def impact(ctx, publication_id, retain=None):
     """
     from workspace.ontology_store import CURRENT, Ontology
     record = _origin_publication(ctx, publication_id)
+    # `_origin_publication` only checks project membership; a publication whose
+    # origin sources have since been restricted must be indistinguishable from a
+    # missing one here too, exactly like its own detail route already requires.
+    if not _origin_readable(ctx, record):
+        _not_found()
+    if retain is not None:
+        retain(ctx.project_id, _origin_impact_recheck(ctx, record))
     dependents, contributing = [], []
     for row in sorted(record.get("grants", []), key=lambda item: item["destinationProject"]):
         try:

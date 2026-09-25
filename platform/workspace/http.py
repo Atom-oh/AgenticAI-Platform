@@ -559,7 +559,9 @@ class ResponseGate:
         ctx, storage = self.context, self.api.storage
         try:
             if view == "impact-origin":
-                publications._origin_publication(ctx, item)
+                record = publications._origin_publication(ctx, item)
+                if not publications._origin_readable(ctx, record, self.aggregate):
+                    publications._not_found()
                 return item
             if view in ("publication", "publication-withdrawn"):
                 record = publications._publication(storage, item.get("id") if isinstance(item, dict) else None)

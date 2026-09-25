@@ -956,3 +956,23 @@ def test_impact_reads_the_manifest_generation_atomically_with_source_nodes(org, 
     assert len(report["dependents"]) == 1 and report["dependents"][0]["projectId"] == org.dest
     assert len(report["dependents"][0]["nodeIds"]) == 1, report
     assert len(calls) == 1, "source_nodes and the caller must share the same manifest read"
+
+
+def test_impact_denies_an_origin_publication_whose_sources_are_restricted(org):
+    """Review 7 #6: `_origin_publication` only checks project membership, not current
+    source access, and the response gate's own "impact-origin" view repeated the
+    same insufficient check on top -- a publication whose origin sources are since
+    restricted returned 404 from its own detail route but 200 (with its own
+    publication ID, inside "publicationId") from /impact."""
+    pub = published(org)
+    assert call(org.api, "GET", f"/publications/{pub['id']}", actor="carol", project=org.origin)[0] == 200
+    restrict(org, ["owner", "planner"])  # excludes carol (a designer)
+    assert call(org.api, "GET", f"/publications/{pub['id']}", actor="carol", project=org.origin)[0] == 404
+    status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}/impact", actor="carol", project=org.origin)
+    assert status == 404, payload
+    assert pub["id"] not in json.dumps(payload)
+    # A genuinely missing publication gets the identical response.
+    missing = call(org.api, "GET", "/publications/pub-absent/impact", actor="carol", project=org.origin)[:2]
+    assert missing == (status, payload)
+    # A direct caller (not through HTTP) gets the same guarantee.
+    assert denied(publications.impact, ctx(org.api, "carol", org.origin), pub["id"]) == (404, "not-found")
