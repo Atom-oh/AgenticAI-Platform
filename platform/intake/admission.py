@@ -444,15 +444,19 @@ _RECHECK_CODES = {"adm_decision": "decision-not-current", "adm_policy": "policy-
                   "adm_resolver": "resolver-changed"}
 
 
-def _final_recheck(host, reader, checks, *, pending=()):
+def _recheck_reads(host, reader, checks, *, pending=()):
     """Re-read every admission record and source fence immediately before use.
 
     Each record must still pass its closed schema, keep the exact version
     observed earlier and have a current status; decision ids in `pending` must
-    still be `pending-review` (the review queue). Every deadline (each record's
-    expiry and the authorization deadline) is collected during the reads,
-    including the current-source fences rechecked through `Sources.recheck`, and
-    compared with one fresh clock read taken after the last read.
+    still be `pending-review` (the review queue). These structural checks fail
+    immediately; every deadline (each record's expiry and the authorization
+    deadline), including the current-source fences rechecked through
+    `Sources.recheck`, is only collected here as `(expiresAt, code)` pairs. The
+    caller compares them with a fresh clock read taken after the last read: by
+    itself (`_final_recheck`), or together with other reads it collected first
+    (a response that must retire several already-read items with one clock
+    read taken after the last of them).
     """
     storage = host.storage
     deadlines = []
@@ -484,7 +488,14 @@ def _final_recheck(host, reader, checks, *, pending=()):
             if type(bound) is not int:
                 raise AdmissionError("authorization-expired", 401)
             deadlines.append((bound, None))
-    now = storage.clock()  # after the last read
+    return fences, deadlines
+
+
+def _final_recheck(host, reader, checks, *, pending=()):
+    """`_recheck_reads`, comparing its collected deadlines with one fresh clock
+    read taken after the last read."""
+    fences, deadlines = _recheck_reads(host, reader, checks, pending=pending)
+    now = host.storage.clock()  # after the last read
     if deadlines:
         expiry, code = min(deadlines, key=lambda item: item[0])
         if expiry <= now:
@@ -508,6 +519,13 @@ class Authority:
 
     def recheck(self):
         return _final_recheck(self.host, self.reader, self.checks, pending=self.pending)
+
+    def collect_deadlines(self):
+        """Like `recheck`, but returns the collected `(fences, deadlines)` instead
+        of comparing them: for a response that rechecks several items and must
+        retire each of them against one clock read taken after the last item's
+        last read, not a clock read taken fresh for each item."""
+        return _recheck_reads(self.host, self.reader, self.checks, pending=self.pending)
 
 
 def authorized(host, scope, decision_id, *, claims=None, sources=None):

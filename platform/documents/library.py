@@ -397,10 +397,16 @@ class Library:
 
     def _upstream_current(self):
         """Version fences cannot see expiry: before every commit attempt (including
-        retries) each upstream admission record must still be schema-valid, current
-        (status and expiry at the present clock) and at its observed version."""
+        retries) each upstream admission record (the transcription's own admission,
+        its reviewer grant, the image admission and its reviewer grant, and any
+        policy/provenance in between) must still be schema-valid, current (status)
+        and at its observed version. Every record's expiry is collected during
+        these reads and compared with one fresh clock read taken after the last
+        read, immediately before the attempt; a clock read taken fresh for each
+        check could miss one that expired while a later check was being read."""
         from intake import records
         kinds = ("adm_decision", "adm_policy", "adm_provenance", "adm_grant")
+        deadlines = []
         for check in self._upstream:
             if check["kind"] not in kinds:
                 continue
@@ -409,9 +415,15 @@ class Library:
                 row = records.validate(check["kind"], row) if row else None
             except ValueError:
                 row = None
-            if not row or row.get("version") != check["version"] or not records.is_current(row, self.storage.clock()):
+            if (not row or row.get("version") != check["version"]
+                    or row.get("status") not in ("active", "admitted") or type(row.get("expiresAt")) is not int):
                 raise DocumentError(409, "source-upstream-revoked",
                                     "The transcription's original image or its admission is no longer current")
+            deadlines.append(row["expiresAt"])
+        now = self.storage.clock()  # after the last read
+        if deadlines and min(deadlines) <= now:
+            raise DocumentError(409, "source-upstream-revoked",
+                                "The transcription's original image or its admission is no longer current")
 
     def write(self, kind, item, expected_version=None):
         return {"owner": self.owner, "kind": kind, "item": item, "expected_version": expected_version}

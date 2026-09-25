@@ -818,3 +818,104 @@ def test_image_admission_expiring_during_the_guard_read_publishes_nothing(chain,
         storage.clock = clock
     assert error.value.status == 409
     assert get(chain.chain["owner"], "ontology", CURRENT) is None
+
+
+# PR #28 review round 8 -----------------------------------------------------------
+
+def test_transcription_admission_expiring_during_the_image_grant_read_blocks_download(env, monkeypatch):
+    """Review 8: `_upstream_current` aggregates every upstream deadline (the
+    transcription's own admission, its reviewer grant, the image admission and
+    its reviewer grant) and compares them all with one fresh clock read taken
+    after the last read, not with a clock read taken fresh for each check."""
+    from documents.library import Library, fingerprint
+    env.policy()
+    storage = env.api.storage
+    short = storage.clock() + 2000  # grant-bob expires soon; the image's own records do not
+    env.admin({"op": "grant_reviewer", "record": {
+        "id": "grant-bob", "actor": "bob", "policyId": "policy-1", "scope": {"projectIds": [env.pid]},
+        "operations": ["review-internal"], "expiresAt": short}})
+    env.grant("dana", "grant-dana")
+    ref = image_asset(env)
+    pending = imaging.admit_image(env.api, env.scope(), ref, data_class="internal-non-sensitive", ocr=ocr)
+    image = review.decide(env.api, env.scope("dana"), pending["id"], approve=True, reason="image checked")
+    request = transcription.request_diagram(env.api, env.scope(), ref, page=1, region={
+        "left": 10, "top": 10, "width": 300, "height": 180, "normalizedImageHash": image["artifact"]["sha256"]})
+    adapter = VisionAdapter(json.dumps({"kind": "diagram", "text": DIAGRAM_TEXT, "tables": []}, ensure_ascii=False))
+    monkeypatch.setattr(gate, "adapter", lambda *args, **kwargs: adapter)
+    transcribed = transcription.transcribe(env.api, env.scope(), request, model_id=MODEL)
+    validated = review.decide(env.api, env.scope("bob"), transcribed["id"], approve=True, reason="matches image")
+    assert validated["status"] == "admitted" and validated["expiresAt"] == short
+    owner = f"project:{env.pid}"
+    did = "d-" + fingerprint(["intake-transcription", validated["id"]])[:40]
+    revision = storage.get(owner, "docrevision", did + "--r000001")
+
+    # `_upstream_current` (the commit guard, run right before the transaction
+    # attempt) re-reads every upstream record a second time; the earlier read
+    # (inside `_lineage`, building the fence list) must not trip this hook.
+    get = storage.get
+    state = {"in_upstream_current": False}
+    original_upstream_current = Library._upstream_current
+
+    def upstream_current(self):
+        state["in_upstream_current"] = True
+        try:
+            return original_upstream_current(self)
+        finally:
+            state["in_upstream_current"] = False
+
+    def reading(owner_, kind_, identifier_):
+        row = get(owner_, kind_, identifier_)
+        if state["in_upstream_current"] and kind_ == "adm_grant" and identifier_ == "grant-dana":
+            storage.clock = lambda: short + 1  # transcription admission crossed during a later upstream read
+        return row
+
+    monkeypatch.setattr(Library, "_upstream_current", upstream_current)
+    monkeypatch.setattr(storage, "get", reading)
+    path = f"/documents/{revision['documentId']}/revisions/{revision['id']}/blob"
+    status, payload, _ = call(env.api, "GET", path, project=env.pid, query={"offset": "0"})
+    assert status == 409 and payload["code"] == "source-upstream-revoked", payload
+    assert storage.get(owner, "docrevision", revision["id"])["status"] == "in_review"
+
+
+def test_grant_expiring_during_a_later_items_response_wide_recheck_returns_no_earlier_preview(env, monkeypatch):
+    """Review 8: the response-wide recheck in `review.list_pending` compares every
+    retained item's collected deadlines with one fresh clock read taken after the
+    last item's last read, not with a clock read taken fresh for each item."""
+    from test_intake_admission import guide
+    env.policy()
+    env.grant("bob", "grant-bob")
+    ids = []
+    for name in ("first.txt", "second.txt"):
+        ref = guide(env, text=f"{name} 정기예금 안내.\n", name=name, request=name)
+        decision = admission.request(env.api, env.scope(), ref, data_class="internal-non-sensitive")
+        assert decision["status"] == "pending-review"
+        ids.append(decision["id"])
+    storage = env.api.storage
+    grant = storage.get(INTAKE_OWNER, "adm_grant", "grant-bob")
+
+    # The response-wide recheck starts by rechecking that the actor still holds
+    # ANY grant at all; that call happens exactly once before the per-item loop
+    # that follows it, in both the current code and the code under test.
+    original_any_grant = review._any_grant
+    calls, state = {"n": 0}, {"second_pass": False}
+
+    def any_grant(storage_, actor, project_id):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            state["second_pass"] = True
+        return original_any_grant(storage_, actor, project_id)
+
+    get, seen = storage.get, {"n": 0}
+
+    def reading(owner_, kind_, identifier_):
+        row = get(owner_, kind_, identifier_)
+        if state["second_pass"] and kind_ == "adm_grant" and identifier_ == "grant-bob":
+            seen["n"] += 1
+            if seen["n"] == 2:  # the second (later) item's read in the response-wide pass
+                storage.clock = lambda: grant["expiresAt"] + 1
+        return row
+
+    monkeypatch.setattr(review, "_any_grant", any_grant)
+    monkeypatch.setattr(storage, "get", reading)
+    status, listed = env.http("GET", "/intake/reviews", actor="bob")
+    assert status == 200 and listed["reviews"] == [], listed
