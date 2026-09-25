@@ -521,15 +521,18 @@ def test_ordinary_worker_progress_never_404s_a_just_submitted_run(monkeypatch):
 
 
 def test_contract_creation_never_leaks_a_revoked_assets_text_via_quote_matching():
-    """Review 7 #1: an explicit rule's quoted source text was read from, and
-    compared against, the cited asset's OWN analysis text before the response
-    gate -- or anything else -- authorized that asset's current access at all. A
-    revoked asset's own GET already 404s, but submitting a matching quote through
-    contract creation behaved differently from a non-matching one (only the
-    non-match failed immediately, with 400 invalid-contract; a match let creation
-    proceed), a content oracle letting a caller learn restricted text one probe at
-    a time. Both must now fail identically and immediately (409 asset-not-ready),
-    before any quote is ever compared."""
+    """Review 7 #1 / review 8 #2: an explicit rule's quoted source text was read
+    from, and compared against, the cited asset's OWN analysis text before the
+    response gate -- or anything else -- authorized that asset's current access
+    at all. A revoked asset's own GET already 404s, but submitting a matching
+    quote through contract creation behaved differently from a non-matching one
+    (only the non-match failed immediately, with 400 invalid-contract; a match
+    let creation proceed), a content oracle letting a caller learn restricted
+    text one probe at a time. Both must now fail identically and immediately
+    (404 not-found -- review 8 #2 folded the readiness check's 409 into the
+    same missing-resource response a revoked asset gets everywhere else, so this
+    is no longer a distinguishable "exists but revoked" signal either), before
+    any quote is ever compared."""
     api = make_api()
     project = shared(api)
     _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
@@ -563,4 +566,4 @@ def test_contract_creation_never_leaks_a_revoked_assets_text_via_quote_matching(
                                               "rules": [nonmatching_rule], "assetIds": [asset["id"]]},
                                               actor="carol", project=project["id"])
     assert (status_match, payload_match.get("code")) == (status_nomatch, payload_nomatch.get("code"))
-    assert status_match == 409 and payload_match.get("code") == "asset-not-ready", (status_match, payload_match)
+    assert status_match == 404 and payload_match.get("code") == "not-found", (status_match, payload_match)

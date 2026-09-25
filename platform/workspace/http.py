@@ -1026,11 +1026,11 @@ class WorkspaceAPI:
         if parts == ["assets"] and method == "POST":
             return self._create_asset(owner, _body(event), gate=gate)
         if parts == ["contracts", "propose"] and method == "POST":
-            return self._propose(owner, _body(event), scope=scope)
+            return self._propose(owner, _body(event), scope=scope, gate=gate)
         if parts == ["contracts"] and method == "POST":
-            return self._contract_create(owner, _body(event), scope=scope)
+            return self._contract_create(owner, _body(event), scope=scope, gate=gate)
         if parts == ["runs"] and method == "POST":
-            return self._run_create(owner, _body(event), scope=scope)
+            return self._run_create(owner, _body(event), scope=scope, gate=gate)
         if len(parts) < 2 or parts[0] not in ("assets", "contracts", "runs", "jobs"):
             raise HTTPError(404, "not-found", "Route not found")
         kind = {"assets": "asset", "contracts": "contract", "runs": "run", "jobs": "job"}[parts[0]]
@@ -1090,7 +1090,7 @@ class WorkspaceAPI:
                     record = self.storage.put(owner, kind, {**record, "archived": True}, record["version"])
                 return _json(200, {"asset": record})
         if kind == "contract" and len(parts) == 2 and method == "PUT":
-            return self._contract_edit(owner, record, _body(event), scope=scope)
+            return self._contract_edit(owner, record, _body(event), scope=scope, gate=gate)
         if len(parts) == 3 and parts[2] == "approve" and method == "POST":
             if kind == "contract":
                 return self._contract_approve(owner, record, _body(event), scope=scope, gate=gate)
@@ -1305,20 +1305,32 @@ class WorkspaceAPI:
         self._invoke(owner, job)
         return _json(202, {"asset": asset, "job": job})
 
-    def _assets(self, owner, identifiers):
+    def _authorized_asset(self, owner, identifier, gate=None):
+        """The current, accessible asset, or a 404 identical to a missing one.
+
+        Revoked, tombstoned, deleted and never-existed must all be indistinguishable
+        (never an existence oracle): access is decided BEFORE readiness, using the
+        same authorization a plain GET would apply. When a gate is given, the
+        observation joins its aggregate for the response's own final recheck.
+        """
+        stored = self.storage.get(owner, "asset", identifier)
+        asset = gate.authorize("asset", stored) if gate is not None and stored is not None else stored
+        if (asset is None or asset.get("accessRevoked") or asset.get("tombstone")
+                or asset.get("status") == "deleted"):
+            raise HTTPError(404, "not-found", "Resource not found")
+        return asset
+
+    def _assets(self, owner, identifiers, gate=None):
         if (not isinstance(identifiers, list) or len(identifiers) > 20
                 or any(not isinstance(identifier, str) for identifier in identifiers)
                 or len(set(identifiers)) != len(identifiers)):
             raise HTTPError(400, "invalid-assets", "Select at most 20 distinct assets")
-        assets = [self._get(owner, "asset", identifier) for identifier in identifiers]
+        assets = [self._authorized_asset(owner, identifier, gate) for identifier in identifiers]
         for asset in assets:
-            # Current access (never revoked/tombstoned/deleted) is required before
-            # any content -- including a rule's own quoted text -- is read from or
-            # compared against this asset; a contract-validation error must fail
-            # the exact same way whether or not a quote would have matched a
-            # restricted asset's text (never a content oracle on it).
-            if (asset.get("archived") or asset.get("uploadStatus") != "stored" or asset.get("accessRevoked")
-                    or asset.get("tombstone") or asset.get("status") == "deleted"):
+            # Readiness (still uploading) and identity (bytes changed) are checked
+            # only once access is already confirmed -- neither ever discloses whether
+            # an inaccessible id exists.
+            if asset.get("archived") or asset.get("uploadStatus") != "stored":
                 raise HTTPError(409, "asset-not-ready", "Selected files must be stored and not archived")
             info = self.storage.blob_info(self._blob_key(owner, asset.get("originalKey")))
             if info["size"] != asset["size"] or info["sha256"] != asset["sha256"]:
@@ -1369,8 +1381,8 @@ class WorkspaceAPI:
                 texts[asset["id"]], _ = context_for(load_pack(self.storage, owner, asset), selected)
         return texts
 
-    def _validated_contract(self, owner, data):
-        assets = self._assets(owner, data.get("assetIds", []))
+    def _validated_contract(self, owner, data, gate=None):
+        assets = self._assets(owner, data.get("assetIds", []), gate=gate)
         try:
             from workspace.guidelines import validate_citations, validate_selection
             refs, pages = validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
@@ -1429,21 +1441,21 @@ class WorkspaceAPI:
         result["assetIds"] = assets
         return result
 
-    def _contract_create(self, owner, body, scope=None):
+    def _contract_create(self, owner, body, scope=None, gate=None):
         data = self._with_criteria({key: body[key] for key in _EDITABLE if key in body},
                                    self._criteria(owner, body, scope, allow_request_draft=isinstance(body.get("changeRequest"), dict)))
-        normalized, _ = self._validated_contract(owner, data)
+        normalized, _ = self._validated_contract(owner, data, gate=gate)
         record = self.storage.put(owner, "contract", {**normalized, "id": uuid.uuid4().hex, "status": "draft"})
         return _json(201, {"contract": record})
 
-    def _contract_edit(self, owner, record, body, scope=None):
+    def _contract_edit(self, owner, record, body, scope=None, gate=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)
         if version != record["version"]:
             raise Conflict("Contract changed")
         editable = {key: body.get(key, record.get(key)) for key in _EDITABLE if key in body or key in record}
         editable = self._with_criteria(editable, self._criteria(owner, body, scope, record,
                                       allow_request_draft=isinstance(editable.get("changeRequest"), dict)))
-        normalized, _ = self._validated_contract(owner, editable)
+        normalized, _ = self._validated_contract(owner, editable, gate=gate)
         revisions = list(record.get("revisions", []))
         if record.get("status") == "approved":
             digest = self.rules().contract_hash(record)
@@ -1510,7 +1522,7 @@ class WorkspaceAPI:
             raise Conflict("Contract changed")
         if record.get("catalogHash"):
             self._criteria(owner, {}, scope, record)
-        normalized, assets = self._validated_contract(owner, record)
+        normalized, assets = self._validated_contract(owner, record, gate=gate)
         from workspace.rules import state_coverage_issues
         coverage_issues = state_coverage_issues(normalized)
         if coverage_issues:
@@ -1553,7 +1565,7 @@ class WorkspaceAPI:
             raise HTTPError(409, "request-changed", "The request ID was already used with different input")
         return job
 
-    def _propose(self, owner, body, scope=None):
+    def _propose(self, owner, body, scope=None, gate=None):
         from engine import model_catalog
         identifier = self._request_id(body, "propose")
         data = {"assetIds": body.get("assetIds", []), "brief": _text(body.get("brief", ""), "brief", 4000, empty=True),
@@ -1578,7 +1590,7 @@ class WorkspaceAPI:
             job = self._retry_dispatch(owner, job)
         if not job:
             self._worker_ready()
-            assets = self._assets(owner, data["assetIds"])
+            assets = self._assets(owner, data["assetIds"], gate=gate)
             from workspace.guidelines import validate_selection
             validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
             job = self._new_job(owner, identifier, "propose", {
@@ -1586,7 +1598,7 @@ class WorkspaceAPI:
         self._invoke(owner, job)
         return _json(202, {"job": job})
 
-    def _run_create(self, owner, body, scope=None, batch_context=None):
+    def _run_create(self, owner, body, scope=None, batch_context=None, gate=None):
         from engine import model_catalog
         inherited_policy = None
         if body.get("baseRunId"):
@@ -1664,7 +1676,7 @@ class WorkspaceAPI:
             if not contract.get("catalogHash"):
                 raise HTTPError(409, "code-criteria-required", "React 코드 기준을 포함한 새 규칙을 승인하세요.")
             self._criteria(owner, {}, scope, contract)
-        normalized, assets = self._validated_contract(owner, contract)
+        normalized, assets = self._validated_contract(owner, contract, gate=gate)
         digest = self.rules().contract_hash(normalized)
         approval = contract.get("approval") or {}
         if (contract["version"] != version or contract.get("status") != "approved"
@@ -1777,7 +1789,7 @@ class WorkspaceAPI:
                 or not isinstance(digest, str) or not _SHA.fullmatch(digest)
                 or digest != selected.get("artifactSha256") or not selected.get("reportKey")):
             raise HTTPError(409, "approval-evidence-required", "Approve only the exact artifact with passing required evidence")
-        _, approval_assets = self._validated_contract(owner, contract)
+        _, approval_assets = self._validated_contract(owner, contract, gate=gate)
         html_key = self._blob_key(owner, selected.get("htmlKey"))
         report_key = self._blob_key(owner, selected["reportKey"])
         if self.storage.blob_info(html_key)["sha256"] != digest:
