@@ -675,6 +675,18 @@ Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `operationId`, `inputs`, `outputs`, `objects`, `iat`/`exp`, `status`, `result`
 and `previous` are validated when present. Any other field is rejected.
 
+Every hash, size, key and identifier the ledger compares is first checked by one
+strict validator layer (`_is_sha`: 64 lowercase hex; `_is_size`: non-negative
+`int`, never `bool`; `_is_key`/`_is_ident`: non-empty bounded strings;
+`_object_ref`: required fields present, no unknown field, every value valid).
+Each receipt input must be exactly `{key, sha256, size}` and an authorized input
+of the job (the input manifest, the frozen release baseline, a listed prior, a
+recorded stage output, or an input handle of the attempt) with the same
+`sha256` and `size`; where the ledger has no recorded size, the stored object's
+server metadata must match. Otherwise `receipt-invalid`. Admission requires each
+admission to be exactly `{decisionId, revision, artifactHash}` with string ids,
+a valid `artifactHash` and distinct decision ids (`admission-invalid`).
+
 `service` is bound per stage (`STAGE_SERVICES`): `context` and `verify` →
 `runtime`, `generate` → `model`, `compile` → `interpreter`, `browser` →
 `browser`, `analyze` → `runtime` or `interpreter`. A `runtime` service carries
@@ -848,7 +860,7 @@ types: any `execution_fakes` class, any class exposing `sign`, or one marked
 and `TestKeyVerifier` is constructible only under pytest. The production operation IDs are mandatory. Offline
 tests may omit them.
 
-Error codes: `request-changed`, `admission-required`, `authority-changed`,
+Error codes: `request-changed`, `admission-required`, `admission-invalid`, `authority-changed`,
 `concurrency-actor`, `concurrency-project`, `execution-completion-scope`,
 `unknown-operation`, `not-an-execution`, `not-queued`, `already-claimed`,
 `attempts-exhausted`, `stale-attempt`, `receipt-invalid`, `budget-exhausted`,

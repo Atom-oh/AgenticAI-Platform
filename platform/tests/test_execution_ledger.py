@@ -2810,3 +2810,44 @@ def test_release_admission_freezes_the_approved_screenshot(xfer):
         admit(ledger, key="req-bad-shot", actor="alice", operation="design.release",
               manifest={"ref": key, "hash": hashlib.sha256(body).hexdigest()})
     assert error.value.code == "manifest-invalid"
+
+
+# === PR #27 review round 6 regressions ===============================================================
+
+@pytest.mark.parametrize("case", ["null-hash-negative-size", "missing-hash", "string-size", "bool-size",
+                                  "authorized-wrong-size", "unauthorized-key", "extra-field"])
+def test_receipt_inputs_are_strictly_validated_and_authorized(xfer, case):
+    """Review 6 finding 2: every input is a well-formed {key, sha256, size} of an authorized input with its metadata."""
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    manifest = {"key": job["manifest"]["ref"], "sha256": job["manifest"]["hash"],
+                "size": len(storage.get_blob(job["manifest"]["ref"]))}
+    entry = {"null-hash-negative-size": {"key": storage.key_for(OWNER, "asset", "nowhere", "x"), "sha256": None,
+                                         "size": -100},
+             "missing-hash": {"key": manifest["key"], "size": manifest["size"]},
+             "string-size": {**manifest, "size": str(manifest["size"])},
+             "bool-size": {**manifest, "size": True},
+             "authorized-wrong-size": {**manifest, "size": manifest["size"] + 1},
+             "unauthorized-key": {**manifest, "key": storage.key_for(OWNER, "asset", "other", "x")},
+             "extra-field": {**manifest, "role": "artifact"}}[case]
+    r = chained(job, "context", "n-in", inputs=[entry], status="ok")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(*ids(job), r)
+    assert error.value.code == "receipt-invalid"
+    assert storage.get(OWNER, "job", job["id"])["stages"] == []
+    ok = ledger.tool().stage(*ids(job), chained(job, "context", "n-in-ok", inputs=[manifest], status="ok"))
+    assert ok["stages"][-1]["inputs"] == [{"key": manifest["key"], "sha256": manifest["sha256"]}]
+
+
+@pytest.mark.parametrize("admissions", [
+    [{"decisionId": "adm-1", "revision": "1"}],
+    [{"decisionId": "adm-1", "revision": "1", "artifactHash": None}],
+    [{"decisionId": "adm-1", "revision": 1, "artifactHash": "a" * 64}],
+    [{"decisionId": "", "revision": "1", "artifactHash": "a" * 64}],
+    [{**ADM[0], "extra": True}],
+    [ADM[0], ADM[0]],
+])
+def test_admissions_are_strictly_shaped(env, admissions):
+    with pytest.raises(LedgerError) as error:
+        admit(env[1], admissions=admissions)
+    assert error.value.code == "admission-invalid"

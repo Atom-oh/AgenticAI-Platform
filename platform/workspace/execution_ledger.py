@@ -80,6 +80,48 @@ _TRUSTED_VERIFIER_MODULE = "workspace.execution_verifier"
 _OFFLINE_VERIFIER_MODULES = frozenset({"execution_fakes", "tests.execution_fakes"})
 
 
+# --- strict value validators (review 6): every compared hash/size/key/id passes one of these first ----------
+# A comparison between two unchecked values can succeed as None == None; the ledger never compares a field it has
+# not validated with these predicates.
+
+def _is_sha(value):
+    return isinstance(value, str) and bool(_SHA256.fullmatch(value))
+
+
+def _is_size(value):
+    return type(value) is int and value >= 0
+
+
+def _is_key(value):
+    return isinstance(value, str) and 0 < len(value) <= 1024
+
+
+def _is_ident(value):
+    return isinstance(value, str) and 0 < len(value) <= 128
+
+
+_OBJECT_FIELDS = {"key": _is_key, "sha256": _is_sha, "size": _is_size,
+                  "role": lambda value: isinstance(value, str) and value in ("artifact", "source", "bundle")}
+
+
+def _object_ref(entry, required=("key", "sha256"), optional=()):
+    """A strictly shaped object reference: every required field present, no unknown field, every value valid."""
+    if (not isinstance(entry, dict) or not set(required) <= set(entry)
+            or set(entry) - set(required) - set(optional)):
+        return None
+    if not all(_OBJECT_FIELDS[name](value) for name, value in entry.items()):
+        return None
+    return dict(entry)
+
+
+def _admission_ref(entry):
+    if (not isinstance(entry, dict) or set(entry) != {"decisionId", "revision", "artifactHash"}
+            or not _is_ident(entry["decisionId"]) or not _is_ident(entry["revision"])
+            or not _is_sha(entry["artifactHash"])):
+        return None
+    return dict(entry)
+
+
 def supported_execution(job):
     """The only accepted discriminator (review round 16, AJ2): bool is an int subclass, so compare the exact type."""
     version = (job or {}).get("executionSchemaVersion")
@@ -500,6 +542,9 @@ class Ledger:
             raise LedgerError("profile-invalid")
         if not admissions:
             raise LedgerError("admission-required")
+        if (not isinstance(admissions, list) or None in [_admission_ref(row) for row in admissions]
+                or len({row["decisionId"] for row in admissions}) != len(admissions)):
+            raise LedgerError("admission-invalid")
         if (not isinstance(manifest, dict) or set(manifest) != {"ref", "hash"}
                 or not isinstance(manifest["hash"], str) or not re.fullmatch(r"[0-9a-f]{64}", manifest["hash"])):
             raise LedgerError("manifest-invalid")
@@ -622,8 +667,7 @@ class Ledger:
         shot = approved.get("screenshot") if isinstance(approved, dict) else None
         if shot is None:
             return None
-        if (not isinstance(shot, dict) or set(shot) != {"key", "sha256"} or not isinstance(shot["key"], str)
-                or not isinstance(shot["sha256"], str) or not _SHA256.fullmatch(shot["sha256"])):
+        if _object_ref(shot) is None:
             raise LedgerError("manifest-invalid")
         try:
             if not self.storage.owns_key(owner, shot["key"]):
@@ -718,16 +762,36 @@ class Ledger:
         return self._terminal(owner, job, "failed", error={"code": code}, bump_fence=True, op=op)
 
     def _allowed_inputs(self, owner, job):
-        allowed = {job["manifest"]["ref"]: job["manifest"]["hash"]}
+        """Authorized inputs: key -> {sha256, size} (size None when only the stored object can establish it)."""
+        allowed = {job["manifest"]["ref"]: {"sha256": job["manifest"]["hash"], "size": None}}
         if job.get("releaseBaseline"):
-            allowed[job["releaseBaseline"]["key"]] = job["releaseBaseline"]["sha256"]
+            allowed[job["releaseBaseline"]["key"]] = {"sha256": job["releaseBaseline"]["sha256"], "size": None}
+        for prior in self._manifest_priors(owner, job):
+            ref = _object_ref({k: prior[k] for k in ("key", "sha256", "size") if k in prior},
+                              optional=("size",))
+            if ref is not None and ref["key"] not in allowed:
+                allowed[ref["key"]] = {"sha256": ref["sha256"], "size": ref.get("size")}
         for row in job.get("stages", []):
             for output in row.get("outputs", []):
-                allowed[output["key"]] = output["sha256"]
+                allowed[output["key"]] = {"sha256": output["sha256"], "size": output.get("size")}
         for handle in (job.get("handles") or {}).values():
             if handle.get("direction") == "in" and handle.get("attemptId") == (job.get("attempt") or {}).get("id"):
-                allowed[handle["key"]] = handle["sha256"]
+                allowed[handle["key"]] = {"sha256": handle["sha256"], "size": handle.get("total")}
         return allowed
+
+    def _authorized_input(self, entry, allowed):
+        """A receipt input is a strict {key, sha256, size} that is an authorized input with the same metadata."""
+        ref = _object_ref(entry, required=("key", "sha256", "size"))
+        authorized = allowed.get(ref["key"]) if ref is not None else None
+        if authorized is None or not _is_sha(authorized["sha256"]) or authorized["sha256"] != ref["sha256"]:
+            return False
+        if authorized["size"] is not None:
+            return _is_size(authorized["size"]) and authorized["size"] == ref["size"]
+        try:
+            identity = self.storage.blob_identity(ref["key"])         # the stored object's server metadata
+        except (ValueError, FileNotFoundError, RuntimeError):
+            return False
+        return identity["size"] == ref["size"] and identity["sha256"] == ref["sha256"]
 
     def _manifest_priors(self, owner, job):
         ref = job["manifest"]["ref"]
@@ -746,7 +810,8 @@ class Ledger:
         return [prior for prior in priors if isinstance(prior, dict)] if isinstance(priors, list) else []
 
     def _verify_object(self, owner, entry, fields):
-        if not isinstance(entry, dict) or set(entry) - set(fields) or {"key", "sha256", "size"} - set(entry):
+        if _object_ref(entry, required=("key", "sha256", "size"),
+                       optional=tuple(set(fields) - {"key", "sha256", "size"})) is None:
             return False
         try:
             info = self.storage.blob_info(entry["key"])
@@ -835,12 +900,8 @@ class Ledger:
         if not isinstance(inputs, list) or len(inputs) > 100:
             raise LedgerError("receipt-invalid")
         for entry in inputs:
-            if not isinstance(entry, dict) or set(entry) != {"key", "sha256", "size"}:
+            if not self._authorized_input(entry, allowed):
                 raise LedgerError("receipt-invalid")
-            if allowed.get(entry["key"]) != entry["sha256"]:
-                priors = {prior.get("key"): prior.get("sha256") for prior in self._manifest_priors(owner, job)}
-                if priors.get(entry["key"]) != entry["sha256"]:
-                    raise LedgerError("receipt-invalid")
         prefix = self.storage.key_for(owner, "job", job["id"], f"out/{attempt['id']}/x")[:-1]
         outputs = [*receipt.get("outputs", []), *receipt.get("objects", [])]
         if not isinstance(receipt.get("outputs", []), list) or not isinstance(receipt.get("objects", []), list) \
@@ -1124,6 +1185,8 @@ class Ledger:
     # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
     def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None):
         """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts."""
+        if not _is_key(key) or not _is_sha(sha256):
+            raise LedgerError("transfer-invalid")
         checks, guard = self._protect(owner, job)
         try:
             if not isinstance(key, str) or not self.storage.owns_key(owner, key):
@@ -1175,6 +1238,7 @@ class Ledger:
         self._current(job, attempt_id, fence, statuses=("running",))
         prior = next((row for row in self._manifest_priors(owner, job) if row.get("key") == ref), None)
         if (prior is None or prior.get("sourceKind") not in ("run-round", "release")
+                or not _is_key(prior.get("key")) or not _is_sha(prior.get("sha256"))
                 or not callable(self.prior_authority)):
             raise LedgerError("transfer-invalid")
         if self._prior_current(owner, job, prior) is None:
@@ -1209,7 +1273,7 @@ class Ledger:
             blob = self.input_resolver(owner, copy.deepcopy(admission))
         except Exception:  # noqa: BLE001
             return None
-        if (not isinstance(blob, dict) or not isinstance(blob.get("key"), str)
+        if (not isinstance(blob, dict) or not _is_key(blob.get("key")) or not _is_sha(blob.get("sha256"))
                 or self._authority_check(blob.get("check")) is None):
             return None
         return blob
@@ -1751,8 +1815,7 @@ class Ledger:
             raise LedgerError("receipt-invalid")
         for entry in listed:
             # A valid key and SHA-256, explicit membership in the chain outputs, and a verified stored object.
-            if (not isinstance(entry, dict) or not isinstance(entry.get("key"), str)
-                    or not isinstance(entry.get("sha256"), str) or not _SHA256.fullmatch(entry["sha256"])
+            if (_object_ref(entry, optional=("size", "role")) is None
                     or entry["key"] not in outputs or outputs[entry["key"]] != entry["sha256"]
                     or "size" in entry and entry["size"] != chain[entry["key"]].get("size")
                     or "role" in entry and entry["role"] != chain[entry["key"]].get("role", "artifact")
