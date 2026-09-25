@@ -256,3 +256,18 @@ def test_codegen_modules_import_only_stdlib_and_pure_schema():
                     or item.module.split(".")[0] in sys.stdlib_module_names, (name, item.module)
             elif isinstance(item, ast.Import):
                 assert all(a.name.split(".")[0] in sys.stdlib_module_names for a in item.names), name
+
+
+def test_generated_visible_text_rejects_unbound_financial_quantities():
+    """PR #30 review 1, #6: headings and every other generated visible string go through the same grammar."""
+    from design_loop.react_project import generated_text
+    flow = build_flow(K, "savings-signup")
+    screens = {(s, "default"): fill(K, flow, s, bindings(GOOD)) for s in flow["screens"]}
+    cases = enumerate_cases(expected(GOOD, K)["conditions"])["cases"]
+    texts = generated_text(K, flow, screens, cases)
+    assert K.screens["amount"]["title"] in texts and "검증용 케이스" in texts
+    k = copy.deepcopy(K)
+    k.screens["amount"]["title"] = "연 9.9% 특판 가입"
+    with pytest.raises(ValueError, match="literal-financial-value"):
+        project(flow, screens, k, bindings(GOOD), cases=cases)
+

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .composition import walk
 from .convention import META_KEYS, PAGE_ID, VALUE_FIELD, Registry
+from .financial import contains_quantity
 from .local_runner import run_node
 
 KIT = Path(__file__).resolve().parents[1] / "react-kit"
@@ -31,6 +32,8 @@ KIT_NUMERIC = {"Stack": {"gap"}, "Grid": {"gap", "columns"}, "Inline": {"gap"}}
 FIXTURE = {"controlled-text": "10000", "controlled-bool": True, "controlled-choice": "o2"}
 FINISHED_TEST_ID = "flow-finished"
 CASE_SELECT = "case-select"
+CASE_SELECT_LABEL = "검증용 케이스"
+FINISHED_MESSAGE = "절차를 완료했습니다."
 
 
 def _js(value):
@@ -196,8 +199,28 @@ def _ts_type(value):
     return "string"
 
 
+def _case_label(k, i, screen, state, empty):
+    return f"케이스 {i + 1} · {k.screens[screen]['title']} · {state}" + (" · 빈 입력" if empty else "")
+
+
+def generated_text(k, flow, screens, cases):
+    """Every visible string codegen emits outside the composition trees: page headings (screen titles), the
+    verifier's case-select label and entries, and the completion message. Composition literals are checked by
+    `composition.validate`; these are checked here with the same grammar (PR #30 review 1, #6)."""
+    texts = [CASE_SELECT_LABEL, FINISHED_MESSAGE]
+    keys = [key for key in screens if key[0] in k.screens]
+    texts += [k.screens[s]["title"] for s in dict.fromkeys(s for s, _ in keys)]
+    texts += [_case_label(k, i, s, st, empty) for i in range(len(cases or [])) for s, st in keys for empty in (False, True)]
+    return texts
+
+
 def project(flow, screens, k, prd_bindings, *, cases, registry=None, meta=None):
-    """`screens` maps `(screenId, state)` to its composition. Returns `{path: source}`."""
+    """`screens` maps `(screenId, state)` to its composition. Returns `{path: source}`.
+
+    A financial quantity in any generated visible string raises `literal-financial-value`: quantities reach a page
+    only through PRD bindings."""
+    if any(contains_quantity(text) for text in generated_text(k, flow, screens, cases)):
+        raise ValueError("literal-financial-value: generated visible text carries an unbound financial quantity")
     registry = (registry or Registry(k)).register_flow(flow)
     for s in flow["screens"]:
         if (s, "default") not in screens:
@@ -247,7 +270,7 @@ def project(flow, screens, k, prd_bindings, *, cases, registry=None, meta=None):
         for screen, state, _, _ in pages:
             for empty in (False, True):
                 value = f"{i}:{screen}:{state}" + (":empty" if empty else "")
-                label = f"케이스 {i + 1} · {k.screens[screen]['title']} · {state}" + (" · 빈 입력" if empty else "")
+                label = _case_label(k, i, screen, state, empty)
                 entries.append({"value": value, "label": label, "caseIndex": i, "screen": screen, "state": state,
                                 "empty": empty})
     fixtures = [{"conditions": dict(case), "form": form} for case in cases]
@@ -289,11 +312,11 @@ def project(flow, screens, k, prd_bindings, *, cases, registry=None, meta=None):
         "  const view = screen + '|' + state;",
         "  return (",
         "    <Stack>",
-        f"      <Select testId={{{_js(CASE_SELECT)}}} label={{\"검증용 케이스\"}} value={{entry}} onChange={{choose}}",
+        f"      <Select testId={{{_js(CASE_SELECT)}}} label={{{_js(CASE_SELECT_LABEL)}}} value={{entry}} onChange={{choose}}",
         "        options={entries.map(item => ({ value: item.value, label: item.label }))} />",
         *views,
         f"      {{finished && <Alert testId={{{_js(FINISHED_TEST_ID)}}} tone={{\"success\"}} "
-        f"message={{\"절차를 완료했습니다.\"}} />}}",
+        f"message={{{_js(FINISHED_MESSAGE)}}} />}}",
         "    </Stack>", "  );", "}", ""])
     total = sum(len(v.encode("utf-8")) for v in files.values())
     if len(files) > MAX_FILES:

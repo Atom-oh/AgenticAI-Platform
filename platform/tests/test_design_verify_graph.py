@@ -510,3 +510,13 @@ def test_large_text_second_pass_is_required():
         assert r["verdict"] == "fail" and not r["approvable"], (name, r["verdict"], codes)
         assert codes & {"large-text-missing", "large-text-failed", "large-text-mismatch"}, (name, codes)
     assert verify(bundle(), K, JUDGE)["verdict"] == "pass"
+
+
+def test_a_financial_quantity_in_a_screen_heading_fails_deterministically():
+    """PR #30 review 1, #6: the codegen heading (the ontology screen title) is generated visible text too."""
+    k = copy.deepcopy(K)
+    k.screens["amount"]["title"] = "연 9.9% 특판 가입"
+    r = verify(bundle(), k, JUDGE)
+    assert r["verdict"] == "fail" and not r["approvable"]
+    assert any(f["code"] == "literal-financial-value" and f["role"] == "reviewer" and f["severity"] == "critical"
+               and f.get("screen") == "amount" for f in r["findings"])

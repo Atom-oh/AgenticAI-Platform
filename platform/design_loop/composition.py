@@ -266,6 +266,10 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         elif node["id"] in ids:
             add("duplicate-id", path + ".id", "duplicate node id")
         ids.add(node["id"])
+    # the page heading is generated visible text (react_project renders the screen title): no literal quantity
+    screen = k.screens.get(c["screenId"]) or {}
+    if contains_quantity(screen.get("title")):
+        add("literal-financial-value", "screen.title", "financial quantities must be bound from the PRD")
     # slots
     slots = (template or {}).get("slots", {})
     for name in c["slots"]:
