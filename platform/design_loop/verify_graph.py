@@ -291,8 +291,14 @@ def _item_pages(item, bundle, k):
 def _reviewer(bundle, k, deps, mode, judgments):
     findings, incomplete = [], []
     flow, values = bundle["flow"], _values(bundle)
+    # In adapt mode, each composition is checked against its own retained baseline (the caller-supplied
+    # `screen_bases`, keyed the same way as `screens`); a screen with no retained baseline still fails closed
+    # via composition.validate's own "adapt mode requires the base composition" check (PR #30 review round 2, #5).
+    bases = bundle.get("screen_bases") or {}
     for screen, state in _page_order(bundle):
-        for f in validate(bundle["screens"][(screen, state)], k, flow=flow, binding_paths=frozenset(values), mode=mode):
+        base = bases.get((screen, state)) if mode == "adapt" else None
+        for f in validate(bundle["screens"][(screen, state)], k, flow=flow, binding_paths=frozenset(values),
+                          mode=mode, base=base):
             findings.append(_finding("reviewer", f["severity"], f["code"], f.get("message", ""), screen=screen,
                                      state=state, path=f.get("path")))
     checklist = bundle["checklist"] if "checklist" in bundle else design_checklist(bundle["prd"], k)

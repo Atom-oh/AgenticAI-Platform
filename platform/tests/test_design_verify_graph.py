@@ -134,6 +134,19 @@ def test_blocked_does_not_regenerate():
     assert out["verdict"] == "blocked" and out["rounds"] == 1 and calls == []
 
 
+def test_adapt_mode_uses_the_retained_baseline():
+    """PR #30 review round 2, #5: _reviewer called validate(mode="adapt", ...) with no base, so every adapt
+    composition failed with adapt-scope even when it never strayed from its own baseline. A caller-retained
+    baseline per (screen, state) must be threaded through; a screen with no retained baseline still fails
+    closed, unchanged."""
+    b = bundle()
+    bases = {key: copy.deepcopy(c) for key, c in b["screens"].items()}
+    r = verify({**b, "screen_bases": bases}, K, JUDGE, mode="adapt")
+    assert not any(f["code"] == "adapt-scope" for f in r["findings"]), r["findings"]
+    r = verify(b, K, JUDGE, mode="adapt")
+    assert any(f["code"] == "adapt-scope" for f in r["findings"]), r["findings"]
+
+
 def test_new_asset_candidate_is_never_approvable():
     b = bundle()
     comp = copy.deepcopy(b["screens"][("amount", "default")])
