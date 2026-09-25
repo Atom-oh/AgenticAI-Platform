@@ -495,7 +495,7 @@ def impact(ctx, publication_id, retain=None):
     `retain(projectId, recheck)` hands every contributing destination reader to
     the response gate, whose final recheck covers all of them.
     """
-    from workspace.ontology_store import Ontology
+    from workspace.ontology_store import CURRENT, Ontology
     record = _origin_publication(ctx, publication_id)
     dependents, contributing = [], []
     for row in sorted(record.get("grants", []), key=lambda item: item["destinationProject"]):
@@ -515,6 +515,7 @@ def impact(ctx, publication_id, retain=None):
         try:
             ontology = Ontology(Service(ctx.host, scope, ctx.claims))
             nodes = ontology.source_nodes(reference)
+            manifest = ontology.current()
             # The destination grant is part of that scope's authority for this answer.
             ontology.sources._remember("pub_grant", grant_row)
         except CollaborationError as error:
@@ -522,16 +523,31 @@ def impact(ctx, publication_id, retain=None):
                 raise
             continue
         if nodes:
-            contributing.append((row["destinationProject"], ontology.sources))
+            contributing.append((row["destinationProject"], scope["owner"], ontology.sources,
+                                 manifest.get("generation") if manifest else None))
             dependents.append({"projectId": row["destinationProject"], "nodeIds": nodes})
     ctx.fresh()
-    # Every contributing destination reader (membership, grant, source and ontology
-    # observations) is rechecked after all destinations were read; a destination
-    # that changed meanwhile fails the whole answer rather than leaking its IDs.
-    for project_id, reader in contributing:
-        reader.recheck()
+
+    def _destination_recheck(owner, reader, generation):
+        """`Sources.recheck()` alone never observes the ontology manifest itself, so a
+        destination's later republish (changing which sources back a node, without
+        touching any admission/asset record `Sources` tracks) would go undetected. Fence
+        the exact manifest generation the nodes were read at too."""
+        def check():
+            reader.recheck()
+            current = ctx.storage.get(owner, "ontology", CURRENT)
+            if (current or {}).get("generation") != generation:
+                fail(409, "ontology-changed", "조회 중 대상 프로젝트의 온톨로지가 변경되었습니다.")
+        return check
+    # Every contributing destination reader (membership, grant, source, ontology
+    # generation and manifest observations) is rechecked after all destinations were
+    # read; a destination that changed meanwhile fails the whole answer rather than
+    # leaking its IDs.
+    for project_id, owner, reader, generation in contributing:
+        recheck = _destination_recheck(owner, reader, generation)
+        recheck()
         if retain is not None:
-            retain(project_id, reader.recheck)
+            retain(project_id, recheck)
     return {"publicationId": record["id"], "dependents": dependents,
             "coverage": {"complete": False, "unknown": ["restricted-or-unmapped"]}}
 

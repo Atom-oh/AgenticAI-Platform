@@ -17,7 +17,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from intake_support import api, approved, call  # noqa: F401,E402
+from intake_support import api, approved, call, document_ref  # noqa: F401,E402
+from test_documents_library import approve as approve_document, finalize as finalize_document, upload  # noqa: E402
 from test_ontology_schema import node  # noqa: E402
 from intake import admin_handler, records  # noqa: E402
 from intake.records import INTAKE_OWNER  # noqa: E402
@@ -855,3 +856,61 @@ def test_publication_detail_authorizes_the_exact_returned_revision(org, monkeypa
     # Revision 2 (bound to the replacement source, never restricted) is genuinely reachable.
     status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}", actor="carol", project=org.origin)
     assert status == 200 and payload["publication"]["revision"] == 2, payload
+
+
+def test_impact_fences_each_destinations_exact_ontology_generation(org, monkeypatch):
+    """Review 6 #1: impact retains each destination's Sources reader but not its exact
+    manifest generation, so a republish that swaps a node's source for a still-existing
+    but now owner-only-restricted one (no membership or grant change at all) goes
+    undetected by Sources.recheck() alone. Reproduced: republish the first destination
+    while inspecting the second; the first destination's node becomes invisible to alice
+    (a designer there), but impact's cached result for it was read before the swap."""
+    pub = published(org)
+    grants = {org.dest: granted(org, pub, roles=("owner", "designer")),
+              org.hidden: granted(org, pub, roles=("owner", "designer"), dest=org.hidden, owner="hank")}
+    owners = {org.dest: "erin", org.hidden: "hank"}
+    for pid, owner in owners.items():
+        project = org.api.storage.get(f"project:{pid}", "project", pid)
+        status, payload, _ = call(org.api, "PUT", f"/projects/{pid}/members", {
+            "version": project["version"], "members": {**{a: {"role": m["role"]} for a, m in project["members"].items()},
+                                                       "alice": {"role": "designer"}}}, actor=owner)
+        assert status == 200, payload
+        ref = publications.published_asset_reference(pub, grants[pid])
+        graph = {"schemaVersion": 1, "projectId": pid, "edges": [],
+                 "nodes": [node(f"screen-{pid[:8]}", "Screen", project=pid, sourceRefs=[ref])]}
+        Ontology(ctx(org.api, owner, pid)).publish_candidate("collection", graph, expected_generation=None,
+                                                             request_id=f"uses-{pid[:8]}")
+    original = Ontology.source_nodes
+    seen = []
+
+    def racing(self, reference, **kwargs):
+        result = original(self, reference, **kwargs)
+        seen.append(self.ctx.project_id)
+        if len(seen) == 2:
+            first = seen[0]
+            # `approved()` always finalizes/approves as "alice", who only holds
+            # "designer" here; do the upload/finalize/approve as the destination owner.
+            uploaded = upload(org.api, data=b"Owner-only source.\n", actor=owners[first], project=first,
+                             name="owner-only.txt", request="owner-only")
+            finalized = finalize_document(org.api, uploaded, actor=owners[first], project=first)
+            status, _ = approve_document(org.api, finalized, actor=owners[first], project=first)
+            assert status == 200
+            document = org.api.storage.get(f"project:{first}", "document", uploaded["document"]["id"])
+            status, payload, _ = call(org.api, "PUT", f"/documents/{document['id']}/permissions",
+                                      {"version": document["version"], "readRoles": ["owner"]},
+                                      actor=owners[first], project=first)
+            assert status == 200, payload
+            # The sourceRef's audienceRevision must match the ACL bump above, or
+            # publish_candidate itself (correctly) rejects it as a changed source.
+            restricted = document_ref(org.api, first, uploaded)
+            current = Ontology(ctx(org.api, owners[first], first)).current()
+            graph = {"schemaVersion": 1, "projectId": first, "edges": [],
+                     "nodes": [node(f"screen-{first[:8]}", "Screen", project=first, sourceRefs=[restricted],
+                                    revision=2)]}
+            Ontology(ctx(org.api, owners[first], first)).publish_candidate(
+                "collection", graph, expected_generation=current["generation"], request_id=f"restrict-{first[:8]}")
+        return result
+    monkeypatch.setattr(Ontology, "source_nodes", racing)
+    status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}/impact", actor="alice", project=org.origin)
+    assert len(seen) == 2
+    assert status != 200 or seen[0] not in json.dumps(payload), payload
