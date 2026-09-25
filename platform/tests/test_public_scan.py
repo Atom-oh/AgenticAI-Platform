@@ -184,13 +184,13 @@ def test_escaped_css_function_and_scheme_are_blocked():
 # ------------------------------------------------------------------ packaged Lambda artifact (BU2)
 
 def _assemble(tmp_path):
-    """Run the deploy.sh `api-dist` assembly lines that matter for the gate into a temporary directory."""
+    """Run the REAL `deploy.sh --assemble-only` path (PR #30 review round 3, #5): the same offline artifact
+    tests/test_packaging.py exercises must itself be self-contained, since api/handlers/design.py — one of
+    the two legacy publishers this gate protects — ships inside it and imports common.public_scan."""
     dist = tmp_path / "api-dist"
-    dist.mkdir()
-    shutil.copytree(ROOT / "api" / "common", dist / "common")
-    for line in (ROOT / "deploy.sh").read_text(encoding="utf-8").splitlines():
-        if line.strip().startswith("cp ../scripts/"):
-            subprocess.run(["bash", "-c", line.strip().replace("api-dist/", f"{dist}/")], cwd=ROOT, check=True)
+    result = subprocess.run(["bash", str(ROOT / "deploy.sh"), "--assemble-only", str(dist)],
+                            cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
     return dist
 
 
@@ -202,8 +202,8 @@ def _artifact_run(dist, code):
 
 def test_public_scan_artifact_runs_without_the_repository(tmp_path):
     deploy = (ROOT / "deploy.sh").read_text(encoding="utf-8")
-    assert "cp ../scripts/check_public_identifiers.py api-dist/common/public_scan_core.py" in deploy
-    assert "cp ../scripts/public-assets.sha256 api-dist/common/public-assets.sha256" in deploy
+    assert 'cp ../scripts/check_public_identifiers.py "$dist/common/public_scan_core.py"' in deploy
+    assert 'cp ../scripts/public-assets.sha256 "$dist/common/public-assets.sha256"' in deploy
     dist = _assemble(tmp_path)
     moved = shutil.move(str(dist), str(tmp_path / "isolated" / "api-dist"))   # the repository path is unreachable
     dist = Path(moved)
