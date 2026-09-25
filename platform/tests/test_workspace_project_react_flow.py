@@ -352,3 +352,62 @@ def test_child_asset_creation_authorizes_its_parent():
                               "sha256": hashlib.sha256(child_bytes).hexdigest(), "purpose": "reference",
                               "parentId": "asset-absent"}, actor="carol", project=project["id"])
     assert (status, missing) == (404, data)
+
+
+def test_new_comment_on_an_ambiguous_page_must_name_its_exact_round():
+    """Review 7 #3 (round-6 #2, partial), creation half: a page produced by more than
+    one round (e.g. a repair) is ambiguous -- the anchor must be rejected unless the
+    caller names the exact round, rather than silently binding to whichever round
+    happens to match first. An unambiguous page (produced by exactly one round) is
+    still accepted and its round persisted automatically."""
+    api = make_api()
+    project = shared(api)
+    _, run = _queued_run(api, project, "ambiguous-page-create")
+    owner = "project:" + project["id"]
+    stored = api.storage.get(owner, "run", run["id"])
+    updated = {**stored, "status": "completed",
+              "rounds": [{"number": 1, "passed": True, "blockingFindings": [],
+                         "pageSources": [{"pageId": "shared-page", "path": "src/pages/notice.tsx"}]},
+                        {"number": 2, "passed": True, "blockingFindings": [],
+                         "pageSources": [{"pageId": "shared-page", "path": "src/pages/notice.tsx"}]}]}
+    api.storage.put(owner, "run", updated, stored["version"])
+    ambiguous = {"requestId": "ambiguous-1", "text": "이 페이지 어느 라운드죠?",
+                "anchor": {"runId": run["id"], "pageId": "shared-page"}}
+    status, data = request(api, "POST", "/comments", ambiguous, actor="carol", project=project["id"])
+    assert status == 400, data
+    status, data = request(api, "POST", "/comments", {**ambiguous, "anchor": {**ambiguous["anchor"], "round": 2}},
+                           actor="carol", project=project["id"])
+    assert status == 201 and data["comment"]["anchor"]["round"] == 2, data
+
+
+def test_ambiguous_page_comment_requires_every_producing_round_authorized():
+    """Review 7 #3 (round-6 #2, partial), read half: a page produced by more than
+    one round is ambiguous. New comments now reject that anchor outright (see
+    test_new_comment_on_an_ambiguous_page_must_name_its_exact_round), so this only
+    protects a comment stored WITHOUT a persisted round (as one created before this
+    fix would be): it must be visible only while EVERY round that could have
+    produced the page is authorized, never just whichever one a naive "first match"
+    happened to pick. Reproduced: round 1 stays reviewable (visible to anyone) while
+    round 2 (sharing the same page) fails -- a planner (not a ROUND_EDITOR) must be
+    denied, not shown round 1's still-valid permission for an anchor that could
+    equally have meant round 2."""
+    api = make_api()
+    project = shared(api)
+    _, run = _queued_run(api, project, "ambiguous-page-read")
+    owner = "project:" + project["id"]
+    stored = api.storage.get(owner, "run", run["id"])
+    updated = {**stored, "status": "completed",
+              "rounds": [{"number": 1, "passed": True, "blockingFindings": [],
+                         "pageSources": [{"pageId": "shared-page", "path": "src/pages/notice.tsx"}]},
+                        {"number": 2, "passed": False,
+                         "pageSources": [{"pageId": "shared-page", "path": "src/pages/notice.tsx"}]}]}
+    api.storage.put(owner, "run", updated, stored["version"])
+    # A legacy comment with no persisted round at all (predates this fix).
+    legacy = {"id": "c-legacy-ambiguous", "projectId": project["id"], "text": "레거시 댓글",
+             "anchor": {"runId": run["id"], "productId": None, "guidelineId": None, "pageId": "shared-page"},
+             "author": "carol", "status": "active", "requestHash": "0" * 64, "history": []}
+    api.storage.put(owner, "comment", {key: value for key, value in legacy.items() if value is not None})
+    status, data = request(api, "GET", "/comments", actor="carol", project=project["id"])
+    assert status == 200 and any(row["id"] == "c-legacy-ambiguous" for row in data["comments"])
+    status, data = request(api, "GET", "/comments", actor="bob", project=project["id"])
+    assert status == 200 and not any(row["id"] == "c-legacy-ambiguous" for row in data["comments"]), data

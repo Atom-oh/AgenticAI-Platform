@@ -433,10 +433,12 @@ class ResponseGate:
     def _anchor(self, query, event):
         """A run-anchored discussion (query filter or new comment) names an authorized run and round.
 
-        A page-anchored comment without an explicit `round` inherits the exact round
-        that produced the page: page content carries the same publishing-handoff/1
-        state and lineage permission as its round's own download, never a generic
-        "the run exists" pass.
+        New comments always persist the exact round that produced their page (see
+        `Collaboration._anchor`), so an explicit `round` is the normal case here. A
+        page anchor with no `round` at all only occurs on a comment stored before
+        that fix: fall back to authorizing EVERY round that could have produced the
+        page (conservative -- a page ambiguous between two rounds is denied unless
+        both authorize), never just the first match.
         """
         anchor = query if self.route.method == "GET" else (_body(event).get("anchor") or {})
         if not isinstance(anchor, dict) or not isinstance(anchor.get("runId"), str):
@@ -447,28 +449,34 @@ class ResponseGate:
         number = anchor.get("round")
         if isinstance(number, str) and number.isdigit():
             number = int(number)
-        if type(number) is not int and isinstance(anchor.get("pageId"), str):
-            number = self._page_round(run, anchor["pageId"])
         if type(number) is int:
             self.round(run["id"], number)
+        elif isinstance(anchor.get("pageId"), str):
+            for candidate in self._page_rounds(run, anchor["pageId"]):
+                self.round(run["id"], candidate)
 
     @staticmethod
-    def _page_round(run, page_id):
-        """The round (if any) whose produced pages include `page_id`."""
-        for row in run.get("rounds", []) if isinstance(run, dict) else []:
-            if isinstance(row, dict) and any(isinstance(entry, dict) and entry.get("pageId") == page_id
-                                             for entry in row.get("pageSources", [])):
-                return row.get("number")
-        return None
+    def _page_rounds(run, page_id):
+        """Every round number whose produced pages include `page_id`."""
+        return [row.get("number") for row in (run.get("rounds", []) if isinstance(run, dict) else [])
+                if isinstance(row, dict) and any(isinstance(entry, dict) and entry.get("pageId") == page_id
+                                                 for entry in row.get("pageSources", []))]
 
     def _run_visible(self, run_id, number=None, page_id=None):
-        """The run (and, with `number` or a round-produced `page_id`, that round) is readable now."""
+        """The run (and, with `number` or a round-produced `page_id`, that round/those
+        rounds) is readable now. A page with no `round` binding at all (a comment
+        stored before rounds were persisted) is visible only if EVERY round that
+        could have produced it is authorized -- never just one of several candidates."""
         run = self.api.storage.get(self.owner, "run", run_id) if isinstance(run_id, str) else None
         authorized = self.authorize("run", run) if run else None
         if authorized is None:
             return False
         if number is None and isinstance(page_id, str):
-            number = self._page_round(run, page_id)
+            numbers = self._page_rounds(run, page_id)
+            if not numbers:
+                return True  # A declared (not round-specific) page: plain run visibility.
+            allowed = {row.get("number") for row in authorized.get("rounds", []) if isinstance(row, dict)}
+            return all(candidate in allowed for candidate in numbers)
         if number is None:
             return True
         return any(isinstance(row, dict) and row.get("number") == number for row in authorized.get("rounds", []))
