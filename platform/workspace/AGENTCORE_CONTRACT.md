@@ -618,7 +618,11 @@ module-private ledger writer token):
 | `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
-heartbeatAt, startedAt, completionSubmissions?}`. Call: `{callId, stage, kind, status: intent|completed|
+heartbeatAt, startedAt, completionSubmissions?}`. A `heartbeat` extends the
+lease only while the attempt's ORIGINAL lease, the deadline and the
+authorization expiry still hold; its `before_attempt` guard rechecks them
+immediately before submission (`stale-attempt`/`deadline`), so an expired
+lease is never renewed. Call: `{callId, stage, kind, status: intent|completed|
 failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?,
 usageEstimated?, settledBy?}`; usage holds only `{inputTokens, outputTokens}`.
 A model call recorded without usage is charged its full reservation as used

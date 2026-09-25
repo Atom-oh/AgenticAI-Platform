@@ -794,7 +794,16 @@ class Ledger:
         now = self.storage.clock()
         extended = {**attempt, "heartbeatAt": now,
                     "leaseExpiresAt": min(now + job["profileBody"]["leaseMs"], job["deadlineAt"])}
-        return self._commit(owner, job, {**job, "attempt": extended}, reindex=False)
+
+        def still_leased():
+            # Review 7 (RUN-02): the ORIGINAL lease, the deadline and the authorization expiry still hold
+            # immediately before submission; an expired lease is never renewed.
+            current = self.storage.clock()
+            if current >= attempt.get("leaseExpiresAt", 0):
+                raise LedgerError("stale-attempt")
+            if current >= job["deadlineAt"] or current >= job["authorizationExpiresAt"]:
+                raise LedgerError("deadline")
+        return self._commit(owner, job, {**job, "attempt": extended}, reindex=False, before_attempt=still_leased)
 
     def _fail(self, owner, job_id, attempt_id, fence, *, code, operation_id=None):
         job = self._get(owner, job_id)

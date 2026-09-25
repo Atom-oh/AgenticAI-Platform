@@ -3122,3 +3122,26 @@ def test_release_success_requires_successful_behavior_and_accessibility_evidence
         finish(ledger, job, "succeeded", result)
     assert error.value.code == "status-inconsistent"
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+def test_heartbeat_never_renews_a_lease_that_expired_during_preparation(env, monkeypatch):
+    """Review 7 finding 4: the original lease and deadline are rechecked by before_attempt."""
+    storage, ledger, now = env
+    job = running(env)
+    lease = job["attempt"]["leaseExpiresAt"]
+    now[0] = lease - 1
+    original = storage._prepare
+
+    def slow(owner, kind, item, *args, **kwargs):
+        if kind == "job":
+            now[0] = lease + 1                             # the lease lapses while the write is prepared
+        return original(owner, kind, item, *args, **kwargs)
+    monkeypatch.setattr(storage, "_prepare", slow)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().heartbeat(*ids(job))
+    assert error.value.code == "stale-attempt"
+    monkeypatch.setattr(storage, "_prepare", original)
+    assert storage.get(OWNER, "job", job["id"])["attempt"]["leaseExpiresAt"] == lease
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    assert error.value.code == "stale-attempt"
