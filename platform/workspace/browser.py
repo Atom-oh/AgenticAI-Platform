@@ -394,6 +394,12 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                             check["status"] = "incomplete"
                             check["reason"] = "실행 시간 상한"
                             break
+                        if large is not None:
+                            # Measure the screen this step is about to navigate away from. The final,
+                            # post-loop measurement alone only sees the last screen; a required screen left
+                            # behind mid-rule would otherwise escape large-text verification entirely
+                            # (PR #30 review round 2, #3).
+                            _large_text(page, large, text_scale)
                         try:
                             passed, actual = _action(page, step, contract["bindings"])
                             item = {"index": index, "action": step["action"], "target": step["target"],

@@ -152,6 +152,28 @@ def test_fixed_width_container_overflows_and_fixed_size_is_unscaled_at_scale_two
     assert evaluate_html(clean, SCALED_RULES, text_scale=2)["largeText"] == {"status": "pass", "overflow": [], "unscaled": []}
 
 
+TRANSITION = """<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>화면 전환</title>
+<style>body,button{font-family:Arial,sans-serif;margin:20px;font-size:calc(var(--studio-text-scale,1)*16px)}
+#screen2{display:none}</style></head>
+<body><main>
+<div id="screen1"><p data-testid="overflowing" style="width:60px;white-space:nowrap;overflow:hidden">고정 크기 문구입니다</p>
+<button type="button" data-testid="next" onclick="document.getElementById('screen1').style.display='none';
+document.getElementById('screen2').style.display='block'">다음</button></div>
+<div id="screen2"><p data-testid="fine">완료</p></div>
+</main></body></html>"""
+TRANSITION_RULES = {"title": "화면 전환", "rules": [{"id": "R1", "title": "다음 화면 이동", "steps": [
+    {"action": "click", "target": "next"}, {"action": "expectText", "target": "fine", "value": "완료"}]}]}
+
+
+def test_navigating_away_does_not_let_a_screen_escape_large_text_measurement():
+    """PR #30 review round 2, #3: an overflowing element on the FIRST screen must be caught even though the rule
+    navigates away to a clean second screen before finishing; measuring only the final state misses it."""
+    result = evaluate_html(TRANSITION, TRANSITION_RULES, text_scale=2)
+    assert result["largeText"]["status"] == "fail", result["largeText"]
+    assert "overflowing" in result["largeText"]["overflow"], result["largeText"]
+    assert not result["passed"], result["blockingFindings"]
+
+
 def test_text_scale_is_bounded():
     import pytest
     for bad in (0.5, 4, True, "2"):
