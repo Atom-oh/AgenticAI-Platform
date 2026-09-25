@@ -88,9 +88,14 @@ def test_offline_engine_chain_from_ontology_to_handoff(local_browser):
     browser = evaluate_bundle(dist, contract, expected_hash=build["bundleHash"])
     assert browser["passed"], ([c for c in browser["checks"] if c["status"] != "pass"], browser["blockingFindings"])
     report = assemble(build, browser, contract=contract)
+    # 8b. the large-text second pass (V-02) over the same bundle and contract
+    large = evaluate_bundle(dist, contract, expected_hash=build["bundleHash"], text_scale=2)
+    assert large["largeText"]["status"] == "pass" and large["passed"], (large["largeText"], large["blockingFindings"])
+    large_report = assemble(build, large, contract=contract)
     # 9. verification graph: pass and approvable with the full design checklist
     bundle = {"prd": prd, "flow": flow, "expectation": expectation, "screens": screens, "binding_values": values,
-              "contract": contract, "browser_report": report, "build": {"bundleHash": build["bundleHash"]},
+              "contract": contract, "browser_report": report, "large_text_report": large_report,
+              "build": {"bundleHash": build["bundleHash"]},
               "registry": registry}
     result = verify(bundle, k, JUDGE)
     assert result["verdict"] == "pass" and result["approvable"] and not result["unavailable"], result["roles"]

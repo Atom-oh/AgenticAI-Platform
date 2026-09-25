@@ -28,6 +28,9 @@ EXP = expected(GOOD, K)
 import json as _json, pathlib as _pl  # noqa: E401,E402
 _FIX = _json.loads((_pl.Path(__file__).parent / "fixtures" / "design_pass_report.json").read_text(encoding="utf-8"))
 CONTRACT_FULL, PASS_REPORT = _FIX["contract"], _FIX["report"]
+# The second (text_scale=2) Browser pass over the same bundle and contract; the real pass runs in the E19 chain.
+LARGE_REPORT = {**copy.deepcopy(PASS_REPORT), "textScale": 2.0,
+                "largeText": {"status": "pass", "overflow": [], "unscaled": []}}
 OK = lambda text: text  # noqa: E731  verify-only normalization fake (Global Constraints; as in E6/E7)
 JUDGE = {"llm_judge": lambda item, ctx: {"verdict": "pass", "evidence": "ok"}, "normalize": OK}
 CHROMIUM = "/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell"
@@ -39,6 +42,7 @@ def bundle(**over):
     screens[("eligibility", "ineligible")] = {**screens[("eligibility", "default")], "state": "ineligible"}
     base = {"prd": GOOD, "flow": FLOW, "expectation": EXP, "screens": screens, "binding_values": bindings(GOOD),
             "contract": CONTRACT_FULL, "browser_report": copy.deepcopy(PASS_REPORT),
+            "large_text_report": copy.deepcopy(LARGE_REPORT),
             "build": {"bundleHash": PASS_REPORT["bundleHash"]},
             "checklist": [{"id": "c1", "text": "톤", "severity": "major"}]}
     base.update(over)
@@ -478,3 +482,31 @@ def test_unresolved_required_rule_target_blocks():
     r = verify(bundle(checklist=design_checklist(GOOD, k)), k, JUDGE)
     assert r["verdict"] == "blocked" and "reviewer" in r["unavailable"] and not r["approvable"]
     assert any(i.get("reason") == "target-unresolved" for i in r["roles"]["reviewer"]["incomplete"])
+
+
+def test_large_text_second_pass_is_required():
+    """PR #30 review 1, #5 (E13 V-02): a missing, failed, unscaled, overflowing, unscaled-pass or foreign large-text
+    report fails the tester; only a passing text_scale>=2 report for the same bundle and contract is accepted."""
+    def bad(**change):
+        report = copy.deepcopy(LARGE_REPORT)
+        for key, value in change.items():
+            if value is None:
+                report.pop(key, None)
+            else:
+                report[key] = value
+        return report
+    cases = {"missing": None,
+             "no-result": bad(largeText=None),
+             "failed": bad(largeText={"status": "fail", "overflow": [], "unscaled": []}),
+             "overflow": bad(largeText={"status": "pass", "overflow": ["amount"], "unscaled": []}),
+             "unscaled": bad(largeText={"status": "pass", "overflow": [], "unscaled": ["amount"]}),
+             "scale-1": bad(textScale=1.0),
+             "other-bundle": bad(bundleHash="e" * 64),
+             "other-contract": bad(contractHash="0" * 64),
+             "checks-failed": bad(passed=False)}
+    for name, report in cases.items():
+        r = verify(bundle(large_text_report=report), K, JUDGE)
+        codes = {f["code"] for f in r["findings"] if f["role"] == "tester"}
+        assert r["verdict"] == "fail" and not r["approvable"], (name, r["verdict"], codes)
+        assert codes & {"large-text-missing", "large-text-failed", "large-text-mismatch"}, (name, codes)
+    assert verify(bundle(), K, JUDGE)["verdict"] == "pass"

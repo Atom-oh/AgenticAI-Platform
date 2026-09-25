@@ -9,7 +9,9 @@ V-01, V-02, V-04, V-05; Codex #11, #22, #23).
 - **Tester:** the assembled report (`evidence.assemble`) must match the bundle's build (`stale-evidence`), carry the
   contract's catalog and contract hashes, and satisfy the production predicate
   `workspace.react_quality.react_report_passes`. Failed required checks are critical, accessibility violations
-  major. No report or contract means the tester is `unavailable`.
+  major. The large-text second pass (`large_text_report`, text_scale >= 2, same bundle and contract hash) must
+  pass with empty `overflow`/`unscaled`; anything else is critical. No report or contract means the tester is
+  `unavailable`.
 - **Coverage:** `coverage.check` (E15). A blocked coverage result blocks the verdict.
 
 `blocked` when any required role is unavailable or coverage is blocked, `fail` on any critical finding, `pass`
@@ -384,7 +386,34 @@ def _tester(bundle):
     if not passes(contract, report) and not any(f["severity"] == "critical" for f in findings):
         findings.append(_finding("tester", "critical", "react-report-failed",
                                  "the report does not satisfy react_report_passes"))
+    findings += _large_text(bundle.get("large_text_report"), build, expected_hash)
     return findings, None
+
+
+MIN_TEXT_SCALE = 2.0
+
+
+def _large_text(large, build, expected_hash):
+    """V-02 (E13): the second Browser pass at text_scale >= 2 over the SAME bundle and contract must pass with no
+    overflow and no unscaled text. Missing, failed, unscaled or foreign evidence is a critical tester failure
+    (PR #30 review 1, #5)."""
+    if not isinstance(large, dict):
+        return [_finding("tester", "critical", "large-text-missing", "the large-text second pass is missing")]
+    if (large.get("bundleHash") != build.get("bundleHash") or (large.get("build") or {}).get("bundleHash")
+            not in (None, build.get("bundleHash")) or expected_hash is None
+            or large.get("contractHash") != expected_hash):
+        return [_finding("tester", "critical", "large-text-mismatch",
+                         "the large-text report is not for this bundle and contract")]
+    result = large.get("largeText")
+    scale = large.get("textScale")
+    ok = (isinstance(result, dict) and result.get("status") == "pass" and result.get("overflow") == []
+          and result.get("unscaled") == [] and isinstance(scale, (int, float)) and not isinstance(scale, bool)
+          and scale >= MIN_TEXT_SCALE and large.get("passed") is True)
+    if not ok:
+        return [_finding("tester", "critical", "large-text-failed", "the large-text second pass did not pass",
+                         overflow=list((result or {}).get("overflow") or [])[:20] if isinstance(result, dict) else [],
+                         unscaled=list((result or {}).get("unscaled") or [])[:20] if isinstance(result, dict) else [])]
+    return []
 
 
 def verify(bundle, k, deps, *, mode="fill", required=ROLES, judgments=None):
