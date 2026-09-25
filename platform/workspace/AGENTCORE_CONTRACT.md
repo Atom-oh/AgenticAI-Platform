@@ -691,7 +691,11 @@ mapping (`_keyed_priors`; review 10, #1): a manifest naming the same key
 twice with a CONFLICTING descriptor (a different hash, source or revision)
 is rejected outright (`manifest-invalid`), never resolved by authorizing the
 input against one descriptor while the binding silently used, or omitted, a
-different one. The job itself also keeps a durable,
+different one. `open_prior` uses the same mapping and fences its new
+handle's creation with that specific prior's own grant predicate and expiry
+(review 10, #2), since the handle does not exist yet for the shared
+protected-operation guard's own handle scan to find. The job itself also
+keeps a durable,
 job-level accumulator of every consumed prior's descriptor (`consumedPriors`
 on the job record, distinct from a stage entry's own field of the same name;
 review 9, #2), merged in the same transaction whenever a stage or completion

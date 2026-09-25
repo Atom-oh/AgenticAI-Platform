@@ -3333,3 +3333,30 @@ def test_manifest_rejects_conflicting_duplicate_prior_descriptors_for_the_same_k
         ledger.tool().stage(*ids(job), first)
     assert error.value.code == "manifest-invalid"
     assert storage.get(OWNER, "job", job["id"])["stages"] == []
+
+
+def test_open_prior_fences_the_new_handle_with_its_own_grant_expiry(env, monkeypatch):
+    """Review 10 finding 2: open_prior's handle-creation commit must recheck the NEW prior's own grant/expiry
+    (the handle does not exist yet, so _protect's handle scan alone cannot find it)."""
+    storage, ledger, now = env
+    prior, entry = listed_prior(storage)
+    job = admit(ledger, manifest_extra={"priors": [prior]})
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    expires_at = now[0] + 1_000
+    original_prior_authority = ledger.prior_authority
+
+    def expiring_prior_authority(owner, job, prior_ref):
+        grant = original_prior_authority(owner, job, prior_ref)
+        return {**grant, "expiresAt": expires_at} if grant else grant
+    ledger.prior_authority = expiring_prior_authority
+    original_get_blob = storage.get_blob
+
+    def lapsing_get_blob(*args, **kwargs):
+        now[0] = expires_at + 1                      # the grant's time bound elapses during the object read
+        return original_get_blob(*args, **kwargs)
+    monkeypatch.setattr(storage, "get_blob", lapsing_get_blob)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().open_prior(*ids(job), ref=prior["key"])
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["handles"] == {}

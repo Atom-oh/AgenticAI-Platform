@@ -1309,11 +1309,18 @@ class Ledger:
         return calls, budget, actual if call["kind"] == "model" else 0
 
     # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
-    def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None):
-        """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts."""
+    def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None, extra_checks=(),
+                   extra_expiries=()):
+        """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts.
+
+        ``extra_checks``/``extra_expiries``: the grant predicate and expiry of a prior being opened right now
+        (review 10, #2) — its handle does not exist yet, so ``_protect``'s own handle scan cannot find it;
+        without these the handle-creation commit's guard would not recheck this specific grant/expiry at all.
+        """
         if not _is_key(key) or not _is_sha(sha256):
             raise LedgerError("transfer-invalid")
-        checks, guard = self._protect(owner, job)
+        checks, guard = self._protect(owner, job, extra_expiries=extra_expiries)
+        checks = self._merge_checks(checks, extra_checks)
         try:
             if not isinstance(key, str) or not self.storage.owns_key(owner, key):
                 raise ValueError("foreign key")
@@ -1367,11 +1374,15 @@ class Ledger:
                 or not _is_key(prior.get("key")) or not _is_sha(prior.get("sha256"))
                 or not callable(self.prior_authority)):
             raise LedgerError("transfer-invalid")
-        if self._prior_current(owner, job, prior) is None:
+        # The new handle does not exist yet, so it fences its own creation with the prior's grant and expiry
+        # (review 10, #2): _protect's handle scan alone would not find it in time.
+        check, expiry = self._prior_grant(owner, job, prior)
+        if check is None:
             raise LedgerError("transfer-invalid")
         return self._open_read(owner, job, op, source="prior", key=prior["key"], sha256=prior.get("sha256"),
                                binding={"prior": {k: prior[k] for k in ("sourceKind", "sourceId", "revision", "key",
-                                                                         "sha256") if k in prior}})
+                                                                         "sha256") if k in prior}},
+                               extra_checks=[check], extra_expiries=[expiry] if expiry is not None else [])
 
     @staticmethod
     def _authority_check(value):
