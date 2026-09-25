@@ -170,10 +170,16 @@ ROUTES = (
     _r("POST", "publications/:id/approve", views={"publication": "publication"}),
     _r("POST", "publications/:id/withdraw", views={"publication": "publication-withdrawn"}),
     _r("POST", "publications/:id/grants", views={"grant": "grant", "reference": "published-ref"}),
+    # Delegated-module routes that return run/round-derived metadata are gated here too.
+    _r("GET", "products/:id/impact", views={"affectedRuns": "run-summary[]"}, fields=("currentGuidelineId", "cursor")),
+    _r("GET", "comments", round="anchor", views={"comments": "comment[]"}, fields=("cursor",)),
+    _r("POST", "comments", round="anchor", views={"comment": "comment"}),
 )
 
 # Prefixes whose modules own their authority (collaboration, ontology, intake review,
 # workbench and the document library); they are dispatched by name, never by fallthrough.
+# Their routes that return run, round or other source-derived workspace metadata are
+# registered in ROUTES above and served through the response gate instead.
 DELEGATED = {"projects": "workspace.collaboration", "products": "workspace.collaboration",
              "comments": "workspace.collaboration", "ontology": "workspace.ontology_api",
              "intake": "intake.review", "workbench": "workbench.api", "documents": "documents.api",
@@ -220,7 +226,7 @@ class ResponseGate:
     VIEWS = frozenset({"asset", "asset[]", "contract", "contract[]", "run", "run[]", "release", "release[]",
                        "job", "batch", "batch[]", "export", "baseline", "publication", "publication[]",
                        "publication-withdrawn", "granted[]", "grant", "published-ref", "impact-origin",
-                       "impact-dependents"})
+                       "impact-dependents", "run-summary[]", "comment", "comment[]"})
     BLOBS = frozenset({"asset", "run-round", "release"})
     _STORED = {"asset": "asset", "contract": "contract", "run": "run", "release": "release", "job": "job",
                "batch": "batch", "export": "gitexport"}
@@ -415,11 +421,37 @@ class ResponseGate:
             if self.authorize(route.resource, record) is None:
                 raise _missing()
             self.record = record
-        if route.round:
+        if route.round == "anchor":
+            self._anchor(query, event)
+        elif route.round:
             run_id, number = self._round_target(params, query, event)
             if run_id is not None:
                 self.round(run_id, number)
         self.prepared = True
+
+    def _anchor(self, query, event):
+        """A run-anchored discussion (query filter or new comment) names an authorized run and round."""
+        anchor = query if self.route.method == "GET" else (_body(event).get("anchor") or {})
+        if not isinstance(anchor, dict) or not isinstance(anchor.get("runId"), str):
+            return
+        run = self.api.storage.get(self.owner, "run", anchor["runId"])
+        if run is None or self.authorize("run", run) is None:
+            raise _missing()
+        number = anchor.get("round")
+        if isinstance(number, str) and number.isdigit():
+            number = int(number)
+        if type(number) is int:
+            self.round(run["id"], number)
+
+    def _run_visible(self, run_id, number=None):
+        """The run (and, with `number`, that round) is readable by the caller now."""
+        run = self.api.storage.get(self.owner, "run", run_id) if isinstance(run_id, str) else None
+        authorized = self.authorize("run", run) if run else None
+        if authorized is None:
+            return False
+        if number is None:
+            return True
+        return any(isinstance(row, dict) and row.get("number") == number for row in authorized.get("rounds", []))
 
     def _round_target(self, params, query, event):
         if self.route.round == "query":
@@ -475,6 +507,17 @@ class ResponseGate:
             if not isinstance(item, dict):
                 raise self._unavailable()
             self.round(item.get("runId"), item.get("round"))
+            return item
+        if view == "run-summary":
+            if not isinstance(item, dict):
+                raise self._unavailable()
+            return item if self._run_visible(item.get("id")) else None
+        if view == "comment":
+            if not isinstance(item, dict):
+                raise self._unavailable()
+            anchor = item.get("anchor") if isinstance(item.get("anchor"), dict) else {}
+            if "runId" in anchor and not self._run_visible(anchor["runId"], anchor.get("round")):
+                return None
             return item
         return self._publication_view(view, item)
 
@@ -608,7 +651,9 @@ class WorkspaceAPI:
             if len(project_headers) > 1:
                 raise HTTPError(400, "invalid-project", "Only one workspace project may be selected")
             project_id = project_headers[0] if project_headers else None
-            if segments[0] in ("projects", "products", "comments"):
+            if segments[0] in ("projects", "products", "comments") and (
+                    segments[0] == "projects" or match_route(method, segments) is None):
+                # Routes registered in ROUTES (run-derived metadata) take the gated path below.
                 response = self.collaboration.handle(method, segments, _body(event) if method in ("POST", "PUT", "PATCH") else {},
                                                        query, owner, project_id,
                                                        authorization_expires_at=int(claims["exp"]) * 1000 if claims.get("exp") is not None else None)
@@ -805,6 +850,27 @@ class WorkspaceAPI:
             page["items"] = [self._run_view(owner, record, scope, cache) for record in page["items"]]
         return _json(200, {name: page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
 
+    def _product_impact(self, gate, owner, product_id, query, scope):
+        """Runs affected by a product republication, each authorized through the gate's run view.
+
+        Rows are paged over authorized runs only (opaque caller-bound cursor), so an
+        inaccessible run contributes neither metadata nor continuation.
+        """
+        if gate is None or gate.context is None:
+            raise HTTPError(400, "project-required", "Select a project first")
+        from workspace.ontology_sources import authorized_page
+        product = self.collaboration._get(scope, "product", product_id)
+
+        def include(run):
+            summary = self.collaboration.impact_summary(scope, product, run)
+            return summary if summary is not None and gate.authorize("run", run) is not None else None
+        page = authorized_page(gate.context, query, "product-impact:" + product["id"], owner, "run", "", include,
+                               purpose="product-impact", token="pagecur", stale_code="list-cursor-stale",
+                               default=100, reader=gate.aggregate)
+        gate.aggregate._remember("product", product)
+        return _json(200, {"currentGuidelineId": product.get("publishedGuidelineId"), "affectedRuns": page["items"],
+                           **({"cursor": page["cursor"]} if "cursor" in page else {})})
+
     def _route(self, owner, method, parts, event, query, scope=None, claims=None, gate=None):
         """Handlers of the registered `ROUTES`; `gate` authorized the addressed resource and round,
         and serializes the response (the caller runs `gate.finish`)."""
@@ -821,6 +887,16 @@ class WorkspaceAPI:
                 return handle(self, scope, method, parts, event, query)
             except DocumentError as error:
                 return _json(error.status, {"error": error.message, "code": error.code})
+        if parts[0] == "products" and len(parts) == 3 and parts[2] == "impact" and method == "GET":
+            return self._product_impact(gate, owner, parts[1], query, scope)
+        if parts == ["comments"]:
+            # Collaboration owns discussion writes; the gate authorizes every run anchor.
+            expiry = (claims or {}).get("exp")
+            status, payload = self.collaboration.handle(
+                method, parts, _body(event) if method == "POST" else {}, query, scope["actor"],
+                (scope.get("project") or {}).get("id"),
+                authorization_expires_at=int(expiry) * 1000 if expiry is not None else None)
+            return _json(status, payload)
         from engine import model_catalog
         if method == "GET" and parts == ["config"]:
             from workspace.component_catalog import read_catalog

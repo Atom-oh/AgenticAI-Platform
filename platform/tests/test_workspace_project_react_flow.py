@@ -86,3 +86,99 @@ def test_planning_ontology_drives_a_real_page_and_changed_guidelines_block_relea
     assert next(item for item in history["runs"] if item["id"] == run["id"])["needsRevalidation"] is True
     _, impact = request(api, "GET", f"/products/{product['id']}/impact", actor="dana", project=project["id"])
     assert any(item["id"] == run["id"] for item in impact["affectedRuns"])
+
+
+def test_revoked_run_input_is_excluded_from_product_impact_like_a_missing_run():
+    """Review 5 #6: `Collaboration._products` used to return affected-run metadata (id,
+    status, guidelineId) straight from storage. Reproduced: republish the product (making
+    a run affected/stale) and then revoke that run's contract input; `GET /runs/:id`
+    correctly denies it (404), but the unfixed `/products/:id/impact` still listed the
+    run's ID, status and guideline reference with 200. The gated route must treat the
+    two identically: a run the caller cannot read contributes nothing to the response."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": "impact-revoke"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    run = data["run"]
+    assert run.get("productId") == product["id"]
+    owner = "project:" + project["id"]
+    # Republish the product: the run is now affected/stale.
+    _, changed = request(api, "PUT", f"/products/{product['id']}", {"version": product["version"], "description": "변경된 기준"},
+                          actor="bob", project=project["id"])
+    assert request(api, "POST", f"/products/{product['id']}/publish", {"version": changed["product"]["version"]},
+                   actor="bob", project=project["id"])[0] == 200
+    _, before = request(api, "GET", f"/products/{product['id']}/impact", actor="dana", project=project["id"])
+    assert any(item["id"] == run["id"] for item in before["affectedRuns"])
+    # Revoke the contract's own input asset (the guideline asset the rule cites).
+    asset = api.storage.get(owner, "asset", publication["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", "/runs/" + run["id"], actor="dana", project=project["id"])[0] == 404
+    _, after = request(api, "GET", f"/products/{product['id']}/impact", actor="dana", project=project["id"])
+    assert not any(item["id"] == run["id"] for item in after["affectedRuns"])
+    assert run["id"] not in json.dumps(after)
+
+
+def _queued_run(api, project, request_id):
+    """A queued (unexecuted) run with a genuine approved contract/product lineage --
+    enough for the response gate's `run_access`, without running a round."""
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": request_id},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    return publication, data["run"]
+
+
+def test_comment_anchored_to_a_run_is_gated_by_run_visibility():
+    """Review 5 #6: `GET`/`POST /comments` are now gated routes; a run anchor must be
+    authorized the same way `GET /runs/:id` is -- reading or writing a comment anchored
+    to a run the caller can no longer read must fail exactly like a missing run,
+    identically for the anchor filter (GET) and a new comment's anchor (POST)."""
+    api = make_api()
+    project = shared(api)
+    publication, run = _queued_run(api, project, "comment-gate")
+    body = {"requestId": "comment-1", "text": "질문 있습니다.", "anchor": {"runId": run["id"]}}
+    status, data = request(api, "POST", "/comments", body, actor="dana", project=project["id"])
+    assert status == 201, data
+    comment = data["comment"]
+    status, data = request(api, "GET", "/comments", actor="dana", project=project["id"], query={"runId": run["id"]})
+    assert status == 200 and [row["id"] for row in data["comments"]] == [comment["id"]]
+    owner = "project:" + project["id"]
+    asset = api.storage.get(owner, "asset", publication["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", "/runs/" + run["id"], actor="dana", project=project["id"])[0] == 404
+    assert request(api, "GET", "/comments", actor="dana", project=project["id"], query={"runId": run["id"]})[0] == 404
+    assert request(api, "POST", "/comments", {**body, "requestId": "comment-2"}, actor="dana",
+                   project=project["id"])[0] == 404
