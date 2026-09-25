@@ -415,16 +415,21 @@ def test_ambiguous_page_comment_requires_every_producing_round_authorized():
 
 
 def test_contract_creation_response_authorizes_its_own_exact_revision(monkeypatch):
-    """Review 7 #4: stored-record views (`ResponseGate._one` for any kind in
-    `_STORED`) authorized whatever the CURRENT record now is and returned the
-    response's OWN, possibly-older item regardless -- generalizing round 5 #5's
+    """Review 7 #4 / review 8 #4 (regression fix): stored-record views
+    (`ResponseGate._one` for any kind in `_STORED`) must authorize whatever the
+    CURRENT record now is before releasing anything -- generalizing round 5 #5's
     exact-revision fence (built only for publications) to contracts and every
     other stored-record kind with the same build-then-authorize-a-different-
-    version shape. Reproduced: after POST /contracts builds its 201 response from
-    revision 1 (bound to a reference asset), concurrently edit the contract to drop
-    that asset (a new revision 2, still authorizable) and revoke the asset, before
-    the gate's own final per-field authorization runs. The stale revision 1 body
-    (still citing the now-revoked asset) must not be released with 201."""
+    version shape. But an ordinary version bump that the CURRENT record's own
+    authorization still allows (review 8 #4) must not be rejected outright --
+    only a version bump whose CURRENT authorization genuinely fails may 404.
+    Reproduced here: after POST /contracts builds its 201 response from
+    revision 1 (bound to a reference asset), concurrently edit the contract
+    (an unrelated field, a new revision 2 that still cites the same asset) and
+    revoke that asset, before the gate's own final per-field authorization
+    runs. Revision 2 also cites the now-revoked asset, so its own
+    authorization genuinely fails too -- the stale revision 1 body must not be
+    released with 201 in that case."""
     api = make_api()
     project = shared(api)
     _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
@@ -449,8 +454,12 @@ def test_contract_creation_response_authorizes_its_own_exact_revision(monkeypatc
     def racing(self, view, item):
         if armed["on"] and view == "contract" and isinstance(item, dict) and item.get("assetIds"):
             armed["on"] = False
+            # Unrelated field edit: revision 2 still cites `reference`, so its
+            # own authorization must fail identically once that asset is
+            # revoked below -- this is the "genuinely rejected" case, not an
+            # ordinary authorized progress bump.
             status, edited = request(api, "PUT", f"/contracts/{item['id']}",
-                                     {"version": item["version"], "assetIds": []},
+                                     {"version": item["version"], "title": "상품 안내 (수정)"},
                                      actor="carol", project=project["id"])
             assert status == 200, edited
             api.storage.put(owner, "asset", {**reference, "accessRevoked": True}, reference["version"])
@@ -461,6 +470,54 @@ def test_contract_creation_response_authorizes_its_own_exact_revision(monkeypatc
                            "rules": [rule], "assetIds": [reference["id"]]}, actor="carol", project=project["id"])
     assert status == 404, data
     assert not armed["on"]
+
+
+def test_ordinary_worker_progress_never_404s_a_just_submitted_run(monkeypatch):
+    """Review 8 #4 (regression from review 7 #4): `ResponseGate._one`'s exact-
+    revision fence must reject only when the CURRENT record's own authorization
+    would deny the content being returned -- not any version bump at all. A
+    real worker can win the race and call `Storage.claim_job` (queued ->
+    running) between the response body being built and the gate's final
+    per-field authorization; that is ordinary, fully-authorized progress on
+    the exact same job the caller is entitled to see, and POST /runs must
+    still return 202 with the job's current ("running") state, never 404."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    owner = "project:" + project["id"]
+    original_one = http_module.ResponseGate._one
+    armed = {"on": True}
+
+    def racing(self, view, item):
+        if armed["on"] and view == "job" and isinstance(item, dict) and item.get("task") == "run":
+            armed["on"] = False
+            claimed = self.api.storage.claim_job(owner, item["id"])
+            assert claimed is not None and claimed["status"] == "running"
+        return original_one(self, view, item)
+    monkeypatch.setattr(http_module.ResponseGate, "_one", racing)
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": "raced-run"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    assert not armed["on"]
+    assert data["job"]["status"] == "running"
+    run = api.storage.get(owner, "run", data["run"]["id"])
+    assert run["status"] == "queued"
+    assert request(api, "GET", f"/jobs/{data['job']['id']}", actor="carol", project=project["id"])[0] == 200
 
 
 def test_contract_creation_never_leaks_a_revoked_assets_text_via_quote_matching():

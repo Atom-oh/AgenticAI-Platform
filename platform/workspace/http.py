@@ -523,18 +523,21 @@ class ResponseGate:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
                 raise self._unavailable()
             stored = self.api.storage.get(self.owner, self._STORED[view], item["id"])
-            # The response was built from THIS exact stored version, never a
-            # replacement authorized in its place: a write between response
-            # construction and this final check (e.g. a concurrent edit that removes
-            # or revokes an input) must not let the CURRENT record's authorization
-            # release the OLDER item's now-possibly-invalid content. Generalizes the
-            # exact-revision fence publications already applies
-            # (`publication_visible`) to every other stored-record kind.
-            if stored is not None and item.get("version") != stored.get("version"):
-                return None
             authorized = self.authorize(view, stored) if stored else None
             if authorized is None:
                 return None
+            if item.get("version") != stored.get("version"):
+                # The record moved since this response was built. Ordinary progress
+                # (a job the worker has since claimed, a round it has since recorded)
+                # bumps the version too, and must not 404 a perfectly normal, still-
+                # authorized submission -- but the OLDER item's own content must never
+                # be released once a NEWER version exists, since that content was
+                # never re-authorized (generalizes the exact-revision fence
+                # publications already applies via `publication_visible`). Serve the
+                # CURRENT, just-authorized record's own content instead of the stale
+                # item: `authorized` already decided whether the CURRENT version may
+                # be released at all.
+                item = authorized
             if view == "run":
                 numbers = {row.get("number") for row in authorized.get("rounds", []) if isinstance(row, dict)}
                 item = {**item, "rounds": [row for row in item.get("rounds", [])
