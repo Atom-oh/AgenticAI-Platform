@@ -43,6 +43,43 @@ def test_allow_missing_patterns_warns_and_passes_only_without_a_deny_list(tmp_pa
     assert r.returncode == 1 and SENTINEL not in r.stdout + r.stderr
 
 
+def test_allow_missing_patterns_still_enforces_registry_and_completeness(tmp_path):
+    """PR #30 review round 2, #1: --allow-missing-patterns must skip identifier matching ONLY. Unreviewed media
+    and an incomplete scan still block, exactly as with a configured deny-list."""
+    empty = tmp_path / "empty.txt"
+    empty.write_text("\n", encoding="utf-8")
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "shot.png").write_bytes(b"\x89PNG unreviewed")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--patterns-file", str(empty), "--no-tree", "--site", str(site),
+                        "--allow-missing-patterns"], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 1 and "unreviewed media" in r.stdout, (r.stdout, r.stderr)
+    reg = tmp_path / "assets.sha256"
+    import hashlib
+    reg.write_text(hashlib.sha256((site / "shot.png").read_bytes()).hexdigest() + "  reviewed test image\n",
+                    encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--patterns-file", str(empty), "--no-tree", "--site", str(site),
+                        "--allow-missing-patterns", "--asset-registry", str(reg)],
+                       capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    # An incomplete scan (an over-nested SVG data URL) must still fail closed, never silently pass.
+    (site / "shot.png").unlink()
+    over = f'<img src="{_nested_svg_for_test(cpi.MAX_NESTING + 1)}">'
+    (site / "index.html").write_text(over, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--patterns-file", str(empty), "--no-tree", "--site", str(site),
+                        "--allow-missing-patterns"], capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+
+
+def _nested_svg_for_test(levels):
+    import base64
+    inner = "<svg xmlns='http://www.w3.org/2000/svg'><text>x</text></svg>"
+    for _ in range(levels - 1):
+        uri = "data:image/svg+xml;base64," + base64.b64encode(inner.encode()).decode()
+        inner = f"<svg xmlns='http://www.w3.org/2000/svg'><image href='{uri}'/></svg>"
+    return "data:image/svg+xml;base64," + base64.b64encode(inner.encode()).decode()
+
+
 def test_workflows_warn_only_when_the_secret_is_absent():
     """The flag is passed only when PUBLIC_DENYLIST is empty; the reusable workflow no longer requires the secret."""
     safety = (ROOT / ".github/workflows/public-safety.yml").read_text(encoding="utf-8")
