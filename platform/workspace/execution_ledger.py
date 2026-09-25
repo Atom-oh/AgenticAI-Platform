@@ -658,6 +658,10 @@ class Ledger:
                "profile": ref, "profileBody": profile, "manifest": manifest, "admissions": admissions,
                "status": "queued", "fence": 0, "attempt": None, "attempts": [], "calls": [], "stages": [],
                "nonces": [], "transfers": [], "handles": {}, "cleanup": [],
+               # Durable, job-level accumulator of every consumed prior's full descriptor (review 9, #2): unlike
+               # ``stages``, retry never clears this, so a prior consumed by a superseded attempt is still
+               # revalidated on every later protected operation of the retried attempt.
+               "consumedPriors": {},
                "budget": {"calls": 0, "maxCalls": profile["maxCallsByOperation"][operation],
                           "tokensReserved": 0, "tokensUsed": 0, "tokenBudget": profile["tokenBudget"]},
                "transferUsage": {"chunks": 0, "bytes": 0},
@@ -1122,7 +1126,8 @@ class Ledger:
         checks, guard = self._protect(owner, job, extra_expiries=consumed_expiries)
         checks = self._merge_checks(checks, consumed_checks)
         self._retain_receipt(owner, job, entry, receipt)
-        after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
+        after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]],
+                 "consumedPriors": self._merge_consumed_priors(job, [entry])}
         return self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, reindex=False)
 
     # --- tool role: per-call intent and outcome (RUN-03) -----------------------
@@ -1443,19 +1448,25 @@ class Ledger:
                 priors.setdefault(prior["key"], prior)
         return priors
 
-    def _consumed_priors(self, owner, job, stages):
-        """The prior descriptors bound durably on each stage entry at staging time (review 8, #1).
-
-        A stage entry's own ``consumedPriors`` (frozen when the receipt was verified, while the manifest was
-        necessarily still readable) is the source of truth; consumed-prior revalidation never depends on the
-        manifest being readable again later, so deleting or corrupting it cannot erase a binding.
-        """
-        consumed = {}
-        for row in stages:
+    @staticmethod
+    def _merge_consumed_priors(job, entries):
+        """Job-level accumulator (review 9, #2) merged with the ``consumedPriors`` of the given stage entries;
+        never dropped by ``stages`` resetting on retry."""
+        merged = dict(job.get("consumedPriors") or {})
+        for row in entries:
             for prior in row.get("consumedPriors") or []:
                 if isinstance(prior, dict) and _is_key(prior.get("key")) and _is_sha(prior.get("sha256")):
-                    consumed[prior["key"]] = prior
-        return list(consumed.values())
+                    merged[prior["key"]] = prior
+        return merged
+
+    def _consumed_priors(self, owner, job, stages):
+        """The prior descriptors bound durably at staging time (review 8, #1): the job-level accumulator
+        (review 9, #2, preserved across a retry that clears ``stages``) plus the given stage entries' own
+        ``consumedPriors`` (frozen when each receipt was verified, while the manifest was necessarily still
+        readable). Consumed-prior revalidation never depends on the manifest being readable again later, nor
+        on a superseded attempt's ``stages`` surviving a retry.
+        """
+        return list(self._merge_consumed_priors(job, stages).values())
 
     def _consumed_prior_checks(self, owner, job, stages, *, skip=()):
         """Current grant predicates (and expiry bounds) of every consumed prior; a revoked one fails the job
@@ -2206,7 +2217,8 @@ class Ledger:
             key_guard()
             temporal()          # last: lease, deadline and authorization expiry immediately before submission
         after = {**job, "status": status, "result": copy.deepcopy(result), "deliverables": deliverables,
-                 "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock()}
+                 "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock(),
+                 "consumedPriors": self._merge_consumed_priors(before, stages)}
         after["cleanup"] = self._cleanup_for(after)
         quotas = self._quota_writes(owner, job["actor"], job["projectId"], remove=job["id"])
         prepared_job, ledger_writes = self._prepare(owner, before, after, extra_writes=quotas, op=op)

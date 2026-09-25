@@ -3277,3 +3277,30 @@ def test_receipt_validation_authorizes_and_binds_a_prior_from_one_manifest_read(
     saved = ledger.tool().stage(*ids(job), first)
     assert len(reads) == 1                              # authorization and the binding shared one read
     assert saved["stages"][-1]["consumedPriors"] == [prior]
+
+
+def test_retry_preserves_consumed_prior_bindings_across_a_lost_lease(env):
+    """Review 9 finding 2: retry clears ``stages`` (where consumedPriors previously lived) and archives only
+    receipt hashes; a prior consumed before a lost lease must still be revalidated on the retried attempt."""
+    storage, ledger, now = env
+    prior, entry = listed_prior(storage)
+    job = admit(ledger, manifest_extra={"priors": [prior]})
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    out = put_output(storage, job, "context", "context.json", b"{}")
+    first = chained(job, "context", "n1", inputs=[entry], outputs=[out], status="ok")
+    job = ledger.tool().stage(*ids(job), first)
+    assert job["stages"][-1]["consumedPriors"] == [prior]
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1                # the lease is lost
+    swept = ledger.reconciler().sweep(OWNER, job["id"])
+    assert swept["status"] == "recovery_required"
+    retried = ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    assert retried["stages"] == []                          # stages reset, but the binding must survive
+    assert retried["consumedPriors"] == {prior["key"]: prior}
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    revoke_round(storage)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["calls"] == []

@@ -688,7 +688,13 @@ the manifest, so a manifest deleted or corrupted afterward cannot erase it.
 Input authorization and this binding are derived from exactly ONE manifest
 read (review 9, #1); reading it twice let a deletion between the reads
 authorize an input against a manifest-listed prior while the second, now-
-failed read left the binding empty. A
+failed read left the binding empty. The job itself also keeps a durable,
+job-level accumulator of every consumed prior's descriptor (`consumedPriors`
+on the job record, distinct from a stage entry's own field of the same name;
+review 9, #2), merged in the same transaction whenever a stage or completion
+adds one; unlike `stages`, `retry` never clears it, so a prior consumed by a
+superseded attempt is still revalidated by every protected operation of the
+retried attempt. A
 resolver-returned admission or prior grant may also carry an `expiresAt`; a
 version predicate alone cannot catch a grant that simply runs out the clock
 (review 8), so every collected `expiresAt` is rechecked, against a fresh clock
