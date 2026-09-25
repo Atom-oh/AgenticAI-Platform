@@ -715,6 +715,19 @@ class Ontology:
             nodes.update({n["id"]: n for n in view["nodes"]})
             edges.update({e["id"]: e for e in view["edges"]})
 
+        # The Procedure's own dependencies (e.g. GOVERNED_BY PolicyRule) are not reachable from a member Screen's
+        # closure: the Procedure node itself was never a closure seed. Traverse them separately under the same
+        # budgets (PR #30 review round 2, #2).
+        remaining_nodes, remaining_edges = max_nodes - len(nodes), max_edges - len(edges)
+        if remaining_nodes < 1 or remaining_edges < 1:
+            truncated = True
+        else:
+            procedure_design = self.closure([procedure_id], direction="dependencies", max_nodes=remaining_nodes,
+                                            max_edges=remaining_edges)
+            merge(procedure_design)
+            unknown |= set(procedure_design["coverage"]["unknown"])
+            truncated = truncated or bool(procedure_design["coverage"]["truncated"])
+
         # uxModel slot alternatives and condition targets are properties, not edges (review round 11, AE1).
         requested = set()
         for _ in range(4):

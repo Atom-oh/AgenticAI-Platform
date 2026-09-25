@@ -302,6 +302,33 @@ def test_procedure_snapshot_truncates_at_max_screens(wb):
     assert sum(1 for n in snap["nodes"] if n["type"] == "Screen") == 20
 
 
+def test_procedure_snapshot_includes_the_procedures_own_policy_dependencies(wb):
+    """PR #30 review round 2, #2: a Procedure GOVERNED_BY PolicyRule must be traversed even though no member
+    Screen's own dependency closure reaches it (the Procedure node itself was never a closure seed)."""
+    from design_fixtures import extra_screens_graph, seed_document_ref
+    from design_loop.knowledge import from_snapshot
+    ontology = Ontology(context(wb))
+    ref = seed_document_ref(wb)
+    base = extra_screens_graph(1, source_ref=ref, project_id=wb.project["id"])
+    rule_node = schema.seal({"id": "rule-1", "type": "PolicyRule", "scope": base["nodes"][0]["scope"],
+                             "title": "필수 규정", "revision": 1, "sourceRefs": [ref], "provenance": "declared",
+                             "reviewState": "candidate", "tombstone": False,
+                             "properties": {"ruleId": "rule-1", "statement": "필수", "required": True,
+                                           "guidelineId": "g1", "severity": "critical"}})
+    gov_edge = schema.seal({"id": "gov-1", "type": "GOVERNED_BY", "src": {"id": "p-big", "revision": 1},
+                           "dst": {"id": "rule-1", "revision": 1}, "sourceRefs": [ref], "provenance": "declared",
+                           "reviewState": "candidate", "tombstone": False})
+    graph = {**base, "nodes": base["nodes"] + [rule_node], "edges": base["edges"] + [gov_edge]}
+    ids = ontology.publish_candidate("policy", graph, expected_generation=None, request_id="policy-1")["identities"]
+    _review_all(ontology, ids)
+    snap = ontology.procedure_snapshot(ids["p-big"])
+    assert ids["rule-1"] in {n["id"] for n in snap["nodes"]}, "the Procedure's own PolicyRule dependency is missing"
+    k = from_snapshot(snap)
+    assert ids["rule-1"] in k.rules, k.rules
+    assert ids["p-big"] in k.rules[ids["rule-1"]]["targets"]
+    assert k.complete, (k.coverage, k.unresolved)
+
+
 def _slot_graph(project, ref, alternatives, extra_allowed=()):
     from design_fixtures import extra_screens_graph
     graph = extra_screens_graph(1, source_ref=ref, project_id=project)
