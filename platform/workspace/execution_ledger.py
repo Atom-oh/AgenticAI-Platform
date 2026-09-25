@@ -1843,6 +1843,17 @@ class Ledger:
         saved = self._commit(owner, job, after, extra_writes=quotas, checks=[check])
         return self._settle_accounting(owner, saved)
 
+    @staticmethod
+    def _browser_behaved(browser):
+        """Successful required behavior and accessibility evidence (SPEC 7-1). Every operation whose evidence
+        graph runs a Browser stage requires this, not only design.release (review 8, #4): a Browser result
+        that explicitly failed, failed accessibility, or carries blocking findings never completes as
+        succeeded, and a missing/incomplete result is not evidence of success either."""
+        accessibility = browser.get("accessibility")
+        return (browser.get("passed") is True and browser.get("functionalStatus") == "pass"
+                and isinstance(accessibility, dict) and accessibility.get("status") == "pass"
+                and not accessibility.get("violations") and not browser.get("blockingFindings"))
+
     # --- tool role: coupled completion (RUN-02, RUN-04) -------------------------
     def _terminal_status(self, job, stages):
         """TERMINAL_RULES[operation]: a closed, profile-versioned table (review round 3, F4)."""
@@ -1863,7 +1874,10 @@ class Ledger:
             return "needs_changes" if isinstance(issues, list) and issues else None
         if operation in ("design.generate", "design.edit"):
             verify = result["verify"]
-            if verify.get("verdict") == "pass" and verify.get("approvable") is True:
+            # A compiled, Browser-verified bundle requires successful mandatory Browser evidence too (review 8,
+            # #4): an explicit approval never overrides a failed, incomplete or contradictory Browser result.
+            if verify.get("verdict") == "pass" and verify.get("approvable") is True \
+                    and self._browser_behaved(result["browser"]):
                 return "succeeded"
             if verify.get("verdict") in ("fail", "blocked") or verify.get("approvable") is False:
                 return "needs_changes"
@@ -1876,7 +1890,9 @@ class Ledger:
             if not isinstance(hashes, list) or not isinstance(evidence, dict) or not isinstance(verify.get("passed"), bool):
                 return None
             covered = all(isinstance(evidence.get(h), str) and evidence[h] for h in hashes)
-            return "succeeded" if verify["passed"] and covered and hashes else "needs_changes"
+            # Same mandatory Browser evidence gate as every other bundle-compiling operation (review 8, #4).
+            behaved = self._browser_behaved(result["browser"])
+            return "succeeded" if verify["passed"] and covered and hashes and behaved else "needs_changes"
         if operation == "design.release":
             approved = self._manifest_document(job).get("approved")
             approved = approved if isinstance(approved, dict) else {}
@@ -1895,16 +1911,11 @@ class Ledger:
             compared = _object_ref(baseline) is not None and result["browser"].get("comparison") == baseline and any(
                 entry.get("key") == baseline["key"] and entry.get("sha256") == baseline["sha256"]
                 for entry in last["browser"].get("inputs", []))
-            # Successful required behavior and accessibility evidence (review 7, SPEC 7-1): the Browser result
-            # explicitly passed with functionalStatus "pass", accessibility "pass" and no blocking findings, and the
-            # final verification passed. Missing, incomplete or contradictory results never succeed.
+            # Successful required behavior and accessibility evidence (review 7, SPEC 7-1), plus the final
+            # verification passed. Missing, incomplete or contradictory results never succeed.
             browser, verify = result["browser"], result["verify"]
-            accessibility = browser.get("accessibility")
-            behaved = (browser.get("passed") is True and browser.get("functionalStatus") == "pass"
-                       and isinstance(accessibility, dict) and accessibility.get("status") == "pass"
-                       and not accessibility.get("violations") and not browser.get("blockingFindings")
-                       and verify.get("passed") is True and verify.get("verdict") == "pass"
-                       and not verify.get("issues"))
+            behaved = (self._browser_behaved(browser) and verify.get("passed") is True
+                       and verify.get("verdict") == "pass" and not verify.get("issues"))
             if (hashes and compared and behaved and isinstance(diff, (int, float)) and not isinstance(diff, bool)
                     and 0 <= diff <= 0.02):
                 return "succeeded"
