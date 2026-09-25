@@ -314,3 +314,41 @@ def test_comment_listing_never_forwards_a_raw_storage_cursor():
                            query={"runId": visible_run["id"]})
     assert status == 200 and len(data["comments"]) <= 50 and "cursor" in data, data
     assert re.fullmatch(r"commentcur-[a-f0-9]{48}", data["cursor"]), data["cursor"]
+
+
+def test_child_asset_creation_authorizes_its_parent():
+    """Review 6 #5: `POST /assets` resolved `parentId` with a bare storage read (no
+    source authorization at all), so a revoked parent's lineage (importRevision,
+    lineageId) was still extended and its id disclosed as `parentId` in the 201
+    response, even though the parent's own `GET /assets/:id` already denies it (404).
+    Reproduced: revoke the parent, then create a child citing it."""
+    api = make_api()
+    project = shared(api)
+    owner = "project:" + project["id"]
+    parent_bytes = b"parent original bytes"
+    status, data = request(api, "POST", "/assets", {"name": "parent.txt", "size": len(parent_bytes),
+                           "sha256": hashlib.sha256(parent_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    parent = data["asset"]
+    original = api.storage.key_for(owner, "asset", parent["id"], "original")
+    api.storage.put_blob(original, parent_bytes, "text/plain")
+    parent = api.storage.put(owner, "asset", {**parent, "status": "stored", "uploadStatus": "stored",
+                             "parseStatus": "complete", "originalKey": original, "projectId": project["id"]},
+                             expected_version=parent["version"])
+    child_bytes = b"child original bytes"
+    status, data = request(api, "POST", "/assets", {"name": "child.txt", "size": len(child_bytes),
+                           "sha256": hashlib.sha256(child_bytes).hexdigest(), "purpose": "reference",
+                           "parentId": parent["id"]}, actor="carol", project=project["id"])
+    assert status == 201 and data["asset"]["parentId"] == parent["id"] and data["asset"]["importRevision"] == 2, data
+    api.storage.put(owner, "asset", {**parent, "accessRevoked": True}, parent["version"])
+    assert request(api, "GET", f"/assets/{parent['id']}", actor="carol", project=project["id"])[0] == 404
+    status, data = request(api, "POST", "/assets", {"name": "child2.txt", "size": len(child_bytes),
+                           "sha256": hashlib.sha256(child_bytes).hexdigest(), "purpose": "reference",
+                           "parentId": parent["id"]}, actor="carol", project=project["id"])
+    assert status == 404, data
+    # A genuinely missing parent gets the identical response.
+    status, missing = request(api, "POST", "/assets", {"name": "child3.txt", "size": len(child_bytes),
+                              "sha256": hashlib.sha256(child_bytes).hexdigest(), "purpose": "reference",
+                              "parentId": "asset-absent"}, actor="carol", project=project["id"])
+    assert (status, missing) == (404, data)

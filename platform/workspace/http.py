@@ -1002,7 +1002,7 @@ class WorkspaceAPI:
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
             return self._listing(gate, owner, kind, parts[0], query, scope)
         if parts == ["assets"] and method == "POST":
-            return self._create_asset(owner, _body(event))
+            return self._create_asset(owner, _body(event), gate=gate)
         if parts == ["contracts", "propose"] and method == "POST":
             return self._propose(owner, _body(event), scope=scope)
         if parts == ["contracts"] and method == "POST":
@@ -1080,7 +1080,7 @@ class WorkspaceAPI:
             return self._download(owner, kind, record, query)
         raise HTTPError(404, "not-found", "Route not found")
 
-    def _create_asset(self, owner, body):
+    def _create_asset(self, owner, body, gate=None):
         name = _text(body.get("name"), "file name", 180)
         if any(c in name for c in "\x00\r\n/\\") or name.rsplit(".", 1)[-1].lower() not in EXTENSIONS or "." not in name:
             raise HTTPError(400, "unsupported-extension", "Choose a supported file extension")
@@ -1098,6 +1098,13 @@ class WorkspaceAPI:
         parent = None
         if parent_id is not None:
             parent = self._get(owner, "asset", parent_id)
+            # The parent's current authority (never revoked/tombstoned/deleted, and in
+            # this project when one is selected) is required before its lineage
+            # (importRevision, lineageId) is extended and its id disclosed as parentId;
+            # inaccessible is the same 404 as a missing parent. The observation is
+            # retained for the response's own final recheck.
+            if gate is not None and gate.authorize("asset", parent) is None:
+                raise _missing()
         identifier = uuid.uuid4().hex
         import_revision, lineage_id = 1, identifier
         if parent is not None:
