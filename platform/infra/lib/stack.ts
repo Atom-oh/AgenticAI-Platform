@@ -30,6 +30,7 @@ import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import { PLANE_PARAM_PREFIX } from './plane-stack';
 import { StudioWorkspace } from './workspace';
+import { IntakeAdmin } from './intake';
 
 export interface BankPlatformStackProps extends cdk.StackProps {
   /** 플레인 스택이 배포되어 SSM 파라미터가 존재할 때 true (브리지·Writer 연결) */
@@ -604,12 +605,17 @@ export class BankPlatformStack extends cdk.Stack {
     studioLoopFn.grantInvoke(fn);
     new cdk.CfnOutput(this, 'StudioLoopFnName', { value: studioLoopFn.functionName });
 
-    new StudioWorkspace(this, 'DesignerWorkspace', {
+    const workspace = new StudioWorkspace(this, 'DesignerWorkspace', {
       apiCode, distribution: dist, cognitoUserPoolId: props.cognitoUserPoolId,
       cognitoClientId: props.cognitoClientId, cacheTable, guardrailId: guardrail.attrGuardrailId,
       guardrailVersion: guardrailVersion.attrVersion,
       mydataPrivacyFunctionArn: props.mydataPrivacyFunctionArn,
     });
+    // source-admission/1 IAM-only administration; synthesized only with -c intakeAdmin=true (B1 deploys it).
+    const intakeAdmin = this.node.tryGetContext('intakeAdmin');
+    if (intakeAdmin === true || intakeAdmin === 'true') {
+      new IntakeAdmin(this, 'IntakeAdmin', { apiCode, table: workspace.recordsTable });
+    }
 
     // ---------- 관측성: 알람 + 대시보드 (§10) ----------
     const alarm = (name: string, metric: cloudwatch.Metric, threshold: number, desc: string) =>

@@ -310,7 +310,10 @@ publication using the trusted completion-write composition point and one
 transaction. Receipt pointers are inline in the job/artifact records. No
 independent graph publication or later terminal-state update is permitted.
 Manual partitions always retain incomplete, declared coverage. Source deadlines
-are rechecked immediately before submitting the version-fenced transaction;
+are rechecked immediately before submitting the version-fenced transaction,
+on every attempt; they include each upstream intake admission record (decision,
+policy, provenance, grant) fenced through a transcription revision's lineage,
+whose expiry changes no version (`source-upstream-revoked`);
 source validity is never extended by publication. Reads, reuse and approval
 independently reject expired sources, including expiry after that observation.
 The existing `Worker.handle` atomically claims a queued durable job before
