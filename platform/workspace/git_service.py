@@ -170,12 +170,13 @@ def process_export(worker, owner, job):
                                          commit_time=exported["createdAt"] // 1000,
                                          **({"guard": authority_guard(reader)} if reader is not None else {}))
     except GitExportDeliveredUnverified as delivered:
-        # The remote branch/commit genuinely exists now (cannot be undone), but a
-        # guard revocation blocked confirming its content matches what was requested.
-        # Persist the observed receipt for attribution/recovery -- never "committed"
-        # (that would claim verified success for a possibly-wrong delivery) -- then
-        # fail the job normally; the generic failure path below only sets status and
-        # error, so these fields are retained even after it runs.
+        # The remote branch/commit genuinely exists now (cannot be undone), but
+        # whatever interrupted confirming its content matches what was requested --
+        # a guard revocation, a lookup failure, or a genuine mismatch -- means it was
+        # never verified. Persist the observed receipt for attribution/recovery --
+        # never "committed" (that would claim verified success for a possibly-wrong
+        # delivery) -- then fail the job normally; the generic failure path below
+        # only sets status and error, so these fields are retained even after it runs.
         if (delivered.sha and re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", delivered.sha)
                 and delivered.source_hash == release["sourceHash"]):
             worker._update(owner, "gitexport", exported["id"], status="delivered-unverified",

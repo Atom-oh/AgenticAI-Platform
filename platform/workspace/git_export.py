@@ -596,17 +596,20 @@ class GitExporter:
         # atomically -- delivery happens there, not at `backend.publish` (which only
         # re-reads to confirm). GitHub and local instead create loose, unreachable
         # objects first and only deliver at `backend.publish` (`POST /git/refs` / the
-        # local ref transaction). A guard revocation between delivery and any further
-        # guarded call raises `ProtectedCallRefused` (never `GitExportError`, so the
-        # `except` below does not see it). For GitHub/local nothing has been delivered
-        # yet at this point, so it must keep blocking exactly as it always has. For
-        # GitLab the branch+commit already exist and cannot be undone, but the guard
-        # also blocked the ONLY calls that could have confirmed their content matches
-        # what was requested -- a genuine mismatch and a guard-blocked confirmation are
-        # indistinguishable here, so this must never be reported as verified "committed"
-        # success (that would silently launder a possibly-wrong delivery); instead the
-        # caller gets the observed facts to persist for attribution/recovery without
-        # claiming they were verified.
+        # local ref transaction). Anything that interrupts the follow-up verification
+        # after that point -- a guard revocation (`ProtectedCallRefused`), a lookup
+        # failure, or a genuine content/base mismatch (`GitExportError`) -- never
+        # undoes a GitLab delivery that already happened. For GitHub/local nothing has
+        # been delivered yet at this point, so it must keep blocking/failing exactly as
+        # it always has. For GitLab the branch+commit already exist and cannot be
+        # undone, but the SAME failure also blocked the only calls that could have
+        # confirmed their content matches what was requested -- an interrupted check and
+        # a genuine mismatch are indistinguishable here, so this must never be reported
+        # as verified "committed" success (that would silently launder a possibly-wrong
+        # delivery); instead the caller gets the observed facts to persist for
+        # attribution/recovery without claiming they were verified. The receipt is tied
+        # to "did the remote actually receive this commit", never to which exception
+        # class interrupted confirming it.
         try:
             sha = backend.create(base, tree, target, files, message, when, branch)
             delivered = self.connection["provider"] == "gitlab"
@@ -615,7 +618,7 @@ class GitExporter:
                 if backend.ref(self.connection["baseBranch"]) != base:
                     _fail("conflict")
                 backend.publish(branch, sha, self.connection["baseBranch"], base)
-            except ProtectedCallRefused:
+            except (ProtectedCallRefused, GitExportError):
                 if delivered:
                     raise GitExportDeliveredUnverified(branch, base, sha, source_hash, target) from None
                 raise

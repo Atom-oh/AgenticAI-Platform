@@ -1206,6 +1206,57 @@ def test_git_export_gitlab_revocation_during_verify_never_claims_committed_on_mi
     assert exported.get("commitSha") == delivered_sha, exported
 
 
+def test_git_export_preserves_a_gitlab_receipt_on_a_plain_verify_failure(env, queued_export, monkeypatch):
+    """Review 8 #4: the round-7 fix for #5 only widened the inner `except` to also
+    treat a guard-interrupted verify as delivered-unverified when raised alongside
+    `ProtectedCallRefused` -- but a genuine `_verify` failure with NO guard
+    interruption at all (no admission revoked, nothing racing) is a plain
+    `GitExportError`, which the inner `except ProtectedCallRefused:` never caught.
+    That `GitExportError` escaped to `_export`'s outer handler, which retried via
+    `existing()` (failing identically), then propagated all the way to
+    `process_export`'s `except GitExportError` -- discarding the commitSha even
+    though GitLab's atomic `POST /commits` had already delivered it. Reproduced
+    with no revocation anywhere: a fake GitLab provider silently commits mismatched
+    source bytes, and nothing ever blocks a guarded call. The export must still
+    fail (a mismatch is never reported as committed), but the delivered commitSha
+    must be retained on the record, exactly like the guard-interrupted case."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote, blob_id
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    tampered = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if method == "POST" and url.endswith("/commits"):
+            # A misbehaving provider silently commits different bytes than requested --
+            # no guard is ever revoked, so any `_verify` failure here is a plain,
+            # unrelated `GitExportError`, never a `ProtectedCallRefused`.
+            sha = result["id"]
+            tree = service.trees[service.commits[sha]["tree"]]
+            tree["generated/studio/run-1/src/App.tsx"] = ("100644", "blob", blob_id(b"wrong source"))
+            tampered["on"] = True
+        return result
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert tampered["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The observed (possibly-wrong) SHA is retained for attribution, never silently lost --
+    # even though nothing here ever raised `ProtectedCallRefused`.
+    assert exported.get("commitSha") == delivered_sha, exported
+
+
 def approvable_run(env, contract, run_id, admissions=None):
     """A React run whose round carries stored passing evidence (verifier checks stubbed by the caller)."""
     import hashlib
