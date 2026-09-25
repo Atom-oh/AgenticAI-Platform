@@ -2485,9 +2485,9 @@ def test_intent_replay_is_fenced_and_never_authorizes_another_invocation(xfer):
     lease = stored["attempt"]["leaseExpiresAt"]
     original = ledger.cost_gate.check
 
-    def lapse():
+    def lapse(pending=0):
         now[0] = lease
-        return original()
+        return original(pending=pending)
     ledger.cost_gate.check = lapse
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(*ids(job), **replay_args(operation))
@@ -3173,3 +3173,40 @@ def test_manifest_unavailability_never_erases_consumed_prior_bindings(xfer):
         finish(ledger, job, "succeeded", result)
     assert error.value.code == "authority-changed"
     assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+
+
+def test_cancelled_unresolved_reservations_count_against_the_daily_budget(xfer, monkeypatch):
+    """Review 8 finding 3: a cancelled job's still-outstanding (never-settled) model call reservation stays in
+    the cross-job pending registry; repeated intent-then-cancel cycles cannot reserve past the daily cap."""
+    from workspace.execution_ledger import CostGuardGate, QUOTA_OWNER, PENDING_CHARGES_ID
+    storage, _, now, _ = xfer
+    client = pending_costguard(monkeypatch, cap=300)
+    ledger = offline_ledger(storage, cost_gate=CostGuardGate())
+
+    def cycle(key):
+        job = run_job(ledger, key=key)
+        call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                    max_tokens=150)["callId"]
+        ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+        return job, call
+
+    job1, call1 = cycle("req-c1")
+    registry = storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+    assert registry["charges"]["resv-" + call1]["tokens"] == 150   # cancellation never drops the reservation
+    job2, call2 = cycle("req-c2")
+    registry = storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+    assert sum(row["tokens"] for row in registry["charges"].values()) == 300
+    assert client.tokens == 0                                      # never actually recorded as daily usage
+    other = run_job(ledger, key="req-c3")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(other), stage="generate", kind="model", min_remaining_ms=0, max_tokens=1)
+    assert error.value.code == "daily-budget"
+    assert storage.get(OWNER, "job", other["id"])["calls"] == []
+    # Settlement (a recovered/expired sweep) finally clears the reservation and records the real usage.
+    for job, call in ((job1, call1), (job2, call2)):
+        current = storage.get(OWNER, "job", job["id"])
+        storage.put(OWNER, "job", {**current, "settlementDueAt": now[0]}, current["version"],
+                    _writer=_ledger_module._WRITER)
+        ledger.reconciler().sweep(OWNER, job["id"])
+    assert client.tokens == 300
+    assert storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)["charges"] == {}

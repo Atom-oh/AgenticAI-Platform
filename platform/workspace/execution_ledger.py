@@ -485,13 +485,26 @@ class Ledger:
             writes = [*self._due_writes(owner, before, job), *writes]
         return job, writes
 
-    # --- the cross-job pending-charge registry (review 7, RUN-03) ------------------------------------------
+    # --- the cross-job pending-charge registry (review 7/8, RUN-03) ------------------------------------------
+    @staticmethod
+    def _pending_entries(job):
+        """Every not-yet-settled token obligation of a job: settled-but-unrecorded ``accounting`` charges, plus
+        every still-outstanding (``intent``) model call's reservation (review 8, #3) — cancelling a job, or its
+        concurrency slot being released, never drops a reservation that may still be billed. Keyed so an
+        obligation and its call's reservation never collide, and a call moving on from ``intent`` (settled,
+        expired-to-``unknown``, or otherwise resolved) always drops its reservation entry in the same write."""
+        entries = {entry["id"]: {"tokens": entry["tokens"]} for entry in job.get("accounting") or []}
+        for call in job.get("calls") or []:
+            if call.get("kind") == "model" and call.get("status") == "intent" and _is_size(call.get("reserved")):
+                entries["resv-" + call["callId"]] = {"tokens": call["reserved"]}
+        return entries
+
     def _pending_writes(self, owner, before, job):
-        """Mirror every added or settled accounting obligation into the global pending-charge registry, in the
-        same transaction as the job write, so unrecorded charges of ANY job (also cancelled or superseded ones)
-        count against the enforced daily budget."""
-        added = {entry["id"]: entry for entry in job.get("accounting") or []}
-        prior = {entry["id"] for entry in (before or {}).get("accounting") or []}
+        """Mirror every job's pending token obligations into the global pending-charge registry, in the same
+        transaction as the job write, so unrecorded charges or outstanding reservations of ANY job (also
+        cancelled or superseded ones) count against the enforced daily budget until idempotently settled."""
+        added = self._pending_entries(job)
+        prior = set(self._pending_entries(before or {}))
         if set(added) == prior:
             return []
         current = self.storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
@@ -499,7 +512,7 @@ class Ledger:
         for identifier in prior - set(added):
             charges.pop(identifier, None)
         for identifier in set(added) - prior:
-            charges[identifier] = {"tokens": added[identifier]["tokens"], "owner": owner, "jobId": job["id"]}
+            charges[identifier] = {**added[identifier], "owner": owner, "jobId": job["id"]}
         return [{"owner": QUOTA_OWNER, "kind": "exec_quota", "expected_version": current["version"] if current else None,
                  "item": {**(current or {"id": PENDING_CHARGES_ID}), "charges": charges}}]
 
@@ -1134,11 +1147,9 @@ class Ledger:
                 raise LedgerError("token-budget")
             self._cost_check()                  # includes every job's unrecorded charges (review 7)
         checks, guard = self._protect(owner, job, min_remaining_ms=min_remaining_ms, cost=kind == "model")          # revocation stops further calls (RUN-03)
-        if kind == "model":
-            # The pending-charge registry read by the cost check is a predicate of the reservation (review 7).
-            registry = self.storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
-            checks = self._merge_checks(checks, [{"owner": QUOTA_OWNER, "kind": "exec_quota", "id": PENDING_CHARGES_ID,
-                                                  "version": registry["version"] if registry else None}])
+        # A model reservation itself now durably mirrors into the pending registry (review 8, #3); that write's
+        # own CAS (a fresher read than any check gathered above) is the reservation's fence, so no separate
+        # registry predicate is added here (one would collide with that write in the same transaction).
         call = {"callId": "call-" + secrets.token_hex(16), "stage": stage, "kind": kind, "status": "intent",
                 "at": now, "attemptId": attempt["id"], "reserved": reserve}
         budget.update(calls=budget["calls"] + 1, tokensReserved=budget["tokensReserved"] + reserve)
