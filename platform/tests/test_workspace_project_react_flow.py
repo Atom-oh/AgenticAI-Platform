@@ -182,3 +182,36 @@ def test_comment_anchored_to_a_run_is_gated_by_run_visibility():
     assert request(api, "GET", "/comments", actor="dana", project=project["id"], query={"runId": run["id"]})[0] == 404
     assert request(api, "POST", "/comments", {**body, "requestId": "comment-2"}, actor="dana",
                    project=project["id"])[0] == 404
+
+
+def test_page_comment_inherits_its_produced_rounds_authorization():
+    """Review 6 #2: a comment anchored to {runId, pageId} without an explicit `round`
+    only checked run-level visibility (any anchor could name any page), never the
+    specific round that actually produced the page. Reproduced: a failed round's page
+    stays visible via /comments to a planner (not a ROUND_EDITOR), and a planner can
+    still post a new one, though the round's own download denies both roles alike."""
+    api = make_api()
+    project = shared(api)
+    _, run = _queued_run(api, project, "page-comment-gate")
+    owner = "project:" + project["id"]
+    stored = api.storage.get(owner, "run", run["id"])
+    # A completed run with one failed (unapproved) round that produced a page.
+    updated = {**stored, "status": "completed",
+              "rounds": [{"number": 1, "passed": False,
+                         "pageSources": [{"pageId": "notice-consent", "path": "src/pages/notice.tsx"}]}]}
+    api.storage.put(owner, "run", updated, stored["version"])
+    body = {"requestId": "page-comment-1", "text": "이 안내 페이지 확인했습니다.",
+            "anchor": {"runId": run["id"], "pageId": "notice-consent"}}
+    # carol is a designer (a ROUND_EDITOR): a failed round's own page is still hers to discuss.
+    status, data = request(api, "POST", "/comments", body, actor="carol", project=project["id"])
+    assert status == 201, data
+    comment = data["comment"]
+    status, data = request(api, "GET", "/comments", actor="carol", project=project["id"])
+    assert status == 200 and comment["id"] in {row["id"] for row in data["comments"]}
+    # bob is a planner (not a ROUND_EDITOR): the failed round is denied exactly like its
+    # own download would be, both reading the existing comment and posting a new one.
+    status, data = request(api, "GET", "/comments", actor="bob", project=project["id"])
+    assert status == 200 and comment["id"] not in {row["id"] for row in data["comments"]}
+    status, data = request(api, "POST", "/comments", {**body, "requestId": "page-comment-2"}, actor="bob",
+                           project=project["id"])
+    assert status == 404, data

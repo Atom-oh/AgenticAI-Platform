@@ -430,7 +430,13 @@ class ResponseGate:
         self.prepared = True
 
     def _anchor(self, query, event):
-        """A run-anchored discussion (query filter or new comment) names an authorized run and round."""
+        """A run-anchored discussion (query filter or new comment) names an authorized run and round.
+
+        A page-anchored comment without an explicit `round` inherits the exact round
+        that produced the page: page content carries the same publishing-handoff/1
+        state and lineage permission as its round's own download, never a generic
+        "the run exists" pass.
+        """
         anchor = query if self.route.method == "GET" else (_body(event).get("anchor") or {})
         if not isinstance(anchor, dict) or not isinstance(anchor.get("runId"), str):
             return
@@ -440,15 +446,28 @@ class ResponseGate:
         number = anchor.get("round")
         if isinstance(number, str) and number.isdigit():
             number = int(number)
+        if type(number) is not int and isinstance(anchor.get("pageId"), str):
+            number = self._page_round(run, anchor["pageId"])
         if type(number) is int:
             self.round(run["id"], number)
 
-    def _run_visible(self, run_id, number=None):
-        """The run (and, with `number`, that round) is readable by the caller now."""
+    @staticmethod
+    def _page_round(run, page_id):
+        """The round (if any) whose produced pages include `page_id`."""
+        for row in run.get("rounds", []) if isinstance(run, dict) else []:
+            if isinstance(row, dict) and any(isinstance(entry, dict) and entry.get("pageId") == page_id
+                                             for entry in row.get("pageSources", [])):
+                return row.get("number")
+        return None
+
+    def _run_visible(self, run_id, number=None, page_id=None):
+        """The run (and, with `number` or a round-produced `page_id`, that round) is readable now."""
         run = self.api.storage.get(self.owner, "run", run_id) if isinstance(run_id, str) else None
         authorized = self.authorize("run", run) if run else None
         if authorized is None:
             return False
+        if number is None and isinstance(page_id, str):
+            number = self._page_round(run, page_id)
         if number is None:
             return True
         return any(isinstance(row, dict) and row.get("number") == number for row in authorized.get("rounds", []))
@@ -516,7 +535,7 @@ class ResponseGate:
             if not isinstance(item, dict):
                 raise self._unavailable()
             anchor = item.get("anchor") if isinstance(item.get("anchor"), dict) else {}
-            if "runId" in anchor and not self._run_visible(anchor["runId"], anchor.get("round")):
+            if "runId" in anchor and not self._run_visible(anchor["runId"], anchor.get("round"), anchor.get("pageId")):
                 return None
             return item
         return self._publication_view(view, item)
