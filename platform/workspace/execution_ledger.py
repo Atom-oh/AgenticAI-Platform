@@ -1101,11 +1101,20 @@ class Ledger:
             raise LedgerError("transfer-invalid") from error
         if hashlib.sha256(data).hexdigest() != sha256:
             raise LedgerError("transfer-invalid")
+        # Pin the validated object identity (review 5, RUN-05): every ranged read is conditional on this entity
+        # tag, so bytes replaced under the same key are refused before any chunk is returned.
+        try:
+            identity = self.storage.blob_identity(key)
+        except (ValueError, FileNotFoundError, RuntimeError) as error:
+            raise LedgerError("transfer-invalid") from error
+        if (identity["size"] != len(data) or identity["sha256"] != sha256 or not isinstance(identity["etag"], str)
+                or not identity["etag"]):
+            raise LedgerError("transfer-invalid")
         handle_id = "hdl-" + secrets.token_hex(16)
         chunks = max(1, -(-len(data) // CHUNK_BYTES))
         handle = {"direction": "in", "source": source, "key": key, "sha256": sha256, "total": len(data),
                   "chunks": chunks, "attemptId": job["attempt"]["id"], "stage": stage, "status": "open", "read": [],
-                  **(binding or {})}
+                  "etag": identity["etag"], **(binding or {})}
         saved = self._commit(owner, job, {**job, "handles": {**job["handles"], handle_id: handle}}, checks=checks, before_attempt=guard,
                              op=op, value=handle_id, reindex=False)
         return {"handleId": handle_id, "total": len(data), "sha256": sha256, "chunks": chunks, "job": saved}
@@ -1271,10 +1280,19 @@ class Ledger:
         checks, guard = self._protect(owner, job)           # every chunk, including a retried one
         self._revalidate_handle(owner, job, handle)
         offset = index * CHUNK_BYTES
+        expected = min(CHUNK_BYTES, handle["total"] - offset)
+        if not isinstance(handle.get("etag"), str) or not handle["etag"]:
+            raise LedgerError("transfer-invalid")                # no pinned identity: fail closed
         try:
-            data = self.storage.get_blob(handle["key"], offset, min(CHUNK_BYTES, handle["total"] - offset))
-        except (ValueError, FileNotFoundError) as error:
+            identity = self.storage.blob_identity(handle["key"])
+            if (identity["etag"] != handle["etag"] or identity["size"] != handle["total"]
+                    or identity["sha256"] != handle["sha256"]):
+                raise Conflict("The blob identity changed")
+            data = self.storage.get_blob(handle["key"], offset, expected, if_match=handle["etag"])
+        except (ValueError, FileNotFoundError, Conflict) as error:
             raise LedgerError("transfer-invalid") from error
+        if len(data) != expected:
+            raise LedgerError("transfer-invalid")
         digest = hashlib.sha256(data).hexdigest()
         bound = self._chunk_op(handle, operation_id, index, digest)
         if index not in handle["read"] or bound:

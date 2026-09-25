@@ -546,8 +546,26 @@ class Storage:
         return {"size": response["ContentLength"], "contentType": response.get("ContentType", "application/octet-stream"),
                 "sha256": response.get("Metadata", {}).get("sha256", "")}
 
-    def get_blob(self, key, offset=0, length=None) -> bytes:
+    def blob_identity(self, key):
+        """Size, stored content hash and entity tag of the current object version (a rewrite changes the tag)."""
+        from botocore.exceptions import ClientError
         self._blob_key(key)
+        try:
+            response = self.s3().head_object(Bucket=self.bucket, Key=key)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") in ("NoSuchKey", "NotFound", "404"):
+                raise FileNotFoundError("Blob not found") from error
+            raise
+        return {"size": response["ContentLength"], "sha256": response.get("Metadata", {}).get("sha256", ""),
+                "etag": response.get("ETag", "")}
+
+    def get_blob(self, key, offset=0, length=None, *, if_match=None) -> bytes:
+        """Ranged read. With ``if_match`` the read is conditional on that entity tag (S3 IfMatch): a replaced
+        object raises Conflict and returns no bytes."""
+        from botocore.exceptions import ClientError
+        self._blob_key(key)
+        if if_match is not None and (not isinstance(if_match, str) or not if_match):
+            raise ValueError("Invalid blob identity")
         if type(offset) is not int or offset < 0 or (length is not None and (type(length) is not int or length < 0)):
             raise ValueError("Invalid blob range")
         info = self.blob_info(key)
@@ -558,7 +576,14 @@ class Storage:
         count = min(info["size"] - offset, length) if length is not None else info["size"] - offset
         if count == 0:
             return b""
-        response = self.s3().get_object(Bucket=self.bucket, Key=key, Range=f"bytes={offset}-{offset + count - 1}")
+        conditional = {"IfMatch": if_match} if if_match is not None else {}
+        try:
+            response = self.s3().get_object(Bucket=self.bucket, Key=key, Range=f"bytes={offset}-{offset + count - 1}",
+                                            **conditional)
+        except ClientError as error:
+            if if_match is not None and error.response.get("Error", {}).get("Code") in ("PreconditionFailed", "412"):
+                raise Conflict("The blob was replaced") from error
+            raise
         with response["Body"] as body:
             data = body.read(count + 1)
         if len(data) != count:

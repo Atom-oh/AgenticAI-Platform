@@ -213,9 +213,12 @@ class FakeS3:
         with self.lock:
             if kwargs.get("IfNoneMatch") == "*" and key in self.objects:
                 raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+            self.writes = getattr(self, "writes", 0) + 1
             self.objects[key] = {
                 "data": bytes(kwargs["Body"]), "ContentType": kwargs["ContentType"],
                 "Metadata": copy.deepcopy(kwargs.get("Metadata", {})),
+                # Like S3, every write of an object gets a new entity tag.
+                "ETag": '"%s"' % hashlib.md5(bytes(kwargs["Body"]) + str(self.writes).encode()).hexdigest(),
             }
             self.puts.append(copy.deepcopy(kwargs))
         return {}
@@ -226,13 +229,15 @@ class FakeS3:
             if item is None:
                 raise self.Missing()
             return {"ContentLength": len(item["data"]), "ContentType": item["ContentType"],
-                    "Metadata": copy.deepcopy(item["Metadata"])}
+                    "Metadata": copy.deepcopy(item["Metadata"]), "ETag": item["ETag"]}
 
     def get_object(self, **kwargs):
         with self.lock:
             item = self.objects.get((kwargs["Bucket"], kwargs["Key"]))
             if item is None:
                 raise self.Missing()
+            if "IfMatch" in kwargs and kwargs["IfMatch"] != item["ETag"]:
+                raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "GetObject")
             data = item["data"]
             if "Range" in kwargs:
                 begin, end = kwargs["Range"].removeprefix("bytes=").split("-")
@@ -240,7 +245,7 @@ class FakeS3:
             body = io.BytesIO(data)
             self.bodies.append(body)
             self.reads.append(kwargs)
-            return {"Body": body}
+            return {"Body": body, "ETag": item["ETag"]}
 
     def delete_object(self, **kwargs):
         with self.lock:

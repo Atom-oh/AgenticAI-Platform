@@ -643,7 +643,12 @@ canonical bytes (they hash to `receiptHash`), written once at `stage` (and at
 stage, attemptId}` under `out/{attemptId}/{stage}/{name}` of the job. An input
 handle (`source="input"`) is opened only when the resolved artifact hash equals
 the frozen `admissions[*].artifactHash`; it records that `decisionId`,
-`revision` and hash, and the server re-hashes the stored bytes against it. Every
+`revision` and hash, and the server re-hashes the stored bytes against it.
+Every read handle (input, prior, manifest) also pins the validated object
+identity: `etag` (with `total` and `sha256`), taken from `Storage.blob_identity`
+after the re-hash. Each `read_chunk` requires the current identity to match and
+reads with `get_blob(..., if_match=etag)` (S3 `IfMatch`); a replaced object,
+size drift or short read is `transfer-invalid` and returns no bytes. Every
 `intent`, `open_*`, `read_chunk` (including a retried chunk index), `write_chunk`
 and `close_output` rechecks the requester's current project authority (a
 mismatch fails the job with `authority-changed`) and fences its mutation with

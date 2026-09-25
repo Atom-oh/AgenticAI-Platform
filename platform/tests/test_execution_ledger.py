@@ -2713,3 +2713,21 @@ def test_production_daily_charge_serializes_native_values_through_the_real_resou
     assert update["Key"] == {"pk": {"S": "usage#2027-01-15"}}
     assert update["ExpressionAttributeValues"][":t"] == {"N": "300"}
     assert set(update["ExpressionAttributeValues"][":ttl"]) == {"N"}
+
+
+@pytest.mark.parametrize("replacement", ["same-size", "other-size"])
+def test_input_reads_are_pinned_to_the_validated_object_identity(xfer, replacement):
+    """Review 5 finding 2: bytes replaced under an old admission are refused before any chunk is returned."""
+    storage, ledger, _, data = xfer
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    stored = storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]
+    assert stored["etag"] and stored["total"] == len(data)
+    first = ledger.tool().read_chunk(*ids(job), handle["handleId"], 0, operation_id=op_id())
+    other = bytes(reversed(data)) if replacement == "same-size" else data + b"-appended"
+    storage.put_blob(stored["key"], other, "application/octet-stream")
+    for index in (0, 1):
+        with pytest.raises(LedgerError) as error:
+            ledger.tool().read_chunk(*ids(job), handle["handleId"], index, operation_id=op_id())
+        assert error.value.code == "transfer-invalid"
+    assert first["index"] == 0
