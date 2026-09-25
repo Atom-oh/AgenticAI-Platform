@@ -15,7 +15,7 @@ import re
 from workspace.ontology_ux import STATES, parse_when
 from workspace.ontology_ux import visible as _visible
 
-from .financial import contains_quantity
+from .financial import contains_quantity, contains_split_quantity
 
 SCHEMA_VERSION = 1
 TOP = frozenset({"schemaVersion", "screenId", "templateId", "state", "variant", "surface", "slots"})
@@ -134,6 +134,18 @@ def _strings(value):
     elif isinstance(value, dict):
         for item in value.values():
             yield from _strings(item)
+
+
+def _records(value):
+    """Yield each dict's own immediate string fields as one sibling group, for split-quantity detection
+    (PR #30 review round 2, #4): a Summary item's {label, value} pair, but not unrelated items in a list."""
+    if isinstance(value, dict):
+        yield [v for v in value.values() if isinstance(v, str)]
+        for item in value.values():
+            yield from _records(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _records(item)
 
 
 def text_of(c, values=None, k=None):
@@ -327,7 +339,8 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
                 add("prop-type", ppath, "literal does not match the declared prop type")
             if name in bind:
                 add("prop-conflict", ppath, "prop is both literal and bound")
-            if any(contains_quantity(s) for s in _strings(literal)):
+            if (any(contains_quantity(s) for s in _strings(literal))
+                    or any(contains_split_quantity(group) for group in _records(literal))):
                 add("literal-financial-value", ppath, "financial quantities must be bound from the PRD")
         for name, bpath in bind.items():
             ppath = f"{path}.bind.{name}"

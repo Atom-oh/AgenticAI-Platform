@@ -151,6 +151,20 @@ def test_literal_financial_values_are_critical(literal):
     assert codes(c) == {"literal-financial-value"}
 
 
+def test_split_label_and_value_financial_literal_is_still_critical():
+    """PR #30 review round 2, #4: a Summary item split into a unit-bearing label ("...(만원)") and a separate
+    bare numeric value bypasses the single-string quantity regex; the combination must still be flagged."""
+    c = summary(items=[{"label": "추가 한도 (만원)", "value": "999"}])
+    assert codes(c) == {"literal-financial-value"}
+    c = summary(items=[{"label": "만기 (개월)", "value": "12"}])
+    assert codes(c) == {"literal-financial-value"}
+    # A bare number with no sibling unit annotation, and ordinary text with no sibling number, both stay clean.
+    c = summary(items=[{"label": "가입자 수", "value": "999"}])
+    assert codes(c) == set()
+    c = summary(items=[{"label": "회원 등급 안내", "value": "일반"}])
+    assert codes(c) == set()
+
+
 def test_the_same_values_bound_from_the_cited_prd_pass():
     assert validate(summary(bound=True), K, flow=FLOW, binding_paths=PATHS) == []
     c = base(); node(c, "n4")["props"] = {}; node(c, "n4")["bind"] = {"children": "product.baseRate"}
