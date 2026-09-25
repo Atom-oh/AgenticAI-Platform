@@ -515,7 +515,10 @@ def impact(ctx, publication_id, retain=None):
         try:
             ontology = Ontology(Service(ctx.host, scope, ctx.claims))
             nodes = ontology.source_nodes(reference)
-            manifest = ontology.current()
+            # The exact generation `source_nodes` itself read (and re-confirmed via its
+            # own final `_recheck` before returning) -- never a second, later `current()`
+            # call, which would reopen a gap for an intervening republish between the two.
+            generation = ontology._last_generation
             # The destination grant is part of that scope's authority for this answer.
             ontology.sources._remember("pub_grant", grant_row)
         except CollaborationError as error:
@@ -523,8 +526,7 @@ def impact(ctx, publication_id, retain=None):
                 raise
             continue
         if nodes:
-            contributing.append((row["destinationProject"], scope["owner"], ontology.sources,
-                                 manifest.get("generation") if manifest else None))
+            contributing.append((row["destinationProject"], scope["owner"], ontology.sources, generation))
             dependents.append({"projectId": row["destinationProject"], "nodeIds": nodes})
     ctx.fresh()
 

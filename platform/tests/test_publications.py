@@ -914,3 +914,45 @@ def test_impact_fences_each_destinations_exact_ontology_generation(org, monkeypa
     status, payload, _ = call(org.api, "GET", f"/publications/{pub['id']}/impact", actor="alice", project=org.origin)
     assert len(seen) == 2
     assert status != 200 or seen[0] not in json.dumps(payload), payload
+
+
+def test_impact_reads_the_manifest_generation_atomically_with_source_nodes(org, monkeypatch):
+    """Review 7 #2 (round-6 #1, partial): impact() read the fenced generation via a
+    SEPARATE `ontology.current()` call made AFTER `source_nodes()` had already read
+    the manifest -- a gap between the two reads (not just across destination
+    iterations, which the round-6 fix does catch) that an intervening republish could
+    still slip through. The generation must come from source_nodes()'s own read
+    (`Ontology._last_generation`, re-confirmed current by its own internal `_recheck`
+    before it returns), never a second, independent read. Verified structurally: with
+    the fix, `Ontology.current` is called exactly once per destination -- never a
+    second time -- so there is no gap left to race at all."""
+    pub = published(org)
+    grant = granted(org, pub, roles=("owner", "designer"))
+    ref = publications.published_asset_reference(pub, grant)
+    graph = {"schemaVersion": 1, "projectId": org.dest, "edges": [],
+             "nodes": [node("screen-dest", "Screen", project=org.dest, sourceRefs=[ref])]}
+    Ontology(ctx(org.api, "erin", org.dest)).publish_candidate("collection", graph, expected_generation=None,
+                                                               request_id="uses-dest")
+    # alice (the impact caller, from origin) must also be a member of the
+    # destination for it to contribute -- matching the existing impact tests' setup.
+    project = org.api.storage.get(f"project:{org.dest}", "project", org.dest)
+    status, payload, _ = call(org.api, "PUT", f"/projects/{org.dest}/members", {
+        "version": project["version"], "members": {**{a: {"role": m["role"]} for a, m in project["members"].items()},
+                                                   "alice": {"role": "designer"}}}, actor="erin")
+    assert status == 200, payload
+    calls = []
+    original_current = Ontology.current
+
+    def counting(self):
+        calls.append(self)
+        result = original_current(self)
+        if len(calls) > 1:
+            # A stale/racy second read would see a different (bumped) generation here;
+            # the fix must never reach this branch at all.
+            result = {**result, "generation": "0" * 64}
+        return result
+    monkeypatch.setattr(Ontology, "current", counting)
+    report = publications.impact(ctx(org.api, "alice", org.origin), pub["id"])
+    assert len(report["dependents"]) == 1 and report["dependents"][0]["projectId"] == org.dest
+    assert len(report["dependents"][0]["nodeIds"]) == 1, report
+    assert len(calls) == 1, "source_nodes and the caller must share the same manifest read"
