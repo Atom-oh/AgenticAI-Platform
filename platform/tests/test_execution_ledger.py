@@ -968,7 +968,8 @@ def test_production_ledger_has_no_input_resolver():
 from test_workspace_storage import TransactionFailure  # noqa: E402
 from botocore.exceptions import ClientError, ReadTimeoutError  # noqa: E402
 
-GOOD = {"context": ("ok", {}), "generate": ("ok", {}), "compile": ("ok", {"sourceHash": "s" * 64, "bundleHash": "u" * 64}),
+GOOD = {"context": ("ok", {}), "generate": ("ok", {}),
+        "compile": ("ok", {"sourceHash": "5" * 64, "bundleHash": _hashlib.sha256(b"compile-bytes").hexdigest()}),
         "browser": ("ok", {"visualDiff": 0.0}), "analyze": ("ok", {"coverage": {"files": 1}}),
         "verify": ("ok", {"verdict": "pass", "approvable": True, "issues": [], "reviewer": "deterministic",
                           "passed": True, "compositionHashes": ["h1"], "judgeEvidence": {"h1": "ev-1"}})}
@@ -987,7 +988,7 @@ def approved_screenshot(storage):
 
 
 def release_manifest(storage, screenshot=True):
-    approved = {"sourceHash": "s" * 64, "bundleHash": "u" * 64}
+    approved = {"sourceHash": "5" * 64, "bundleHash": _hashlib.sha256(b"compile-bytes").hexdigest()}
     if screenshot:
         approved["screenshot"] = approved_screenshot(storage)
     body = _json.dumps({"admissions": ADM, "approved": approved, "priors": []}).encode()
@@ -1066,7 +1067,9 @@ RULES = [
     ("intake.transcribe", {"verify": ("ok", {"issues": ["region outside image"]})}, "needs_changes", True),
     ("design.release", {}, "succeeded", True),
     ("design.release", {"browser": ("ok", {"visualDiff": 0.03})}, "succeeded", False),
-    ("design.release", {"compile": ("ok", {"sourceHash": "0" * 64, "bundleHash": "u" * 64})}, "succeeded", False),
+    ("design.release", {"compile": ("ok", {"sourceHash": "0" * 64,
+                                           "bundleHash": _hashlib.sha256(b"compile-bytes").hexdigest()})},
+     "succeeded", False),
     ("design.release", {}, "needs_changes", False),
 ]
 
@@ -2801,7 +2804,7 @@ def test_release_admission_freezes_the_approved_screenshot(xfer):
     job, result = chain(xfer, "design.release")
     assert job["releaseBaseline"] == approved_screenshot(storage)
     assert finish(ledger, job, "succeeded", result)["status"] == "succeeded"
-    body = _json.dumps({"admissions": ADM, "approved": {"sourceHash": "s" * 64, "bundleHash": "u" * 64,
+    body = _json.dumps({"admissions": ADM, "approved": {"sourceHash": "5" * 64, "bundleHash": "6" * 64,
                                                         "screenshot": {**approved_screenshot(storage),
                                                                        "sha256": "0" * 64}}}).encode()
     key = storage.key_for(OWNER, "run", "run-r", "bad-shot-manifest.json")
@@ -2851,3 +2854,41 @@ def test_admissions_are_strictly_shaped(env, admissions):
     with pytest.raises(LedgerError) as error:
         admit(env[1], admissions=admissions)
     assert error.value.code == "admission-invalid"
+
+
+def screenshot_only_manifest(storage, **approved):
+    body = _json.dumps({"admissions": ADM, "approved": {"screenshot": approved_screenshot(storage), **approved},
+                        "priors": []}).encode()
+    key = storage.key_for(OWNER, "run", "run-r", f"shot-only-{hashlib.sha256(body).hexdigest()[:8]}.json")
+    storage.put_blob_once(key, body, "application/json")
+    return {"ref": key, "hash": hashlib.sha256(body).hexdigest()}
+
+
+BUNDLE_SHA = hashlib.sha256(b"compile-bytes").hexdigest()        # the bytes chain() stores as the compile bundle
+
+
+@pytest.mark.parametrize("case", ["no-approved-hashes", "empty-observed", "null-approved", "non-hex",
+                                  "observed-not-the-compiled-bundle"])
+def test_release_success_requires_explicit_valid_approved_and_observed_hashes(xfer, case):
+    """Review 6 finding 1: missing hashes never compare equal as None."""
+    storage, ledger, _, _ = xfer
+    results, approved = {}, {"sourceHash": "5" * 64, "bundleHash": BUNDLE_SHA}
+    if case == "no-approved-hashes":
+        approved, results = {}, {"compile": ("ok", {})}
+    elif case == "empty-observed":
+        results = {"compile": ("ok", {})}
+    elif case == "null-approved":
+        approved = {"sourceHash": None, "bundleHash": None}
+        results = {"compile": ("ok", {"sourceHash": None, "bundleHash": None})}
+    elif case == "non-hex":
+        approved = {"sourceHash": "s" * 64, "bundleHash": "u" * 64}
+        results = {"compile": ("ok", {"sourceHash": "s" * 64, "bundleHash": "u" * 64})}
+    else:
+        approved = {"sourceHash": "5" * 64, "bundleHash": "6" * 64}
+        results = {"compile": ("ok", {"sourceHash": "5" * 64, "bundleHash": "6" * 64})}
+    job, result = chain(xfer, "design.release", results=results,
+                        manifest=screenshot_only_manifest(storage, **approved))
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "status-inconsistent"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"

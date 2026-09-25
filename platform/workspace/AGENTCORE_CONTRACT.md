@@ -704,8 +704,12 @@ must equal the pinned tool profile (`TOOL_PROFILES`, frozen in
 `design.release` succeeds only against its frozen `releaseBaseline`: the
 current Browser receipt must consume that screenshot as an input (it is an
 allowed input of the job) and its `result.comparison` must equal
-`{key, sha256}` of it, in addition to the approved source/bundle hashes and
-`visualDiff <= 0.02`. A missing baseline or another comparison input makes the
+`{key, sha256}` of it. The input manifest's `approved.sourceHash` and
+`approved.bundleHash` and the current compile receipt's observed
+`result.sourceHash`/`result.bundleHash` must all be valid SHA-256 values; the
+observed `bundleHash` must be the current compile bundle output's `sha256`, and
+both observed hashes must equal the approved ones (a missing hash never
+compares equal); `visualDiff` must be a number in `[0, 0.02]`. A missing baseline or another comparison input makes the
 requested `succeeded` status `status-inconsistent`.
 
 Receipts follow the operation's evidence graph (`STAGE_INPUTS`): each stage's

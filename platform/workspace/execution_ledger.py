@@ -1737,17 +1737,25 @@ class Ledger:
             covered = all(isinstance(evidence.get(h), str) and evidence[h] for h in hashes)
             return "succeeded" if verify["passed"] and covered and hashes else "needs_changes"
         if operation == "design.release":
-            approved = self._manifest_document(job).get("approved") or {}
-            diff = result["browser"].get("visualDiff")
+            approved = self._manifest_document(job).get("approved")
+            approved = approved if isinstance(approved, dict) else {}
+            compiled, diff = result["compile"], result["browser"].get("visualDiff")
+            bundle = [entry for entry in last["compile"].get("outputs", []) if entry.get("role") == "bundle"]
+            # Explicit, valid approved AND observed hashes (review 6): the observed bundle hash is the current
+            # compile receipt's bundle, and both equal the approval; a missing hash never compares equal.
+            hashes = (_is_sha(approved.get("sourceHash")) and _is_sha(approved.get("bundleHash"))
+                      and _is_sha(compiled.get("sourceHash")) and _is_sha(compiled.get("bundleHash"))
+                      and len(bundle) == 1 and compiled["bundleHash"] == bundle[0]["sha256"]
+                      and compiled["sourceHash"] == approved["sourceHash"]
+                      and compiled["bundleHash"] == approved["bundleHash"])
             # The Browser comparison input is exactly the approved screenshot frozen at admission: the receipt
             # consumed it and its result names it (review 5). A release without a frozen baseline never succeeds.
             baseline = job.get("releaseBaseline")
-            compared = baseline is not None and result["browser"].get("comparison") == baseline and any(
+            compared = _object_ref(baseline) is not None and result["browser"].get("comparison") == baseline and any(
                 entry.get("key") == baseline["key"] and entry.get("sha256") == baseline["sha256"]
                 for entry in last["browser"].get("inputs", []))
-            if (approved and compared and result["compile"].get("sourceHash") == approved.get("sourceHash")
-                    and result["compile"].get("bundleHash") == approved.get("bundleHash")
-                    and isinstance(diff, (int, float)) and not isinstance(diff, bool) and diff <= 0.02):
+            if (hashes and compared and isinstance(diff, (int, float)) and not isinstance(diff, bool)
+                    and 0 <= diff <= 0.02):
                 return "succeeded"
             return None
         return None
