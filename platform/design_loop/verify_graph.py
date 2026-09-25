@@ -4,7 +4,8 @@ V-01, V-02, V-04, V-05; Codex #11, #22, #23).
 - **Reviewer:** deterministic `composition.validate` of every page, `rules_v2` for `method: "rule"` checklist items,
   and the injected judge for the others, once per page each item targets. `deps["generate"]` judges all of a
   page's items in one batched call (`batch_judge`); otherwise `deps["llm_judge"]` judges item by item. Both go
-  through the verify-only `deps["normalize"]` boundary first. No judge, no normalization hook, an empty checklist, a
+  through the verify-only `deps["normalize"]` boundary first. A cached judgment is reused only when the injected
+  `deps["verify_lineage"]` confirms its lineage is current. No judge, no normalization hook, an empty checklist, a
   page text over 6 000 characters or any `incomplete` item makes the reviewer `unavailable`.
 - **Tester:** the assembled report (`evidence.assemble`) must match the bundle's build (`stale-evidence`), carry the
   contract's catalog and contract hashes, and satisfy the production predicate
@@ -220,15 +221,26 @@ def page_review_key(bundle, k, deps, screen_id, state, items):
                       profile_hash=(deps or {}).get("profileHash"), revisions=rule_revisions(k))
 
 
+def _current_lineage(stored, verify_lineage):
+    """Reuse needs BOTH the local receipt (integrity of the stored record) and the injected current-lineage
+    verifier (the admissions it names are still current). A content digest alone cannot establish admission
+    authority, so a missing, failing or rejecting verifier prevents reuse (PR #30 review 1, #7)."""
+    if not callable(verify_lineage) or not isinstance(stored, dict) or not _local_lineage(stored):
+        return False
+    try:
+        return verify_lineage(copy.deepcopy(stored)) is True
+    except Exception:  # noqa: BLE001 - a lineage check that cannot run is missing evidence
+        return False
+
+
 def compose_review(stored, bundle, k, deps, screen_id, state, items, *, verify_lineage=None):
     """`design.compose` reuses a stored judgment only when the recomputed review key matches and its lineage
-    re-verifies (`verify_lineage`, injected by C; the default checks the local receipt hash)."""
-    verify_lineage = verify_lineage or _local_lineage
+    re-verifies through `verify_lineage`, injected by C (no default: without it nothing is reused)."""
     if not isinstance(stored, dict):
         return {"status": "needs_changes", "code": "review-evidence-missing"}
     try:
         key = page_review_key(bundle, k, deps, screen_id, state, items)
-        ok = stored.get("reviewKey") == key and bool(verify_lineage(stored))
+        ok = stored.get("reviewKey") == key and _current_lineage(stored, verify_lineage)
     except Exception:  # noqa: BLE001 - a lineage check that cannot run is missing evidence
         ok = False
     if not ok:
@@ -321,7 +333,7 @@ def _reviewer(bundle, k, deps, mode, judgments):
             key = review_key(system, user, model=deps.get("model"), prompt_version=PROMPT_VERSION,
                              profile_hash=deps.get("profileHash"), revisions=rule_revisions(k))
             stored = judgments.get(key) if judgments is not None else None
-            if stored is not None and _local_lineage(stored):
+            if stored is not None and _current_lineage(stored, deps.get("verify_lineage")):
                 verdicts = stored["verdicts"]
             else:
                 verdicts = batch_judge(items, context, deps)

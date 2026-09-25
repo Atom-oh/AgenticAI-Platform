@@ -296,24 +296,36 @@ def test_batch_judge_missing_or_unparsable_items_are_incomplete():
     assert {v["evidence"] for v in batch_judge(items, ctx, {"generate": half["generate"]}).values()} == {"normalization-unavailable"}
 
 
+CURRENT = lambda stored: True  # noqa: E731  injected current-lineage verifier stand-in
+
+
 def test_compose_reuses_a_judgment_only_for_the_same_review_key_and_lineage():
     b = bundle()
     items = [{"id": "c1", "text": "톤"}]
     key = page_review_key(b, K, {}, "intro", "default", items)
     stored = stored_judgment(key, {"c1": {"verdict": "pass", "evidence": "ok"}})
-    assert compose_review(stored, b, K, {}, "intro", "default", items)["status"] == "reused"
+    assert compose_review(stored, b, K, {}, "intro", "default", items, verify_lineage=CURRENT)["status"] == "reused"
     changed = copy.deepcopy(b)                                                     # same composition IR, new PRD value
     changed["binding_values"] = {**b["binding_values"], "product.summaryItems": [{"label": "기본금리", "value": "연 2.1%"},
                                                                                  {"label": "가입기간", "value": "12개월"}]}
     assert changed["screens"] == b["screens"]
-    assert compose_review(stored, changed, K, {}, "intro", "default", items) == \
+    assert compose_review(stored, changed, K, {}, "intro", "default", items, verify_lineage=CURRENT) == \
         {"status": "needs_changes", "code": "review-evidence-missing"}
     k = copy.deepcopy(K); k.rules["r-terms-required"]["revision"] += 1             # a rule revision changes
-    assert compose_review(stored, b, k, {}, "intro", "default", items)["code"] == "review-evidence-missing"
+    assert compose_review(stored, b, k, {}, "intro", "default", items, verify_lineage=CURRENT)["code"] == "review-evidence-missing"
     tampered = {**stored, "verdicts": {"c1": {"verdict": "fail", "evidence": "x"}}}
-    assert compose_review(tampered, b, K, {}, "intro", "default", items)["code"] == "review-evidence-missing"
+    assert compose_review(tampered, b, K, {}, "intro", "default", items, verify_lineage=CURRENT)["code"] == "review-evidence-missing"
     assert compose_review(stored, b, K, {}, "intro", "default", items, verify_lineage=lambda s: False)["status"] == "needs_changes"
-    assert compose_review(None, b, K, {}, "intro", "default", items)["status"] == "needs_changes"
+    # PR #30 review 1, #7: a content digest is not admission authority; no injected current-lineage verifier, a
+    # verifier that raises, or one that rejects the stored admissions -> never reused.
+    assert compose_review(stored, b, K, {}, "intro", "default", items) == \
+        {"status": "needs_changes", "code": "review-evidence-missing"}
+    assert compose_review(stored, b, K, {}, "intro", "default", items,
+                          verify_lineage=lambda s: 1 / 0)["status"] == "needs_changes"
+    ghost = stored_judgment(key, {"c1": {"verdict": "pass", "evidence": "ok"}}, admissions=["adm-does-not-exist"])
+    assert compose_review(ghost, b, K, {}, "intro", "default", items,
+                          verify_lineage=lambda s: set(s["admissions"]) <= {"adm-2", "adm-3"})["status"] == "needs_changes"
+    assert compose_review(None, b, K, {}, "intro", "default", items, verify_lineage=CURRENT)["status"] == "needs_changes"
 
 
 def test_judge_budget_three_fill_variants_by_ten_pages():
@@ -328,7 +340,7 @@ def test_judge_budget_three_fill_variants_by_ten_pages():
         ids = [i["id"] for i in json.loads(user)["items"]]
         return json.dumps({"verdicts": {i: {"verdict": "pass", "evidence": "ok"} for i in ids}})
 
-    deps, judgments, gui_calls = {"generate": generate, "normalize": OK}, {}, 0
+    deps, judgments, gui_calls = {"generate": generate, "normalize": OK, "verify_lineage": CURRENT}, {}, 0
     for variant in ("a", "b", "c"):
         screens = {}
         for s in FLOW["screens"]:
@@ -520,3 +532,23 @@ def test_a_financial_quantity_in_a_screen_heading_fails_deterministically():
     assert r["verdict"] == "fail" and not r["approvable"]
     assert any(f["code"] == "literal-financial-value" and f["role"] == "reviewer" and f["severity"] == "critical"
                and f.get("screen") == "amount" for f in r["findings"])
+
+
+def test_reviewer_cache_is_not_reused_without_a_current_lineage_verifier():
+    """PR #30 review 1, #7: the reviewer's judgment cache needs deps['verify_lineage'] too."""
+    calls = []
+
+    def generate(system, user, on_token):
+        calls.append(1)
+        ids = [i["id"] for i in json.loads(user)["items"]]
+        return json.dumps({"verdicts": {i: {"verdict": "pass", "evidence": "ok"} for i in ids}})
+    for deps, reused in (({"generate": generate, "normalize": OK}, False),
+                         ({"generate": generate, "normalize": OK, "verify_lineage": lambda s: 1 / 0}, False),
+                         ({"generate": generate, "normalize": OK, "verify_lineage": lambda s: False}, False),
+                         ({"generate": generate, "normalize": OK, "verify_lineage": CURRENT}, True)):
+        judgments = {}
+        assert verify(bundle(), K, deps, judgments=judgments)["verdict"] == "pass"
+        first = len(calls)
+        assert verify(bundle(), K, deps, judgments=judgments)["verdict"] == "pass"
+        assert (len(calls) == first) is reused, deps.keys()
+        calls.clear()
