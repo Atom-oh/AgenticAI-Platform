@@ -965,7 +965,7 @@ def test_revoked_round_is_never_approved_and_creation_replay_omits_it(env, bound
                         stored["version"])
     approvals = []
     monkeypatch.setattr(WorkspaceAPI, "_run_approve",
-                        lambda self, owner_, run, body_, scope=None: approvals.append(run["id"]) or
+                        lambda self, owner_, run, body_, scope=None, gate=None: approvals.append(run["id"]) or
                         {"statusCode": 200, "headers": {"Content-Type": "application/json"},
                          "body": json.dumps({"run": run})})
     _grant_revoked(env)
@@ -1103,3 +1103,55 @@ def test_git_export_rechecks_before_every_outbound_transfer(env, queued_export):
     assert len(service.calls) == 1 and all(call_[0] == "GET" for call_ in service.calls), service.calls
     exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
     assert exported.get("status") != "committed"
+
+
+def approvable_run(env, contract, run_id, admissions=None):
+    """A React run whose round carries stored passing evidence (verifier checks stubbed by the caller)."""
+    import hashlib
+    owner = f"project:{env.pid}"
+    storage = env.api.storage
+    run = react_run(env, contract, run_id=run_id, admissions=admissions)
+    row = run["rounds"][0]
+    html, dist, bundle = b"<html></html>", b"synthetic dist archive", "b" * 64
+    html_key = key_for(owner, "run", run_id, "rounds/1-preview.html")
+    dist_key = key_for(owner, "run", run_id, "rounds/1-dist.zip")
+    report_key = key_for(owner, "run", run_id, "rounds/1.json")
+    storage.put_blob_once(html_key, html, "text/html")
+    storage.put_blob_once(dist_key, dist, "application/zip")
+    digest = hashlib.sha256(html).hexdigest()
+    report = {"artifactSha256": digest, "contractHash": run["contractHash"], "sourceHash": row["sourceHash"],
+              "bundleHash": bundle, "catalogHash": contract["catalogHash"], "visual": {"status": "pass"}}
+    storage.put_blob_once(report_key, json.dumps(report).encode(), "application/json")
+    row = {**row, "artifactSha256": digest, "htmlKey": html_key, "reportKey": report_key, "distKey": dist_key,
+           "distArchiveSha256": hashlib.sha256(dist).hexdigest(), "bundleHash": bundle}
+    run = storage.put(owner, "run", {**run, "rounds": [row]}, run["version"])
+    return run, {"contractVersion": contract["version"], "round": 1, "artifactSha256": digest,
+                 "sourceHash": row["sourceHash"], "bundleHash": bundle}
+
+
+def test_revocation_before_approval_storage_never_persists_the_approval(env, design, monkeypatch):
+    """Review 5 #2: the approval transaction carries the round's complete lineage conditions."""
+    import workspace.react_artifacts as artifacts
+    import workspace.react_quality as quality
+    monkeypatch.setattr(artifacts, "read_archive", lambda contents, expected: {})
+    monkeypatch.setattr(quality, "react_report_passes", lambda *args, **kwargs: True)
+    _, contract = design
+    owner = f"project:{env.pid}"
+    control, body = approvable_run(env, contract, "run-control")
+    status, payload = http(env, "POST", f"/runs/{control['id']}/approve", body, actor="carol")
+    assert status == 200 and payload["run"]["approval"]["round"] == 1, payload
+    decision = internal_admitted(env)
+    run, body = approvable_run(env, contract, "run-admitted", [admission.admission_ref(decision)])
+    storage = env.api.storage
+    original = storage.put_many
+    armed = {"on": True}
+
+    def revoking(writes, *args, **kwargs):
+        if armed["on"] and any(w["kind"] == "run" and "approval" in w["item"] for w in writes):
+            armed["on"] = False
+            _grant_revoked(env)
+        return original(writes, *args, **kwargs)
+    monkeypatch.setattr(storage, "put_many", revoking)
+    status, payload = http(env, "POST", f"/runs/{run['id']}/approve", body, actor="carol")
+    assert status != 200 and not armed["on"], payload
+    assert "approval" not in storage.get(owner, "run", run["id"])

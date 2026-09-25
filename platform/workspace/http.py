@@ -867,9 +867,9 @@ class WorkspaceAPI:
             return self._contract_edit(owner, record, _body(event), scope=scope)
         if len(parts) == 3 and parts[2] == "approve" and method == "POST":
             if kind == "contract":
-                return self._contract_approve(owner, record, _body(event), scope=scope)
+                return self._contract_approve(owner, record, _body(event), scope=scope, gate=gate)
             if kind == "run":
-                return self._run_approve(owner, record, _body(event), scope=scope)
+                return self._run_approve(owner, record, _body(event), scope=scope, gate=gate)
         if len(parts) == 3 and parts[2] == "blob" and method == "GET" and kind in ("asset", "run"):
             # The gate authorized the asset or the round (every chunk, every artifact kind)
             # and rechecks after this chunk's bytes are read, before they are returned.
@@ -1212,7 +1212,7 @@ class WorkspaceAPI:
             **normalized, "id": record["id"], "status": "draft", "revisions": revisions}, version)
         return _json(200, {"contract": result})
 
-    def _approval_put(self, owner, kind, record, expected_version, scope, action, assets=()):
+    def _approval_put(self, owner, kind, record, expected_version, scope, action, assets=(), gate=None):
         writes = [{"owner": owner, "kind": kind, "item": record, "expected_version": expected_version}]
         if scope and scope.get("project"):
             fresh = self.collaboration.require(scope, action)
@@ -1235,9 +1235,31 @@ class WorkspaceAPI:
                 raise Conflict("Baseline changed during approval")
             unique[key] = check
         checks = list(unique.values())
-        return self.storage.put_many(writes, checks=checks)[0]
+        before_attempt = None
+        reader = gate.aggregate if gate is not None else None
+        if reader is not None:
+            # The approval is fenced by the complete lineage the gate authorized (the
+            # addressed resource and its round): every observed version joins the
+            # transaction, and every attempt first reruns the full recheck (currency,
+            # expiry, historical references, packages), so a revocation before storage
+            # leaves no approval behind.
+            present = {(check["owner"], check["kind"], check["id"]) for check in checks}
+            versions = {(write["owner"], write["kind"], write["item"]["id"]): write["expected_version"]
+                        for write in writes}
+            for key, check in reader.observed.items():
+                if key in versions:
+                    if versions[key] != check["version"]:
+                        raise Conflict("The approved record changed after authorization")
+                    continue
+                if key not in present:
+                    checks.append(dict(check))
+                    present.add(key)
+            if len(writes) + len(checks) > 100:
+                raise HTTPError(409, "approval-scope-limit", "승인 근거가 한 번에 확인할 수 있는 범위를 넘습니다.")
+            before_attempt = reader.recheck
+        return self.storage.put_many(writes, checks=checks, before_attempt=before_attempt)[0]
 
-    def _contract_approve(self, owner, record, body, scope=None):
+    def _contract_approve(self, owner, record, body, scope=None, gate=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)
         if record["version"] != version:
             raise Conflict("Contract changed")
@@ -1266,7 +1288,7 @@ class WorkspaceAPI:
             **record, **normalized, "status": "approved",
             "approval": {"version": version + 1, "hash": digest, "actor": scope["actor"] if scope else owner,
                          "at": self.storage.clock()},
-        }, version, scope, "edit_rules", assets=assets)
+        }, version, scope, "edit_rules", assets=assets, gate=gate)
         return _json(200, {"contract": result})
 
     @staticmethod
@@ -1496,7 +1518,7 @@ class WorkspaceAPI:
         return all(rule["id"] in by_id and (not rule.get("required", True)
                    or by_id[rule["id"]]["status"] == "pass") for rule in rules)
 
-    def _run_approve(self, owner, run, body, scope=None):
+    def _run_approve(self, owner, run, body, scope=None, gate=None):
         version = _integer(body.get("contractVersion"), "Contract version", 1, 2**53 - 1)
         number = _integer(body.get("round"), "Round", 1, 5)
         selected = next((row for row in run.get("rounds", []) if row.get("number") == number), None)
@@ -1561,7 +1583,7 @@ class WorkspaceAPI:
             **run, "approval": {"round": number, "artifactSha256": digest, "contractVersion": version,
                                 "contractHash": run["contractHash"], "actor": scope["actor"] if scope else owner,
                                 "at": self.storage.clock(), **extra_approval},
-        }, run["version"], scope, "approve", assets=approval_assets)
+        }, run["version"], scope, "approve", assets=approval_assets, gate=gate)
         return _json(200, {"run": result})
 
     @staticmethod

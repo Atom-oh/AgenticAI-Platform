@@ -189,7 +189,11 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   readers for publication impact) runs after all storage reads, including each
   blob chunk, immediately before the response is returned. An inaccessible
   singular record is the same `404` as a missing one, inaccessible list rows are
-  omitted, and an undeclared response field fails closed (`503`). Upload, workbench,
+  omitted, and an undeclared response field fails closed (`503`). Contract and
+  run approvals are fenced by that authorization: every version the gate observed
+  joins the approval transaction and each attempt first reruns the aggregate
+  recheck (currency, expiry, historical references), so a revocation before
+  storage persists no approval. Upload, workbench,
   document and intake jobs keep their own module authority; the delegated prefixes
   (`http.DELEGATED`) are listed by name.
 - Queued `propose`/`run` generation and `release` rebuild jobs are gated at
