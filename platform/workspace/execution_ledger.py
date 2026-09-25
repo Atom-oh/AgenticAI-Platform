@@ -970,12 +970,18 @@ class Ledger:
                     or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
         self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages)
+        # Freeze the full descriptor of every consumed prior now, while the manifest (or its handle) is
+        # necessarily still readable (review 8, #1): later revalidation reads this, never the manifest again.
+        available = self._input_priors(owner, job)
+        consumed_priors = {available[entry["key"]]["key"]: available[entry["key"]] for entry in inputs
+                           if entry.get("key") in available and entry.get("sha256") == available[entry["key"]]["sha256"]}
         return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
                 "attemptId": attempt["id"], "status": receipt.get("status", "ok"), "service": binding,
                 "result": copy.deepcopy(receipt.get("result", {})),
                 "inputs": [{"key": entry["key"], "sha256": entry["sha256"]} for entry in inputs],
                 "outputs": [{key: entry[key] for key in ("key", "sha256", "size", "role") if key in entry}
-                            for entry in outputs]}
+                            for entry in outputs],
+                "consumedPriors": list(consumed_priors.values())}
 
     @staticmethod
     def _receipt_bytes(receipt):
@@ -1366,15 +1372,30 @@ class Ledger:
         checks.extend(self._consumed_prior_checks(owner, job, job.get("stages", []), skip=opened))
         return checks
 
-    def _consumed_priors(self, owner, job, stages):
-        """The manifest priors named as inputs by the given stage entries (by exact key and hash)."""
-        listed = {prior["key"]: prior for prior in self._manifest_priors(owner, job)
+    def _input_priors(self, owner, job):
+        """Full descriptors of a prior a receipt input might name: manifest-listed and every currently open
+        prior handle (review 8, #1) — a fallback that keeps a descriptor available while a handle is open even
+        when the manifest itself is momentarily unavailable."""
+        priors = {prior["key"]: prior for prior in self._manifest_priors(owner, job)
                   if _is_key(prior.get("key")) and _is_sha(prior.get("sha256"))}
+        for handle in (job.get("handles") or {}).values():
+            prior = handle.get("prior")
+            if (handle.get("direction") == "in" and handle.get("source") == "prior" and isinstance(prior, dict)
+                    and _is_key(prior.get("key")) and _is_sha(prior.get("sha256"))):
+                priors.setdefault(prior["key"], prior)
+        return priors
+
+    def _consumed_priors(self, owner, job, stages):
+        """The prior descriptors bound durably on each stage entry at staging time (review 8, #1).
+
+        A stage entry's own ``consumedPriors`` (frozen when the receipt was verified, while the manifest was
+        necessarily still readable) is the source of truth; consumed-prior revalidation never depends on the
+        manifest being readable again later, so deleting or corrupting it cannot erase a binding.
+        """
         consumed = {}
         for row in stages:
-            for entry in row.get("inputs", []):
-                prior = listed.get(entry.get("key"))
-                if prior is not None and entry.get("sha256") == prior["sha256"]:
+            for prior in row.get("consumedPriors") or []:
+                if isinstance(prior, dict) and _is_key(prior.get("key")) and _is_sha(prior.get("sha256")):
                     consumed[prior["key"]] = prior
         return list(consumed.values())
 
