@@ -204,7 +204,12 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
 - The queued Git export worker (`git_service.process_export`) rebuilds the recorded
   actor's current `export` scope (`ontology_sources.job_reader`), reruns the same
   round-delivery lineage check at execution and rechecks that reader after reading
-  the source archive, immediately before the external exporter call.
+  the source archive, immediately before the external exporter call. The same
+  retained reader travels into the exporter (`export_release(..., guard=
+  ontology_sources.authority_guard(reader))`): every outbound request — metadata
+  reads, each content (blob/tree/commit) transfer and the branch publication, and
+  every local repository write — rechecks it first, and a refusal fails the export
+  before any further transfer.
 - Release record includes sourceHash,bundleHash,catalogHash,contractHash,guidelineId,approval,rebuildEvidence,status.
 - GET `/git-connections` exposes configured connection IDs/labels/repository visibility only; no credentials.
 - POST `/releases/:id/git` `{connectionId,requestId}` starts authorized feature-branch export.

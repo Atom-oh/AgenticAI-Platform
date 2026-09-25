@@ -240,6 +240,20 @@ class ProtectedCallRefused(RuntimeError):
 PROTECTED_CALLS = ("model_call", "render_call", "react_call")
 
 
+def authority_guard(reader):
+    """The recheck every protected call runs first: a zero-argument guard for `reader`.
+
+    Adapters that make several outbound transfers (the Git exporter) call it before
+    each one; `protected_calls` uses it for worker model/service calls.
+    """
+    def check():
+        try:
+            recheck_job(reader)
+        except ValueError as error:
+            raise ProtectedCallRefused(str(error)) from None
+    return check
+
+
 @contextlib.contextmanager
 def protected_calls(worker, reader, names=PROTECTED_CALLS):
     """The one protected-call wrapper for generation/repair/rebuild workers.
@@ -253,13 +267,11 @@ def protected_calls(worker, reader, names=PROTECTED_CALLS):
         yield worker
         return
     saved = {name: getattr(worker, name) for name in names}
+    check = authority_guard(reader)
 
     def guard(call):
         def protected(*args, **kwargs):
-            try:
-                recheck_job(reader)
-            except ValueError as error:
-                raise ProtectedCallRefused(str(error)) from None
+            check()
             return call(*args, **kwargs)
         return protected
     for name, call in saved.items():

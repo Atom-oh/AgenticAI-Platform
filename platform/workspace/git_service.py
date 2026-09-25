@@ -161,9 +161,13 @@ def process_export(worker, owner, job):
     # before the external delivery.
     _recheck_lineage(reader)
     try:
+        # The retained reader travels into the exporter: every outbound request (each
+        # content transfer and the publication) rechecks it first.
+        from workspace.ontology_sources import authority_guard
         result = exporter.export_release(release["id"], release["sourceHash"], files,
                                          release.get("productId") or release["runId"],
-                                         commit_time=exported["createdAt"] // 1000)
+                                         commit_time=exported["createdAt"] // 1000,
+                                         **({"guard": authority_guard(reader)} if reader is not None else {}))
     except GitExportError as error:
         raise ValueError(f"Git 내보내기를 완료하지 못했습니다: {error.code}") from None
     if (not isinstance(result, dict) or result.get("status") != "committed"

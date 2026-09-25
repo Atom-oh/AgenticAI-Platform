@@ -197,7 +197,14 @@ class _Local:
         if self.run("rev-parse", "--is-bare-repository").strip() != b"true":
             _fail("invalid-input")
 
+    guard = None
+
     def run(self, *args, data=None, env=None, missing=False):
+        if self.guard is not None:
+            self.guard()  # Before every object write, ref update and read of the target repository.
+        return self._run(*args, data=data, env=env, missing=missing)
+
+    def _run(self, *args, data=None, env=None, missing=False):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             _fail("unavailable")
@@ -273,6 +280,8 @@ class _Local:
 
 
 class _Remote:
+    guard = None
+
     def __init__(self, config, token_provider, transport, deadline):
         self.config, self.transport, self.deadline = config, transport, deadline
         self.github = config["provider"] == "github"
@@ -298,6 +307,10 @@ class _Remote:
         self.calls += 1
         if self.calls > 2000 or time.monotonic() >= self.deadline:
             _fail("unavailable")
+        if self.guard is not None:
+            # Retained authority is rechecked before every outbound request (metadata,
+            # content transfer and publication); a refusal is never masked.
+            self.guard()
         try:
             result = self.transport(method, self.root + path, dict(self.headers), payload)
             if not isinstance(result, (dict, list)):
@@ -501,7 +514,9 @@ class GitExporter:
                 "commitUrl": commit_url, "filesUrl": files_url, "repository": config["repository"],
                 "connectionId": config["id"], "sourceHash": source_hash}
 
-    def export_release(self, release_id, source_hash, files, project_key, expected_base_sha=None, commit_time=None):
+    def export_release(self, release_id, source_hash, files, project_key, expected_base_sha=None, commit_time=None,
+                       guard=None):
+        """`guard` (the caller's retained-authority recheck) runs before every outbound operation."""
         _id(release_id)
         _id(project_key)
         if (not isinstance(files, dict) or not 1 <= len(files) <= MAX_FILES
@@ -530,19 +545,21 @@ class GitExporter:
         if branch == self.connection["baseBranch"]:
             _fail("invalid-input")
         try:
-            return self._export(release_id, source_hash, files, project_key, expected_base_sha, when, target, branch)
+            return self._export(release_id, source_hash, files, project_key, expected_base_sha, when, target, branch,
+                                guard)
         except GitExportError as error:
             code = error.code if error.code in _MESSAGES else "unavailable"
             raise GitExportError(code, _MESSAGES[code]) from None
         except (KeyError, TypeError, ValueError, UnicodeError):
             raise GitExportError("invalid-response", _MESSAGES["invalid-response"]) from None
 
-    def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch):
+    def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch, guard=None):
         deadline = time.monotonic() + 120
         if self.connection["provider"] == "local":
             backend = _Local(self.connection, deadline)
         else:
             backend = _Remote(self.connection, self.token_provider, self.transport, deadline)
+        backend.guard = guard
         def existing(sha):
             base = self._verify(backend, sha, release_id, source_hash, project_key, target, files, expected)
             if backend.ref(branch) != sha:

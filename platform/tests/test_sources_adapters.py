@@ -1081,3 +1081,25 @@ def test_baseline_rechecks_authority_after_its_artifact_reads(env, design, monke
                               query={"round": "1"})
     assert status in (404, 409) and row["sourceHash"] not in json.dumps(payload), payload
     assert http(env, "GET", f"/runs/{run['id']}/baseline")[0] == 404
+
+
+# Fix round 5 (PR #29 review 5) ----------------------------------------------
+
+def test_git_export_rechecks_before_every_outbound_transfer(env, queued_export):
+    """Review 5 #1: the retained reader guards each exporter call, not only the start."""
+    from test_workspace_git_export import Remote, remote_exporter
+    from workspace.git_service import process_export
+    service = Remote("github")
+    armed = {"on": True}
+
+    def transport(method, url, headers, payload):
+        if armed["on"]:
+            armed["on"] = False
+            _grant_revoked(env)  # Revoked while the first metadata request is in flight.
+        return service(method, url, headers, payload)
+    queued_export.worker.git_exporter_factory = lambda connection, token: remote_exporter("github", transport)
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert len(service.calls) == 1 and all(call_[0] == "GET" for call_ in service.calls), service.calls
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported.get("status") != "committed"
