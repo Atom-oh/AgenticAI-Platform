@@ -1402,6 +1402,26 @@ class WorkspaceAPI:
             # 400 -- a race that revoked one raises the same 404 a plain GET (or the
             # matching-quote path's own later gate recheck) would.
             self._assets(owner, [asset["id"] for asset in assets], gate=gate)
+            if gate is not None and gate.aggregate is not None:
+                # The re-check above still authorizes/reads each asset one at a
+                # time (each asset's own blob_info read can take time), so a
+                # revocation racing a LATER asset's read in that SAME pass -- not
+                # only the very first one checked -- was still invisible to it
+                # (review 8 #3 only closed the window up to that pass's own
+                # first check). Every one of those re-checks already joined this
+                # gate's aggregate reader; recheck it as a single aggregate ONCE,
+                # strictly after every read this validation performed, exactly
+                # like the response gate's own final recheck does for a
+                # successful response -- so it does not matter which asset's read
+                # raced the revocation.
+                from workspace.collaboration import CollaborationError
+                from workspace.ontology_sources import _AUTHORITY_CODES
+                try:
+                    gate.aggregate.recheck()
+                except CollaborationError as changed:
+                    if changed.status == 401 or changed.code in _AUTHORITY_CODES:
+                        raise
+                    raise HTTPError(404, "not-found", "Resource not found") from None
             raise HTTPError(400, "invalid-contract", str(error)[:240]) from error
         return normalized, assets
 

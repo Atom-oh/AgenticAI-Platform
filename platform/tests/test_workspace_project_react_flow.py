@@ -674,3 +674,68 @@ def test_contract_validation_never_leaks_quote_matching_via_a_revocation_race(mo
                               actor="carol", project=project["id"])
     assert not armed["on"]
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_contract_validation_recheck_closes_a_race_between_two_assets_own_reads(monkeypatch):
+    """PR #33 review 1 #2: review 8 #3's re-check re-authorized every referenced
+    asset fresh, up front, in its OWN list comprehension -- but its readiness
+    loop still reads each asset's bytes one at a time (`blob_info`); revoking
+    the FIRST (quoted) asset while a LATER asset's blob is being read, in that
+    SAME re-check pass, was still invisible to it, since the quoted asset's own
+    authorization had already been captured before that later read even
+    started. Reproduced with two referenced assets and a non-matching quote on
+    the first: revoking it during the SECOND asset's `blob_info` call, inside
+    the re-check pass itself (not the original pass), must still surface the
+    same 404 as any other revoked asset -- closed by rechecking the gate's
+    ENTIRE aggregate reader as one aggregate, strictly after every read this
+    validation performs, not per-asset as each one is read."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+
+    def stored_reference(name, text):
+        data_bytes = text.encode()
+        status, data = request(api, "POST", "/assets", {"name": name, "size": len(data_bytes),
+                               "sha256": hashlib.sha256(data_bytes).hexdigest(), "purpose": "reference"},
+                               actor="carol", project=project["id"])
+        assert status == 201, data
+        asset = data["asset"]
+        original = api.storage.key_for(owner, "asset", asset["id"], "original")
+        analysis = api.storage.key_for(owner, "asset", asset["id"], "analysis.json")
+        api.storage.put_blob(original, data_bytes, "text/plain")
+        api.storage.put_blob(analysis, json.dumps({"text": text, "parseStatus": "complete"}).encode(),
+                             "application/json")
+        saved = api.storage.put(owner, "asset", {**asset, "status": "stored", "uploadStatus": "stored",
+                                "parseStatus": "complete", "originalKey": original, "analysisKey": analysis,
+                                "projectId": project["id"]}, expected_version=asset["version"])
+        return saved, original
+
+    quoted, quoted_key = stored_reference("quoted.txt", "기밀 원본 문장입니다.")
+    other, other_key = stored_reference("other.txt", "다른 참고 파일입니다.")
+    from workspace.storage import Storage
+    original_blob_info = Storage.blob_info
+    calls = {"other": 0}
+
+    def racing(self, key):
+        if key == other_key:
+            calls["other"] += 1
+            if calls["other"] == 2:
+                # The re-check pass's OWN readiness loop already re-authorized
+                # (and already checked `quoted`'s own blob) before reaching
+                # `other`'s -- revoke `quoted` right here, mid-pass, after it
+                # already passed within this SAME re-check.
+                current = self.get(owner, "asset", quoted["id"])
+                self.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+        return original_blob_info(self, key)
+    monkeypatch.setattr(Storage, "blob_info", racing)
+    nonmatching_rule = {"id": "R1", "title": "확인", "source": {"kind": "explicit", "assetId": quoted["id"],
+                        "quote": "이 문장은 존재하지 않습니다"}, "steps": [{"action": "expectVisible", "target": "x", "value": True}]}
+    status, payload = request(api, "POST", "/contracts", {"productId": product["id"], "title": "t",
+                              "rules": [nonmatching_rule], "assetIds": [quoted["id"], other["id"]]},
+                              actor="carol", project=project["id"])
+    assert calls["other"] == 2
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
