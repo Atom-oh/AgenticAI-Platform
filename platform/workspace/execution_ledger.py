@@ -447,16 +447,18 @@ class Ledger:
                          before_attempt=before_attempt)
 
     # --- the protected-operation guard (review 2) ---------------------------------------------------
-    def _protect(self, owner, job, *, recovery=False, min_remaining_ms=None, cost=False):
+    def _protect(self, owner, job, *, recovery=False, min_remaining_ms=None, cost=False, extra_expiries=()):
         """Shared guard for intent, chunk reads, stage, transfers and completion.
 
         Returns (checks, guard): the transactional authority predicates (current actor membership, every consumed
         admission decision and every opened prior grant; a withdrawn one fails the job) and a
         callable that put_many runs immediately before each wire submission, rechecking lease/recovery bound,
-        authorization, deadline, the per-call deadline reservation and the daily cost gate.
+        authorization, deadline, the per-call deadline reservation, every source/grant time expiry (review 8,
+        #2) and the daily cost gate.
         """
+        source_checks, expiries = self._source_checks(owner, job)
         checks, seen = [], {}
-        for check in [self._check_authority(owner, job), *self._source_checks(owner, job)]:
+        for check in [self._check_authority(owner, job), *source_checks]:
             identity = (check["owner"], check["kind"], check["id"])
             if identity in seen:
                 if seen[identity] != check["version"]:
@@ -464,7 +466,9 @@ class Ledger:
                 continue
             seen[identity] = check["version"]
             checks.append(check)
-        return checks, self._temporal_guard(job, recovery=recovery, min_remaining_ms=min_remaining_ms, cost=cost)
+        guard = self._temporal_guard(job, recovery=recovery, min_remaining_ms=min_remaining_ms, cost=cost,
+                                     expires=[*expiries, *extra_expiries])
+        return checks, guard
 
     def _prepare(self, owner, before, job, *, extra_writes=(), op=None, value=None, reindex=True):
         """Prepared, uncommitted ledger writes (prepare_finish): the job record plus its index writes."""
@@ -1102,9 +1106,11 @@ class Ledger:
         if isinstance(receipt, dict) and "operationId" in receipt and receipt["operationId"] != operation_id:
             raise LedgerError("receipt-invalid")
         entry = self._verified_receipt(owner, job, receipt)
-        checks, guard = self._protect(owner, job)
-        # A prior this receipt consumes must be granted now, and its grant is a predicate of the stage write.
-        checks = self._merge_checks(checks, self._consumed_prior_checks(owner, job, [entry]))
+        # A prior this receipt consumes must be granted now, and its grant (and expiry) is a predicate of the
+        # stage write, rechecked by the same final guard (review 8, #2).
+        consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, job, [entry])
+        checks, guard = self._protect(owner, job, extra_expiries=consumed_expiries)
+        checks = self._merge_checks(checks, consumed_checks)
         self._retain_receipt(owner, job, entry, receipt)
         after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
         return self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, reindex=False)
@@ -1341,14 +1347,30 @@ class Ledger:
             return None
         return dict(value)
 
+    @staticmethod
+    def _expiry_bound(value):
+        """An optional time bound alongside a resolver-returned grant (review 8, #2, RUN-02/05): a version
+        predicate alone cannot detect a purely time-based expiry (nothing bumps the version when a grant simply
+        runs out the clock), so a valid ``expiresAt`` is carried separately and rechecked against a fresh clock
+        read immediately before delivery or submission."""
+        return value["expiresAt"] if isinstance(value, dict) and type(value.get("expiresAt")) is int else None
+
+    def _prior_grant(self, owner, job, prior):
+        """The prior's current grant predicate and optional expiry bound, or (None, None) when not granted."""
+        if not callable(self.prior_authority):
+            return None, None
+        try:
+            raw = self.prior_authority(owner, job, copy.deepcopy(prior))
+        except Exception:  # noqa: BLE001 - an authority failure is a refusal
+            return None, None
+        if not isinstance(raw, dict):
+            return None, None
+        check = self._authority_check({key: value for key, value in raw.items() if key != "expiresAt"})
+        return (check, self._expiry_bound(raw)) if check is not None else (None, None)
+
     def _prior_current(self, owner, job, prior):
         """The prior's current grant predicate, or None when it is no longer granted."""
-        if not callable(self.prior_authority):
-            return None
-        try:
-            return self._authority_check(self.prior_authority(owner, job, copy.deepcopy(prior)))
-        except Exception:  # noqa: BLE001 - an authority failure is a refusal
-            return None
+        return self._prior_grant(owner, job, prior)[0]
 
     def _resolve_admitted(self, owner, admission):
         """The resolver's current view of an admitted artifact ({key, sha256, check}), or None when withdrawn."""
@@ -1364,24 +1386,34 @@ class Ledger:
         return blob
 
     def _source_checks(self, owner, job):
-        """Every consumed admission and every opened prior must still be granted; returns their predicates."""
-        checks = []
+        """Every consumed admission and every opened prior must still be granted; returns (checks, expiries):
+        their transactional predicates, and every time bound alongside a grant (review 8, #2) for the final
+        guard to recheck against a fresh clock immediately before delivery or submission."""
+        checks, expiries = [], []
         for admission in job["admissions"]:
             blob = self._resolve_admitted(owner, admission)
             if blob is None or blob.get("sha256") != admission.get("artifactHash"):
                 self._source_revoked(owner, job, {"decisionId": admission.get("decisionId")})
             checks.append(self._authority_check(blob["check"]))
+            expiry = self._expiry_bound(blob)
+            if expiry is not None:
+                expiries.append(expiry)
         opened = set()
         for handle in (job.get("handles") or {}).values():
             if handle.get("direction") == "in" and handle.get("source") == "prior":
-                check = self._prior_current(owner, job, handle.get("prior") or {})
+                check, expiry = self._prior_grant(owner, job, handle.get("prior") or {})
                 if check is None:
                     self._source_revoked(owner, job, {"prior": (handle.get("prior") or {}).get("sourceId")})
                 checks.append(check)
+                if expiry is not None:
+                    expiries.append(expiry)
                 opened.add((handle.get("prior") or {}).get("key"))
         # Review 7: a listed prior consumed by a recorded receipt is revalidated independently of any handle.
-        checks.extend(self._consumed_prior_checks(owner, job, job.get("stages", []), skip=opened))
-        return checks
+        consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, job, job.get("stages", []),
+                                                                         skip=opened)
+        checks.extend(consumed_checks)
+        expiries.extend(consumed_expiries)
+        return checks, expiries
 
     def _input_priors(self, owner, job):
         """Full descriptors of a prior a receipt input might name: manifest-listed and every currently open
@@ -1411,17 +1443,20 @@ class Ledger:
         return list(consumed.values())
 
     def _consumed_prior_checks(self, owner, job, stages, *, skip=()):
-        """Current grant predicates of every consumed prior; a revoked one fails the job (authority-changed)."""
-        checks = []
+        """Current grant predicates (and expiry bounds) of every consumed prior; a revoked one fails the job
+        (authority-changed). Returns (checks, expiries)."""
+        checks, expiries = [], []
         for prior in self._consumed_priors(owner, job, stages):
             if prior["key"] in skip:
                 continue
-            check = self._prior_current(owner, job, prior) if prior.get("sourceKind") in ("run-round", "release") \
-                else None
+            check, expiry = self._prior_grant(owner, job, prior) if prior.get("sourceKind") in ("run-round", "release") \
+                else (None, None)
             if check is None:
                 self._source_revoked(owner, job, {"prior": prior.get("sourceId")})
             checks.append(check)
-        return checks
+            if expiry is not None:
+                expiries.append(expiry)
+        return checks, expiries
 
     @staticmethod
     def _merge_checks(checks, extra):
@@ -2039,8 +2074,13 @@ class Ledger:
             raise LedgerError("receipt-invalid")
         return {"bundle": bundles[0] if bundles else None, "sources": sources}
 
-    def _temporal_guard(self, before, *, recovery=False, min_remaining_ms=None, cost=False):
-        """Final temporal and budget checks, run by put_many immediately before each wire submission (RUN-02/03)."""
+    def _temporal_guard(self, before, *, recovery=False, min_remaining_ms=None, cost=False, expires=()):
+        """Final temporal and budget checks, run by put_many immediately before each wire submission (RUN-02/03).
+
+        ``expires``: every source/grant time bound collected when the checks were gathered (review 8, #2). A
+        version predicate alone cannot catch a grant that simply ran out the clock (nothing bumps its version),
+        so each bound is rechecked here against a fresh clock read, immediately before delivery or submission.
+        """
         attempt, profile = before["attempt"] or {}, before["profileBody"]
 
         def guard():
@@ -2049,6 +2089,8 @@ class Ledger:
             now = self.storage.clock()
             if now >= before["deadlineAt"] or now >= before["authorizationExpiresAt"]:
                 raise LedgerError("deadline")
+            if any(now >= bound for bound in expires):
+                raise LedgerError("authority-changed")
             if recovery:
                 # The five-minute recovery bound holds independently of whether the watchdog has run.
                 if now >= before["recoveryAt"] + profile["recoveryWindowMs"]:
@@ -2138,9 +2180,11 @@ class Ledger:
         key_revision = self._key_revision()
         receipts = self._reverify_chain(owner, job, stages, attempt)
         self._fresh_obligations(owner, before)
-        protected, temporal = self._protect(owner, before, recovery=recovery)
-        # Priors consumed by receipts supplied to reconcile (not yet in ``before``) are revalidated too (review 7).
-        protected = self._merge_checks(protected, self._consumed_prior_checks(owner, before, stages))
+        # Priors consumed by receipts supplied to reconcile (not yet in ``before``) are revalidated too (review
+        # 7), and their expiry bounds (review 8, #2) are rechecked by the same final guard.
+        consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, before, stages)
+        protected, temporal = self._protect(owner, before, recovery=recovery, extra_expiries=consumed_expiries)
+        protected = self._merge_checks(protected, consumed_checks)
         key_guard = self._key_guard(receipts, key_revision)
 
         def guard():

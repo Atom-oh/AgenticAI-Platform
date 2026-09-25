@@ -639,15 +639,22 @@ with the outcome committed and the obligation retained. Repeating the identical
 `accounting` is pending), settles it. `intent` first settles the job's pending
 obligations so they reach the enforced daily counter before the cost gate is
 consulted; while any remain unsettled no further call is authorized
-(`accounting-pending`). Every added or settled obligation is also mirrored, in
-the same transaction, into the global pending-charge registry (`exec_quota`
-record `pending-charges` in partition `execution:quota`, `{charges: {id:
-{tokens, owner, jobId}}}`), so an unrecorded charge of any job, including a
-cancelled, failed or superseded one, counts as used: a model `intent` (and its
-`before_attempt` guard) passes the registry total to the cost gate, which
-requires `usage_today + pending < DAILY_TOKEN_CAP` (`daily-budget`), and the
-registry version is a predicate of the reservation. An unreadable or oversized
-(more than 1000 entries) registry is `daily-budget-unavailable`. `outcome` for an `interpreter` or
+(`accounting-pending`). Every added or settled obligation, and every still-
+outstanding (`intent`) model call's own token reservation (keyed
+`resv-{callId}`; review 8), is also mirrored, in the same transaction, into
+the global pending-charge registry (`exec_quota` record `pending-charges` in
+partition `execution:quota`, `{charges: {id: {tokens, owner, jobId}}}`), so an
+unrecorded charge or a still-unresolved reservation of any job, including a
+cancelled, failed or superseded one, counts as used until it is idempotently
+settled: a model `intent` passes the registry total to the cost gate, which
+requires `usage_today + pending < DAILY_TOKEN_CAP` (`daily-budget`); the
+reservation's own write to that same registry record is itself the
+transactional fence for the reservation (no separate version predicate is
+added, to avoid a same-record write/check collision). Cancelling a job, or its
+concurrency slot being released, never drops its calls' reservations; only a
+recorded outcome, or the reconciler's expire-to-`unknown` sweep, removes them.
+An unreadable or oversized (more than 1000 entries) registry is
+`daily-budget-unavailable`. `outcome` for an `interpreter` or
 `browser` call requires `service_session_id`, the observed service session,
 stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
 receiptHash, receiptRef, nonce, attemptId, status, service, result, inputs,
@@ -673,7 +680,16 @@ revalidates every consumed admission, every opened prior and every listed prior
 that a recorded receipt consumed as an input, independently of any handle (a
 withdrawn one fails the job with `authority-changed`); `stage` and completion
 also revalidate the priors consumed by the receipts they add, and each grant
-predicate is part of the protected transaction; `read_chunk` additionally requires that an
+predicate is part of the protected transaction. Each stage entry freezes the
+full descriptor of every prior it consumed (`consumedPriors`) at staging time,
+while the manifest (or an open handle) is necessarily still readable (review
+8): later revalidation always reads this durable binding, never re-fetching
+the manifest, so a manifest deleted or corrupted afterward cannot erase it. A
+resolver-returned admission or prior grant may also carry an `expiresAt`; a
+version predicate alone cannot catch a grant that simply runs out the clock
+(review 8), so every collected `expiresAt` is rechecked, against a fresh clock
+read, by the same final guard immediately before delivery or submission
+(`authority-changed`). `read_chunk` additionally requires that an
 input handle's admission still resolves to the same key and hash, otherwise
 `transfer-invalid`. Chunk indexes are non-negative integers below the handle's
 chunk count; a negative index is `transfer-invalid` (never a retry of a written
