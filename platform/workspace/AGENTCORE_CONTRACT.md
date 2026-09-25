@@ -726,8 +726,14 @@ allowed input of the job) and its `result.comparison` must equal
 `result.sourceHash`/`result.bundleHash` must all be valid SHA-256 values; the
 observed `bundleHash` must be the current compile bundle output's `sha256`, and
 both observed hashes must equal the approved ones (a missing hash never
-compares equal); `visualDiff` must be a number in `[0, 0.02]`. A missing baseline or another comparison input makes the
-requested `succeeded` status `status-inconsistent`.
+compares equal); `visualDiff` must be a number in `[0, 0.02]`. The Browser
+result must also carry successful required behavior and accessibility
+evidence: `passed: true`, `functionalStatus: "pass"`, `accessibility.status:
+"pass"` with no `violations`, and no `blockingFindings`; the final `verify`
+result must have `passed: true`, `verdict: "pass"` and no `issues`. A missing
+baseline, another comparison input, or missing, incomplete or contradictory
+behavior/accessibility evidence makes the requested `succeeded` status
+`status-inconsistent`.
 
 Receipts follow the operation's evidence graph (`STAGE_INPUTS`): each stage's
 `inputs` must include an output of the latest receipt of its predecessor stage

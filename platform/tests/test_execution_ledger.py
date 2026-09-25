@@ -972,7 +972,9 @@ from botocore.exceptions import ClientError, ReadTimeoutError  # noqa: E402
 
 GOOD = {"context": ("ok", {}), "generate": ("ok", {}),
         "compile": ("ok", {"sourceHash": "5" * 64, "bundleHash": _hashlib.sha256(b"compile-bytes").hexdigest()}),
-        "browser": ("ok", {"visualDiff": 0.0}), "analyze": ("ok", {"coverage": {"files": 1}}),
+        "browser": ("ok", {"visualDiff": 0.0, "passed": True, "functionalStatus": "pass",
+                           "accessibility": {"status": "pass", "violations": []}}),
+        "analyze": ("ok", {"coverage": {"files": 1}}),
         "verify": ("ok", {"verdict": "pass", "approvable": True, "issues": [], "reviewer": "deterministic",
                           "passed": True, "compositionHashes": ["h1"], "judgeEvidence": {"h1": "ev-1"}})}
 
@@ -3094,3 +3096,29 @@ def test_pending_charges_of_other_jobs_count_against_the_daily_budget(xfer, monk
         with pytest.raises(LedgerError) as error:
             ledger.tool().intent(*ids(other), stage="generate", kind="model", min_remaining_ms=0, max_tokens=10)
         assert error.value.code == "daily-budget"
+
+
+@pytest.mark.parametrize("case", ["failed-behavior", "failed-functional", "failed-accessibility",
+                                  "missing-evidence", "blocking-findings", "verify-failed"])
+def test_release_success_requires_successful_behavior_and_accessibility_evidence(xfer, case):
+    """Review 7 finding 3: contradictory or incomplete Browser/verify results never complete a release."""
+    storage, ledger, _, _ = xfer
+    browser = dict(GOOD["browser"][1])
+    verify = dict(GOOD["verify"][1])
+    if case == "failed-behavior":
+        browser["passed"] = False
+    elif case == "failed-functional":
+        browser["functionalStatus"] = "fail"
+    elif case == "failed-accessibility":
+        browser["accessibility"] = {"status": "fail", "violations": [{"id": "color-contrast"}]}
+    elif case == "missing-evidence":
+        browser = {"visualDiff": 0.0}
+    elif case == "blocking-findings":
+        browser["blockingFindings"] = ["unresolved requirement"]
+    else:
+        verify.update(passed=False, verdict="fail")
+    job, result = chain(xfer, "design.release", results={"browser": ("ok", browser), "verify": ("ok", verify)})
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "status-inconsistent"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"

@@ -1865,7 +1865,17 @@ class Ledger:
             compared = _object_ref(baseline) is not None and result["browser"].get("comparison") == baseline and any(
                 entry.get("key") == baseline["key"] and entry.get("sha256") == baseline["sha256"]
                 for entry in last["browser"].get("inputs", []))
-            if (hashes and compared and isinstance(diff, (int, float)) and not isinstance(diff, bool)
+            # Successful required behavior and accessibility evidence (review 7, SPEC 7-1): the Browser result
+            # explicitly passed with functionalStatus "pass", accessibility "pass" and no blocking findings, and the
+            # final verification passed. Missing, incomplete or contradictory results never succeed.
+            browser, verify = result["browser"], result["verify"]
+            accessibility = browser.get("accessibility")
+            behaved = (browser.get("passed") is True and browser.get("functionalStatus") == "pass"
+                       and isinstance(accessibility, dict) and accessibility.get("status") == "pass"
+                       and not accessibility.get("violations") and not browser.get("blockingFindings")
+                       and verify.get("passed") is True and verify.get("verdict") == "pass"
+                       and not verify.get("issues"))
+            if (hashes and compared and behaved and isinstance(diff, (int, float)) and not isinstance(diff, bool)
                     and 0 <= diff <= 0.02):
                 return "succeeded"
             return None
