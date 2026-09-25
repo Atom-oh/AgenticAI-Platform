@@ -44,7 +44,7 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
     `exp`) is collected during the reads and compared with one fresh clock read
     taken after the last read, immediately before the transaction attempt.
     """
-    authorization, upstream, sources = [], [], []
+    authorization, upstream, sources, capability = [], [], [], []
     if deadline is not None:
         if type(deadline) is not int:
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
@@ -71,7 +71,7 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
                     or type(row.get("expiresAt")) is not int):
                 code, message = _TIMED_AUTHORITY[check["kind"]]
                 fail(403 if check["kind"] == "capability" else 409, code, message)
-            upstream.append(row["expiresAt"])
+            (capability if check["kind"] == "capability" else upstream).append(row["expiresAt"])
             continue
         if check["kind"] != "wb_source":
             continue
@@ -83,6 +83,8 @@ def check_source_deadlines(storage, checks, claims=None, deadline=None):
     now = storage.clock()  # after the last read
     if authorization and min(authorization) <= now:
         fail(401, "authorization-expired", "인증이 만료되었습니다.")
+    if capability and min(capability) <= now:
+        fail(403, "publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다.")
     if upstream and min(upstream) <= now:
         fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
     if sources and min(sources) <= now:
