@@ -50,10 +50,13 @@ def process_image(worker, owner, job):
         must still hold: a removed and restored member (a later epoch) or a revoked
         and restored asset (a later version) cannot resurrect the queued request.
 
-        The deadline is compared with one fresh clock read taken after every read
-        this callback performs (the scope rebuild and every observed version),
-        immediately before the caller's commit attempt; a clock read taken before
-        those reads could miss a deadline crossed during them."""
+        These reads only collect: the job's deadline is returned as one
+        `(expiresAt, error)` pair for the caller to compare with a fresh clock
+        read taken after every read it has collected — this callback's own,
+        immediately (`_check_deadlines`, below), or together with `decide()`'s
+        own policy/provenance/upstream deadlines when this runs as one of its
+        `guards` (a clock read taken before those combined reads could miss a
+        deadline crossed during any of them, including this callback's)."""
         fresh = collaboration.resolve_scope(data.get("actorId"), data.get("projectId"), deadline)
         if type(frozen) is not int or fresh["project"].get("authorityRevision", 0) != frozen:
             raise IntakeBlocked(["authority-changed"])
@@ -61,10 +64,16 @@ def process_image(worker, owner, job):
             row = storage.get(check["owner"], check["kind"], check["id"])
             if not row or row.get("version") != check["version"]:
                 raise IntakeBlocked(["source-changed"])
-        if storage.clock() >= deadline:  # after every read above
-            raise IntakeBlocked(["authorization-expired"])
+        return [(deadline, IntakeBlocked(["authorization-expired"]))]
 
-    current_authority()
+    def _check_deadlines(pairs):
+        now = storage.clock()  # after every read that collected a pair
+        if pairs:
+            expiry, error = min(pairs, key=lambda item: item[0])
+            if expiry <= now:
+                raise error
+
+    _check_deadlines(current_authority())
     current = storage.get(owner, "job", job["id"])
     if not current or current.get("status") != "running" or current.get("input") != data:
         raise ValueError("반입 작업이 변경되었습니다.")

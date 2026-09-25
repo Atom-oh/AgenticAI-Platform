@@ -244,9 +244,23 @@ def decide(host, scope, *, reader, source, data_class, policy, artifact, derivat
     authority = Authority(host, reader, checks)
 
     def guard():
-        authority.recheck()
-        for extra_guard in guards:  # caller-owned checks, e.g. a Worker job's frozen epoch
-            extra_guard()
+        # This attempt's reads only collect: the policy/provenance/upstream
+        # deadlines this decision already depends on (from `authority`) and
+        # every caller-owned guard's own deadlines (e.g. a Worker job's frozen
+        # epoch, source versions and authorization deadline) join ONE aggregate,
+        # compared with a single fresh clock read taken after the last of them
+        # — including a guard's own later reads, which must not let an earlier,
+        # already-collected policy/provenance deadline go unchecked.
+        _, deadlines = authority.collect_deadlines()
+        combined = [(expiry, AdmissionError(code) if code else AdmissionError("authorization-expired", 401))
+                    for expiry, code in deadlines]
+        for extra_guard in guards:
+            combined.extend(extra_guard())
+        now = storage.clock()  # after every guard's reads
+        if combined:
+            expiry, error = min(combined, key=lambda item: item[0])
+            if expiry <= now:
+                raise error
 
     guard()
     try:
