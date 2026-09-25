@@ -450,13 +450,14 @@ def _recheck_reads(host, reader, checks, *, pending=()):
     Each record must still pass its closed schema, keep the exact version
     observed earlier and have a current status; decision ids in `pending` must
     still be `pending-review` (the review queue). These structural checks fail
-    immediately; every deadline (each record's expiry and the authorization
-    deadline), including the current-source fences rechecked through
-    `Sources.recheck`, is only collected here as `(expiresAt, code)` pairs. The
-    caller compares them with a fresh clock read taken after the last read: by
-    itself (`_final_recheck`), or together with other reads it collected first
-    (a response that must retire several already-read items with one clock
-    read taken after the last of them).
+    immediately; every deadline (each record's expiry, the reader's own
+    inherited upstream deadlines and the authorization deadline), including
+    the current-source fences rechecked through `Sources.recheck_deadlines`,
+    is only collected here as `(expiresAt, code)` pairs. The caller compares
+    them with a fresh clock read taken after the last read: by itself
+    (`_final_recheck`), or together with other reads it collected first (a
+    response that must retire several already-read items with one clock read
+    taken after the last of them).
     """
     storage = host.storage
     deadlines = []
@@ -480,14 +481,16 @@ def _recheck_reads(host, reader, checks, *, pending=()):
     fences = []
     if reader is not None:
         try:
-            fences = reader.recheck()
+            fences, source_deadlines = reader.recheck_deadlines()
         except CollaborationError:
             raise AdmissionError("source-changed") from None
-        bound = reader.ctx.scope.get("authorizationExpiresAt")
-        if bound is not None:
-            if type(bound) is not int:
-                raise AdmissionError("authorization-expired", 401)
-            deadlines.append((bound, None))
+        # The reader's own upstream admission deadlines (e.g. an image or its
+        # reviewer grant, reached through the source it resolved) and its
+        # authorization bound join this same aggregate, uncompared, so a
+        # deadline crossed after the reader's own reads but before this
+        # check's later reads (or another item's) is still caught.
+        for expiry, code in source_deadlines:
+            deadlines.append((expiry, None if code == "authorization-expired" else "source-changed"))
     return fences, deadlines
 
 
