@@ -833,12 +833,17 @@ class Ledger:
             raise LedgerError("code-invalid")
         return self._terminal(owner, job, "failed", error={"code": code}, bump_fence=True, op=op)
 
-    def _allowed_inputs(self, owner, job):
-        """Authorized inputs: key -> {sha256, size} (size None when only the stored object can establish it)."""
+    def _allowed_inputs(self, owner, job, manifest_priors):
+        """Authorized inputs: key -> {sha256, size} (size None when only the stored object can establish it).
+
+        ``manifest_priors``: the ONE manifest read shared with the durable consumed-prior binding (review 9,
+        #1) — reading the manifest twice let a deletion between the reads authorize an input against a prior
+        that the second, now-failed read then silently dropped from the binding.
+        """
         allowed = {job["manifest"]["ref"]: {"sha256": job["manifest"]["hash"], "size": None}}
         if job.get("releaseBaseline"):
             allowed[job["releaseBaseline"]["key"]] = {"sha256": job["releaseBaseline"]["sha256"], "size": None}
-        for prior in self._manifest_priors(owner, job):
+        for prior in manifest_priors:
             ref = _object_ref({k: prior[k] for k in ("key", "sha256", "size") if k in prior},
                               optional=("size",))
             if ref is not None and ref["key"] not in allowed:
@@ -967,7 +972,11 @@ class Ledger:
         binding = self._service_binding(job, receipt, attempt, stages) if all(checks) else None
         if binding is None:
             raise LedgerError("receipt-invalid")
-        allowed = self._allowed_inputs(owner, job)
+        # One manifest read shared by input authorization AND the durable consumed-prior binding below (review
+        # 9, #1): reading it twice let a deletion between the reads authorize an input against a manifest-
+        # listed prior that the second, now-failed read then silently dropped from the binding.
+        manifest_priors = self._manifest_priors(owner, job)
+        allowed = self._allowed_inputs(owner, job, manifest_priors)
         inputs = receipt.get("inputs", [])
         if not isinstance(inputs, list) or len(inputs) > 100:
             raise LedgerError("receipt-invalid")
@@ -989,7 +998,8 @@ class Ledger:
         self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages)
         # Freeze the full descriptor of every consumed prior now, while the manifest (or its handle) is
         # necessarily still readable (review 8, #1): later revalidation reads this, never the manifest again.
-        available = self._input_priors(owner, job)
+        # Uses the SAME manifest_priors snapshot as the authorization check above (review 9, #1).
+        available = self._input_priors(owner, job, manifest_priors)
         consumed_priors = {available[entry["key"]]["key"]: available[entry["key"]] for entry in inputs
                            if entry.get("key") in available and entry.get("sha256") == available[entry["key"]]["sha256"]}
         return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
@@ -1415,11 +1425,16 @@ class Ledger:
         expiries.extend(consumed_expiries)
         return checks, expiries
 
-    def _input_priors(self, owner, job):
+    def _input_priors(self, owner, job, manifest_priors):
         """Full descriptors of a prior a receipt input might name: manifest-listed and every currently open
         prior handle (review 8, #1) — a fallback that keeps a descriptor available while a handle is open even
-        when the manifest itself is momentarily unavailable."""
-        priors = {prior["key"]: prior for prior in self._manifest_priors(owner, job)
+        when the manifest itself is momentarily unavailable.
+
+        ``manifest_priors``: the SAME single manifest read used to authorize inputs (review 9, #1); reading
+        the manifest again here let a deletion between the two reads produce an authorized input with no
+        durable prior descriptor to bind.
+        """
+        priors = {prior["key"]: prior for prior in manifest_priors
                   if _is_key(prior.get("key")) and _is_sha(prior.get("sha256"))}
         for handle in (job.get("handles") or {}).values():
             prior = handle.get("prior")

@@ -3250,3 +3250,30 @@ def test_completion_never_succeeds_once_a_grant_expiry_elapses_during_staging(xf
         finish(ledger, job, "succeeded", result)
     assert error.value.code == "authority-changed"
     assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+# === PR #27 review round 9 regressions ================================================================
+
+def test_receipt_validation_authorizes_and_binds_a_prior_from_one_manifest_read(env, monkeypatch):
+    """Review 9 finding 1: input authorization and the durable consumedPriors binding must be derived from
+    the SAME manifest read; a manifest deleted between two separate reads must never authorize an input
+    against a manifest-listed prior while leaving its consumedPriors binding empty."""
+    storage, ledger, now = env
+    prior, entry = listed_prior(storage)
+    job = run_job(ledger, operation="design.extract", manifest_extra={"priors": [prior]})
+    manifest_ref = job["manifest"]["ref"]
+    original_get_blob = storage.get_blob
+    reads = []
+
+    def counting_get_blob(key, *args, **kwargs):
+        if key == manifest_ref:
+            reads.append(key)
+            if len(reads) > 1:
+                raise FileNotFoundError("simulated manifest deletion between two reads")
+        return original_get_blob(key, *args, **kwargs)
+    monkeypatch.setattr(storage, "get_blob", counting_get_blob)
+    out = put_output(storage, job, "context", "context.json", b"{}")
+    first = chained(job, "context", "n1", inputs=[entry], outputs=[out], status="ok")
+    saved = ledger.tool().stage(*ids(job), first)
+    assert len(reads) == 1                              # authorization and the binding shared one read
+    assert saved["stages"][-1]["consumedPriors"] == [prior]

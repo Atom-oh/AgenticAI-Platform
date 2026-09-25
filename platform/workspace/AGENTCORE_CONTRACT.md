@@ -684,7 +684,11 @@ predicate is part of the protected transaction. Each stage entry freezes the
 full descriptor of every prior it consumed (`consumedPriors`) at staging time,
 while the manifest (or an open handle) is necessarily still readable (review
 8): later revalidation always reads this durable binding, never re-fetching
-the manifest, so a manifest deleted or corrupted afterward cannot erase it. A
+the manifest, so a manifest deleted or corrupted afterward cannot erase it.
+Input authorization and this binding are derived from exactly ONE manifest
+read (review 9, #1); reading it twice let a deletion between the reads
+authorize an input against a manifest-listed prior while the second, now-
+failed read left the binding empty. A
 resolver-returned admission or prior grant may also carry an `expiresAt`; a
 version predicate alone cannot catch a grant that simply runs out the clock
 (review 8), so every collected `expiresAt` is rechecked, against a fresh clock
