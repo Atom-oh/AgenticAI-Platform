@@ -657,8 +657,11 @@ size drift or short read is `transfer-invalid` and returns no bytes. Every
 and `close_output` rechecks the requester's current project authority (a
 mismatch fails the job with `authority-changed`) and fences its mutation with
 the project version check. Through the protected-operation guard below it also
-revalidates every consumed admission and opened prior (a withdrawn one fails
-the job with `authority-changed`); `read_chunk` additionally requires that an
+revalidates every consumed admission, every opened prior and every listed prior
+that a recorded receipt consumed as an input, independently of any handle (a
+withdrawn one fails the job with `authority-changed`); `stage` and completion
+also revalidate the priors consumed by the receipts they add, and each grant
+predicate is part of the protected transaction; `read_chunk` additionally requires that an
 input handle's admission still resolves to the same key and hash, otherwise
 `transfer-invalid`. Chunk indexes are non-negative integers below the handle's
 chunk count; a negative index is `transfer-invalid` (never a retry of a written

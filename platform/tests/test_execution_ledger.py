@@ -1002,10 +1002,13 @@ def release_manifest(storage, screenshot=True):
     return {"ref": key, "hash": hashlib.sha256(body).hexdigest()}
 
 
-def chain(env, operation="design.generate", results=None, skip=(), key="req-1", manifest=None, comparison=True):
+def chain(env, operation="design.generate", results=None, skip=(), key="req-1", manifest=None, comparison=True,
+          manifest_extra=None, extra_inputs=None):
     """Drive a complete verified receipt chain; returns (job, finish result)."""
     storage, ledger = env[0], env[1]
     over = {"manifest": manifest or release_manifest(storage)} if operation == "design.release" else {}
+    if manifest_extra:
+        over["manifest_extra"] = manifest_extra
     job = run_job(ledger, operation=operation, key=key, **over)
     results = {**GOOD, **(results or {})}
     previous, hashes, files = None, [], []
@@ -1022,7 +1025,7 @@ def chain(env, operation="design.generate", results=None, skip=(), key="req-1", 
         status, result = results[stage]
         kind = STAGE_SERVICES[stage][0]
         service = {} if kind == "runtime" else {"service": service_call(ledger, job, stage, kind)}
-        inputs = required_inputs(job, stage)
+        inputs = [*required_inputs(job, stage), *((extra_inputs or {}).get(stage, []))]
         if operation == "design.release" and stage == "browser" and comparison and job.get("releaseBaseline"):
             baseline = job["releaseBaseline"]          # the Browser compares against the approved screenshot
             inputs = [*inputs, {**baseline, "size": len(APPROVED_SHOT)}]
@@ -2988,3 +2991,46 @@ def test_chunk_retries_are_durably_bounded_by_read_retries(xfer, direction):
     stored = storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]
     assert stored["retries"] == {"0": PROFILE_DEFAULT["readRetries"]}
     assert storage.get(OWNER, "job", job["id"])["transferUsage"]["chunks"] == 1
+
+
+# === PR #27 review round 7 regressions (prepared while Bash was unavailable) =========================
+
+def listed_prior(storage, source_id="run-p"):
+    data = b"prior round source bytes"
+    key = storage.key_for(OWNER, "run", source_id, "rounds/1/source.zip")
+    try:
+        storage.put_blob_once(key, data, "application/zip")
+    except Exception:
+        pass
+    prior = {"sourceKind": "run-round", "sourceId": source_id, "revision": "1", "key": key,
+             "sha256": hashlib.sha256(data).hexdigest()}
+    return prior, {"key": key, "sha256": prior["sha256"], "size": len(data)}
+
+
+def revoke_round(storage, source_id="run-p"):
+    record = storage.get(OWNER, "run", source_id)
+    storage.put(OWNER, "run", {**record, "status": "revoked"}, record["version"])
+
+
+@pytest.mark.parametrize("when", ["before-staging", "before-finish"])
+def test_consumed_priors_are_revalidated_without_an_open_handle(xfer, when):
+    """Review 7 finding 1: a listed prior consumed by a receipt is re-authorized, and its grant is a predicate."""
+    storage, ledger, _, _ = xfer
+    prior, entry = listed_prior(storage)
+    if when == "before-staging":
+        storage.put(OWNER, "run", {"id": "run-p", "status": "ready"})
+        revoke_round(storage)
+        with pytest.raises(LedgerError) as error:
+            chain(xfer, "design.extract", manifest_extra={"priors": [prior]}, extra_inputs={"context": [entry]})
+        assert error.value.code == "authority-changed"
+        return
+    job, result = chain(xfer, "design.extract", manifest_extra={"priors": [prior]},
+                        extra_inputs={"context": [entry]})
+    predicates = [item["ConditionCheck"]["Key"]["sk"] for item in storage.table().transactions[-1]["TransactItems"]
+                  if "ConditionCheck" in item]
+    assert "run#run-p" in predicates                      # the grant fenced the last protected write
+    revoke_round(storage)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"

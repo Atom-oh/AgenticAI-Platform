@@ -1029,6 +1029,8 @@ class Ledger:
             raise LedgerError("receipt-invalid")
         entry = self._verified_receipt(owner, job, receipt)
         checks, guard = self._protect(owner, job)
+        # A prior this receipt consumes must be granted now, and its grant is a predicate of the stage write.
+        checks = self._merge_checks(checks, self._consumed_prior_checks(owner, job, [entry]))
         self._retain_receipt(owner, job, entry, receipt)
         after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
         return self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, reindex=False)
@@ -1292,13 +1294,56 @@ class Ledger:
             if blob is None or blob.get("sha256") != admission.get("artifactHash"):
                 self._source_revoked(owner, job, {"decisionId": admission.get("decisionId")})
             checks.append(self._authority_check(blob["check"]))
+        opened = set()
         for handle in (job.get("handles") or {}).values():
             if handle.get("direction") == "in" and handle.get("source") == "prior":
                 check = self._prior_current(owner, job, handle.get("prior") or {})
                 if check is None:
                     self._source_revoked(owner, job, {"prior": (handle.get("prior") or {}).get("sourceId")})
                 checks.append(check)
+                opened.add((handle.get("prior") or {}).get("key"))
+        # Review 7: a listed prior consumed by a recorded receipt is revalidated independently of any handle.
+        checks.extend(self._consumed_prior_checks(owner, job, job.get("stages", []), skip=opened))
         return checks
+
+    def _consumed_priors(self, owner, job, stages):
+        """The manifest priors named as inputs by the given stage entries (by exact key and hash)."""
+        listed = {prior["key"]: prior for prior in self._manifest_priors(owner, job)
+                  if _is_key(prior.get("key")) and _is_sha(prior.get("sha256"))}
+        consumed = {}
+        for row in stages:
+            for entry in row.get("inputs", []):
+                prior = listed.get(entry.get("key"))
+                if prior is not None and entry.get("sha256") == prior["sha256"]:
+                    consumed[prior["key"]] = prior
+        return list(consumed.values())
+
+    def _consumed_prior_checks(self, owner, job, stages, *, skip=()):
+        """Current grant predicates of every consumed prior; a revoked one fails the job (authority-changed)."""
+        checks = []
+        for prior in self._consumed_priors(owner, job, stages):
+            if prior["key"] in skip:
+                continue
+            check = self._prior_current(owner, job, prior) if prior.get("sourceKind") in ("run-round", "release") \
+                else None
+            if check is None:
+                self._source_revoked(owner, job, {"prior": prior.get("sourceId")})
+            checks.append(check)
+        return checks
+
+    @staticmethod
+    def _merge_checks(checks, extra):
+        """Append predicates not already present; the same record at two versions is a conflict."""
+        merged, seen = list(checks), {(c["owner"], c["kind"], c["id"]): c["version"] for c in checks}
+        for check in extra:
+            identity = (check["owner"], check["kind"], check["id"])
+            if identity in seen:
+                if seen[identity] != check["version"]:
+                    raise LedgerError("conflict")
+                continue
+            seen[identity] = check["version"]
+            merged.append(check)
+        return merged
 
     def _source_revoked(self, owner, job, source):
         if job["status"] not in TERMINAL:
@@ -1981,6 +2026,8 @@ class Ledger:
         receipts = self._reverify_chain(owner, job, stages, attempt)
         self._fresh_obligations(owner, before)
         protected, temporal = self._protect(owner, before, recovery=recovery)
+        # Priors consumed by receipts supplied to reconcile (not yet in ``before``) are revalidated too (review 7).
+        protected = self._merge_checks(protected, self._consumed_prior_checks(owner, before, stages))
         key_guard = self._key_guard(receipts, key_revision)
 
         def guard():
