@@ -520,6 +520,58 @@ def test_ordinary_worker_progress_never_404s_a_just_submitted_run(monkeypatch):
     assert request(api, "GET", f"/jobs/{data['job']['id']}", actor="carol", project=project["id"])[0] == 200
 
 
+def test_ordinary_worker_progress_never_leaks_private_storage_keys(monkeypatch):
+    """PR #33 review 1 #1: the review-8 priority fix's `item = authorized`
+    substituted the RAW stored record for the response gate's stale-item
+    replacement -- but `item` (from the already-serialized response body) had
+    already gone through `_public()` inside `_json()`, while `authorized` (read
+    straight from storage) never had, and `finish()` never re-filters. Reproduced:
+    claim_job races POST /contracts/propose's job-view serialization -- the
+    successful 202 leaked assetSnapshots[].originalKey, assetSnapshots[].
+    analysisKey and requestHash, private fields an ordinary GET (or the
+    non-raced response) never exposes."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    asset_bytes = b"propose source bytes"
+    status, data = request(api, "POST", "/assets", {"name": "source.txt", "size": len(asset_bytes),
+                           "sha256": hashlib.sha256(asset_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    asset = data["asset"]
+    original = api.storage.key_for(owner, "asset", asset["id"], "original")
+    analysis = api.storage.key_for(owner, "asset", asset["id"], "analysis.json")
+    api.storage.put_blob(original, asset_bytes, "text/plain")
+    api.storage.put_blob(analysis, json.dumps({"text": "propose source bytes", "parseStatus": "complete"}).encode(),
+                         "application/json")
+    asset = api.storage.put(owner, "asset", {**asset, "status": "stored", "uploadStatus": "stored",
+                            "parseStatus": "complete", "originalKey": original, "analysisKey": analysis,
+                            "projectId": project["id"]}, expected_version=asset["version"])
+    original_one = http_module.ResponseGate._one
+    armed = {"on": True}
+
+    def racing(self, view, item):
+        if armed["on"] and view == "job" and isinstance(item, dict) and item.get("task") == "propose":
+            armed["on"] = False
+            claimed = self.api.storage.claim_job(owner, item["id"])
+            assert claimed is not None and claimed["status"] == "running"
+        return original_one(self, view, item)
+    monkeypatch.setattr(http_module.ResponseGate, "_one", racing)
+    status, data = request(api, "POST", "/contracts/propose", {"productId": product["id"], "assetIds": [asset["id"]],
+                           "brief": "요약", "requestId": "raced-propose"}, actor="carol", project=project["id"])
+    assert status == 202, data
+    assert not armed["on"]
+    job = data["job"]
+    assert job["status"] == "running"
+    blob = json.dumps(job, ensure_ascii=False)
+    assert "originalKey" not in blob and "analysisKey" not in blob and "requestHash" not in blob, job
+    assert job.get("input", {}).get("assetSnapshots"), job
+
+
 def test_contract_creation_never_leaks_a_revoked_assets_text_via_quote_matching():
     """Review 7 #1 / review 8 #2: an explicit rule's quoted source text was read
     from, and compared against, the cited asset's OWN analysis text before the

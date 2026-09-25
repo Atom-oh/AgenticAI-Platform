@@ -536,8 +536,12 @@ class ResponseGate:
                 # publications already applies via `publication_visible`). Serve the
                 # CURRENT, just-authorized record's own content instead of the stale
                 # item: `authorized` already decided whether the CURRENT version may
-                # be released at all.
-                item = authorized
+                # be released at all. `item` (from the already-serialized response
+                # body) went through `_public()` in `_json()`; `authorized` is the
+                # raw stored record and has not -- run it through the same filter
+                # before it substitutes for `item`, or private storage keys/fields
+                # (assetSnapshots[].originalKey/analysisKey, requestHash, etc.) leak.
+                item = _public(authorized)
             if view == "run":
                 numbers = {row.get("number") for row in authorized.get("rounds", []) if isinstance(row, dict)}
                 item = {**item, "rounds": [row for row in item.get("rounds", [])
