@@ -1064,8 +1064,18 @@ RULES = [
     ("design.generate", {}, "succeeded", True),
     ("design.generate", {"verify": ("ok", {"verdict": "fail", "approvable": False})}, "needs_changes", True),
     ("design.generate", {"verify": ("ok", {"verdict": "fail", "approvable": False})}, "succeeded", False),
+    # Review 8 finding 4: a failed/incomplete Browser result blocks generate/edit/compose too, not only release.
+    ("design.generate", {"browser": ("ok", {"passed": False, "functionalStatus": "pass",
+                                            "accessibility": {"status": "pass", "violations": []}})},
+     "succeeded", False),
     ("design.edit", {"verify": ("ok", {"verdict": "pass", "approvable": False})}, "succeeded", False),
+    ("design.edit", {"browser": ("ok", {"passed": True, "functionalStatus": "fail",
+                                        "accessibility": {"status": "pass", "violations": []}})},
+     "succeeded", False),
     ("design.compose", {}, "succeeded", True),
+    ("design.compose", {"browser": ("ok", {"passed": True, "functionalStatus": "pass",
+                                           "accessibility": {"status": "fail", "violations": [{"id": "contrast"}]}})},
+     "succeeded", False),
     ("design.compose", {"verify": ("ok", {"reviewer": "deterministic", "passed": True, "compositionHashes": ["h1", "h2"],
                                           "judgeEvidence": {"h1": "ev-1"}})}, "needs_changes", True),
     ("design.compose", {"verify": ("ok", {"reviewer": "llm", "passed": True, "compositionHashes": [],
@@ -2475,9 +2485,9 @@ def test_intent_replay_is_fenced_and_never_authorizes_another_invocation(xfer):
     lease = stored["attempt"]["leaseExpiresAt"]
     original = ledger.cost_gate.check
 
-    def lapse():
+    def lapse(pending=0):
         now[0] = lease
-        return original()
+        return original(pending=pending)
     ledger.cost_gate.check = lapse
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(*ids(job), **replay_args(operation))
@@ -3145,3 +3155,208 @@ def test_heartbeat_never_renews_a_lease_that_expired_during_preparation(env, mon
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
     assert error.value.code == "stale-attempt"
+
+
+# === PR #27 review round 8 regressions ================================================================
+
+def test_manifest_unavailability_never_erases_consumed_prior_bindings(xfer):
+    """Review 8 finding 1: a stage entry's own consumedPriors is durable; deleting/corrupting the manifest
+    afterward must never erase the revalidation of a prior it named as a consumed input."""
+    storage, ledger, _, _ = xfer
+    prior, entry = listed_prior(storage)
+    job, result = chain(xfer, "design.extract", manifest_extra={"priors": [prior]},
+                        extra_inputs={"context": [entry]})
+    manifest_ref = storage.get(OWNER, "job", job["id"])["manifest"]["ref"]
+    storage.s3().delete_object(Bucket=storage.bucket, Key=manifest_ref)   # the manifest is now unreadable
+    revoke_round(storage)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
+
+
+def test_cancelled_unresolved_reservations_count_against_the_daily_budget(xfer, monkeypatch):
+    """Review 8 finding 3: a cancelled job's still-outstanding (never-settled) model call reservation stays in
+    the cross-job pending registry; repeated intent-then-cancel cycles cannot reserve past the daily cap."""
+    from workspace.execution_ledger import CostGuardGate, QUOTA_OWNER, PENDING_CHARGES_ID
+    storage, _, now, _ = xfer
+    client = pending_costguard(monkeypatch, cap=300)
+    ledger = offline_ledger(storage, cost_gate=CostGuardGate())
+
+    def cycle(key):
+        job = run_job(ledger, key=key)
+        call = ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0,
+                                    max_tokens=150)["callId"]
+        ledger.api().cancel(OWNER, job["id"], actor="designer-1")
+        return job, call
+
+    job1, call1 = cycle("req-c1")
+    registry = storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+    assert registry["charges"]["resv-" + call1]["tokens"] == 150   # cancellation never drops the reservation
+    job2, call2 = cycle("req-c2")
+    registry = storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
+    assert sum(row["tokens"] for row in registry["charges"].values()) == 300
+    assert client.tokens == 0                                      # never actually recorded as daily usage
+    other = run_job(ledger, key="req-c3")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(other), stage="generate", kind="model", min_remaining_ms=0, max_tokens=1)
+    assert error.value.code == "daily-budget"
+    assert storage.get(OWNER, "job", other["id"])["calls"] == []
+    # Settlement (a recovered/expired sweep) finally clears the reservation and records the real usage.
+    for job, call in ((job1, call1), (job2, call2)):
+        current = storage.get(OWNER, "job", job["id"])
+        storage.put(OWNER, "job", {**current, "settlementDueAt": now[0]}, current["version"],
+                    _writer=_ledger_module._WRITER)
+        ledger.reconciler().sweep(OWNER, job["id"])
+    assert client.tokens == 300
+    assert storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)["charges"] == {}
+
+
+def _expiring_resolver(base_resolver, expires_at):
+    def resolver(owner, admission):
+        blob = base_resolver(owner, admission)
+        return {**blob, "expiresAt": expires_at} if blob else blob
+    return resolver
+
+
+def test_source_expiry_is_rechecked_by_the_final_guard_before_delivery(xfer, monkeypatch):
+    """Review 8 finding 2: an admission's resolver-granted time bound is rechecked with a fresh clock read
+    immediately before delivery; a version predicate alone cannot catch it elapsing mid-read."""
+    storage, ledger, now, data = xfer
+    expires_at = now[0] + 1_000
+    ledger.input_resolver = _expiring_resolver(ledger.input_resolver, expires_at)
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    original_get_blob = storage.get_blob
+
+    def lapsing_get_blob(*args, **kwargs):
+        now[0] = expires_at + 1                      # the grant's time bound elapses during the ranged read
+        return original_get_blob(*args, **kwargs)
+    monkeypatch.setattr(storage, "get_blob", lapsing_get_blob)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().read_chunk(*ids(job), handle["handleId"], 0)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]["read"] == []
+
+
+def test_completion_never_succeeds_once_a_grant_expiry_elapses_during_staging(xfer):
+    """Review 8 finding 2: the same expiry bound is rechecked at completion, not only at the read."""
+    storage, ledger, now, data = xfer
+    expires_at = now[0] + 10_000
+    ledger.input_resolver = _expiring_resolver(ledger.input_resolver, expires_at)
+    job, result = chain(xfer, "design.extract")
+    now[0] = expires_at + 1                          # elapses before completion is submitted
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
+
+
+# === PR #27 review round 9 regressions ================================================================
+
+def test_receipt_validation_authorizes_and_binds_a_prior_from_one_manifest_read(env, monkeypatch):
+    """Review 9 finding 1: input authorization and the durable consumedPriors binding must be derived from
+    the SAME manifest read; a manifest deleted between two separate reads must never authorize an input
+    against a manifest-listed prior while leaving its consumedPriors binding empty."""
+    storage, ledger, now = env
+    prior, entry = listed_prior(storage)
+    job = run_job(ledger, operation="design.extract", manifest_extra={"priors": [prior]})
+    manifest_ref = job["manifest"]["ref"]
+    original_get_blob = storage.get_blob
+    reads = []
+
+    def counting_get_blob(key, *args, **kwargs):
+        if key == manifest_ref:
+            reads.append(key)
+            if len(reads) > 1:
+                raise FileNotFoundError("simulated manifest deletion between two reads")
+        return original_get_blob(key, *args, **kwargs)
+    monkeypatch.setattr(storage, "get_blob", counting_get_blob)
+    out = put_output(storage, job, "context", "context.json", b"{}")
+    first = chained(job, "context", "n1", inputs=[entry], outputs=[out], status="ok")
+    saved = ledger.tool().stage(*ids(job), first)
+    assert len(reads) == 1                              # authorization and the binding shared one read
+    assert saved["stages"][-1]["consumedPriors"] == [prior]
+
+
+def test_retry_preserves_consumed_prior_bindings_across_a_lost_lease(env):
+    """Review 9 finding 2: retry clears ``stages`` (where consumedPriors previously lived) and archives only
+    receipt hashes; a prior consumed before a lost lease must still be revalidated on the retried attempt."""
+    storage, ledger, now = env
+    prior, entry = listed_prior(storage)
+    job = admit(ledger, manifest_extra={"priors": [prior]})
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    out = put_output(storage, job, "context", "context.json", b"{}")
+    first = chained(job, "context", "n1", inputs=[entry], outputs=[out], status="ok")
+    job = ledger.tool().stage(*ids(job), first)
+    assert job["stages"][-1]["consumedPriors"] == [prior]
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1                # the lease is lost
+    swept = ledger.reconciler().sweep(OWNER, job["id"])
+    assert swept["status"] == "recovery_required"
+    retried = ledger.api().retry(OWNER, job["id"], actor="designer-1", acknowledge_unknown_outcome=True)
+    assert retried["stages"] == []                          # stages reset, but the binding must survive
+    assert retried["consumedPriors"] == {prior["key"]: prior}
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    revoke_round(storage)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["calls"] == []
+
+
+# === PR #32 review round 1 regressions =================================================================
+
+def test_manifest_rejects_conflicting_duplicate_prior_descriptors_for_the_same_key(env):
+    """Review 10 finding 1: a manifest naming the same key twice with a CONFLICTING descriptor (different
+    hash/source) must be rejected outright — never resolved by authorizing an input against one descriptor
+    while the durable consumed-prior binding silently uses (or omits) a different one."""
+    storage, ledger, now = env
+    key = storage.key_for(OWNER, "run", "run-a", "rounds/1/source.zip")
+    data_a = b"prior A round source bytes"
+    try:
+        storage.put_blob_once(key, data_a, "application/zip")
+    except Exception:
+        pass
+    prior_a = {"sourceKind": "run-round", "sourceId": "run-a", "revision": "1", "key": key,
+              "sha256": hashlib.sha256(data_a).hexdigest()}
+    prior_b = {"sourceKind": "run-round", "sourceId": "run-b", "revision": "1", "key": key,
+              "sha256": hashlib.sha256(b"prior B round source bytes").hexdigest()}
+    entry = {"key": key, "sha256": prior_a["sha256"], "size": len(data_a)}
+    job = admit(ledger, manifest_extra={"priors": [prior_a, prior_b]})
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    out = put_output(storage, job, "context", "context.json", b"{}")
+    first = chained(job, "context", "n1", inputs=[entry], outputs=[out], status="ok")
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().stage(*ids(job), first)
+    assert error.value.code == "manifest-invalid"
+    assert storage.get(OWNER, "job", job["id"])["stages"] == []
+
+
+def test_open_prior_fences_the_new_handle_with_its_own_grant_expiry(env, monkeypatch):
+    """Review 10 finding 2: open_prior's handle-creation commit must recheck the NEW prior's own grant/expiry
+    (the handle does not exist yet, so _protect's handle scan alone cannot find it)."""
+    storage, ledger, now = env
+    prior, entry = listed_prior(storage)
+    job = admit(ledger, manifest_extra={"priors": [prior]})
+    job = ledger.dispatcher().allocate(OWNER, job["id"])
+    job = ledger.tool().claim(OWNER, job["id"], job["attempt"]["id"], job["fence"])
+    expires_at = now[0] + 1_000
+    original_prior_authority = ledger.prior_authority
+
+    def expiring_prior_authority(owner, job, prior_ref):
+        grant = original_prior_authority(owner, job, prior_ref)
+        return {**grant, "expiresAt": expires_at} if grant else grant
+    ledger.prior_authority = expiring_prior_authority
+    original_get_blob = storage.get_blob
+
+    def lapsing_get_blob(*args, **kwargs):
+        now[0] = expires_at + 1                      # the grant's time bound elapses during the object read
+        return original_get_blob(*args, **kwargs)
+    monkeypatch.setattr(storage, "get_blob", lapsing_get_blob)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().open_prior(*ids(job), ref=prior["key"])
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["handles"] == {}

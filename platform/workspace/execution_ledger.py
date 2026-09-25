@@ -447,16 +447,18 @@ class Ledger:
                          before_attempt=before_attempt)
 
     # --- the protected-operation guard (review 2) ---------------------------------------------------
-    def _protect(self, owner, job, *, recovery=False, min_remaining_ms=None, cost=False):
+    def _protect(self, owner, job, *, recovery=False, min_remaining_ms=None, cost=False, extra_expiries=()):
         """Shared guard for intent, chunk reads, stage, transfers and completion.
 
         Returns (checks, guard): the transactional authority predicates (current actor membership, every consumed
         admission decision and every opened prior grant; a withdrawn one fails the job) and a
         callable that put_many runs immediately before each wire submission, rechecking lease/recovery bound,
-        authorization, deadline, the per-call deadline reservation and the daily cost gate.
+        authorization, deadline, the per-call deadline reservation, every source/grant time expiry (review 8,
+        #2) and the daily cost gate.
         """
+        source_checks, expiries = self._source_checks(owner, job)
         checks, seen = [], {}
-        for check in [self._check_authority(owner, job), *self._source_checks(owner, job)]:
+        for check in [self._check_authority(owner, job), *source_checks]:
             identity = (check["owner"], check["kind"], check["id"])
             if identity in seen:
                 if seen[identity] != check["version"]:
@@ -464,7 +466,9 @@ class Ledger:
                 continue
             seen[identity] = check["version"]
             checks.append(check)
-        return checks, self._temporal_guard(job, recovery=recovery, min_remaining_ms=min_remaining_ms, cost=cost)
+        guard = self._temporal_guard(job, recovery=recovery, min_remaining_ms=min_remaining_ms, cost=cost,
+                                     expires=[*expiries, *extra_expiries])
+        return checks, guard
 
     def _prepare(self, owner, before, job, *, extra_writes=(), op=None, value=None, reindex=True):
         """Prepared, uncommitted ledger writes (prepare_finish): the job record plus its index writes."""
@@ -485,13 +489,26 @@ class Ledger:
             writes = [*self._due_writes(owner, before, job), *writes]
         return job, writes
 
-    # --- the cross-job pending-charge registry (review 7, RUN-03) ------------------------------------------
+    # --- the cross-job pending-charge registry (review 7/8, RUN-03) ------------------------------------------
+    @staticmethod
+    def _pending_entries(job):
+        """Every not-yet-settled token obligation of a job: settled-but-unrecorded ``accounting`` charges, plus
+        every still-outstanding (``intent``) model call's reservation (review 8, #3) — cancelling a job, or its
+        concurrency slot being released, never drops a reservation that may still be billed. Keyed so an
+        obligation and its call's reservation never collide, and a call moving on from ``intent`` (settled,
+        expired-to-``unknown``, or otherwise resolved) always drops its reservation entry in the same write."""
+        entries = {entry["id"]: {"tokens": entry["tokens"]} for entry in job.get("accounting") or []}
+        for call in job.get("calls") or []:
+            if call.get("kind") == "model" and call.get("status") == "intent" and _is_size(call.get("reserved")):
+                entries["resv-" + call["callId"]] = {"tokens": call["reserved"]}
+        return entries
+
     def _pending_writes(self, owner, before, job):
-        """Mirror every added or settled accounting obligation into the global pending-charge registry, in the
-        same transaction as the job write, so unrecorded charges of ANY job (also cancelled or superseded ones)
-        count against the enforced daily budget."""
-        added = {entry["id"]: entry for entry in job.get("accounting") or []}
-        prior = {entry["id"] for entry in (before or {}).get("accounting") or []}
+        """Mirror every job's pending token obligations into the global pending-charge registry, in the same
+        transaction as the job write, so unrecorded charges or outstanding reservations of ANY job (also
+        cancelled or superseded ones) count against the enforced daily budget until idempotently settled."""
+        added = self._pending_entries(job)
+        prior = set(self._pending_entries(before or {}))
         if set(added) == prior:
             return []
         current = self.storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
@@ -499,7 +516,7 @@ class Ledger:
         for identifier in prior - set(added):
             charges.pop(identifier, None)
         for identifier in set(added) - prior:
-            charges[identifier] = {"tokens": added[identifier]["tokens"], "owner": owner, "jobId": job["id"]}
+            charges[identifier] = {**added[identifier], "owner": owner, "jobId": job["id"]}
         return [{"owner": QUOTA_OWNER, "kind": "exec_quota", "expected_version": current["version"] if current else None,
                  "item": {**(current or {"id": PENDING_CHARGES_ID}), "charges": charges}}]
 
@@ -641,6 +658,10 @@ class Ledger:
                "profile": ref, "profileBody": profile, "manifest": manifest, "admissions": admissions,
                "status": "queued", "fence": 0, "attempt": None, "attempts": [], "calls": [], "stages": [],
                "nonces": [], "transfers": [], "handles": {}, "cleanup": [],
+               # Durable, job-level accumulator of every consumed prior's full descriptor (review 9, #2): unlike
+               # ``stages``, retry never clears this, so a prior consumed by a superseded attempt is still
+               # revalidated on every later protected operation of the retried attempt.
+               "consumedPriors": {},
                "budget": {"calls": 0, "maxCalls": profile["maxCallsByOperation"][operation],
                           "tokensReserved": 0, "tokensUsed": 0, "tokenBudget": profile["tokenBudget"]},
                "transferUsage": {"chunks": 0, "bytes": 0},
@@ -816,12 +837,18 @@ class Ledger:
             raise LedgerError("code-invalid")
         return self._terminal(owner, job, "failed", error={"code": code}, bump_fence=True, op=op)
 
-    def _allowed_inputs(self, owner, job):
-        """Authorized inputs: key -> {sha256, size} (size None when only the stored object can establish it)."""
+    def _allowed_inputs(self, owner, job, keyed_priors):
+        """Authorized inputs: key -> {sha256, size} (size None when only the stored object can establish it).
+
+        ``keyed_priors``: the ONE validated key -> descriptor mapping shared with the durable consumed-prior
+        binding (review 9, #1; review 10, #1) — reading the manifest twice, or resolving a duplicate key
+        differently for each purpose, let an input be authorized against a descriptor that the binding then
+        silently dropped or mismatched.
+        """
         allowed = {job["manifest"]["ref"]: {"sha256": job["manifest"]["hash"], "size": None}}
         if job.get("releaseBaseline"):
             allowed[job["releaseBaseline"]["key"]] = {"sha256": job["releaseBaseline"]["sha256"], "size": None}
-        for prior in self._manifest_priors(owner, job):
+        for prior in keyed_priors.values():
             ref = _object_ref({k: prior[k] for k in ("key", "sha256", "size") if k in prior},
                               optional=("size",))
             if ref is not None and ref["key"] not in allowed:
@@ -863,6 +890,24 @@ class Ledger:
         except (ValueError, AttributeError):
             return []
         return [prior for prior in priors if isinstance(prior, dict)] if isinstance(priors, list) else []
+
+    @staticmethod
+    def _keyed_priors(manifest_priors):
+        """One key -> full descriptor mapping, shared by input authorization, the durable consumed-prior
+        binding and ``open_prior`` (review 10, #1): a manifest naming the same key twice with a CONFLICTING
+        descriptor (a different hash, source or revision) is rejected outright — never resolved by silently
+        picking the first descriptor for one purpose and the last for another, which let an input be
+        authorized against one descriptor while its consumed-prior binding silently used (or omitted) a
+        different one."""
+        keyed = {}
+        for prior in manifest_priors:
+            if not isinstance(prior, dict) or not _is_key(prior.get("key")):
+                continue
+            existing = keyed.get(prior["key"])
+            if existing is not None and existing != prior:
+                raise LedgerError("manifest-invalid")
+            keyed[prior["key"]] = prior
+        return keyed
 
     def _verify_object(self, owner, entry, fields):
         if _object_ref(entry, required=("key", "sha256", "size"),
@@ -950,7 +995,12 @@ class Ledger:
         binding = self._service_binding(job, receipt, attempt, stages) if all(checks) else None
         if binding is None:
             raise LedgerError("receipt-invalid")
-        allowed = self._allowed_inputs(owner, job)
+        # One manifest read, keyed into ONE validated mapping, shared by input authorization AND the durable
+        # consumed-prior binding below (review 9, #1; review 10, #1): reading the manifest twice, or resolving
+        # a duplicate key differently for each purpose, let an input be authorized against one descriptor
+        # while its binding silently used (or omitted) a different one.
+        keyed_priors = self._keyed_priors(self._manifest_priors(owner, job))
+        allowed = self._allowed_inputs(owner, job, keyed_priors)
         inputs = receipt.get("inputs", [])
         if not isinstance(inputs, list) or len(inputs) > 100:
             raise LedgerError("receipt-invalid")
@@ -970,12 +1020,19 @@ class Ledger:
                     or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
         self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages)
+        # Freeze the full descriptor of every consumed prior now, while the manifest (or its handle) is
+        # necessarily still readable (review 8, #1): later revalidation reads this, never the manifest again.
+        # Uses the SAME keyed_priors mapping as the authorization check above (review 9/10, #1).
+        available = self._input_priors(owner, job, keyed_priors)
+        consumed_priors = {available[entry["key"]]["key"]: available[entry["key"]] for entry in inputs
+                           if entry.get("key") in available and entry.get("sha256") == available[entry["key"]]["sha256"]}
         return {"stage": receipt["stage"], "receiptHash": receipt_hash(receipt), "nonce": nonce,
                 "attemptId": attempt["id"], "status": receipt.get("status", "ok"), "service": binding,
                 "result": copy.deepcopy(receipt.get("result", {})),
                 "inputs": [{"key": entry["key"], "sha256": entry["sha256"]} for entry in inputs],
                 "outputs": [{key: entry[key] for key in ("key", "sha256", "size", "role") if key in entry}
-                            for entry in outputs]}
+                            for entry in outputs],
+                "consumedPriors": list(consumed_priors.values())}
 
     @staticmethod
     def _receipt_bytes(receipt):
@@ -1083,11 +1140,14 @@ class Ledger:
         if isinstance(receipt, dict) and "operationId" in receipt and receipt["operationId"] != operation_id:
             raise LedgerError("receipt-invalid")
         entry = self._verified_receipt(owner, job, receipt)
-        checks, guard = self._protect(owner, job)
-        # A prior this receipt consumes must be granted now, and its grant is a predicate of the stage write.
-        checks = self._merge_checks(checks, self._consumed_prior_checks(owner, job, [entry]))
+        # A prior this receipt consumes must be granted now, and its grant (and expiry) is a predicate of the
+        # stage write, rechecked by the same final guard (review 8, #2).
+        consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, job, [entry])
+        checks, guard = self._protect(owner, job, extra_expiries=consumed_expiries)
+        checks = self._merge_checks(checks, consumed_checks)
         self._retain_receipt(owner, job, entry, receipt)
-        after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]]}
+        after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]],
+                 "consumedPriors": self._merge_consumed_priors(job, [entry])}
         return self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, reindex=False)
 
     # --- tool role: per-call intent and outcome (RUN-03) -----------------------
@@ -1128,11 +1188,9 @@ class Ledger:
                 raise LedgerError("token-budget")
             self._cost_check()                  # includes every job's unrecorded charges (review 7)
         checks, guard = self._protect(owner, job, min_remaining_ms=min_remaining_ms, cost=kind == "model")          # revocation stops further calls (RUN-03)
-        if kind == "model":
-            # The pending-charge registry read by the cost check is a predicate of the reservation (review 7).
-            registry = self.storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)
-            checks = self._merge_checks(checks, [{"owner": QUOTA_OWNER, "kind": "exec_quota", "id": PENDING_CHARGES_ID,
-                                                  "version": registry["version"] if registry else None}])
+        # A model reservation itself now durably mirrors into the pending registry (review 8, #3); that write's
+        # own CAS (a fresher read than any check gathered above) is the reservation's fence, so no separate
+        # registry predicate is added here (one would collide with that write in the same transaction).
         call = {"callId": "call-" + secrets.token_hex(16), "stage": stage, "kind": kind, "status": "intent",
                 "at": now, "attemptId": attempt["id"], "reserved": reserve}
         budget.update(calls=budget["calls"] + 1, tokensReserved=budget["tokensReserved"] + reserve)
@@ -1251,11 +1309,18 @@ class Ledger:
         return calls, budget, actual if call["kind"] == "model" else 0
 
     # --- tool role: transfers (RUN-05; review rounds 2/7, N6/AA3) ----------------
-    def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None):
-        """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts."""
+    def _open_read(self, owner, job, op, *, source, key, sha256, stage=None, binding=None, extra_checks=(),
+                   extra_expiries=()):
+        """Server-side handle over stored bytes: the Lambda hashes them, nothing claimed by the Runtime counts.
+
+        ``extra_checks``/``extra_expiries``: the grant predicate and expiry of a prior being opened right now
+        (review 10, #2) — its handle does not exist yet, so ``_protect``'s own handle scan cannot find it;
+        without these the handle-creation commit's guard would not recheck this specific grant/expiry at all.
+        """
         if not _is_key(key) or not _is_sha(sha256):
             raise LedgerError("transfer-invalid")
-        checks, guard = self._protect(owner, job)
+        checks, guard = self._protect(owner, job, extra_expiries=extra_expiries)
+        checks = self._merge_checks(checks, extra_checks)
         try:
             if not isinstance(key, str) or not self.storage.owns_key(owner, key):
                 raise ValueError("foreign key")
@@ -1304,16 +1369,20 @@ class Ledger:
         if replay:
             return self._replayed_handle(replay)
         self._current(job, attempt_id, fence, statuses=("running",))
-        prior = next((row for row in self._manifest_priors(owner, job) if row.get("key") == ref), None)
+        prior = self._keyed_priors(self._manifest_priors(owner, job)).get(ref)
         if (prior is None or prior.get("sourceKind") not in ("run-round", "release")
                 or not _is_key(prior.get("key")) or not _is_sha(prior.get("sha256"))
                 or not callable(self.prior_authority)):
             raise LedgerError("transfer-invalid")
-        if self._prior_current(owner, job, prior) is None:
+        # The new handle does not exist yet, so it fences its own creation with the prior's grant and expiry
+        # (review 10, #2): _protect's handle scan alone would not find it in time.
+        check, expiry = self._prior_grant(owner, job, prior)
+        if check is None:
             raise LedgerError("transfer-invalid")
         return self._open_read(owner, job, op, source="prior", key=prior["key"], sha256=prior.get("sha256"),
                                binding={"prior": {k: prior[k] for k in ("sourceKind", "sourceId", "revision", "key",
-                                                                         "sha256") if k in prior}})
+                                                                         "sha256") if k in prior}},
+                               extra_checks=[check], extra_expiries=[expiry] if expiry is not None else [])
 
     @staticmethod
     def _authority_check(value):
@@ -1324,14 +1393,30 @@ class Ledger:
             return None
         return dict(value)
 
+    @staticmethod
+    def _expiry_bound(value):
+        """An optional time bound alongside a resolver-returned grant (review 8, #2, RUN-02/05): a version
+        predicate alone cannot detect a purely time-based expiry (nothing bumps the version when a grant simply
+        runs out the clock), so a valid ``expiresAt`` is carried separately and rechecked against a fresh clock
+        read immediately before delivery or submission."""
+        return value["expiresAt"] if isinstance(value, dict) and type(value.get("expiresAt")) is int else None
+
+    def _prior_grant(self, owner, job, prior):
+        """The prior's current grant predicate and optional expiry bound, or (None, None) when not granted."""
+        if not callable(self.prior_authority):
+            return None, None
+        try:
+            raw = self.prior_authority(owner, job, copy.deepcopy(prior))
+        except Exception:  # noqa: BLE001 - an authority failure is a refusal
+            return None, None
+        if not isinstance(raw, dict):
+            return None, None
+        check = self._authority_check({key: value for key, value in raw.items() if key != "expiresAt"})
+        return (check, self._expiry_bound(raw)) if check is not None else (None, None)
+
     def _prior_current(self, owner, job, prior):
         """The prior's current grant predicate, or None when it is no longer granted."""
-        if not callable(self.prior_authority):
-            return None
-        try:
-            return self._authority_check(self.prior_authority(owner, job, copy.deepcopy(prior)))
-        except Exception:  # noqa: BLE001 - an authority failure is a refusal
-            return None
+        return self._prior_grant(owner, job, prior)[0]
 
     def _resolve_admitted(self, owner, admission):
         """The resolver's current view of an admitted artifact ({key, sha256, check}), or None when withdrawn."""
@@ -1347,49 +1432,87 @@ class Ledger:
         return blob
 
     def _source_checks(self, owner, job):
-        """Every consumed admission and every opened prior must still be granted; returns their predicates."""
-        checks = []
+        """Every consumed admission and every opened prior must still be granted; returns (checks, expiries):
+        their transactional predicates, and every time bound alongside a grant (review 8, #2) for the final
+        guard to recheck against a fresh clock immediately before delivery or submission."""
+        checks, expiries = [], []
         for admission in job["admissions"]:
             blob = self._resolve_admitted(owner, admission)
             if blob is None or blob.get("sha256") != admission.get("artifactHash"):
                 self._source_revoked(owner, job, {"decisionId": admission.get("decisionId")})
             checks.append(self._authority_check(blob["check"]))
+            expiry = self._expiry_bound(blob)
+            if expiry is not None:
+                expiries.append(expiry)
         opened = set()
         for handle in (job.get("handles") or {}).values():
             if handle.get("direction") == "in" and handle.get("source") == "prior":
-                check = self._prior_current(owner, job, handle.get("prior") or {})
+                check, expiry = self._prior_grant(owner, job, handle.get("prior") or {})
                 if check is None:
                     self._source_revoked(owner, job, {"prior": (handle.get("prior") or {}).get("sourceId")})
                 checks.append(check)
+                if expiry is not None:
+                    expiries.append(expiry)
                 opened.add((handle.get("prior") or {}).get("key"))
         # Review 7: a listed prior consumed by a recorded receipt is revalidated independently of any handle.
-        checks.extend(self._consumed_prior_checks(owner, job, job.get("stages", []), skip=opened))
-        return checks
+        consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, job, job.get("stages", []),
+                                                                         skip=opened)
+        checks.extend(consumed_checks)
+        expiries.extend(consumed_expiries)
+        return checks, expiries
+
+    def _input_priors(self, owner, job, keyed_priors):
+        """Full descriptors of a prior a receipt input might name: manifest-listed and every currently open
+        prior handle (review 8, #1) — a fallback that keeps a descriptor available while a handle is open even
+        when the manifest itself is momentarily unavailable.
+
+        ``keyed_priors``: the SAME validated key -> descriptor mapping used to authorize inputs (review 9, #1;
+        review 10, #1); reading the manifest again, or resolving a duplicate key differently, let an
+        authorized input end up with no durable prior descriptor to bind (or the wrong one).
+        """
+        priors = {key: prior for key, prior in keyed_priors.items() if _is_sha(prior.get("sha256"))}
+        for handle in (job.get("handles") or {}).values():
+            prior = handle.get("prior")
+            if (handle.get("direction") == "in" and handle.get("source") == "prior" and isinstance(prior, dict)
+                    and _is_key(prior.get("key")) and _is_sha(prior.get("sha256"))):
+                priors.setdefault(prior["key"], prior)
+        return priors
+
+    @staticmethod
+    def _merge_consumed_priors(job, entries):
+        """Job-level accumulator (review 9, #2) merged with the ``consumedPriors`` of the given stage entries;
+        never dropped by ``stages`` resetting on retry."""
+        merged = dict(job.get("consumedPriors") or {})
+        for row in entries:
+            for prior in row.get("consumedPriors") or []:
+                if isinstance(prior, dict) and _is_key(prior.get("key")) and _is_sha(prior.get("sha256")):
+                    merged[prior["key"]] = prior
+        return merged
 
     def _consumed_priors(self, owner, job, stages):
-        """The manifest priors named as inputs by the given stage entries (by exact key and hash)."""
-        listed = {prior["key"]: prior for prior in self._manifest_priors(owner, job)
-                  if _is_key(prior.get("key")) and _is_sha(prior.get("sha256"))}
-        consumed = {}
-        for row in stages:
-            for entry in row.get("inputs", []):
-                prior = listed.get(entry.get("key"))
-                if prior is not None and entry.get("sha256") == prior["sha256"]:
-                    consumed[prior["key"]] = prior
-        return list(consumed.values())
+        """The prior descriptors bound durably at staging time (review 8, #1): the job-level accumulator
+        (review 9, #2, preserved across a retry that clears ``stages``) plus the given stage entries' own
+        ``consumedPriors`` (frozen when each receipt was verified, while the manifest was necessarily still
+        readable). Consumed-prior revalidation never depends on the manifest being readable again later, nor
+        on a superseded attempt's ``stages`` surviving a retry.
+        """
+        return list(self._merge_consumed_priors(job, stages).values())
 
     def _consumed_prior_checks(self, owner, job, stages, *, skip=()):
-        """Current grant predicates of every consumed prior; a revoked one fails the job (authority-changed)."""
-        checks = []
+        """Current grant predicates (and expiry bounds) of every consumed prior; a revoked one fails the job
+        (authority-changed). Returns (checks, expiries)."""
+        checks, expiries = [], []
         for prior in self._consumed_priors(owner, job, stages):
             if prior["key"] in skip:
                 continue
-            check = self._prior_current(owner, job, prior) if prior.get("sourceKind") in ("run-round", "release") \
-                else None
+            check, expiry = self._prior_grant(owner, job, prior) if prior.get("sourceKind") in ("run-round", "release") \
+                else (None, None)
             if check is None:
                 self._source_revoked(owner, job, {"prior": prior.get("sourceId")})
             checks.append(check)
-        return checks
+            if expiry is not None:
+                expiries.append(expiry)
+        return checks, expiries
 
     @staticmethod
     def _merge_checks(checks, extra):
@@ -1822,6 +1945,17 @@ class Ledger:
         saved = self._commit(owner, job, after, extra_writes=quotas, checks=[check])
         return self._settle_accounting(owner, saved)
 
+    @staticmethod
+    def _browser_behaved(browser):
+        """Successful required behavior and accessibility evidence (SPEC 7-1). Every operation whose evidence
+        graph runs a Browser stage requires this, not only design.release (review 8, #4): a Browser result
+        that explicitly failed, failed accessibility, or carries blocking findings never completes as
+        succeeded, and a missing/incomplete result is not evidence of success either."""
+        accessibility = browser.get("accessibility")
+        return (browser.get("passed") is True and browser.get("functionalStatus") == "pass"
+                and isinstance(accessibility, dict) and accessibility.get("status") == "pass"
+                and not accessibility.get("violations") and not browser.get("blockingFindings"))
+
     # --- tool role: coupled completion (RUN-02, RUN-04) -------------------------
     def _terminal_status(self, job, stages):
         """TERMINAL_RULES[operation]: a closed, profile-versioned table (review round 3, F4)."""
@@ -1842,7 +1976,10 @@ class Ledger:
             return "needs_changes" if isinstance(issues, list) and issues else None
         if operation in ("design.generate", "design.edit"):
             verify = result["verify"]
-            if verify.get("verdict") == "pass" and verify.get("approvable") is True:
+            # A compiled, Browser-verified bundle requires successful mandatory Browser evidence too (review 8,
+            # #4): an explicit approval never overrides a failed, incomplete or contradictory Browser result.
+            if verify.get("verdict") == "pass" and verify.get("approvable") is True \
+                    and self._browser_behaved(result["browser"]):
                 return "succeeded"
             if verify.get("verdict") in ("fail", "blocked") or verify.get("approvable") is False:
                 return "needs_changes"
@@ -1855,7 +1992,9 @@ class Ledger:
             if not isinstance(hashes, list) or not isinstance(evidence, dict) or not isinstance(verify.get("passed"), bool):
                 return None
             covered = all(isinstance(evidence.get(h), str) and evidence[h] for h in hashes)
-            return "succeeded" if verify["passed"] and covered and hashes else "needs_changes"
+            # Same mandatory Browser evidence gate as every other bundle-compiling operation (review 8, #4).
+            behaved = self._browser_behaved(result["browser"])
+            return "succeeded" if verify["passed"] and covered and hashes and behaved else "needs_changes"
         if operation == "design.release":
             approved = self._manifest_document(job).get("approved")
             approved = approved if isinstance(approved, dict) else {}
@@ -1874,16 +2013,11 @@ class Ledger:
             compared = _object_ref(baseline) is not None and result["browser"].get("comparison") == baseline and any(
                 entry.get("key") == baseline["key"] and entry.get("sha256") == baseline["sha256"]
                 for entry in last["browser"].get("inputs", []))
-            # Successful required behavior and accessibility evidence (review 7, SPEC 7-1): the Browser result
-            # explicitly passed with functionalStatus "pass", accessibility "pass" and no blocking findings, and the
-            # final verification passed. Missing, incomplete or contradictory results never succeed.
+            # Successful required behavior and accessibility evidence (review 7, SPEC 7-1), plus the final
+            # verification passed. Missing, incomplete or contradictory results never succeed.
             browser, verify = result["browser"], result["verify"]
-            accessibility = browser.get("accessibility")
-            behaved = (browser.get("passed") is True and browser.get("functionalStatus") == "pass"
-                       and isinstance(accessibility, dict) and accessibility.get("status") == "pass"
-                       and not accessibility.get("violations") and not browser.get("blockingFindings")
-                       and verify.get("passed") is True and verify.get("verdict") == "pass"
-                       and not verify.get("issues"))
+            behaved = (self._browser_behaved(browser) and verify.get("passed") is True
+                       and verify.get("verdict") == "pass" and not verify.get("issues"))
             if (hashes and compared and behaved and isinstance(diff, (int, float)) and not isinstance(diff, bool)
                     and 0 <= diff <= 0.02):
                 return "succeeded"
@@ -1996,8 +2130,13 @@ class Ledger:
             raise LedgerError("receipt-invalid")
         return {"bundle": bundles[0] if bundles else None, "sources": sources}
 
-    def _temporal_guard(self, before, *, recovery=False, min_remaining_ms=None, cost=False):
-        """Final temporal and budget checks, run by put_many immediately before each wire submission (RUN-02/03)."""
+    def _temporal_guard(self, before, *, recovery=False, min_remaining_ms=None, cost=False, expires=()):
+        """Final temporal and budget checks, run by put_many immediately before each wire submission (RUN-02/03).
+
+        ``expires``: every source/grant time bound collected when the checks were gathered (review 8, #2). A
+        version predicate alone cannot catch a grant that simply ran out the clock (nothing bumps its version),
+        so each bound is rechecked here against a fresh clock read, immediately before delivery or submission.
+        """
         attempt, profile = before["attempt"] or {}, before["profileBody"]
 
         def guard():
@@ -2006,6 +2145,8 @@ class Ledger:
             now = self.storage.clock()
             if now >= before["deadlineAt"] or now >= before["authorizationExpiresAt"]:
                 raise LedgerError("deadline")
+            if any(now >= bound for bound in expires):
+                raise LedgerError("authority-changed")
             if recovery:
                 # The five-minute recovery bound holds independently of whether the watchdog has run.
                 if now >= before["recoveryAt"] + profile["recoveryWindowMs"]:
@@ -2095,16 +2236,19 @@ class Ledger:
         key_revision = self._key_revision()
         receipts = self._reverify_chain(owner, job, stages, attempt)
         self._fresh_obligations(owner, before)
-        protected, temporal = self._protect(owner, before, recovery=recovery)
-        # Priors consumed by receipts supplied to reconcile (not yet in ``before``) are revalidated too (review 7).
-        protected = self._merge_checks(protected, self._consumed_prior_checks(owner, before, stages))
+        # Priors consumed by receipts supplied to reconcile (not yet in ``before``) are revalidated too (review
+        # 7), and their expiry bounds (review 8, #2) are rechecked by the same final guard.
+        consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, before, stages)
+        protected, temporal = self._protect(owner, before, recovery=recovery, extra_expiries=consumed_expiries)
+        protected = self._merge_checks(protected, consumed_checks)
         key_guard = self._key_guard(receipts, key_revision)
 
         def guard():
             key_guard()
             temporal()          # last: lease, deadline and authorization expiry immediately before submission
         after = {**job, "status": status, "result": copy.deepcopy(result), "deliverables": deliverables,
-                 "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock()}
+                 "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock(),
+                 "consumedPriors": self._merge_consumed_priors(before, stages)}
         after["cleanup"] = self._cleanup_for(after)
         quotas = self._quota_writes(owner, job["actor"], job["projectId"], remove=job["id"])
         prepared_job, ledger_writes = self._prepare(owner, before, after, extra_writes=quotas, op=op)
