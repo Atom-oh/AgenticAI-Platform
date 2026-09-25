@@ -1355,6 +1355,17 @@ class Ledger:
             raise LedgerError("transfer-invalid")
         return handle
 
+    @staticmethod
+    def _retry_count(job, handle, index, retry):
+        """The handle's durable per-index retry counts after this request; at most ``readRetries`` retries."""
+        counts = dict(handle.get("retries") or {})
+        if retry:
+            used = counts.get(str(index), 0)
+            if used >= job["profileBody"]["readRetries"]:
+                raise LedgerError("retry-exhausted")
+            counts[str(index)] = used + 1
+        return counts
+
     def _chunk_op(self, handle, operation_id, index, digest):
         """Binds a supplied chunk operation ID to (handle, index, chunk hash). Returns the new entry or None."""
         if operation_id is None:
@@ -1379,6 +1390,7 @@ class Ledger:
         handle = self._handle(job, handle_id, "in")
         if type(index) is not int or not 0 <= index < handle["chunks"]:
             raise LedgerError("transfer-invalid")
+        retries = self._retry_count(job, handle, index, index in handle["read"])   # before any bytes are served
         checks, guard = self._protect(owner, job)           # every chunk, including a retried one
         self._revalidate_handle(owner, job, handle)
         offset = index * CHUNK_BYTES
@@ -1397,18 +1409,15 @@ class Ledger:
             raise LedgerError("transfer-invalid")
         digest = hashlib.sha256(data).hexdigest()
         bound = self._chunk_op(handle, operation_id, index, digest)
-        if index not in handle["read"] or bound:
-            first = index not in handle["read"]
-            usage = self._transfer_budget(job, 1, len(data)) if first else job["transferUsage"]
-            handles = {**job["handles"], handle_id: {**handle, "read": [*handle["read"], index] if first
-                                                     else handle["read"],
-                                                     "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
-            self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=checks, before_attempt=guard,
-                         reindex=False)
-        else:
-            # A pure retry charges nothing but is fenced exactly like a first read: the unchanged job version (the
-            # attempt/fence), the authority predicates and the temporal guard, after the bytes were read.
-            self._fence(owner, job, checks, guard)
+        first = index not in handle["read"]
+        usage = self._transfer_budget(job, 1, len(data)) if first else job["transferUsage"]
+        # A first read commits its usage; a retry (review 6) commits its durable retry count. Both carry the job
+        # version, the guard's authority predicates and its before_attempt checks; a failure returns no bytes.
+        handles = {**job["handles"], handle_id: {**handle, "read": [*handle["read"], index] if first else handle["read"],
+                                                 "retries": retries,
+                                                 "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
+        self._commit(owner, job, {**job, "handles": handles, "transferUsage": usage}, checks=checks,
+                     before_attempt=guard, reindex=False)
         return {"index": index, "data": base64.b64encode(data).decode(), "sha256": digest}
 
     def _fence(self, owner, job, checks, guard):
@@ -1460,11 +1469,10 @@ class Ledger:
         if index < len(handle["parts"]):
             if handle["parts"][index] != digest:
                 raise LedgerError("transfer-invalid")
+            retries = self._retry_count(job, handle, index, True)
             checks, guard = self._protect(owner, job)          # every retry, like a first write (review 6)
-            if not bound:
-                self._fence(owner, job, checks, guard)          # check-only: nothing is written
-                return self._projection(job)
-            handles = {**job["handles"], handle_id: {**handle, "chunkOps": {**(handle.get("chunkOps") or {}), **bound}}}
+            handles = {**job["handles"], handle_id: {**handle, "retries": retries,
+                                                     "chunkOps": {**(handle.get("chunkOps") or {}), **(bound or {})}}}
             return self._commit(owner, job, {**job, "handles": handles}, checks=checks, before_attempt=guard,
                                 reindex=False)
         if index != len(handle["parts"]) or index >= handle["chunks"]:

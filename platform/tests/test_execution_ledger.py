@@ -880,7 +880,9 @@ def test_retried_write_chunk_is_idempotent(xfer):
     operation = op_id()
     first = ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
     again = ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
-    assert again["version"] == first["version"]
+    assert again["version"] == first["version"] + 1          # only the durable retry count is written
+    assert again["handles"][handle["handleId"]]["parts"] == first["handles"][handle["handleId"]]["parts"]
+    assert again["handles"][handle["handleId"]]["retries"] == {"0": 1}
     assert again["transferUsage"]["chunks"] == first["transferUsage"]["chunks"]
     with pytest.raises(LedgerError) as error:
         ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(b"s" * 10))
@@ -2959,3 +2961,30 @@ def test_pure_output_chunk_retry_runs_the_shared_guard(xfer, change):
     with pytest.raises(LedgerError) as error:
         ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data), operation_id=operation)
     assert error.value.code == ("authority-changed" if change == "withdrawal" else "stale-attempt")
+
+
+@pytest.mark.parametrize("direction", ["read", "write"])
+def test_chunk_retries_are_durably_bounded_by_read_retries(xfer, direction):
+    """Review 6 finding 5: at most readRetries (2) retries per chunk index, counted on the handle."""
+    storage, ledger, _, _ = xfer
+    job = run_job(ledger)
+    if direction == "read":
+        handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+        attempt = lambda operation: ledger.tool().read_chunk(*ids(job), handle["handleId"], 0,
+                                                             operation_id=operation)
+    else:
+        data = b"w" * 10
+        handle = open_out(ledger, job, data)
+        attempt = lambda operation: ledger.tool().write_chunk(*ids(job), handle["handleId"], 0, b64(data),
+                                                              operation_id=operation)
+    operation = op_id()
+    attempt(operation)
+    for _ in range(PROFILE_DEFAULT["readRetries"]):
+        attempt(operation)
+    for again in (operation, op_id()):
+        with pytest.raises(LedgerError) as error:
+            attempt(again)
+        assert error.value.code == "retry-exhausted"
+    stored = storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]
+    assert stored["retries"] == {"0": PROFILE_DEFAULT["readRetries"]}
+    assert storage.get(OWNER, "job", job["id"])["transferUsage"]["chunks"] == 1

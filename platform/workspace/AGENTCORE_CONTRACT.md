@@ -667,11 +667,13 @@ part). `read_chunk` and `write_chunk` are not `ops` entries; a supplied
 (`chunkOps: {operationId: "index:chunkSha256"}`, at most `2 × chunks + 8`), and
 reusing it for another index or chunk hash is `operation-changed`. Every returned
 chunk is fenced after its bytes are read: a first read commits its usage with
-the guard's predicates, and a pure retry (already read, same operation ID)
-submits a check-only transaction (unchanged job version plus the guard's
-predicates and `before_attempt` checks) that charges no usage; a failure
-returns no bytes. A pure `write_chunk` retry (already written, same hash and
-operation ID) runs the same guard and check-only transaction.
+the guard's predicates, and a retry of an already-read index commits only its
+durable retry count (`handle.retries: {"index": n}`) with the same job version,
+guard predicates and `before_attempt` checks, charging no usage; a failure
+returns no bytes. A `write_chunk` retry of an already-written index (same hash)
+runs the same guard and commits its retry count. Each index allows at most
+`readRetries` (2) retries; a further one is refused with `retry-exhausted`
+before any bytes are served or written.
 
 Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
 `attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,
@@ -877,7 +879,7 @@ Error codes: `request-changed`, `admission-required`, `admission-invalid`, `auth
 `transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
 `operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
 `completion-contention`, `completion-obligations`, `completion-unavailable`,
-`completion-invalid`, `calls-unresolved`, `accounting-pending`, `profile-invalid`, `manifest-invalid`,
+`completion-invalid`, `calls-unresolved`, `accounting-pending`, `retry-exhausted`, `profile-invalid`, `manifest-invalid`,
 `evidence-stale`,
 `unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
 `acknowledge-required`, `not-retryable`, `forbidden`.
