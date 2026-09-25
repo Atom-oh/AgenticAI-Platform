@@ -1391,6 +1391,13 @@ class WorkspaceAPI:
             from workspace.change_requests import baseline_project
             baseline_project(self.storage, owner, normalized.get("changeRequest", {}))
         except ValueError as error:
+            # A validation failure (e.g. a quote that doesn't match) must never be
+            # distinguishable from an asset that lost access while its text was being
+            # read for that same comparison (review 8 #3): re-authorize every
+            # referenced asset one more time before reporting the content-revealing
+            # 400 -- a race that revoked one raises the same 404 a plain GET (or the
+            # matching-quote path's own later gate recheck) would.
+            self._assets(owner, [asset["id"] for asset in assets], gate=gate)
             raise HTTPError(400, "invalid-contract", str(error)[:240]) from error
         return normalized, assets
 

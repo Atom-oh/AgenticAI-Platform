@@ -567,3 +567,58 @@ def test_contract_creation_never_leaks_a_revoked_assets_text_via_quote_matching(
                                               actor="carol", project=project["id"])
     assert (status_match, payload_match.get("code")) == (status_nomatch, payload_nomatch.get("code"))
     assert status_match == 404 and payload_match.get("code") == "not-found", (status_match, payload_match)
+
+
+def test_contract_validation_never_leaks_quote_matching_via_a_revocation_race(monkeypatch):
+    """Review 8 #3 (still open after review 7 #1): `_assets` checked access once, up
+    front, but retained no authorization observation and a later validation
+    failure (`ValueError` -> 400 invalid-contract) raised straight past the
+    response gate entirely -- so an asset revoked in the window between that
+    initial check and `_asset_texts` reading its analysis for the quote
+    comparison still produced a distinguishable code (400 for a non-matching
+    quote) instead of the 404 a revoked asset must always get. Reproduced here
+    by revoking the asset from inside `_asset_texts` itself (after `_assets`
+    already passed it), then submitting a rule whose quote does not match: the
+    fix re-authorizes every referenced asset again before ever reporting the
+    400, so the race is closed and this returns 404 like every other revoked
+    asset, never the content-revealing 400."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    secret_text = "기밀 원본 문장입니다."
+    asset_bytes = secret_text.encode()
+    status, data = request(api, "POST", "/assets", {"name": "secret.txt", "size": len(asset_bytes),
+                           "sha256": hashlib.sha256(asset_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    asset = data["asset"]
+    original = api.storage.key_for(owner, "asset", asset["id"], "original")
+    analysis = api.storage.key_for(owner, "asset", asset["id"], "analysis.json")
+    api.storage.put_blob(original, asset_bytes, "text/plain")
+    api.storage.put_blob(analysis, json.dumps({"text": secret_text, "parseStatus": "complete"}).encode(),
+                         "application/json")
+    asset = api.storage.put(owner, "asset", {**asset, "status": "stored", "uploadStatus": "stored",
+                            "parseStatus": "complete", "originalKey": original, "analysisKey": analysis,
+                            "projectId": project["id"]}, expected_version=asset["version"])
+    original_texts = http_module.WorkspaceAPI._asset_texts
+    armed = {"on": True}
+
+    def racing(self, owner, assets, guide_refs=None):
+        texts = original_texts(self, owner, assets, guide_refs)
+        if armed["on"]:
+            armed["on"] = False
+            current = self.storage.get(owner, "asset", asset["id"])
+            self.storage.put(owner, "asset", {**current, "accessRevoked": True}, current["version"])
+        return texts
+    monkeypatch.setattr(http_module.WorkspaceAPI, "_asset_texts", racing)
+    nonmatching_rule = {"id": "R1", "title": "확인", "source": {"kind": "explicit", "assetId": asset["id"],
+                        "quote": "이 문장은 존재하지 않습니다"}, "steps": [{"action": "expectVisible", "target": "x", "value": True}]}
+    status, payload = request(api, "POST", "/contracts", {"productId": product["id"], "title": "t",
+                              "rules": [nonmatching_rule], "assetIds": [asset["id"]]},
+                              actor="carol", project=project["id"])
+    assert not armed["on"]
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
