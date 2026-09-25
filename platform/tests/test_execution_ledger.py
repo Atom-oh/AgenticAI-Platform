@@ -3210,3 +3210,43 @@ def test_cancelled_unresolved_reservations_count_against_the_daily_budget(xfer, 
         ledger.reconciler().sweep(OWNER, job["id"])
     assert client.tokens == 300
     assert storage.get(QUOTA_OWNER, "exec_quota", PENDING_CHARGES_ID)["charges"] == {}
+
+
+def _expiring_resolver(base_resolver, expires_at):
+    def resolver(owner, admission):
+        blob = base_resolver(owner, admission)
+        return {**blob, "expiresAt": expires_at} if blob else blob
+    return resolver
+
+
+def test_source_expiry_is_rechecked_by_the_final_guard_before_delivery(xfer, monkeypatch):
+    """Review 8 finding 2: an admission's resolver-granted time bound is rechecked with a fresh clock read
+    immediately before delivery; a version predicate alone cannot catch it elapsing mid-read."""
+    storage, ledger, now, data = xfer
+    expires_at = now[0] + 1_000
+    ledger.input_resolver = _expiring_resolver(ledger.input_resolver, expires_at)
+    job = run_job(ledger)
+    handle = ledger.tool().open_input(*ids(job), operation_id=op_id(), decision_id="adm-1", stage="context")
+    original_get_blob = storage.get_blob
+
+    def lapsing_get_blob(*args, **kwargs):
+        now[0] = expires_at + 1                      # the grant's time bound elapses during the ranged read
+        return original_get_blob(*args, **kwargs)
+    monkeypatch.setattr(storage, "get_blob", lapsing_get_blob)
+    with pytest.raises(LedgerError) as error:
+        ledger.tool().read_chunk(*ids(job), handle["handleId"], 0)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["handles"][handle["handleId"]]["read"] == []
+
+
+def test_completion_never_succeeds_once_a_grant_expiry_elapses_during_staging(xfer):
+    """Review 8 finding 2: the same expiry bound is rechecked at completion, not only at the read."""
+    storage, ledger, now, data = xfer
+    expires_at = now[0] + 10_000
+    ledger.input_resolver = _expiring_resolver(ledger.input_resolver, expires_at)
+    job, result = chain(xfer, "design.extract")
+    now[0] = expires_at + 1                          # elapses before completion is submitted
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
