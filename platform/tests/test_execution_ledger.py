@@ -3145,3 +3145,21 @@ def test_heartbeat_never_renews_a_lease_that_expired_during_preparation(env, mon
     with pytest.raises(LedgerError) as error:
         ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=0)
     assert error.value.code == "stale-attempt"
+
+
+# === PR #27 review round 8 regressions ================================================================
+
+def test_manifest_unavailability_never_erases_consumed_prior_bindings(xfer):
+    """Review 8 finding 1: a stage entry's own consumedPriors is durable; deleting/corrupting the manifest
+    afterward must never erase the revalidation of a prior it named as a consumed input."""
+    storage, ledger, _, _ = xfer
+    prior, entry = listed_prior(storage)
+    job, result = chain(xfer, "design.extract", manifest_extra={"priors": [prior]},
+                        extra_inputs={"context": [entry]})
+    manifest_ref = storage.get(OWNER, "job", job["id"])["manifest"]["ref"]
+    storage.s3().delete_object(Bucket=storage.bucket, Key=manifest_ref)   # the manifest is now unreadable
+    revoke_round(storage)
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == "authority-changed"
+    assert storage.get(OWNER, "job", job["id"])["status"] == "failed"
