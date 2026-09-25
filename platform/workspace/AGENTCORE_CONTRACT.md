@@ -687,7 +687,9 @@ live evidence and the privacy redaction adapter remain outstanding.
   for model use, in bounded batches (≤ 400 000 bytes by default, never above
   512 KiB) with a 5-minute cursor bound to decision, revision, derivative hash
   and actor, and reruns `verify` for every batch. Every verification ends with
-  a final recheck after all reads, and every delivery path repeats it through
+  a final recheck after all reads (every record expiry and the authorization
+  deadline are collected during the reads and compared with one clock read
+  taken after the last read, as in each commit attempt's deadline guard), and every delivery path repeats it through
   one shared `admission.Authority.recheck()` after its last read, immediately
   before returning anything: `pages_for`, `imaging.read_vision_chunk`,
   `imaging.vision_input`, `imaging.descriptor` (OCR text),

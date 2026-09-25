@@ -569,3 +569,36 @@ def test_normalization_invariant_violation_blocks_the_admission(env, monkeypatch
                         lambda texts, spans: [t.replace("12", "1") for t in original(texts, spans)])
     decision = admission.request(env.api, env.scope(), ref, data_class="public")
     assert decision == {"status": "blocked", "blocking": ["normalization-invariant"]}
+
+
+# PR #28 review round 7 ----------------------------------------------------------
+
+def test_decision_expiring_during_the_final_source_read_delivers_nothing(env, monkeypatch):
+    """Review 7, finding 2: the final recheck compares deadlines with a clock read after its last read."""
+    decision = internal_admitted(env)
+    storage = env.api.storage
+    clock, get, recheck = storage.clock, storage.get, admission.Authority.recheck
+    state = {"final": False, "calls": 0}
+
+    def final(self):
+        state["calls"] += 1
+        state["final"] = state["calls"] == 1  # the delivery recheck after the cursor/derivative I/O
+        try:
+            return recheck(self)
+        finally:
+            state["final"] = False
+
+    def reading(owner, kind, identifier):
+        row = get(owner, kind, identifier)
+        if state["final"] and not kind.startswith("adm_") and kind != "project":
+            storage.clock = lambda: decision["expiresAt"] + 1  # crossed during the source read
+        return row
+
+    monkeypatch.setattr(admission.Authority, "recheck", final)
+    monkeypatch.setattr(storage, "get", reading)
+    try:
+        with pytest.raises(AdmissionError) as error:
+            admission.pages_for(env.api, env.scope(), decision["id"])
+    finally:
+        storage.clock = clock
+    assert error.value.code == "decision-not-current" and state["calls"] == 1

@@ -447,12 +447,15 @@ _RECHECK_CODES = {"adm_decision": "decision-not-current", "adm_policy": "policy-
 def _final_recheck(host, reader, checks, *, pending=()):
     """Re-read every admission record and source fence immediately before use.
 
-    Each record must still pass its closed schema, be current (status and expiry
-    at the present clock) and keep the exact version observed earlier; the
-    current-source fences are rechecked through `Sources.recheck`. Decision ids in
-    `pending` must still be `pending-review` and unexpired (the review queue).
+    Each record must still pass its closed schema, keep the exact version
+    observed earlier and have a current status; decision ids in `pending` must
+    still be `pending-review` (the review queue). Every deadline (each record's
+    expiry and the authorization deadline) is collected during the reads,
+    including the current-source fences rechecked through `Sources.recheck`, and
+    compared with one fresh clock read taken after the last read.
     """
     storage = host.storage
+    deadlines = []
     for check in checks:
         code = _RECHECK_CODES.get(check["kind"])
         if code is None:
@@ -462,19 +465,31 @@ def _final_recheck(host, reader, checks, *, pending=()):
             row = records.validate(check["kind"], row) if row else None
         except ValueError:
             row = None
-        now = storage.clock()
         if check["kind"] == "adm_decision" and check["id"] in pending:
-            current = bool(row) and row["status"] == "pending-review" and now < row["expiresAt"]
+            status_ok = bool(row) and row["status"] == "pending-review"
         else:
-            current = records.is_current(row, now)
-        if not row or row.get("version") != check["version"] or not current:
+            status_ok = bool(row) and row.get("status") in ("active", "admitted")
+        if (not row or row.get("version") != check["version"] or not status_ok
+                or type(row.get("expiresAt")) is not int):
             raise AdmissionError(code)
-    if reader is None:
-        return []
-    try:
-        return reader.recheck()
-    except CollaborationError:
-        raise AdmissionError("source-changed") from None
+        deadlines.append((row["expiresAt"], code))
+    fences = []
+    if reader is not None:
+        try:
+            fences = reader.recheck()
+        except CollaborationError:
+            raise AdmissionError("source-changed") from None
+        bound = reader.ctx.scope.get("authorizationExpiresAt")
+        if bound is not None:
+            if type(bound) is not int:
+                raise AdmissionError("authorization-expired", 401)
+            deadlines.append((bound, None))
+    now = storage.clock()  # after the last read
+    if deadlines:
+        expiry, code = min(deadlines, key=lambda item: item[0])
+        if expiry <= now:
+            raise AdmissionError(code) if code else AdmissionError("authorization-expired", 401)
+    return fences
 
 
 class Authority:

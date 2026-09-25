@@ -271,12 +271,21 @@ class Sources:
             from workspace.component_catalog import read_catalog
             if self.package_hashes != {read_catalog()["hash"]}:
                 fail(409, "ontology-package-stale", "조회 중 컴포넌트 기준이 변경되었습니다.")
+        upstream = []
         for check in self.observed.values():
             row = self.storage.get(check["owner"], check["kind"], check["id"])
             if not row or row["version"] != check["version"]:
                 fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
             if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision"):
-                from intake.records import is_current
-                if not is_current(row, self.storage.clock()):
+                if row.get("status") not in ("active", "admitted") or type(row.get("expiresAt")) is not int:
                     fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
+                upstream.append(row["expiresAt"])
+        # Deadlines collected during the reads are compared with one clock read
+        # taken after the last read.
+        bound = self.ctx.scope.get("authorizationExpiresAt")
+        now = self.storage.clock()
+        if bound is not None and (type(bound) is not int or bound <= now):
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        if upstream and min(upstream) <= now:
+            fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
         return list(self.observed.values())
