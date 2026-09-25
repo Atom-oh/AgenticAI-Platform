@@ -23,7 +23,8 @@ KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership", "
                    "wb_artifact", "wb_pension", "wb_report", "wb_tool",
                    "document", "docrevision", "docbinding", "docaudit", "docanalysis", "docdecision",
                    "exec_report", "exec_request", "exec_quota", "exec_due",
-                   "adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver"})
+                   "adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver",
+                   "capability", "adm_sharing", "publication", "pub_grant"})
 MAX_BLOB_BYTES = 50 * 1024 * 1024
 MAX_RECORD_BYTES = 350_000
 JOB_RETENTION_SECONDS = 30 * 24 * 60 * 60

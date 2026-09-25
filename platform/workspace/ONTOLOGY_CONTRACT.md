@@ -136,10 +136,110 @@ final authority, source-version and expiry checks are always repeated before
 returning data or committing a mutation.
 Opaque pagination cursors use the separate `ontology_cursor` record kind,
 with an application expiry and DynamoDB TTL of at most five minutes.
+Multi-record responses (workspace and publication listings, batch views) check
+each row on its own reader, absorb every row's observations into one aggregate
+reader (`ontology_sources.aggregate_reader`) and run a single final aggregate
+recheck after the complete response is assembled and before it or its cursor is
+returned; a change to any earlier row's authority fails the response.
 
-The v1 schema reserves `published-asset`, `ux-contract` and `run-round` source
-kinds for later authority adapters. Until those adapters are installed, reads fail unavailable.
-This is explicit staging, not completed sharing or release integration.
+The `run-round`, `ux-contract` and `published-asset` source kinds have installed
+authority adapters (B0 sharing). Each resolves the exact record in the current
+project (or active grant), rechecks current membership and audience, and compares
+revision and hash. Missing and inaccessible records return the same `404 not-found`.
+Current resolution (`Sources.resolve`) is the only reuse authority; historical
+authorization (`Sources.authorize`, or `resolve(..., historical=True)`, metadata
+only, never text) admits diagnostics. Offline code and tests exist; this is not
+live sharing or release evidence.
+
+- `run-round` `{sourceId: runId, revision: "<round>", sha256: round.sourceHash,
+  audienceRevision: "current-project-members-v1", location?: {round, path}}`.
+  The run is a React run of this project; the round exists. Content permission
+  depends on round state: draft, failed or needs-changes rounds are readable only
+  by owner/designer/developer; reviewable, approved or released rounds by any
+  current project reader. The state check precedes the hash check, so a restricted
+  reader receives `404 not-found` for any reference. A different hash is
+  `409 source-changed`; an archived run is `409 ontology-source-stale` for current
+  use. Current use also requires current upstream lineage: the approved contract
+  (through the `ux-contract` rules), every `designManifestInput.admissions` entry
+  (`intake.admission.verify` with matching revision and derivative hash), every
+  exact input binding in the run's `assetSnapshots` (resolved as an `asset`
+  source at the snapshot import revision and hash), every refinement input
+  (`baseRunId`/`baseRound` with its recorded source/artifact hash, and the
+  contract's `changeRequest.baseline`, each reauthorized recursively through the
+  base round's own lineage, at most 5 levels, cycles denied) and the
+  product/guideline criteria (`resolve_generation_context`); otherwise
+  `409 source-upstream-revoked`. Text requires `location.path` and reads the
+  verified source archive (`read_archive` over the stored archive hash).
+  `Sources.release_source` returns the verified archive bytes under the same
+  constraints. Existing delivery routes use the same checks through
+  `Sources.round_delivery` (every run/release blob chunk of every artifact kind,
+  including `candidate`, the baseline route and Git export): the round-state
+  permission and the historical upstream-permission checks below. A revoked
+  upstream or a restricted state is `404 not-found`; a merely superseded upstream
+  keeps diagnostic delivery. Historical authorization rechecks upstream permission: a
+  superseded but still readable upstream (retained contract revision, admission
+  whose source was superseded but is still readable, guideline still published)
+  admits metadata; a revoked upstream denies with `404 not-found`. Historical
+  checks verify admissions with the same reader, and every decision, policy,
+  reviewer-grant/provenance and source version observed (including the
+  superseded-source fallback) joins that reader's final `recheck()`. A
+  `document-revision` source authorized historically (directly or through that
+  fallback) also propagates the library's nested transcription lineage
+  (transcription and image admissions, policy, reviewer grants and image asset),
+  so their versions and expiry deadlines are rechecked by the parent reader. Admission
+  verification runs on a probe reader (`Sources._probe`) whose observations are
+  absorbed (`Sources.absorb`), so its own final recheck never re-enters the parent
+  reader's historical-reference replay. Historical round checks also fence the product and
+  guideline records they consult, so a guideline withdrawn during delivery fails
+  that response's final recheck.
+- `ux-contract` `{sourceId: contractId, revision: str(contract.version), sha256:
+  contract.approval.hash, audienceRevision: "current-project-members-v1"}`. The
+  contract is `approved` at that version, the approval hash matches and
+  `rules.contract_hash` recomputes it (`409 source-changed` otherwise); its
+  product/guideline criteria and catalog hash are still current
+  (`Collaboration.is_current`). Every `assetIds` input resolves as a current
+  `asset` source (archived, revoked or changed input: `409 source-upstream-revoked`).
+  Historical authorization of a contract or round reauthorizes the same inputs
+  (a retained contract revision uses the `assetIds` of its immutable revision
+  blob); a revoked input is `404 not-found`, an archived but readable one keeps
+  diagnostics. Historical resolution returns metadata only from the authorized
+  revision: the current record when it is that approved revision, otherwise the
+  hash-verified retained revision blob, never newer content. A draft or foreign contract is `404 not-found`.
+  An edited contract's retained revision, or an approved one whose criteria
+  changed, is `409 source-superseded` for current use and readable historically.
+  Current `ux-contract` and `run-round` resolution retains the consulted product
+  and guideline records as observed versions and adds the consulted catalog hash
+  to the package recheck set, so a republication or catalog change between
+  resolution and return/commit fails `recheck()` and the commit fence. The
+  records are fenced before criteria validation and re-read after it, so the
+  fenced versions are exactly those validation used (`ontology-source-changed`
+  otherwise). `published-asset` package sources join the same package set.
+- `published-asset` `{sourceId: publicationId, revision: str(publication revision),
+  sha256: publication hash, audienceRevision: str(grant revision)}`. Resolution
+  requires an active destination grant for this publication revision naming the
+  caller's role, the `published` revision, the grant revision and hash, and the
+  current origin source audience of every published node source, and for each
+  non-`package` source the IAM-administered organization-sharing policy
+  (`adm_sharing`) at exactly the revision bound at approval, still active and
+  unexpired (restricted, revoked or re-issued upstream policy beats the grant:
+  `409 source-upstream-revoked`; historical `404 not-found`). Policy records are
+  fenced and their currency rechecked by `recheck()` and before commit.
+  A transcription document revision (`transcriptionOf`) is shareable only while
+  its whole lineage is current, checked on every current and historical read
+  without origin membership: the transcription and image admissions at the bound
+  revisions and hashes, their policies and reviewer grants/provenance, and the
+  original image asset, which (like a published `asset` source) must pass the
+  complete current-asset conditions of `Sources.resolve` — stored, not archived,
+  revoked, tombstoned or deleted, exact import revision/hash, stored bytes matching
+  size and hash; every record is fenced into the destination reader. Withdrawal is
+  `409 source-withdrawn` and a newer revision `409 source-superseded` for current
+  use; historical metadata stays readable while the grant and upstream remain.
+  Returned metadata (current and historical) is built only from the granted
+  revision's immutable snapshot and its revision-specific approval history entry
+  (`revision`, `hash`, `nodes`, `approvedBy`, `approvedAt`, derived `status`
+  `published`/`superseded`/`withdrawn`), never from a newer proposed or published
+  revision of the current record.
+  See `platform/docs/CONTRACTS.md` "Shared publications".
 
 ## APIs
 

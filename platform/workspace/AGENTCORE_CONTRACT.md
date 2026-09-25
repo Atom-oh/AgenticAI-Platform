@@ -30,11 +30,15 @@ An edge contains `id`, `type`, exact source/target node IDs and revisions,
 A source reference contains `sourceKind`, `sourceId`, `revision`, `sha256`,
 `audienceRevision` and a location when applicable: document page, source
 path/export/line, or image region. Implemented source-kind identifiers are
-`asset`, `document-revision`, `product-guideline`, `workbench-document` and
-`package`. Imported code revisions use `asset` with an exact import revision,
-byte hash and file location. `published-asset`, `ux-contract` and `run-round`
-are reserved for their separately installed authority adapters and fail closed
-until those adapters exist.
+`asset`, `document-revision`, `product-guideline`, `workbench-document`,
+`package`, `run-round`, `ux-contract` and `published-asset`. Imported code
+revisions use `asset` with an exact import revision, byte hash and file location.
+The last three have installed authority adapters (B0 sharing) in
+`workspace/ontology_sources.py` and `workspace/publications.py`; their rules are
+in `ONTOLOGY_CONTRACT.md` "Source authority". A missing and an inaccessible
+record return the same `404 not-found`. Current resolution alone admits reuse;
+historical authorization admits metadata only. Intake (`source-admission/1`)
+has no admission adapter for these kinds and still refuses them with `503`.
 IDs are stable within a scope; revision hashes identify immutable content.
 Original IDs live in namespace mappings. Ambiguity cannot silently select
 the first match.
@@ -98,21 +102,31 @@ inferred from an agent/service identity.
 Effective access intersects current membership, publication grant and upstream
 source policy. Grants cannot widen a restricted upstream audience. Organization
 publication requires a separately authorized source-policy change; ordinary
-uploads or project ownership do not create it. A new revision needs a new grant
+uploads or project ownership do not create it. It is an IAM-administered,
+versioned `adm_sharing` policy per exact origin source revision
+(`intake/admin_handler.py` `grant_sharing`/`revoke_sharing`), bound by revision
+at proposal/approval and rechecked on every access. A new revision needs a new grant
 binding or explicit renewal. Withdrawal immediately invalidates downstream reuse.
 
 Impact crosses shared boundaries only through authorized references. Return
 only authorized dependents and evidence; do not disclose hidden IDs, names or
 exact counts. Coverage says `restricted-or-unmapped`, never “no impact.”
+Every contributing destination reader (current membership, the destination grant,
+source and ontology observations) is retained and rechecked after all
+destinations were read and again by the response gate's final recheck; a
+destination whose authority changed meanwhile fails the whole answer.
 Internal routing may create work in the affected project's authorized worklist
 without exposing that project to the initiating caller.
 
 Project roles remain the authoritative owner/planner/designer/developer roles.
 Organization-level `design_publish` and `policy_publish` capabilities are
-separate grants assigned through IAM-only administration; project owners cannot
-self-grant them. Origin source authority is also required. Destination acceptance
-requires destination ownership. Explicit deny, upstream restriction, expiry and
-revocation override allows.
+separate grants assigned through IAM-only administration (`intake/admin_handler.py`
+`grant_capability`/`revoke_capability`); project owners cannot self-grant them. Origin source authority is also required. Destination acceptance
+requires destination ownership and the revision's current upstream sharing
+eligibility (every source's origin audience and bound `adm_sharing` policy), checked
+before creation or replay and fenced into the acceptance commit; an ineligible
+publication is the same `404` as a missing one. Explicit deny, upstream restriction,
+expiry and revocation override allows.
 
 Withdrawal is prospective enforcement, not recall of delivered bytes. At the
 next access/stage boundary, fence affected attempts, quarantine derivatives,

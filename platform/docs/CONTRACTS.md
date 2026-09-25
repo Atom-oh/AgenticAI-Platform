@@ -346,3 +346,42 @@ code-collection index/files/mapping, prompt text and image/vision derivatives ar
 private blobs under `Storage.key_for(owner, "adm_decision", <id>, ...)`.
 The Worker task `intake-image` (job target `adm_decision.decisionId`) produces
 image decisions atomically with its job completion.
+
+The IAM-only administration Lambda (`intake/admin_handler.py`) also owns the
+organization `design_publish`/`policy_publish` capabilities used by shared
+publications: `grant_capability` (record `{id, actor, name, expiresAt}`) and
+`revoke_capability` (`{id, expectedRevision}`). Kind `capability` lives in
+`intake:deployment` with an `adm_audit` event per write. No workspace route
+creates or activates a capability; project ownership confers none.
+The same entry point owns organization-sharing source policies (kind
+`adm_sharing` in `intake:deployment`): `grant_sharing` (record `{id, projectId,
+source: {sourceKind, sourceId, revision, sha256}, audience: "organization",
+expiresAt}`, where `id` must equal `records.sharing_policy_id(projectId, source)`;
+re-issue with `expectedRevision` creates a new revision) and `revoke_sharing`
+(`{id, expectedRevision}`). One policy admits exactly one origin source revision
+(`asset`, `document-revision` or `product-guideline`) to organization publication.
+
+## Shared publications
+
+Shared-publication authority and the `published-asset` source adapter follow
+[`workspace/AGENTCORE_CONTRACT.md`](../workspace/AGENTCORE_CONTRACT.md)
+"Shared-publication authority". Offline code and tests exist
+(`workspace/publications.py`, `tests/test_publications.py`); no route is deployed by this record.
+All routes require a JWT access token and `X-Workspace-Project`; a publication the
+caller cannot use returns the same `404 not-found` as a missing one.
+
+| Method / path | Input / output |
+|---|---|
+| POST `/studio-api/publications` | Origin project; `{kind: "design"\|"policy", nodeIds, revisionBindings: {nodeId: {revision, contentHash}}}` (closed fields). Design: owner/designer; policy: owner/planner. Every node must be a current, readable, `approved` origin node at the bound revision whose sources are publishable (`asset`, `document-revision`, `product-guideline`, `package`, no `allowedRoles`) and, except `package`, each covered by a current `adm_sharing` policy → `201 {publication: {id, originProject, kind, revision, nodes, sharing: [{policyId, revision}], hash, status: "proposed", recallNeeded}}`. A changed binding or sharing-policy revision of the same node set is a new revision; `409 publication-source-policy-required` without a policy. Proposal and approval record `ontologyGeneration` and fence the ontology manifest (`ontology`/`project-current` version) read with the nodes; a later ontology change fails the transaction (`409 ontology-changed`/`conflict`). A changed binding of the same node set is a new revision; `409 publication-binding-stale` / `publication-restricted-source` / `publication-withdrawn`, `422 publication-node-kind` |
+| POST `/studio-api/publications/{id}/approve` | Origin project; `{}`. Requires a current `capability` for the actor (`design_publish` or `policy_publish`) **and** origin source authority (source-owner role that can still read every bound node) → `{publication: {..., status: "published", approvedBy, capability: {id, revision}}}`. The capability's version, status and expiry are rechecked by the storage transaction guard immediately before submission (`workbench/service.check_source_deadlines`); `403 publication-capability-required` / `publication-authority-required` |
+| POST `/studio-api/publications/{id}/grants` | Destination project owner; `{roles}` → `201 {grant: {id, publicationId, publicationRevision, publicationHash, originProject, destinationProject, roles, revision, status}, reference}` where `reference` is the `published-asset` source reference. A new publication revision needs a new grant; changed roles bump the grant revision |
+| POST `/studio-api/publications/{id}/withdraw` | Origin owner or the approving publisher; `{}` → `{publication: {..., status: "withdrawn", recallNeeded: boolean}}`. Destination IDs stay internal recall metadata. First and replayed responses omit `nodes`/`sharing` unless the caller can currently read every bound source; a replayed approval of a published revision requires the same source access (`403 publication-authority-required`) |
+| GET `/studio-api/publications` | `?view=origin` (default): this project's publications the caller can currently read (same source check as detail); `?view=granted`: this project's active grants that name the caller's current role and still pass the upstream check (a grant excluding the role is omitted, including for the destination owner). Paged with `limit` (1–100) and an opaque `cursor` (`pubcur-…`): a random ID of an `ontology_cursor` record in the caller's project partition, bound to actor, role, project, authority epoch, view and `limit`, expiring after five minutes; storage keys stay server-side and hidden rows never supply continuation (`409 publication-cursor-stale` otherwise). The origin view scans only its own ID prefix (`pub-<origin digest>-…`) |
+| GET `/studio-api/publications/{id}` | Origin members who can currently read every recorded node source (`Sources.authorize`), or destination members whose role the latest active grant names while that grant passes the `published-asset` adapter's historical checks (grant ∩ current upstream audience); a destination receives only that granted revision's snapshot metadata. Otherwise `404 not-found` |
+| GET `/studio-api/publications/{id}/impact` | Origin members → `{publicationId, dependents: [{projectId, nodeIds}], coverage: {complete: false, unknown: ["restricted-or-unmapped"]}}`; only destinations where the caller is a current member able to read the dependents, no hidden IDs or counts |
+
+Storage kinds: `publication` in the owner partition `publication:deployment` (IDs carry a per-origin prefix)
+(revision history and immutable per-revision snapshot blobs under
+`Storage.key_for("publication:deployment", "publication", <id>, "revisions/<n>.json")`);
+`pub_grant` in the destination partition `project:<id>`; `capability` in
+`intake:deployment`.

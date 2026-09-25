@@ -197,7 +197,14 @@ class _Local:
         if self.run("rev-parse", "--is-bare-repository").strip() != b"true":
             _fail("invalid-input")
 
+    guard = None
+
     def run(self, *args, data=None, env=None, missing=False):
+        if self.guard is not None:
+            self.guard()  # Before every object write, ref update and read of the target repository.
+        return self._run(*args, data=data, env=env, missing=missing)
+
+    def _run(self, *args, data=None, env=None, missing=False):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             _fail("unavailable")
@@ -273,6 +280,8 @@ class _Local:
 
 
 class _Remote:
+    guard = None
+
     def __init__(self, config, token_provider, transport, deadline):
         self.config, self.transport, self.deadline = config, transport, deadline
         self.github = config["provider"] == "github"
@@ -298,6 +307,10 @@ class _Remote:
         self.calls += 1
         if self.calls > 2000 or time.monotonic() >= self.deadline:
             _fail("unavailable")
+        if self.guard is not None:
+            # Retained authority is rechecked before every outbound request (metadata,
+            # content transfer and publication); a refusal is never masked.
+            self.guard()
         try:
             result = self.transport(method, self.root + path, dict(self.headers), payload)
             if not isinstance(result, (dict, list)):
@@ -501,7 +514,9 @@ class GitExporter:
                 "commitUrl": commit_url, "filesUrl": files_url, "repository": config["repository"],
                 "connectionId": config["id"], "sourceHash": source_hash}
 
-    def export_release(self, release_id, source_hash, files, project_key, expected_base_sha=None, commit_time=None):
+    def export_release(self, release_id, source_hash, files, project_key, expected_base_sha=None, commit_time=None,
+                       guard=None):
+        """`guard` (the caller's retained-authority recheck) runs before every outbound operation."""
         _id(release_id)
         _id(project_key)
         if (not isinstance(files, dict) or not 1 <= len(files) <= MAX_FILES
@@ -530,19 +545,22 @@ class GitExporter:
         if branch == self.connection["baseBranch"]:
             _fail("invalid-input")
         try:
-            return self._export(release_id, source_hash, files, project_key, expected_base_sha, when, target, branch)
+            return self._export(release_id, source_hash, files, project_key, expected_base_sha, when, target, branch,
+                                guard)
         except GitExportError as error:
             code = error.code if error.code in _MESSAGES else "unavailable"
             raise GitExportError(code, _MESSAGES[code]) from None
         except (KeyError, TypeError, ValueError, UnicodeError):
             raise GitExportError("invalid-response", _MESSAGES["invalid-response"]) from None
 
-    def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch):
+    def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch, guard=None):
+        from workspace.ontology_sources import ProtectedCallRefused
         deadline = time.monotonic() + 120
         if self.connection["provider"] == "local":
             backend = _Local(self.connection, deadline)
         else:
             backend = _Remote(self.connection, self.token_provider, self.transport, deadline)
+        backend.guard = guard
         def existing(sha):
             base = self._verify(backend, sha, release_id, source_hash, project_key, target, files, expected)
             if backend.ref(branch) != sha:
@@ -560,15 +578,39 @@ class GitExporter:
         if any("/".join(target.split("/")[:index]) in tree for index in range(1, len(target.split("/")))):
             _fail("conflict")
         message = self._message(release_id, source_hash, project_key, target, base)
+        # GitLab's `POST /commits` (`backend.create`) creates the commit AND the branch
+        # atomically -- delivery happens there, not at `backend.publish` (which only
+        # re-reads to confirm). GitHub and local instead create loose, unreachable
+        # objects first and only deliver at `backend.publish` (`POST /git/refs` / the
+        # local ref transaction). A guard revocation between delivery and any further
+        # guarded call raises `ProtectedCallRefused` (never `GitExportError`, so the
+        # `except` below does not see it) -- once delivery has genuinely happened,
+        # that must not discard the one record of an action that already cannot be
+        # undone, while a revocation BEFORE delivery must keep blocking it exactly as
+        # it always has.
         try:
             sha = backend.create(base, tree, target, files, message, when, branch)
-            self._verify(backend, sha, release_id, source_hash, project_key, target, files, base)
-            if backend.ref(self.connection["baseBranch"]) != base:
-                _fail("conflict")
-            backend.publish(branch, sha, self.connection["baseBranch"], base)
+            delivered = self.connection["provider"] == "gitlab"
+            try:
+                self._verify(backend, sha, release_id, source_hash, project_key, target, files, base)
+                if backend.ref(self.connection["baseBranch"]) != base:
+                    _fail("conflict")
+                backend.publish(branch, sha, self.connection["baseBranch"], base)
+            except ProtectedCallRefused:
+                if delivered:
+                    return self._result(branch, base, sha, source_hash, target)
+                raise
         except GitExportError:
             occupied = backend.ref(branch)
             if occupied:
                 return existing(occupied)
             raise
-        return existing(sha)
+        # The transfer is now genuinely delivered (the ref transaction above either
+        # created the branch or raised): its receipt (already verified against `base`
+        # and `files` immediately before publish) is preserved as-is. A further guarded
+        # call here would only re-confirm what publish already committed the provider
+        # to, while letting a guard revocation racing the delivery itself discard the
+        # one observed record of a transfer that already happened and cannot be undone
+        # (`self.guard()` still runs, and still blocks, before every call up to and
+        # including `publish` -- no unguarded transfer is introduced by this).
+        return self._result(branch, base, sha, source_hash, target)

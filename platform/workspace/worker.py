@@ -253,12 +253,19 @@ class Worker:
             return {"status": "duplicate-or-unavailable"}
         try:
             task = job["task"]
+            # Generation/release inputs are reauthorized at execution, before any model call
+            # or rebuild; the same reader is rechecked before the outcome is recorded.
+            from workspace.ontology_sources import job_lineage, protected_calls, recheck_job
+            lineage = job_lineage(self, owner, job) if task in ("propose", "run") else None
             if task == "finalize":
                 result = self._finalize(owner, job, context)
             elif task == "propose":
-                result = self._propose(owner, job)
+                with protected_calls(self, lineage):
+                    result = self._propose(owner, job)
             elif task == "run":
-                result = self._run(owner, job, context)
+                # Every model/verifier call inside the generation and repair loop rechecks first.
+                with protected_calls(self, lineage):
+                    result = self._run(owner, job, context)
             elif task == "release":
                 from workspace.releases import process_release
                 result = process_release(self, owner, job)
@@ -287,6 +294,7 @@ class Worker:
                 if not current_job or current_job.get("status") != "completed":
                     raise ValueError("문서 작업의 원자적 완료 기록을 확인하지 못했습니다.")
             else:
+                recheck_job(lineage)
                 self._update(owner, "job", identifier, status="completed", progress=100, result=result)
             return {"status": "completed", "jobId": identifier}
         except Exception as error:
@@ -327,7 +335,9 @@ class Worker:
                 return {"status": "failed", "jobId": identifier}
             # Known validation messages are bounded and contain no SDK secrets.
             from engine.gate import GateRefused, GateUnsupported
-            message = str(error)[:300] if isinstance(error, (ValueError, GateRefused, GateUnsupported)) else f"작업 처리 실패: {type(error).__name__}"
+            from workspace.ontology_sources import ProtectedCallRefused
+            message = (str(error)[:300] if isinstance(error, (ValueError, GateRefused, GateUnsupported, ProtectedCallRefused))
+                       else f"작업 처리 실패: {type(error).__name__}")
             if job.get("task") in ("document-finalize", "document-analysis"):
                 from documents.errors import DocumentError
                 from documents.jobs import fail_work
@@ -668,8 +678,11 @@ class Worker:
             self._update(owner, "job", job["id"], progress={"percent": 20 + int(75 * (number - 1) / run["maxRounds"]),
                                                            "stage": "verify", "round": number,
                                                            "message": f"{number}라운드 실제 브라우저에서 동작·접근성·화면 비교"})
+            from workspace.ontology_sources import ProtectedCallRefused
             try:
                 report = self.render_call(html, approved, reference, run.get("visualTolerance", 0.15))
+            except ProtectedCallRefused:
+                raise
             except Exception as error:
                 report = {"passed": False, "engineError": True, "functionalStatus": "incomplete",
                           "checks": [], "accessibility": {"status": "incomplete"}, "visual": {"status": "not-run"},

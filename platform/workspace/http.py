@@ -13,6 +13,7 @@ import math
 import os
 import re
 import uuid
+from typing import NamedTuple
 from urllib.parse import quote
 
 from workspace.storage import Conflict, Storage, key_for
@@ -100,6 +101,531 @@ def _body(event, binary=False):
         raise HTTPError(400, "invalid-body", "Invalid request body") from error
 
 
+class Route(NamedTuple):
+    """One registered workspace route and the gate views its responses are serialized through.
+
+    `views` maps response fields to authorized views; `fields` are plain fields
+    derived from the gated resource (or carrying no source-bound content);
+    `resource` pre-authorizes the addressed `:id` record before any processing;
+    `round` names where a run-round target comes from ("query", "baseline",
+    "body"); `blob` is the authorized byte view; `public` routes carry only
+    platform-wide configuration.
+    """
+    method: str
+    pattern: tuple
+    views: dict = {}
+    fields: tuple = ()
+    resource: str | None = None
+    blob: str | None = None
+    round: str | None = None
+    public: bool = False
+
+
+def _r(method, path, **options):
+    return Route(method, tuple(path.split("/")), **options)
+
+
+# The complete project-scoped workspace route inventory. `match_route` dispatches
+# nothing else, so a route that is not registered here is unreachable, and a
+# registered route's response always passes `ResponseGate.finish`.
+ROUTES = (
+    _r("GET", "config", public=True),
+    _r("GET", "components", public=True),
+    _r("GET", "git-connections", public=True),
+    _r("GET", "assets", views={"assets": "asset[]"}, fields=("cursor",)),
+    _r("POST", "assets", views={"asset": "asset"}, fields=("chunkBytes",)),
+    _r("GET", "assets/:id", resource="asset", views={"asset": "asset"}, fields=("analysis",)),
+    _r("DELETE", "assets/:id", resource="asset", views={"asset": "asset"}),
+    _r("GET", "assets/:id/guidelines", resource="asset", fields=("sources", "pages", "total", "cursor")),
+    _r("PUT", "assets/:id/parts/:part", resource="asset", views={"asset": "asset"}, fields=("index", "sha256")),
+    _r("POST", "assets/:id/complete", resource="asset", views={"asset": "asset", "job": "job"}),
+    _r("GET", "assets/:id/blob", resource="asset", blob="asset"),
+    _r("GET", "contracts", views={"contracts": "contract[]"}, fields=("cursor",)),
+    _r("POST", "contracts", views={"contract": "contract"}),
+    _r("POST", "contracts/propose", views={"job": "job"}),
+    _r("GET", "contracts/:id", resource="contract", views={"contract": "contract"}),
+    _r("PUT", "contracts/:id", resource="contract", views={"contract": "contract"}),
+    _r("POST", "contracts/:id/approve", resource="contract", views={"contract": "contract"}),
+    _r("GET", "runs", views={"runs": "run[]"}, fields=("cursor",)),
+    _r("POST", "runs", views={"job": "job", "run": "run"}),
+    _r("GET", "runs/:id", resource="run", views={"run": "run"}),
+    _r("POST", "runs/:id/approve", resource="run", round="body", views={"run": "run"}),
+    _r("GET", "runs/:id/baseline", resource="run", round="baseline", views={"baseline": "baseline"},
+       fields=("files",)),
+    _r("GET", "runs/:id/blob", resource="run", round="query", blob="run-round"),
+    _r("GET", "jobs/:id", resource="job", views={"job": "job"}),
+    _r("GET", "batches", views={"batches": "batch[]"}, fields=("cursor",)),
+    _r("POST", "batches", views={"batch": "batch", "runs": "run[]"}),
+    _r("GET", "batches/:id", resource="batch", views={"batch": "batch", "runs": "run[]"}),
+    _r("GET", "releases", views={"releases": "release[]"}, fields=("cursor",)),
+    _r("POST", "releases", round="body", views={"release": "release", "job": "job"}),
+    _r("GET", "releases/:id", resource="release", views={"release": "release"}),
+    _r("GET", "releases/:id/blob", resource="release", blob="release"),
+    _r("POST", "releases/:id/git", resource="release", views={"export": "export", "release": "release", "job": "job"}),
+    _r("GET", "publications", views={"publications": "publication[]", "grants": "granted[]"}, fields=("cursor",)),
+    _r("POST", "publications", views={"publication": "publication"}),
+    _r("GET", "publications/:id", views={"publication": "publication"}),
+    _r("GET", "publications/:id/impact", views={"publicationId": "impact-origin", "dependents": "impact-dependents"},
+       fields=("coverage",)),
+    _r("POST", "publications/:id/approve", views={"publication": "publication"}),
+    _r("POST", "publications/:id/withdraw", views={"publication": "publication-withdrawn"}),
+    _r("POST", "publications/:id/grants", views={"grant": "grant", "reference": "published-ref"}),
+    # Delegated-module routes that return run/round-derived metadata are gated here too.
+    _r("GET", "products/:id/impact", views={"affectedRuns": "run-summary[]"}, fields=("currentGuidelineId", "cursor")),
+    _r("GET", "comments", round="anchor", views={"comments": "comment[]"}, fields=("cursor",)),
+    _r("POST", "comments", round="anchor", views={"comment": "comment"}),
+)
+
+# Prefixes whose modules own their authority (collaboration, ontology, intake review,
+# workbench and the document library); they are dispatched by name, never by fallthrough.
+# Their routes that return run, round or other source-derived workspace metadata are
+# registered in ROUTES above and served through the response gate instead.
+DELEGATED = {"projects": "workspace.collaboration", "products": "workspace.collaboration",
+             "comments": "workspace.collaboration", "ontology": "workspace.ontology_api",
+             "intake": "intake.review", "workbench": "workbench.api", "documents": "documents.api",
+             "impact-analyses": "documents.analysis"}
+
+
+def match_route(method, parts):
+    """The registered route for a request, or None; literal segments win over `:param` ones."""
+    best = None
+    for route in ROUTES:
+        if route.method != method or len(route.pattern) != len(parts):
+            continue
+        params, literal = {}, 0
+        for expected, actual in zip(route.pattern, parts):
+            if expected.startswith(":"):
+                if not actual:
+                    break
+                params[expected[1:]] = actual
+            elif expected == actual:
+                literal += 1
+            else:
+                break
+        else:
+            if best is None or literal > best[0]:
+                best = (literal, route, params)
+    return (best[1], best[2]) if best else None
+
+
+def _missing():
+    return HTTPError(404, "not-found", "Resource not found")
+
+
+class ResponseGate:
+    """The single response-layer authorization of project-scoped workspace resources.
+
+    Every registered route's response is serialized through authorized views that
+    consult the shared `Sources` lineage reader: each view authorizes on a probe
+    reader absorbed into ONE aggregate reader, and `finish` runs one final
+    aggregate recheck (plus retained destination readers) after all storage reads,
+    immediately before the response is returned. An inaccessible singular record
+    is the same `404` as a missing one; inaccessible list rows are omitted.
+    """
+
+    VIEWS = frozenset({"asset", "asset[]", "contract", "contract[]", "run", "run[]", "release", "release[]",
+                       "job", "batch", "batch[]", "export", "baseline", "publication", "publication[]",
+                       "publication-withdrawn", "granted[]", "grant", "published-ref", "impact-origin",
+                       "impact-dependents", "run-summary[]", "comment", "comment[]"})
+    BLOBS = frozenset({"asset", "run-round", "release"})
+    _STORED = {"asset": "asset", "contract": "contract", "run": "run", "release": "release", "job": "job",
+               "batch": "batch", "export": "gitexport"}
+    # Tasks whose job records carry their own authority (asset upload, workbench,
+    # document and intake jobs) are authorized by their owning modules.
+    SELF_AUTHORIZED_TASKS = ("finalize", "workbench", "document-finalize", "document-analysis", "intake-image")
+
+    def __init__(self, api, scope, claims, route):
+        self.api, self.scope, self.route = api, scope, route
+        self.context = api._lineage_context(scope, claims) if api is not None else None
+        self.aggregate = None
+        if self.context is not None:
+            from workspace.ontology_sources import aggregate_reader
+            self.aggregate = aggregate_reader(self.context)
+        self._views, self._rounds, self.retained = {}, set(), {}
+        self.prepared, self.record = False, None
+
+    @property
+    def owner(self):
+        return self.scope["owner"]
+
+    # authorization ------------------------------------------------------------
+
+    def authorize(self, view, record):
+        """The authorized view of one stored record, or None when it is inaccessible."""
+        if not isinstance(record, dict):
+            return None
+        if self.context is None:
+            return record
+        key = view, record.get("id"), record.get("version")
+        if key in self._views:
+            return self._views[key]
+        from workspace.ontology_sources import _AUTHORITY_CODES, Sources
+        reader = Sources(self.context)
+        try:
+            value = self._authorize(view.removesuffix("[]"), reader, record)
+        except CollaborationError as error:
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            value = None
+        if value is not None:
+            self.aggregate.absorb(reader)
+        self._views[key] = value
+        return value
+
+    def _authorize(self, kind, reader, record):
+        storage = self.api.storage
+        if kind == "contract":
+            return reader.contract_access(record)
+        if kind == "run":
+            return reader.run_access(record)
+        if kind == "release":
+            reader.round_delivery(record.get("runId"), record.get("round"))
+            return record
+        if kind == "asset":
+            return reader.asset_access(record)
+        if kind == "batch":
+            # The batch's OWN pinned contract revision, not whatever the contract has
+            # since become: the exact same reference and check a run's own contract
+            # lineage uses (`_contract_ref` + historical `_contract`), so an edited-away
+            # or revoked pinned input denies the batch exactly like it denies its runs.
+            ref = reader._contract_ref(record)
+            reader._contract(ref, historical=True)
+            return record
+        if kind == "export":
+            release = (storage.get(self.owner, "release", record["releaseId"])
+                       if isinstance(record.get("releaseId"), str) else None)
+            if release is None:
+                return None
+            reader.round_delivery(release.get("runId"), release.get("round"))
+            return record
+        if kind == "job":
+            return self._job(reader, record)
+        raise ValueError("Unknown gate view")
+
+    def _job(self, reader, job):
+        """A content-bearing job is authorized like its resource GET."""
+        storage = self.api.storage
+        task, data = job.get("task"), job.get("input") if isinstance(job.get("input"), dict) else {}
+        if task in self.SELF_AUTHORIZED_TASKS:
+            return self._module_job(reader, task, data, job)
+        if task == "propose":
+            reader.inputs_access(data)
+        elif task == "run":
+            run = storage.get(self.owner, "run", data.get("runId")) if isinstance(data.get("runId"), str) else None
+            if run is None:
+                return None
+            reader.run_access(run)
+        elif task in ("release", "git"):
+            release_id = data.get("releaseId")
+            if task == "git":
+                exported = (storage.get(self.owner, "gitexport", data.get("exportId"))
+                            if isinstance(data.get("exportId"), str) else None)
+                release_id = (exported or {}).get("releaseId")
+            release = storage.get(self.owner, "release", release_id) if isinstance(release_id, str) else None
+            if release is None:
+                return None
+            reader.round_delivery(release.get("runId"), release.get("round"))
+        else:
+            return None
+        return job
+
+    def _module_job(self, reader, task, data, job):
+        """Jobs whose inputs are owned by another module: that module's read authority applies.
+
+        Every observation joins the response's aggregate reader (retained until the
+        final recheck); an inaccessible input makes the job a missing one.
+        """
+        ctx, storage = self.context, self.api.storage
+        if task == "finalize":
+            asset = storage.get(self.owner, "asset", data["assetId"]) if isinstance(data.get("assetId"), str) else None
+            return job if asset is not None and reader.asset_access(asset) else None
+        if task == "intake-image":
+            if data.get("projectId") != ctx.project_id or not isinstance(data.get("sourceRef"), dict):
+                return None
+            reader.authorize(data["sourceRef"])
+            return job
+        if task in ("document-finalize", "document-analysis"):
+            from documents.errors import DocumentError
+            from documents.library import authorize_job
+            try:
+                checks = authorize_job(self.api, self.scope, job)
+            except DocumentError as error:
+                # The document library's own contract decides the denial (creator-only 403).
+                raise HTTPError(error.status, error.code, error.message) from None
+            for check in checks or []:
+                reader._remember_owned(check["owner"], check["kind"], check)
+            return job
+        # workbench
+        if data.get("projectId") != ctx.project_id:
+            return None
+        operation = data.get("operation")
+        if operation == "ontology-analyze":
+            refs = data.get("sourceRefs")
+            if not isinstance(refs, list) or not refs:
+                return None
+            for ref in refs:
+                reader.authorize(ref)
+            return job
+        if operation in ("index", "skill-propose", "skill-validate", "skill-execute"):
+            from workbench import knowledge
+            versions = data.get("sourceVersions")
+            if not isinstance(versions, dict):
+                return None
+            for source_id in versions:
+                source = ctx.get("wb_source", source_id)
+                if not knowledge.source_current(ctx, source):
+                    return None
+                reader._remember("wb_source", source)
+            if operation != "index":
+                skill = (storage.get(self.owner, "wb_skill", data["skillId"])
+                         if isinstance(data.get("skillId"), str) else None)
+                if skill is None or skill.get("projectId") != ctx.project_id:
+                    return None
+                refs = skill.get("sourceRefs", [])
+                authority = "canonical" if refs and all(isinstance(r, dict) and "sourceKind" in r for r in refs) \
+                    else "legacy"
+                for check in knowledge.authorize_refs(ctx, refs, authority=authority) or []:
+                    reader._remember_owned(check["owner"], check["kind"], check)
+            return job
+        if operation == "pension_ask":
+            # A private answer job: readable only by the member who asked.
+            return job if data.get("actor") == ctx.actor else None
+        return None
+
+    def round(self, run_id, number):
+        """publishing-handoff/1 delivery gate for one round (state permission + upstream lineage)."""
+        if self.context is None:
+            return
+        if (run_id, number) in self._rounds:
+            return
+        from workspace.ontology_sources import Sources
+        reader = Sources(self.context)
+        try:
+            reader.round_delivery(run_id, number)
+        except CollaborationError as error:
+            if error.status == 404:
+                # Inaccessible equals missing: the same body as a missing run or round.
+                raise _missing() from None
+            raise
+        self.aggregate.absorb(reader)
+        self._rounds.add((run_id, number))
+
+    def retain(self, project_id, recheck):
+        """Keep a reader of another project scope (impact destinations) for the final recheck."""
+        self.retained[project_id] = recheck
+
+    def prepare(self, params, query, event):
+        """Resource and round gates before any processing: inaccessible is a missing record."""
+        route = self.route
+        if route.resource:
+            record = self.api._get(self.owner, self._STORED[route.resource], params["id"])
+            if self.authorize(route.resource, record) is None:
+                raise _missing()
+            self.record = record
+        if route.round == "anchor":
+            self._anchor(query, event)
+        elif route.round:
+            run_id, number = self._round_target(params, query, event)
+            if run_id is not None:
+                self.round(run_id, number)
+        self.prepared = True
+
+    def _anchor(self, query, event):
+        """A run-anchored discussion (query filter or new comment) names an authorized run and round.
+
+        A page-anchored comment without an explicit `round` inherits the exact round
+        that produced the page: page content carries the same publishing-handoff/1
+        state and lineage permission as its round's own download, never a generic
+        "the run exists" pass.
+        """
+        anchor = query if self.route.method == "GET" else (_body(event).get("anchor") or {})
+        if not isinstance(anchor, dict) or not isinstance(anchor.get("runId"), str):
+            return
+        run = self.api.storage.get(self.owner, "run", anchor["runId"])
+        if run is None or self.authorize("run", run) is None:
+            raise _missing()
+        number = anchor.get("round")
+        if isinstance(number, str) and number.isdigit():
+            number = int(number)
+        if type(number) is not int and isinstance(anchor.get("pageId"), str):
+            number = self._page_round(run, anchor["pageId"])
+        if type(number) is int:
+            self.round(run["id"], number)
+
+    @staticmethod
+    def _page_round(run, page_id):
+        """The round (if any) whose produced pages include `page_id`."""
+        for row in run.get("rounds", []) if isinstance(run, dict) else []:
+            if isinstance(row, dict) and any(isinstance(entry, dict) and entry.get("pageId") == page_id
+                                             for entry in row.get("pageSources", [])):
+                return row.get("number")
+        return None
+
+    def _run_visible(self, run_id, number=None, page_id=None):
+        """The run (and, with `number` or a round-produced `page_id`, that round) is readable now."""
+        run = self.api.storage.get(self.owner, "run", run_id) if isinstance(run_id, str) else None
+        authorized = self.authorize("run", run) if run else None
+        if authorized is None:
+            return False
+        if number is None and isinstance(page_id, str):
+            number = self._page_round(run, page_id)
+        if number is None:
+            return True
+        return any(isinstance(row, dict) and row.get("number") == number for row in authorized.get("rounds", []))
+
+    def _round_target(self, params, query, event):
+        if self.route.round == "query":
+            return params["id"], WorkspaceAPI._query_int(query, "round", 1, 5, minimum=1)
+        if self.route.round == "baseline":
+            try:
+                number = int(query.get("round", (self.record.get("approval") or {}).get("round", 0)))
+            except (ValueError, TypeError):
+                raise _missing() from None
+            return params["id"], number
+        body = _body(event)
+        run_id, number = params.get("id", body.get("runId")), body.get("round")
+        if not isinstance(run_id, str) or type(number) is not int:
+            return None, None  # The handler rejects the malformed request.
+        return run_id, number
+
+    # serialization ------------------------------------------------------------
+
+    def _unavailable(self):
+        return HTTPError(503, "response-not-authorized", "Workspace operation is unavailable. Retry or inspect the job.")
+
+    def serialize(self, view, value):
+        if view.endswith("[]"):
+            if not isinstance(value, list):
+                raise self._unavailable()
+            return [row for row in (self._one(view[:-2], item) for item in value) if row is not None]
+        if view == "impact-dependents":
+            if not isinstance(value, list):
+                raise self._unavailable()
+            # Only destinations whose reader is retained for the final recheck may contribute.
+            return [row for row in value if isinstance(row, dict) and row.get("projectId") in self.retained]
+        result = self._one(view, value)
+        if result is None:
+            raise _missing()
+        return result
+
+    def _one(self, view, item):
+        if self.context is None:
+            return item
+        if view in self._STORED:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                raise self._unavailable()
+            stored = self.api.storage.get(self.owner, self._STORED[view], item["id"])
+            authorized = self.authorize(view, stored) if stored else None
+            if authorized is None:
+                return None
+            if view == "run":
+                numbers = {row.get("number") for row in authorized.get("rounds", []) if isinstance(row, dict)}
+                item = {**item, "rounds": [row for row in item.get("rounds", [])
+                                           if isinstance(row, dict) and row.get("number") in numbers]}
+            elif view == "batch":
+                # The pinned-contract check above only gates the batch as a whole; each
+                # emitted run reference (runIds, baselineRunId, slots) is independently
+                # authorized too, so a run inaccessible on its own (e.g. its own upstream
+                # revoked) never surfaces its ID here either.
+                visible = {run_id for run_id in item.get("runIds", [])
+                          if isinstance(run_id, str) and self._run_visible(run_id)}
+                item = {**item, "runIds": [run_id for run_id in item.get("runIds", []) if run_id in visible],
+                       "baselineRunId": item.get("baselineRunId") if item.get("baselineRunId") in visible else None,
+                       "slots": [dict(slot, runId=None) if isinstance(slot, dict) and slot.get("runId")
+                                and slot["runId"] not in visible else slot
+                                for slot in item["slots"]] if isinstance(item.get("slots"), list) else item.get("slots")}
+            return item
+        if view == "baseline":
+            if not isinstance(item, dict):
+                raise self._unavailable()
+            self.round(item.get("runId"), item.get("round"))
+            return item
+        if view == "run-summary":
+            if not isinstance(item, dict):
+                raise self._unavailable()
+            return item if self._run_visible(item.get("id")) else None
+        if view == "comment":
+            if not isinstance(item, dict):
+                raise self._unavailable()
+            anchor = item.get("anchor") if isinstance(item.get("anchor"), dict) else {}
+            if "runId" in anchor and not self._run_visible(anchor["runId"], anchor.get("round"), anchor.get("pageId")):
+                return None
+            return item
+        return self._publication_view(view, item)
+
+    def _publication_view(self, view, item):
+        from workspace import publications
+        from workspace.ontology_sources import _AUTHORITY_CODES
+        ctx, storage = self.context, self.api.storage
+        try:
+            if view == "impact-origin":
+                publications._origin_publication(ctx, item)
+                return item
+            if view in ("publication", "publication-withdrawn"):
+                record = publications._publication(storage, item.get("id") if isinstance(item, dict) else None)
+                if view == "publication":
+                    # The exact returned revision (and its sources) is authorized and fenced.
+                    return item if publications.publication_visible(ctx, record, self.aggregate, item) else None
+                if (not record or record.get("originProject") != ctx.project_id
+                        or any(item.get(key) != record.get(key) for key in ("revision", "hash", "status"))):
+                    return None
+                self.aggregate._remember_owned(publications.PUBLICATION_OWNER, "publication", record)
+                if not publications._origin_readable(ctx, record, self.aggregate):
+                    item = {key: value for key, value in item.items() if key not in ("nodes", "sharing")}
+                return item
+            if view in ("grant", "granted"):
+                identifier = item.get("id") if isinstance(item, dict) else None
+            elif view == "published-ref":
+                revision = item.get("revision") if isinstance(item, dict) else None
+                if not isinstance(revision, str) or not revision.isdigit():
+                    return None
+                identifier = publications.grant_id(item.get("sourceId"), int(revision))
+            else:
+                raise ValueError("Unknown gate view")
+            row = storage.get(ctx.owner, "pub_grant", identifier) if isinstance(identifier, str) else None
+            if view == "granted":
+                return item if publications._granted_view(ctx, row, self.aggregate) is not None else None
+            return item if publications.grant_visible(ctx, row, self.aggregate) else None
+        except CollaborationError as error:
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            return None
+
+    def recheck(self):
+        if self.aggregate is not None:
+            self.aggregate.recheck()
+        for recheck in self.retained.values():
+            recheck()
+
+    def finish(self, response):
+        """Serialize the response through its declared views; one final recheck, then release it."""
+        route = self.route
+        if (not isinstance(response, dict) or not 200 <= response.get("statusCode", 0) < 300
+                or route is None or route.public):
+            return response
+        if response.get("isBase64Encoded"):
+            if not route.blob or not self.prepared:
+                raise self._unavailable()
+            self.recheck()  # After the chunk's bytes were read, before they leave.
+            return response
+        try:
+            payload = json.loads(response["body"])
+        except (KeyError, TypeError, ValueError):
+            raise self._unavailable() from None
+        if not isinstance(payload, dict) or set(payload) - set(route.views) - set(route.fields):
+            # An undeclared response field is never released unauthorized.
+            raise self._unavailable()
+        if route.method != "GET" and self.record is not None and self.aggregate is not None:
+            # The addressed record is this write's output: its pre-write observation is
+            # replaced by the authorization of the version now stored (serialized below).
+            self.aggregate.observed.pop((self.owner, self._STORED[route.resource], self.record["id"]), None)
+        for key, view in route.views.items():
+            if payload.get(key) is not None:
+                payload[key] = self.serialize(view, payload[key])
+        self.recheck()
+        return {**response, "body": json.dumps(payload, ensure_ascii=False, allow_nan=False)}
+
+
 class WorkspaceAPI:
     def __init__(self, storage=None, lambda_client=None, worker_fn=None, rules=None, directory=None, collaboration=None,
                  git_connections=None):
@@ -157,7 +683,9 @@ class WorkspaceAPI:
             if len(project_headers) > 1:
                 raise HTTPError(400, "invalid-project", "Only one workspace project may be selected")
             project_id = project_headers[0] if project_headers else None
-            if segments[0] in ("projects", "products", "comments"):
+            if segments[0] in ("projects", "products", "comments") and (
+                    segments[0] == "projects" or match_route(method, segments) is None):
+                # Routes registered in ROUTES (run-derived metadata) take the gated path below.
                 response = self.collaboration.handle(method, segments, _body(event) if method in ("POST", "PUT", "PATCH") else {},
                                                        query, owner, project_id,
                                                        authorization_expires_at=int(claims["exp"]) * 1000 if claims.get("exp") is not None else None)
@@ -184,6 +712,14 @@ class WorkspaceAPI:
                 result = route(self, scope, claims, method, segments[1:],
                                _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
                 return _json(result[0], result[1])
+            if segments[0] in ("documents", "impact-analyses"):
+                # Delegated: the document library owns its authority (DELEGATED).
+                scope = self.collaboration.require(scope, "read")
+                return self._route(scope["owner"], method, segments, event, query, scope=scope, claims=claims)
+            matched = match_route(method, segments)
+            if matched is None:
+                raise HTTPError(404, "not-found", "Route not found")
+            route, params = matched
             action = "read"
             if method != "GET":
                 if segments[0] == "assets":
@@ -195,7 +731,21 @@ class WorkspaceAPI:
                 elif segments[0] == "releases":
                     action = "export" if segments[-1] == "git" else "release"
             scope = self.collaboration.require(scope, action)
-            return self._route(scope["owner"], method, segments, event, query, scope=scope)
+            # The single response gate: resource/round authorization before processing,
+            # authorized serialization and one final recheck before release.
+            gate = ResponseGate(self, scope, claims, route)
+            gate.prepare(params, query, event)
+            if segments[0] == "publications":
+                # Capability grants are IAM-only (intake admin entry point); no route writes them.
+                from workspace.publications import route as publication_route
+                status, payload = publication_route(self, scope, claims, method, segments[1:],
+                                                    _body(event) if method in ("POST", "PUT", "PATCH") else {},
+                                                    query, gate=gate)
+                response = _json(status, payload)
+            else:
+                response = self._route(scope["owner"], method, segments, event, query, scope=scope, claims=claims,
+                                       gate=gate)
+            return gate.finish(response)
         except CollaborationError as error:
             return _json(error.status, {"error": error.message, "code": error.code})
         except HTTPError as error:
@@ -298,7 +848,90 @@ class WorkspaceAPI:
             raise HTTPError(404, "not-found", "Private artifact not found")
         return key
 
-    def _route(self, owner, method, parts, event, query, scope=None):
+    def _lineage_context(self, scope, claims):
+        """A request context for the shared lineage reader, or None in the single-owner workspace.
+
+        The single-owner legacy workspace has no other audience and no admissions.
+        """
+        if not scope or not scope.get("project"):
+            return None
+        from workbench.service import Service
+        return Service(self, scope, claims or {})
+
+    def _authorized_list(self, gate, owner, kind, name, query, scope):
+        """A listing of authorized rows only, with opaque caller-bound cursors (ONT-09)."""
+        from workspace.ontology_sources import authorized_page
+        cache = {}
+
+        def include(record):
+            value = gate.authorize(kind, record)
+            if value is not None and kind == "run":
+                value = {**value, "needsRevalidation": self._run_view(owner, record, scope, cache)["needsRevalidation"]}
+            return value
+        page = authorized_page(gate.context, query, name, owner, kind, "", include,
+                               purpose="workspace-list", token="pagecur", stale_code="list-cursor-stale",
+                               default=100, reader=gate.aggregate)
+        return {name: page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})}
+
+    def _listing(self, gate, owner, kind, name, query, scope):
+        if gate is not None and gate.context is not None:
+            return _json(200, self._authorized_list(gate, owner, kind, name, query, scope))
+        page = self.storage.list_page(owner, kind, limit=100, cursor=query.get("cursor"))
+        if kind == "run":
+            cache = {}
+            page["items"] = [self._run_view(owner, record, scope, cache) for record in page["items"]]
+        return _json(200, {name: page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+
+    def _product_impact(self, gate, owner, product_id, query, scope):
+        """Runs affected by a product republication, each authorized through the gate's run view.
+
+        Rows are paged over authorized runs only (opaque caller-bound cursor), so an
+        inaccessible run contributes neither metadata nor continuation.
+        """
+        if gate is None or gate.context is None:
+            raise HTTPError(400, "project-required", "Select a project first")
+        from workspace.ontology_sources import authorized_page
+        product = self.collaboration._get(scope, "product", product_id)
+
+        def include(run):
+            summary = self.collaboration.impact_summary(scope, product, run)
+            return summary if summary is not None and gate.authorize("run", run) is not None else None
+        page = authorized_page(gate.context, query, "product-impact:" + product["id"], owner, "run", "", include,
+                               purpose="product-impact", token="pagecur", stale_code="list-cursor-stale",
+                               default=100, reader=gate.aggregate)
+        gate.aggregate._remember("product", product)
+        return _json(200, {"currentGuidelineId": product.get("publishedGuidelineId"), "affectedRuns": page["items"],
+                           **({"cursor": page["cursor"]} if "cursor" in page else {})})
+
+    def _comments_listing(self, gate, owner, scope, query):
+        """Authorized comments, paged with an opaque cursor: the gate filters comments,
+        but a raw storage cursor still encodes a hidden comment's own storage key even
+        while it contributes nothing to the visible page. Fold the same anchor filter
+        and run/round visibility (`gate._one("comment", ...)`, review 6 #2) into the
+        page scan itself, so a hidden row's key never becomes a public continuation
+        token either (ONT-09, no-existence-disclosure)."""
+        if gate is None or gate.context is None:
+            raise HTTPError(400, "project-required", "Select a project first")
+        from workspace.collaboration import _ANCHORS
+        from workspace.ontology_sources import authorized_page
+        filters = {key: value for key, value in query.items() if key in _ANCHORS}
+        anchor = self.collaboration._anchor(scope, filters) if filters else {}
+
+        def include(row):
+            if not isinstance(row, dict) or row.get("projectId") != scope["project"]["id"]:
+                return None
+            row_anchor = row.get("anchor") if isinstance(row.get("anchor"), dict) else {}
+            if not all(row_anchor.get(key) == value for key, value in anchor.items()):
+                return None
+            return gate._one("comment", row)
+        page = authorized_page(gate.context, query, "comments", owner, "comment", "", include,
+                               purpose="comments", token="commentcur", stale_code="list-cursor-stale",
+                               default=50, reader=gate.aggregate)
+        return _json(200, {"comments": page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})})
+
+    def _route(self, owner, method, parts, event, query, scope=None, claims=None, gate=None):
+        """Handlers of the registered `ROUTES`; `gate` authorized the addressed resource and round,
+        and serializes the response (the caller runs `gate.finish`)."""
         if parts[0] in ("documents", "impact-analyses"):
             from documents.errors import DocumentError
             try:
@@ -312,6 +945,20 @@ class WorkspaceAPI:
                 return handle(self, scope, method, parts, event, query)
             except DocumentError as error:
                 return _json(error.status, {"error": error.message, "code": error.code})
+        if parts[0] == "products" and len(parts) == 3 and parts[2] == "impact" and method == "GET":
+            return self._product_impact(gate, owner, parts[1], query, scope)
+        if parts == ["comments"] and method == "GET":
+            # A gated, opaquely-paged read (see `_comments_listing`); Collaboration
+            # itself is used only for validating/building the query anchor filter.
+            return self._comments_listing(gate, owner, scope, query)
+        if parts == ["comments"]:
+            # Collaboration owns discussion writes; the gate authorizes every run anchor.
+            expiry = (claims or {}).get("exp")
+            status, payload = self.collaboration.handle(
+                method, parts, _body(event) if method == "POST" else {}, query, scope["actor"],
+                (scope.get("project") or {}).get("id"),
+                authorization_expires_at=int(expiry) * 1000 if expiry is not None else None)
+            return _json(status, payload)
         from engine import model_catalog
         if method == "GET" and parts == ["config"]:
             from workspace.component_catalog import read_catalog
@@ -331,8 +978,7 @@ class WorkspaceAPI:
             from workspace.batches import create_batch
             return create_batch(self, owner, _body(event), scope)
         if parts == ["batches"] and method == "GET":
-            page = self.storage.list_page(owner, "batch", limit=100, cursor=query.get("cursor"))
-            return _json(200, {"batches": page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+            return self._listing(gate, owner, "batch", "batches", query, scope)
         if len(parts) == 2 and parts[0] == "batches" and method == "GET":
             from workspace.batches import batch_view
             return _json(200, batch_view(self, owner, self._get(owner, "batch", parts[1])))
@@ -340,8 +986,7 @@ class WorkspaceAPI:
             from workspace.releases import create_release
             return create_release(self, owner, _body(event), scope)
         if parts == ["releases"] and method == "GET":
-            page = self.storage.list_page(owner, "release", limit=100, cursor=query.get("cursor"))
-            return _json(200, {"releases": page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+            return self._listing(gate, owner, "release", "releases", query, scope)
         if parts[0] == "releases" and len(parts) in (2, 3) and method == "GET":
             release = self._get(owner, "release", parts[1])
             if len(parts) == 2:
@@ -351,16 +996,13 @@ class WorkspaceAPI:
                 return self._release_download(owner, release, query)
         if len(parts) == 3 and parts[0] == "releases" and parts[2] == "git" and method == "POST":
             from workspace.git_service import create_export
-            return create_export(self, owner, self._get(owner, "release", parts[1]), _body(event), scope)
+            release = self._get(owner, "release", parts[1])
+            return create_export(self, owner, release, _body(event), scope)
         if len(parts) == 1 and parts[0] in ("assets", "contracts", "runs") and method == "GET":
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
-            page = self.storage.list_page(owner, kind, limit=100, cursor=query.get("cursor"))
-            if kind == "run":
-                cache = {}
-                page["items"] = [self._run_view(owner, record, scope, cache) for record in page["items"]]
-            return _json(200, {parts[0]: page["items"], **({"cursor": page["cursor"]} if page.get("cursor") else {})})
+            return self._listing(gate, owner, kind, parts[0], query, scope)
         if parts == ["assets"] and method == "POST":
-            return self._create_asset(owner, _body(event))
+            return self._create_asset(owner, _body(event), gate=gate)
         if parts == ["contracts", "propose"] and method == "POST":
             return self._propose(owner, _body(event), scope=scope)
         if parts == ["contracts"] and method == "POST":
@@ -376,6 +1018,13 @@ class WorkspaceAPI:
             from workspace.react_artifacts import generated_files
             try:
                 number = int(query.get("round", (record.get("approval") or {}).get("round", 0)))
+            except (ValueError, TypeError):
+                raise HTTPError(404, "not-found", "Resource not found") from None
+            if not any(isinstance(row, dict) and row.get("number") == number for row in record.get("rounds", [])):
+                raise HTTPError(404, "not-found", "Resource not found")
+            # The gate authorized this round before artifact validation; its final recheck
+            # runs after these artifact reads, before the response is released.
+            try:
                 row, project, _ = approved_artifacts(self.storage, owner, record, number)
             except (ValueError, TypeError) as error:
                 raise HTTPError(409, "baseline-unavailable", "기준 시안의 현재 승인을 확인할 수 없습니다.") from error
@@ -422,14 +1071,16 @@ class WorkspaceAPI:
             return self._contract_edit(owner, record, _body(event), scope=scope)
         if len(parts) == 3 and parts[2] == "approve" and method == "POST":
             if kind == "contract":
-                return self._contract_approve(owner, record, _body(event), scope=scope)
+                return self._contract_approve(owner, record, _body(event), scope=scope, gate=gate)
             if kind == "run":
-                return self._run_approve(owner, record, _body(event), scope=scope)
+                return self._run_approve(owner, record, _body(event), scope=scope, gate=gate)
         if len(parts) == 3 and parts[2] == "blob" and method == "GET" and kind in ("asset", "run"):
+            # The gate authorized the asset or the round (every chunk, every artifact kind)
+            # and rechecks after this chunk's bytes are read, before they are returned.
             return self._download(owner, kind, record, query)
         raise HTTPError(404, "not-found", "Route not found")
 
-    def _create_asset(self, owner, body):
+    def _create_asset(self, owner, body, gate=None):
         name = _text(body.get("name"), "file name", 180)
         if any(c in name for c in "\x00\r\n/\\") or name.rsplit(".", 1)[-1].lower() not in EXTENSIONS or "." not in name:
             raise HTTPError(400, "unsupported-extension", "Choose a supported file extension")
@@ -447,6 +1098,13 @@ class WorkspaceAPI:
         parent = None
         if parent_id is not None:
             parent = self._get(owner, "asset", parent_id)
+            # The parent's current authority (never revoked/tombstoned/deleted, and in
+            # this project when one is selected) is required before its lineage
+            # (importRevision, lineageId) is extended and its id disclosed as parentId;
+            # inaccessible is the same 404 as a missing parent. The observation is
+            # retained for the response's own final recheck.
+            if gate is not None and gate.authorize("asset", parent) is None:
+                raise _missing()
         identifier = uuid.uuid4().hex
         import_revision, lineage_id = 1, identifier
         if parent is not None:
@@ -768,7 +1426,7 @@ class WorkspaceAPI:
             **normalized, "id": record["id"], "status": "draft", "revisions": revisions}, version)
         return _json(200, {"contract": result})
 
-    def _approval_put(self, owner, kind, record, expected_version, scope, action, assets=()):
+    def _approval_put(self, owner, kind, record, expected_version, scope, action, assets=(), gate=None):
         writes = [{"owner": owner, "kind": kind, "item": record, "expected_version": expected_version}]
         if scope and scope.get("project"):
             fresh = self.collaboration.require(scope, action)
@@ -791,11 +1449,34 @@ class WorkspaceAPI:
                 raise Conflict("Baseline changed during approval")
             unique[key] = check
         checks = list(unique.values())
+        before_attempt = None
+        reader = gate.aggregate if gate is not None else None
+        if reader is not None:
+            # The approval is fenced by the complete lineage the gate authorized (the
+            # addressed resource and its round): every observed version joins the
+            # transaction, and every attempt first reruns the full recheck (currency,
+            # expiry, historical references, packages), so a revocation before storage
+            # leaves no approval behind.
+            present = {(check["owner"], check["kind"], check["id"]) for check in checks}
+            versions = {(write["owner"], write["kind"], write["item"]["id"]): write["expected_version"]
+                        for write in writes}
+            for key, check in reader.observed.items():
+                if key in versions:
+                    if versions[key] != check["version"]:
+                        raise Conflict("The approved record changed after authorization")
+                    continue
+                if key not in present:
+                    checks.append(dict(check))
+                    present.add(key)
+            if len(writes) + len(checks) > 100:
+                raise HTTPError(409, "approval-scope-limit", "승인 근거가 한 번에 확인할 수 있는 범위를 넘습니다.")
+            before_attempt = reader.recheck
         # Human approval may update a design-linked run; outcome statuses remain ledger-only.
         from workspace import storage as storage_module
-        return self.storage.put_many(writes, checks=checks, _writer=storage_module._human_writer())[0]
+        return self.storage.put_many(writes, checks=checks, before_attempt=before_attempt,
+                                     _writer=storage_module._human_writer())[0]
 
-    def _contract_approve(self, owner, record, body, scope=None):
+    def _contract_approve(self, owner, record, body, scope=None, gate=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)
         if record["version"] != version:
             raise Conflict("Contract changed")
@@ -824,7 +1505,7 @@ class WorkspaceAPI:
             **record, **normalized, "status": "approved",
             "approval": {"version": version + 1, "hash": digest, "actor": scope["actor"] if scope else owner,
                          "at": self.storage.clock()},
-        }, version, scope, "edit_rules", assets=assets)
+        }, version, scope, "edit_rules", assets=assets, gate=gate)
         return _json(200, {"contract": result})
 
     @staticmethod
@@ -1054,7 +1735,7 @@ class WorkspaceAPI:
         return all(rule["id"] in by_id and (not rule.get("required", True)
                    or by_id[rule["id"]]["status"] == "pass") for rule in rules)
 
-    def _run_approve(self, owner, run, body, scope=None):
+    def _run_approve(self, owner, run, body, scope=None, gate=None):
         version = _integer(body.get("contractVersion"), "Contract version", 1, 2**53 - 1)
         number = _integer(body.get("round"), "Round", 1, 5)
         selected = next((row for row in run.get("rounds", []) if row.get("number") == number), None)
@@ -1119,7 +1800,7 @@ class WorkspaceAPI:
             **run, "approval": {"round": number, "artifactSha256": digest, "contractVersion": version,
                                 "contractHash": run["contractHash"], "actor": scope["actor"] if scope else owner,
                                 "at": self.storage.clock(), **extra_approval},
-        }, run["version"], scope, "approve", assets=approval_assets)
+        }, run["version"], scope, "approve", assets=approval_assets, gate=gate)
         return _json(200, {"run": result})
 
     @staticmethod
@@ -1172,7 +1853,7 @@ class WorkspaceAPI:
             number = self._query_int(query, "round", 1, 5, minimum=1)
             row = next((row for row in record.get("rounds", []) if row.get("number") == number), None)
             if not row:
-                raise HTTPError(404, "not-found", "Round artifact not available")
+                raise HTTPError(404, "not-found", "Resource not found")
             key = row.get(requested + "Key")
             declared_type = "image/png" if requested in ("screenshot", "diff") else "application/octet-stream"
             extension = ".zip" if requested in ("source", "dist") else ".json" if requested in ("candidate", "report") else ".html" if requested == "html" else ".png"

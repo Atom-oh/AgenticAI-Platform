@@ -551,7 +551,11 @@ def prepare_transcription(host, scope, decision):
 
 
 def authorize_job(host, scope, job):
-    """Reauthorize private targets before generic workspace job serialization."""
+    """Reauthorize private targets before generic workspace job serialization.
+
+    Returns the library's observations (project, documents, transcription lineage)
+    for the caller's final recheck.
+    """
     task = job.get("task")
     if task not in ("document-finalize", "document-analysis"):
         return
@@ -566,10 +570,11 @@ def authorize_job(host, scope, job):
         document = library.document(data.get("documentId"))
         library.revision(document, data.get("revisionId"))
         library.assert_current([document])
-    else:
-        # The analysis owner supplies source/result validation in its own module.
-        from documents.analysis import authorize_analysis
-        authorize_analysis(host, scope, data.get("analysisId"))
+        return library.checks([document])
+    # The analysis owner supplies source/result validation in its own module.
+    from documents.analysis import authorize_analysis
+    result = authorize_analysis(host, scope, data.get("analysisId"))
+    return result["library"].checks(result["documents"])
 
 
 def visible_page(library, kind, select, limit, cursor=None):
