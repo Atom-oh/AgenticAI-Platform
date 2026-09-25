@@ -861,11 +861,10 @@ class Ledger:
             raise LedgerError("receipt-invalid", reason="key-registry") from error
 
     def _key_guard(self, receipts, revision):
-        """Final key-authority fence run immediately before submission (review 4, RUN-04): the key-registry
-        revision the chain was verified under is still current and every retained receipt still verifies."""
+        """Final key-authority fence run before submission (review 4/5, RUN-04): every retained receipt still
+        verifies, and AFTER that loop the key-registry revision is still the one the chain was verified under (a
+        rotation during verification is refused)."""
         def guard():
-            if self._key_revision() != revision:
-                raise LedgerError("receipt-invalid", reason="key-revision")
             for receipt in receipts:
                 try:
                     valid = self.verifier.verify(receipt) is True
@@ -873,6 +872,8 @@ class Ledger:
                     valid = False
                 if not valid:
                     raise LedgerError("receipt-invalid", reason="key-revoked")
+            if self._key_revision() != revision:
+                raise LedgerError("receipt-invalid", reason="key-revision")
         return guard
 
     def _reverify_chain(self, owner, job, stages, attempt):
@@ -1860,8 +1861,8 @@ class Ledger:
         key_guard = self._key_guard(receipts, key_revision)
 
         def guard():
-            temporal()
             key_guard()
+            temporal()          # last: lease, deadline and authorization expiry immediately before submission
         after = {**job, "status": status, "result": copy.deepcopy(result), "deliverables": deliverables,
                  "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock()}
         after["cleanup"] = self._cleanup_for(after)

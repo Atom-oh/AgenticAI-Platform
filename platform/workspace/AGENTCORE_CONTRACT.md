@@ -712,10 +712,12 @@ retained signed receipt of the attempt and re-verifies it with the current
 verifier (signature and key), its hash, bindings and `previous` linkage; any
 failure is `receipt-invalid`. The re-verification is bound to the verifier's
 key-registry revision (`verifier.revision()`, read before re-verifying), and
-the completion transaction's `before_attempt` guard rechecks immediately
-before submission that this revision is unchanged and that every retained
-receipt still verifies; a rotation or revocation in between is `receipt-invalid`
-and nothing commits. The terminal job records `verifiedKeyRevision`. It also re-reads every chain output of the current attempt, including the result manifest and every
+the completion transaction's `before_attempt` guard re-verifies every retained
+receipt, then rechecks that this revision is unchanged, and only then runs the
+temporal checks (lease, deadline, authorization expiry, recovery bound) as its
+last step immediately before submission. A rotation or revocation at any point
+up to that recheck is `receipt-invalid`; time expiring during verification is
+refused by the final temporal checks; nothing commits. The terminal job records `verifiedKeyRevision`. It also re-reads every chain output of the current attempt, including the result manifest and every
 object it lists, and requires the stored hash and size to match before any
 terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
 Every `files`/`objects` entry of the result manifest must be an object with a

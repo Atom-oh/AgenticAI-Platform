@@ -2731,3 +2731,26 @@ def test_input_reads_are_pinned_to_the_validated_object_identity(xfer, replaceme
             ledger.tool().read_chunk(*ids(job), handle["handleId"], index, operation_id=op_id())
         assert error.value.code == "transfer-invalid"
     assert first["index"] == 0
+
+
+@pytest.mark.parametrize("change", ["lease-expiry", "key-rotation"])
+def test_final_submission_checks_run_after_the_final_signature_verification(xfer, change):
+    """Review 5 finding 3: key revision is rechecked after re-verification and time is checked last."""
+    storage, ledger, now, _ = xfer
+    job, result = chain(xfer)
+    refs = len(storage.get(OWNER, "job", job["id"])["stages"])
+    verify, calls = ledger.verifier.verify, [0]
+
+    def slow(receipt):
+        calls[0] += 1
+        if calls[0] == 2 * refs:                  # the last verification of the submission-time key guard
+            if change == "lease-expiry":
+                now[0] = storage.get(OWNER, "job", job["id"])["attempt"]["leaseExpiresAt"]
+            else:
+                ledger.verifier.epoch += 1
+        return verify(receipt)
+    ledger.verifier.verify = slow
+    with pytest.raises(LedgerError) as error:
+        finish(ledger, job, "succeeded", result)
+    assert error.value.code == ("stale-attempt" if change == "lease-expiry" else "receipt-invalid")
+    assert storage.get(OWNER, "job", job["id"])["status"] == "running"
