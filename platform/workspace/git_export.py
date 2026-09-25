@@ -609,7 +609,11 @@ class GitExporter:
         # delivery); instead the caller gets the observed facts to persist for
         # attribution/recovery without claiming they were verified. The receipt is tied
         # to "did the remote actually receive this commit", never to which exception
-        # class interrupted confirming it.
+        # class interrupted confirming it -- including an ordinary parsing/metadata
+        # failure (e.g. a verification response missing an expected field) that
+        # `export_release`'s own outer wrapper would otherwise convert to a plain
+        # GitExportError OUTSIDE this scope, losing `sha`/`delivered` (and so the
+        # receipt) entirely: catch those here too, before they ever get that far.
         try:
             sha = backend.create(base, tree, target, files, message, when, branch)
             delivered = self.connection["provider"] == "gitlab"
@@ -618,7 +622,7 @@ class GitExporter:
                 if backend.ref(self.connection["baseBranch"]) != base:
                     _fail("conflict")
                 backend.publish(branch, sha, self.connection["baseBranch"], base)
-            except (ProtectedCallRefused, GitExportError):
+            except (ProtectedCallRefused, GitExportError, KeyError, TypeError, ValueError, UnicodeError):
                 if delivered:
                     raise GitExportDeliveredUnverified(branch, base, sha, source_hash, target) from None
                 raise

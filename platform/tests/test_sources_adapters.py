@@ -1257,6 +1257,58 @@ def test_git_export_preserves_a_gitlab_receipt_on_a_plain_verify_failure(env, qu
     assert exported.get("commitSha") == delivered_sha, exported
 
 
+def test_git_export_preserves_a_gitlab_receipt_on_malformed_verification_metadata(env, queued_export, monkeypatch):
+    """PR #33 review 1 #3: review 8 #4 broadened the inner `except` to
+    `(ProtectedCallRefused, GitExportError)`, but a plain parsing/metadata
+    failure -- e.g. `_Remote.commit`'s `result["parent_ids"]` raising `KeyError`
+    on a malformed verification response -- is neither. That `KeyError` escaped
+    `_export`'s inner AND outer handlers untouched, all the way out to
+    `export_release`'s own outer wrapper, which converts
+    `(KeyError, TypeError, ValueError, UnicodeError)` to a plain
+    `GitExportError("invalid-response", ...)` -- but that conversion happens
+    OUTSIDE `_export`'s scope, with no access to `sha`/`delivered`, so the
+    receipt is lost even though GitLab's atomic `POST /commits` already
+    delivered it. Reproduced with no guard/revocation anywhere: a fake GitLab
+    provider strips `parent_ids` from the verification GET's response."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    stripped = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if (method == "GET" and "/commits/" in url and not url.endswith("/commits/" + service.base)
+                and isinstance(result, dict) and "parent_ids" in result):
+            # A misbehaving provider's verification response (the delivered
+            # commit, fetched AFTER `POST /commits` -- never the base commit
+            # fetched earlier while building the tree) is missing an expected
+            # field -- an ordinary parsing failure, never a guard interruption
+            # and never a content mismatch either.
+            stripped["on"] = True
+            return {key: value for key, value in result.items() if key != "parent_ids"}
+        return result
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert stripped["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The delivered SHA is retained for attribution, never silently lost -- even
+    # though the interrupting exception was an ordinary KeyError, not
+    # ProtectedCallRefused or GitExportError.
+    assert exported.get("commitSha") == delivered_sha, exported
+
+
 def approvable_run(env, contract, run_id, admissions=None):
     """A React run whose round carries stored passing evidence (verifier checks stubbed by the caller)."""
     import hashlib
