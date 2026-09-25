@@ -12,12 +12,50 @@ LOG=${LOG:-/tmp/bank-platform-deploy.log}
 REGION=${AWS_REGION:-ap-northeast-2}
 GRAPH_BACKEND=${GRAPH_BACKEND:-local}
 MAIN_STACK=${MAIN_STACK:-BankPlatformCore}   # 라이브 메인 스택. (구 `BankPlatform` 스택은 롤백 정리 고착 — 갱신하지 않는다)
-WITH_PLANE=0; NO_WEB=0; NO_SEED=0
+WITH_PLANE=0; NO_WEB=0; NO_SEED=0; ASSEMBLE_ONLY=""; ASSEMBLE_FLAG=0
+prev=""
 for a in "$@"; do
   [ "$a" = "--plane" ] && WITH_PLANE=1
   [ "$a" = "--no-web" ] && NO_WEB=1
   [ "$a" = "--no-seed" ] && NO_SEED=1
+  [ "$a" = "--assemble-only" ] && ASSEMBLE_FLAG=1
+  [ "$prev" = "--assemble-only" ] && ASSEMBLE_ONLY="$a"
+  prev="$a"
 done
+# The offline assembly flag never falls through to deployment: a missing, empty or
+# relative destination is an error before any side effect (review round 3).
+if [ "$ASSEMBLE_FLAG" = 1 ]; then
+  case "$ASSEMBLE_ONLY" in
+    /?*) ;;
+    *) echo "--assemble-only requires an absolute destination directory" >&2; exit 2;;
+  esac
+fi
+PYTHON=${PYTHON:-python3}
+
+# Step 1 only: assemble the Lambda source modules into $1 (offline; no vendoring,
+# no AWS calls). tests/test_packaging.py imports the handlers from this output.
+assemble_api() {
+  local dist="$1"
+  rm -rf "$dist" && mkdir -p "$dist/seed/out"
+  cp api/*.py "$dist/"
+  cp -r api/common api/handlers engine graph onprem semantic "$dist/"
+  for m in registry screengen report agentcore design_loop studio workspace workbench documents intake; do [ -d "$m" ] && cp -r "$m" "$dist/"; done
+  mkdir -p "$dist/react-kit"
+  cp react-kit/catalog.json "$dist/react-kit/"
+  cp -r react-kit/ui "$dist/react-kit/"
+  mkdir -p "$dist/component-library"
+  cp component-library/catalog.json "$dist/component-library/"
+  cp -r component-library/ui "$dist/component-library/"
+  [ -d skills ] && cp -r skills "$dist/"
+  return 0
+}
+
+if [ "$ASSEMBLE_FLAG" = 1 ]; then
+  assemble_api "$ASSEMBLE_ONLY"
+  find "$ASSEMBLE_ONLY" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+  echo "assembled: $ASSEMBLE_ONLY"
+  exit 0
+fi
 echo "log: $LOG"; : > "$LOG"
 
 echo "== 0) 사전 점검 =="
@@ -32,17 +70,7 @@ fi
 [ -f seed/out/nodes.jsonl ] || python3 seed/generate.py >> "$LOG" 2>&1
 
 echo "== 1) api-dist 조립 =="
-rm -rf api-dist && mkdir -p api-dist/seed/out
-cp api/*.py api-dist/
-cp -r api/common api/handlers engine graph onprem semantic api-dist/
-for m in registry screengen report agentcore design_loop studio workspace workbench documents; do [ -d "$m" ] && cp -r "$m" api-dist/; done
-mkdir -p api-dist/react-kit
-cp react-kit/catalog.json api-dist/react-kit/
-cp -r react-kit/ui api-dist/react-kit/
-mkdir -p api-dist/component-library
-cp component-library/catalog.json api-dist/component-library/
-cp -r component-library/ui api-dist/component-library/
-[ -d skills ] && cp -r skills api-dist/
+assemble_api api-dist
 # Harness·Registry API는 최신 boto3가 필요하다 (Lambda 기본 boto3에는 없음) — 배포 패키지에 동봉
 pip3 install -q --upgrade --target api-dist boto3 botocore >> "$LOG" 2>&1 || { echo "boto3 vendoring failed"; tail -5 "$LOG"; exit 1; }
 # PyPI botocore 모델이 AWS CLI v2 번들보다 뒤처질 수 있다(Harness memory/disabled 등) — CLI 서비스 모델을 덧씌운다

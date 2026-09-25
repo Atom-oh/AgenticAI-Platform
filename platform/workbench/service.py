@@ -22,24 +22,58 @@ def fail(status, code, message):
     raise CollaborationError(status, code, message)
 
 
-def check_source_deadlines(storage, checks, claims=None):
-    """Recheck the aggregate deadline after reads and transaction preparation."""
-    deadlines = []
+UPSTREAM_ADMISSION_KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision")
+
+
+def check_source_deadlines(storage, checks, claims=None, deadline=None):
+    """Recheck the aggregate deadline after reads and transaction preparation.
+
+    Every deadline (source access, upstream admission/policy/provenance/grant
+    expiry, the token `exp`, and `deadline`, the verified scope's
+    `authorizationExpiresAt` in ms, which binds even when the claims carry no
+    `exp`) is collected during the reads and compared with one fresh clock read
+    taken after the last read, immediately before the transaction attempt.
+    """
+    authorization, upstream, sources = [], [], []
+    if deadline is not None:
+        if type(deadline) is not int:
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        authorization.append(deadline)
+    expiry = (claims or {}).get("exp")
+    if expiry is not None:
+        try:
+            authorization.append(int(expiry) * 1000)
+        except (ValueError, TypeError, OverflowError):
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
     for check in checks:
+        if check["kind"] in UPSTREAM_ADMISSION_KINDS:
+            # Upstream intake authority (image/transcription admission, policy,
+            # provenance, grant) expires without a version change: every commit
+            # attempt rechecks its schema, exact version, status and expiry.
+            from intake import records
+            row = storage.get(check["owner"], check["kind"], check["id"])
+            try:
+                row = records.validate(check["kind"], row) if row else None
+            except ValueError:
+                row = None
+            if (not row or row["version"] != check["version"] or row.get("status") not in ("active", "admitted")
+                    or type(row.get("expiresAt")) is not int):
+                fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
+            upstream.append(row["expiresAt"])
+            continue
         if check["kind"] != "wb_source":
             continue
         source = storage.get(check["owner"], check["kind"], check["id"])
         if (not source or source["version"] != check["version"]
                 or type(source.get("accessExpiresAt")) is not int):
             fail(409, "stale-evidence", "검증한 원본 권한이 변경되었습니다.")
-        deadlines.append(source["accessExpiresAt"])
-    expiry = (claims or {}).get("exp")
-    if expiry is None and not deadlines:
-        return
-    now = storage.clock()
-    if expiry is not None and int(expiry) * 1000 <= now:
+        sources.append(source["accessExpiresAt"])
+    now = storage.clock()  # after the last read
+    if authorization and min(authorization) <= now:
         fail(401, "authorization-expired", "인증이 만료되었습니다.")
-    if deadlines and min(deadlines) <= now:
+    if upstream and min(upstream) <= now:
+        fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
+    if sources and min(sources) <= now:
         fail(409, "stale-evidence", "검증한 원본의 유효 기간이 만료되었습니다.")
 
 
@@ -156,6 +190,9 @@ class Service:
         project = self.scope["project"]
         if self.claims.get("exp") is not None and int(self.claims["exp"]) * 1000 <= self.storage.clock():
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        bound = self.scope.get("authorizationExpiresAt")
+        if bound is not None and (type(bound) is not int or bound <= self.storage.clock()):
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
         if len(writes) + 1 > 100:
             fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         unique = {}
@@ -183,7 +220,7 @@ class Service:
             # retry must return there for reauthorization before another send.
             observed = list(unique.values())
             return self.storage.put_many([*writes, fence], checks=observed, retry_conflicts=False,
-                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims))[:-1]
+                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims, bound))[:-1]
         except Conflict as error:
             raise CollaborationError(409, "conflict", "프로젝트 또는 근거가 변경되었습니다.") from error
 
