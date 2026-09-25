@@ -11,6 +11,10 @@ and [SPEC.md](../SPEC.md), then the applicable module contract:
 Guidebooks explain usage; dated plans and deployment reports are evidence for
 their stated scope, not blanket requirements for every module.
 
+For implementation, start with [the platform architecture](docs/ARCHITECTURE.md).
+It connects existing modules to the ontology execution design, current gaps,
+delivery ownership and required acceptance evidence.
+
 ## Current architecture
 
 | Path | Current implementation |
@@ -121,6 +125,24 @@ states must have required assertions before criteria approval; the existing
 source, browser, release and permission checks remain authoritative.
 
 ## Source map
+
+The ontology foundation in `workspace/ontology_*.py` adds source-bound canonical
+partitions, typed static analysis, human mapping review and reverse dependency
+paths. `source-analyzer/` parses TS/TSX/HTML/CSS without executing inputs.
+`PROJECT_ONTOLOGY_MODE=canonical` explicitly enables product publication and
+workbench projection against the workspace authority; the initial default remains
+`legacy`. Analyzer execution is separately configured and cannot silently use
+the offline test adapter. Read the [ontology contract](workspace/ONTOLOGY_CONTRACT.md)
+and [AgentCore implementation plan](docs/ONTOLOGY_AGENTCORE_PLAN.md).
+This data foundation does not establish the later AgentCore service/cutover gates.
+
+The next execution work begins with the offline ledger/attempt protocol described
+in the [delivery register](docs/ARCHITECTURE.md#implementation-ownership-and-delivery-sequence),
+with separately reviewed private admission/publication units, then dedicated
+service probes and adapters, and finally application cutover.
+Use the [acceptance specification](docs/ONTOLOGY_AGENTCORE_VALIDATION.md)
+throughout that implementation. The ledger, probes and new service adapters are
+required work at the design baseline, not existing operating integrations.
 
 The 2026-09-21 UX change workflow adds saved change requests, screen/overlay/slot
 scope, source ID mappings and guarded transitions. An approved React baseline

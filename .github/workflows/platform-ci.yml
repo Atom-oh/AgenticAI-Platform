@@ -23,6 +23,8 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: platform/react-kit/package-lock.json }
       - run: npm ci --ignore-scripts
         working-directory: platform/react-kit
+      - run: npm ci --ignore-scripts
+        working-directory: platform/source-analyzer
       - run: pip install pytest pyyaml pg8000 httpx -r workspace/requirements.txt
       - run: python -m playwright install --with-deps chromium
       - run: python -m workspace.fetch_axe gates/package-lock.json /tmp/studio-axe
@@ -73,6 +75,17 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - run: npm ci && npm test
+
+  ontology:
+    name: Ontology — source analyzer and resolver boundaries
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: platform/source-analyzer } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: platform/source-analyzer/package-lock.json }
+      - run: npm ci --ignore-scripts
+      - run: npm test
 
   infra:
     name: Infra — cdk synth

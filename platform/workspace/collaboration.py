@@ -208,11 +208,18 @@ def _projection(project_id, product_id, guideline_id, revision, draft):
 class Collaboration:
     def __init__(self, storage, directory=None):
         self.storage, self.directory = storage, directory
+        self.ontology_enabled = False
 
-    def resolve_scope(self, actor, project_id):
+    def _check_expiry(self, expiry):
+        if expiry is not None and (type(expiry) is not int or expiry <= self.storage.clock()):
+            raise CollaborationError(401, "authorization-expired", "인증이 만료되었습니다.")
+
+    def resolve_scope(self, actor, project_id, authorization_expires_at=None):
+        self._check_expiry(authorization_expires_at)
         actor = _actor(actor)
+        binding = {"authorizationExpiresAt": authorization_expires_at} if authorization_expires_at is not None else {}
         if project_id is None:
-            return {"owner": actor, "actor": actor, "project": None, "role": "owner"}
+            return {"owner": actor, "actor": actor, "project": None, "role": "owner", **binding}
         identifier = _id(project_id)
         owner = f"project:{identifier}"
         project = self.storage.get(owner, "project", identifier)
@@ -221,7 +228,7 @@ class Collaboration:
         if (not project or project.get("status") != "active" or not isinstance(member, dict)
                 or member.get("role") not in _ROLES):
             raise CollaborationError(403, "forbidden", "Current project membership is required")
-        return {"owner": owner, "actor": actor, "project": project, "role": member["role"]}
+        return {"owner": owner, "actor": actor, "project": project, "role": member["role"], **binding}
 
     def require(self, scope, action):
         """Re-resolve canonical authority; return the fresh scope for CAS writes."""
@@ -230,7 +237,8 @@ class Collaboration:
         project = scope.get("project")
         if project is not None and not isinstance(project, dict):
             raise CollaborationError(403, "forbidden", "Invalid project scope")
-        fresh = self.resolve_scope(scope.get("actor"), project.get("id") if project else None)
+        fresh = self.resolve_scope(scope.get("actor"), project.get("id") if project else None,
+                                   scope.get("authorizationExpiresAt"))
         if fresh["owner"] != scope.get("owner") or fresh["role"] not in _ACTIONS.get(action, ()):
             raise CollaborationError(403, "forbidden", "This action is not allowed for the current role")
         return fresh
@@ -251,7 +259,9 @@ class Collaboration:
         project = scope["project"]
         fence = self._write(scope["owner"], "project", project, project["version"])
         try:
-            return self.storage.put_many([*writes, fence])[:-1]
+            expiry = scope.get("authorizationExpiresAt")
+            return self.storage.put_many([*writes, fence], retry_conflicts=expiry is None,
+                                         before_attempt=lambda: self._check_expiry(expiry))[:-1]
         except Conflict as error:
             raise CollaborationError(409, "conflict", "The project or resource changed; reload and retry") from error
 
@@ -272,24 +282,25 @@ class Collaboration:
                 break
         return found
 
-    def handle(self, method, parts, body, query, actor, project_id):
+    def handle(self, method, parts, body, query, actor, project_id, *, authorization_expires_at=None):
         if not parts or parts[0] not in ("projects", "products", "comments"):
             return None
         _actor(actor)
         if not isinstance(body, dict) or not isinstance(query, dict):
             _invalid("Request body and query must be objects")
         try:
-            status, result = self._handle(method.upper(), parts, body, query, actor, project_id)
+            self._check_expiry(authorization_expires_at)
+            status, result = self._handle(method.upper(), parts, body, query, actor, project_id, authorization_expires_at)
             return status, _public(result)
         except Conflict as error:
             raise CollaborationError(409, "conflict", "The resource changed; reload and retry") from error
         except ValueError as error:
             raise CollaborationError(400, "invalid-input", "Invalid resource data") from error
 
-    def _handle(self, method, parts, body, query, actor, project_id):
+    def _handle(self, method, parts, body, query, actor, project_id, authorization_expires_at=None):
         if parts[0] == "projects":
-            return self._projects(method, parts, body, query, actor)
-        scope = self.require(self.resolve_scope(actor, project_id), "read")
+            return self._projects(method, parts, body, query, actor, authorization_expires_at)
+        scope = self.require(self.resolve_scope(actor, project_id, authorization_expires_at), "read")
         if scope["project"] is None:
             raise CollaborationError(400, "project-required", "Select a project first")
         if parts[0] == "products":
@@ -311,10 +322,10 @@ class Collaboration:
     def _cursor(page):
         return {"cursor": page["cursor"]} if page.get("cursor") else {}
 
-    def _projects(self, method, parts, body, query, actor):
+    def _projects(self, method, parts, body, query, actor, authorization_expires_at=None):
         if parts == ["projects"]:
             if method == "POST":
-                return self._create_project(actor, body)
+                return self._create_project(actor, body, authorization_expires_at)
             if method == "GET":
                 page = self.storage.list_page(actor, "membership", cursor=query.get("cursor"))
                 projects = []
@@ -322,7 +333,7 @@ class Collaboration:
                     if member.get("status") != "active":
                         continue
                     try:
-                        scope = self.resolve_scope(actor, member["projectId"])
+                        scope = self.resolve_scope(actor, member["projectId"], authorization_expires_at)
                     except CollaborationError as error:
                         if error.status == 403:
                             continue
@@ -330,7 +341,7 @@ class Collaboration:
                     projects.append(scope["project"])
                 return 200, {"projects": projects, **self._cursor(page)}
         if len(parts) >= 2:
-            scope = self.resolve_scope(actor, parts[1])
+            scope = self.resolve_scope(actor, parts[1], authorization_expires_at)
             if len(parts) == 2 and method == "GET":
                 return 200, {"project": scope["project"]}
             if len(parts) == 3 and parts[2] == "members" and method == "PUT":
@@ -340,13 +351,13 @@ class Collaboration:
                 return 200, {"people": self._people(query.get("q"))}
         raise CollaborationError(404, "not-found", "Route not found")
 
-    def _create_project(self, actor, body):
+    def _create_project(self, actor, body, authorization_expires_at=None):
         name = _text(body.get("name"), "project name", 180)
         identifier = "p-" + _hash([actor, _request(body.get("requestId"))])[:48]
         owner, fingerprint = f"project:{identifier}", _hash({"name": name})
         existing = self.storage.get(owner, "project", identifier)
         if existing:
-            project = self.resolve_scope(actor, identifier)["project"]
+            project = self.resolve_scope(actor, identifier, authorization_expires_at)["project"]
             if project.get("requestHash") != fingerprint:
                 raise CollaborationError(409, "request-changed", "This requestId has different input")
             return 200, {"project": project}
@@ -366,9 +377,12 @@ class Collaboration:
                   self._write(actor, "membership", {"id": identifier, "projectId": identifier,
                                                    **member, "status": "active"})]
         try:
-            saved = self.storage.put_many(writes)[0]
+            saved = self.storage.put_many(writes, retry_conflicts=authorization_expires_at is None,
+                before_attempt=lambda: self._check_expiry(authorization_expires_at))[0]
         except Conflict:
-            saved = self.resolve_scope(actor, identifier)["project"]
+            if not self.storage.get(owner, "project", identifier):
+                raise
+            saved = self.resolve_scope(actor, identifier, authorization_expires_at)["project"]
             if saved.get("requestHash") != fingerprint:
                 raise CollaborationError(409, "request-changed", "This requestId has different input")
             return 200, {"project": saved}
@@ -507,10 +521,15 @@ class Collaboration:
         updated = {**product, "status": "published", "publishedGuidelineId": guideline_id,
                    "publishedRevision": revision, "publishedFromVersion": version, "ontologyHash": ontology["hash"],
                    "guideAssetId": asset_id, "guideLineageId": asset["lineageId"], "updatedBy": scope["actor"]}
+        canonical_writes = []
+        if self.ontology_enabled:
+            from workspace.ontology_product import prepare_product
+            canonical_writes, publication = prepare_product(self, scope, updated, guideline, ontology)
+            updated["ontologyPublication"] = publication
         records = self._commit(scope, [self._write(owner, "product", updated, version),
                                        self._write(owner, "guideline", guideline),
                                        self._write(owner, "ontology", metadata),
-                                       self._write(owner, "asset", asset)])
+                                       self._write(owner, "asset", asset), *canonical_writes])
         return 200, {"product": records[0], "guideline": records[1], "ontology": ontology, "assetId": asset_id}
 
     def _read(self, owner, key, limit, expected_sha):

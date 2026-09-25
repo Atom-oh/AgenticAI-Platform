@@ -2,6 +2,8 @@
 
 Baseline: merged MyData implementation through `acad38c` (PR #4), 2026-09-13.
 This file maps requirements to evidence; it does not waive defects or certify deployment.
+That baseline dates the original discrepancy audit. Later ontology/workbench
+amendments below and the architecture's 2026-09-23 baseline are separately scoped.
 
 ## Read the applicable contract
 
@@ -9,9 +11,14 @@ This file maps requirements to evidence; it does not waive defects or certify de
 |---|---|
 | `AGENTS.md` | Shared agent workflow and review rules |
 | `SPEC.md` | Active bank-platform requirements, including explicit scoped amendments |
+| `platform/docs/ARCHITECTURE.md` | Cross-module implementation design, authority boundaries and staged ownership under SPEC §7-2 |
+| `platform/docs/ONTOLOGY_AGENTCORE_VALIDATION.md` | Acceptance cases and evidence rules; documentation review is separate from implementation results |
+| `platform/workspace/ONTOLOGY_CONTRACT.md` | Implemented canonical data/API boundaries and explicitly gated source-analysis migration |
+| `platform/docs/ONTOLOGY_AGENTCORE_PLAN.md` | Dated ontology/AgentCore sequence and historical review outcomes; does not override active contracts |
 | `platform/README.md` | Implementation map, commands, and dated operational evidence |
 | `platform/docs/CONTRACTS.md` | API/module integration |
 | `platform/workspace/REACT_CONTRACT.md` | React generation, approval, release, and export |
+| `platform/workspace/AGENTCORE_CONTRACT.md` | SPEC §7-2 execution, authorization, capability and rollout requirements; not a deployment claim |
 | `platform/workspace/CONTRACT.md` | Imported-file/HTML workspace validation |
 | `platform/workbench/CONTRACT.md`, `platform/workbench/README.md` | Project-scoped knowledge/impact/skills and synthetic pension/report workflow; SPEC §17 |
 | `platform/infra/README-privacy.md` | MyData relay/gateway configuration and operational prerequisites |
@@ -106,6 +113,26 @@ repository file pointers. Include the applicable context text in the caller-owne
 prompt; a steering file alone is insufficient. See [review invocation](pr-review.md).
 
 ## Workbench scope amendment
+
+The ontology extension chooses workspace project `ontology` records as the
+canonical authority when `PROJECT_ONTOLOGY_MODE=canonical` is explicitly enabled.
+Existing per-product guideline projections retain their IDs/hashes; workbench
+typed-graph/impact consumers become a projection with explicit legacy import.
+The bank local/Neptune graph remains a separate reference source. This is not
+three interchangeable stores or a claim that all sources have migrated.
+Default execution and graph mode remain legacy until the cutover gates.
+Source-analysis/offline tests and configured readiness are not live AgentCore
+Runtime/Interpreter/Browser/Memory/Identity/Gateway evidence. The new planned
+Gateway/Lambda must not inherit the bank target's private-plane capabilities.
+
+The 2026-09-23 user instruction adopts the cross-module design in
+`platform/docs/ARCHITECTURE.md` before actual implementation. ADR-003 records
+that scoped decision. The completed Kiro acceptance-document reviews corrected
+verification criteria; they do not prove implementation of the dedicated
+ledger, execution authority, Runtime or other service adapters.
+Review new implementation against its named contract/case IDs and current code.
+Offline protocol work and disposable capability probes may precede activation;
+the existing A/B/C reviews, source boundaries and service gates remain mandatory.
 
 SPEC §17 applies only to the new `/studio-api/workbench` module. Its private
 feature-hash vector and typed-graph artifacts are an explicit initial backend,

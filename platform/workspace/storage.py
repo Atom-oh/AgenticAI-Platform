@@ -17,7 +17,7 @@ import re
 import time
 from decimal import Decimal
 
-KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership",
+KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership", "ontology_cursor",
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
                    "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
                    "wb_artifact", "wb_pension", "wb_report", "wb_tool",
@@ -139,8 +139,19 @@ class Storage:
                 if key not in ("pk", "sk", "owner", "sub", "ttl")}
         data.update(id=identifier, version=expected_version + 1 if expected_version else 1,
                     createdAt=previous["createdAt"] if previous else now, updatedAt=now)
+        if kind == "project":
+            def authority(record):
+                return ({actor: member["role"] for actor, member in record.get("members", {}).items()},
+                        record.get("status"), record.get("archived", False))
+            data["authorityRevision"] = ((previous.get("authorityRevision", 0) +
+                int(authority(previous) != authority(data))) if previous else 1)
         if kind == "job":
             data["ttl"] = now // 1000 + JOB_RETENTION_SECONDS
+        if kind == "ontology_cursor":
+            expiry = data.get("expiresAt")
+            if type(expiry) is not int or not now < expiry <= now + 300000:
+                raise ValueError("An ontology cursor requires a bounded expiry")
+            data["ttl"] = expiry // 1000
         data.setdefault("status", {"asset": "uploading", "contract": "draft", "job": "queued",
                                   "run": "queued", "product": "draft"}.get(kind, "active"))
         encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, default=str).encode()
@@ -158,7 +169,7 @@ class Storage:
             raise Conflict("The resource has changed") from error
         return _plain(data)
 
-    def put_many(self, writes: list[dict], checks: list[dict] | None = None) -> list[dict]:
+    def put_many(self, writes: list[dict], checks: list[dict] | None = None, *, retry_conflicts=True, before_attempt=None) -> list[dict]:
         """Atomically publish conditional metadata across owner partitions.
 
         The resource client marshals native values. Build each nested condition
@@ -166,6 +177,8 @@ class Storage:
         A transaction failure must never fall back to individual writes.
         """
         from boto3.dynamodb.conditions import ConditionExpressionBuilder
+        if before_attempt is not None and not callable(before_attempt):
+            raise ValueError("A transaction guard must be callable")
         checks = [] if checks is None else checks
         if not isinstance(writes, list) or not isinstance(checks, list) or not 1 <= len(writes) + len(checks) <= 100:
             raise ValueError("A transaction requires between 1 and 100 writes")
@@ -210,6 +223,8 @@ class Storage:
                 condition.pop("ExpressionAttributeValues")
             transactions.append({"ConditionCheck": condition})
         for attempt in range(5):
+            if before_attempt is not None:
+                before_attempt()
             try:
                 table.meta.client.transact_write_items(TransactItems=copy.deepcopy(transactions))
                 break
@@ -222,7 +237,7 @@ class Storage:
                 # Actual predicate failures must never be refreshed or bypassed.
                 contention = (len(codes) == len(transactions) and "TransactionConflict" in codes
                               and all(code in ("None", "TransactionConflict") for code in codes))
-                if contention and attempt < 4:
+                if contention and retry_conflicts and attempt < 4:
                     time.sleep(random.uniform(.025 * 2 ** attempt, .05 * 2 ** attempt))
                     continue
                 if any(code in ("ConditionalCheckFailed", "TransactionConflict") for code in codes):

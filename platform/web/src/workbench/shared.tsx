@@ -7,6 +7,7 @@ export const LABELS: Record<string, string> = {
   DRAFT: '초안', PENDING_APPROVAL: '승인 대기', APPROVED: '승인됨', DEPRECATED: '사용 중단',
   draft: '초안', approved: '승인됨', pending: '대기', queued: '대기 중', running: '처리 중',
   completed: '완료', complete: '완료', failed: '실패', ready: '준비됨', partial: '일부 완료',
+  processing: '분석 중', unverified: '실행 근거 미확인', cancelled: '취소됨',
   open: '대기', todo: '대기', in_progress: '진행 중', 'in-progress': '진행 중', blocked: '차단됨', done: '완료',
   pass: '통과', passed: '통과', fail: '실패', 'not-run': '미실행', 'not-configured': '미설정', unknown: '미확인',
   confirmed: '근거 확인', candidate: '검토 후보', snapshot: '문서 스냅샷', confluence: '사내 Confluence', git: 'Git 자산',
@@ -18,7 +19,7 @@ export const LABELS: Record<string, string> = {
   model: '모델 생성 응답', 'deterministic-baseline': '결정론적 기준 응답',
   behaviorEvaluation: 'Skill 행동 평가', knowledge: '지식 검색', externalSources: '외부 원본 연결',
   mcp: 'MCP 제공', available: '사용 가능', configured: '설정됨', 'configured-only': '개별 연결 설정 필요',
-  registered: '등록됨', indexing: '색인 중', analyzed: '분석됨', vectors: '벡터 항목', PROPOSING: '초안 생성 중',
+  registered: '등록됨', indexing: '색인 중', analyzed: '분석됨', 'needs-mapping': '매핑 확인 필요', vectors: '벡터 항목', PROPOSING: '초안 생성 중',
   VALIDATING: '행동 평가 중', answered: '응답 생성됨', refused: '요청 거부', 'insufficient-evidence': '근거 부족',
 };
 export const label = (value?: string) => value ? LABELS[value] || value : '미확인';

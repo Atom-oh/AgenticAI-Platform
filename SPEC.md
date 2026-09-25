@@ -329,6 +329,45 @@ not React release approval. No claim covers unsupplied financial APIs/authentica
 transactions or completed migration of all legacy galleries/drafts.
 The detailed interface is `platform/workspace/REACT_CONTRACT.md`.
 
+### 7-2. Ontology-centered AgentCore extension
+
+The canonical project ontology extends the workspace `ontology` records and
+project-scoped publication authority. Existing product-guideline projection IDs
+and hashes remain historical partitions. Workbench graph/impact views consume
+an authorized projection of that canonical manifest; the bank local/Neptune
+impact graph remains a separate reference source, not automatically imported.
+
+Connect source-bound Foundation, Atom, Molecule, Organism, Pattern, PageTemplate,
+Screen and Procedure entities to actual code, products and approved business
+guidance. Source syntax observations, candidate mappings and human approval are
+different states. Preserve unknown/dynamic/unreadable dependencies and revision
+binding; image/code changes require observable reverse dependency paths.
+
+The selected AgentCore backend must execute actual Runtime, Code Interpreter,
+Browser, Memory and Identity/Gateway→Lambda operations. Use a separate ontology
+Gateway/target with no plane/bridge/customer-profile or Registry write authority.
+Do not change the existing bank IAM Gateway for this extension.
+Model invocation retains the measured boundary; Memory cannot grant access or
+override current sources. Missing service evidence cannot become success or
+trigger a silent local fallback.
+
+Implement in reviewed stages with the current Lambda/legacy mode as the initial
+default. Offline schema/analyzer/API tests do not certify AgentCore deployment.
+The execution/authorization, capability-gate, private-source and rollout
+requirements in `platform/workspace/AGENTCORE_CONTRACT.md` are adopted for this
+extension. Implemented interfaces are scoped by `platform/workspace/ONTOLOGY_CONTRACT.md`.
+`platform/docs/ONTOLOGY_AGENTCORE_PLAN.md` records sequencing and historical reviews;
+edits to that plan do not amend these requirements.
+
+The cross-module implementation design is
+`platform/docs/ARCHITECTURE.md`. Keep its authority boundaries and delivery
+register aligned with the owning contracts when implementing this extension.
+Use `platform/docs/ONTOLOGY_AGENTCORE_VALIDATION.md` as the acceptance
+specification and record case-level evidence in its private dated copy;
+document-review PASS does not establish implementation or service
+readiness. Preserve full requested-model gaps when admitting a separately
+declared, verified enabled-model set under the applicable service gates.
+
 ## 8. User interface
 
 ### 8-1. Surfaces

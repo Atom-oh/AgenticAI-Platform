@@ -140,14 +140,18 @@ def _get(api, scope, kind, identifier):
     return item
 
 
-def _commit(api, scope, writes, action="read", checks=()):
+def _commit(api, scope, writes, action="read", checks=(), claims=None):
     api.collaboration.require(scope, action)
-    if checks:
+    if checks or claims is not None:
         from workspace.storage import Conflict
         if scope.get("project"):
             writes = [*writes, _write(scope, "project", scope["project"], scope["project"]["version"])]
+        if len(writes) + len(checks) > 100:
+            raise CollaborationError(422, "report-scope-limit", "보고서의 원본 근거 범위를 나누어 다시 생성하세요.")
         try:
-            result = api.storage.put_many(writes, checks=list(checks))
+            from workbench.service import check_source_deadlines
+            result = api.storage.put_many(writes, checks=list(checks), retry_conflicts=False,
+                before_attempt=lambda: check_source_deadlines(api.storage, checks, claims))
             return result[:-1] if scope.get("project") else result
         except Conflict as error:
             raise CollaborationError(409, "source-changed", "원본 또는 프로젝트가 변경되었습니다.") from error
@@ -395,18 +399,22 @@ def _report_sources(api, scope, claims, body):
         from workbench.service import Service
         from workbench import impact, knowledge
         ctx = Service(api, scope, claims)
-        knowledge.authorize_refs(ctx, change.get("sourceRefs", []))
+        knowledge.authorize_refs(ctx, change.get("sourceRefs", []), authority=change.get("graphAuthority", "legacy"))
         current_impact = impact.read_impact(ctx, change["id"]) if change.get("impactHash") else None
         references.append({"kind": "wb_change", "id": change["id"], "version": change["version"],
                            "impactHash": change.get("impactHash"), "generation": change.get("generation"),
-                           "sourceRefs": copy.deepcopy(change.get("sourceRefs", []))})
+                           "sourceRefs": copy.deepcopy(change.get("sourceRefs", [])),
+                           "graphAuthority": change.get("graphAuthority", "legacy")})
         tasks = [t for t in _list(api, scope, "wb_task") if current_impact
                  and t.get("changeId") == change["id"] and t.get("impactHash") == change["impactHash"]]
         for task in tasks:
-            knowledge.verify_refs(ctx, task.get("sourceRefs", []))
+            authority = task.get("graphAuthority", "legacy")
+            validate = knowledge.authorize_refs if authority == "canonical" else knowledge.verify_refs
+            validate(ctx, task.get("sourceRefs", []), authority=authority)
             references.append({"kind": "wb_task", "id": task["id"], "version": task["version"],
                                "changeId": change["id"], "impactHash": task["impactHash"],
-                               "sourceRefs": copy.deepcopy(task.get("sourceRefs", []))})
+                               "sourceRefs": copy.deepcopy(task.get("sourceRefs", [])),
+                               "graphAuthority": task.get("graphAuthority", "legacy")})
         sections += ["## 변경 영향", f"변경: {_literal(change.get('title', change['id']))}",
                      f"사유: {_literal(change.get('reason', '미기록'))}",
                      "| 대상 | 담당 역할 | 상태 |", "|---|---|---|"]
@@ -420,6 +428,12 @@ def _report_sources(api, scope, claims, body):
                          f"분석 해시: `{change['impactHash']}`"]
             if any(item.get("confidence") == "unknown" for item in current_impact["items"]):
                 unresolved.append("매핑되지 않은 영향 대상을 확인해야 합니다.")
+            coverage = current_impact.get("coverage", {})
+            sections.append("분석 결과 범위: " + ("일부 생략됨." if coverage.get("truncated") else "기록된 조회 범위 내 결과."))
+            if coverage.get("truncated"):
+                sections.append("저장·조회 한도로 확인된 영향과 작업 일부가 이 보고서에서 생략되었습니다.")
+            if coverage.get("unknown"):
+                sections.append("분석 제한·미확인 사유: " + ", ".join(_literal(value) for value in coverage["unknown"]))
         if not change.get("impactHash") and not change.get("impact"):
             unresolved.append("변경 영향 분석 근거를 확인해야 합니다.")
     evidence_ids = body.get("evidenceIds", [])
@@ -469,8 +483,7 @@ def _create_report(api, scope, claims, body):
                             *[f"- `{ref['kind']}:{_literal(ref['id'])}` · 버전/해시 `{ref.get('version', ref.get('contentHash', ''))}`"
                               for ref in references]]) + "\n"
     raw = markdown.encode()
-    key = api.storage.key_for(scope["owner"], "wb_report", identifier, "document.md")
-    api.storage.put_blob_once(key, raw, "text/markdown; charset=utf-8")
+    key = api.storage.key_for(scope["owner"], "wb_report", identifier, hashlib.sha256(raw).hexdigest() + "/document.md")
     record = {"id": identifier, "title": title, "type": kind, "status": "draft",
               "projectId": (scope.get("project") or {}).get("id"),
               "mode": "evidence-template", "contentHash": hashlib.sha256(raw).hexdigest(),
@@ -478,30 +491,43 @@ def _create_report(api, scope, claims, body):
               "createdBy": scope["actor"], "requestHash": fingerprint,
               "validation": {"status": "pass" if not unresolved else "incomplete",
                              "sourceCount": len(references), "generatedNumericClaims": False}}
-    saved = _commit(api, scope, [_write(scope, "wb_report", record)])[0]
+    from workspace.ontology_impact import check_metadata_budget
+    check_metadata_budget([record])
+    checks = _validate_report_sources(api, scope, claims, record, exact=False, snapshot=True)
+    api.storage.put_blob_once(key, raw, "text/markdown; charset=utf-8")
+    saved = _commit(api, scope, [_write(scope, "wb_report", record)], checks=checks, claims=claims)[0]
     return 201, {"report": _public(saved)}
 
 
-def _validate_report_sources(api, scope, claims, report, exact=True):
+def _validate_report_sources(api, scope, claims, report, exact=True, snapshot=False):
     checks = {}
+
+    def remember(check):
+        key = check["owner"], check["kind"], check["id"]
+        if key in checks and checks[key] != check:
+            raise CollaborationError(409, "source-changed", "보고서 원본이 검증 중 변경되었습니다.")
+        checks[key] = check
+
     for reference in report["sourceRefs"]:
         if reference["kind"] == "knowledge":
             from workbench.api import route as core_route
             from workbench.service import Service
             from workbench.knowledge import authorize_refs
-            authorize_refs(Service(api, scope, claims), [reference.get("evidence") or {}])
+            for check in authorize_refs(Service(api, scope, claims), [reference.get("evidence") or {}]):
+                remember(check)
             _, value = core_route(api, scope, claims, "GET", ["knowledge", reference["id"]], {}, {})
             document = value.get("document") or {}
             text = document.get("content", document.get("text", ""))
-            if exact and hashlib.sha256(text.encode()).hexdigest() != reference["contentHash"]:
+            if (exact or snapshot) and hashlib.sha256(text.encode()).hexdigest() != reference["contentHash"]:
                 raise CollaborationError(409, "source-changed", "보고서 원본 자료가 변경되었습니다.")
-            if exact:
+            if exact or snapshot:
                 from workbench.service import Service
                 from workbench.knowledge import verify_refs
                 if value.get("evidence") != reference.get("evidence"):
                     raise CollaborationError(409, "source-changed", "보고서 원본 버전 또는 권한이 변경되었습니다.")
-                for check in verify_refs(Service(api, scope, claims), [value["evidence"]]):
-                    checks[(check["kind"], check["id"])] = check
+                if exact:
+                    for check in verify_refs(Service(api, scope, claims), [value["evidence"]]):
+                        remember(check)
         else:
             current = _get(api, scope, reference["kind"], reference["id"])
             if reference["kind"] in {"wb_change", "wb_task"}:
@@ -510,10 +536,15 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                 ctx = Service(api, scope, claims)
                 # Historical output retains its own bindings. Current read access
                 # must hold for both those bindings and the current record.
-                knowledge.authorize_refs(ctx, reference.get("sourceRefs", []))
-                knowledge.authorize_refs(ctx, current.get("sourceRefs", []))
-                if exact:
-                    if current.get("sourceRefs", []) != reference.get("sourceRefs", []):
+                authority = reference.get("graphAuthority", "legacy")
+                for check in knowledge.authorize_refs(ctx, reference.get("sourceRefs", []), authority=authority):
+                    remember(check)
+                for check in knowledge.authorize_refs(ctx, current.get("sourceRefs", []),
+                                                      authority=current.get("graphAuthority", "legacy")):
+                    remember(check)
+                if exact or snapshot:
+                    if (current.get("sourceRefs", []) != reference.get("sourceRefs", [])
+                            or current.get("graphAuthority", "legacy") != authority):
                         raise CollaborationError(409, "source-changed", "간접 원본 근거가 변경되었습니다.")
                     if current.get("impactHash") != reference.get("impactHash"):
                         raise CollaborationError(409, "source-changed", "영향 분석 버전이 변경되었습니다.")
@@ -522,18 +553,25 @@ def _validate_report_sources(api, scope, claims, report, exact=True):
                         analyzed = impact.read_impact(ctx, change_id)
                         if analyzed["impactHash"] != reference.get("impactHash"):
                             raise CollaborationError(409, "source-changed", "작업의 영향 분석이 변경되었습니다.")
-                        manifest = api.storage.get(scope["owner"], "wb_index", "current")
+                        kind, manifest_id = ("ontology", "project-current") if authority == "canonical" else ("wb_index", "current")
+                        manifest = api.storage.get(scope["owner"], kind, manifest_id)
+                        if (manifest or {}).get("generation") != analyzed["generation"]:
+                            raise CollaborationError(409, "source-changed", "보고서의 영향 분석 기준이 변경되었습니다.")
                         if manifest:
-                            check = ctx.check("wb_index", manifest)
-                            checks[(check["kind"], check["id"])] = check
-                    for check in knowledge.verify_refs(ctx, reference.get("sourceRefs", [])):
-                        checks[(check["kind"], check["id"])] = check
-            if exact and current["version"] != reference["version"]:
+                            check = ctx.check(kind, manifest)
+                            remember(check)
+                    if exact:
+                        for check in knowledge.verify_refs(ctx, reference.get("sourceRefs", []), authority=authority):
+                            remember(check)
+            if (exact or snapshot) and current["version"] != reference["version"]:
                 raise CollaborationError(409, "source-changed", "보고서 원본 자료가 변경되었습니다.")
-            checks[(reference["kind"], reference["id"])] = {
+            remember({
                 "owner": scope["owner"], "kind": reference["kind"], "id": reference["id"],
-                "version": current["version"]}
-    return list(checks.values())
+                "version": current["version"]})
+    from workbench.service import check_source_deadlines
+    result = list(checks.values())
+    check_source_deadlines(api.storage, result, claims)
+    return result
 
 
 def can_read_report(api, scope, claims, report):
@@ -575,7 +613,7 @@ def route(api, scope, claims, method, parts, body, query):
             updated = _commit(api, scope, [_write(scope, "wb_report", {
                 **report, "status": "approved", "approval": {"actor": scope["actor"],
                 "contentHash": report["contentHash"], "sourceRefs": report["sourceRefs"]}}, report["version"])],
-                action="publish", checks=checks)[0]
+                action="publish", checks=checks, claims=claims)[0]
             return 200, {"report": _public(updated)}
     return None
 

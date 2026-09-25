@@ -5,6 +5,7 @@ import { WorkbenchScope, useAction, useLoad, ActionState, Empty, Field, label, L
 import { Planning, Deliverables, Components } from './WorkspaceViews';
 import { Changes, Development } from './Changes';
 import KnowledgeView from './Knowledge';
+import OntologyView from './Ontology';
 import Skills from './Skills';
 import { Sources, Batches, Tools, Operations } from './Operations';
 import Pension from './Pension';
@@ -19,6 +20,7 @@ export const WORKBENCH_VIEWS: Record<WorkbenchView, { title: string; group: stri
   components: { title: 'React 컴포넌트', group: '개발', description: '실제 플랫폼 패키지의 속성·버전과 연결된 작업을 확인하세요.' },
   development: { title: '개발 작업·검증', group: '개발', description: '변경 근거부터 소스 검증과 개발 전달까지 이어서 처리하세요.' },
   knowledge: { title: '규정집·위키', group: '공통 지식', description: '프로젝트에서 조회할 수 있는 지식과 원본 버전, 연결 근거를 살펴보세요.' },
+  ontology: { title: '프로젝트 온톨로지', group: '공통 지식', description: '디자인 자산·상품·규정·코드의 원본과 변경 영향을 하나의 프로젝트 기준으로 확인하세요.' },
   skills: { title: 'Skill 제작실', group: '공통 지식', description: '반복되는 업무를 지침으로 만들고, 검증된 버전을 승인하세요.' },
   pension: { title: '연금 상담', group: '업무 시나리오', description: '가상 페르소나의 연금 현황을 살펴보고, 가정을 바꾸며 상담을 평가하세요.' },
   reports: { title: '보고서 작업실', group: '업무 시나리오', description: '변경과 상담의 근거를 모아 보고서를 만들고, 정확한 버전을 검토하세요.' },
@@ -143,6 +145,7 @@ function View({ view }: { view: WorkbenchView }) {
     case 'components': return <Components />;
     case 'development': return <Development />;
     case 'knowledge': return <KnowledgeView />;
+    case 'ontology': return <OntologyView />;
     case 'skills': return <Skills />;
     case 'pension': return <Pension />;
     case 'reports': return <Reports />;

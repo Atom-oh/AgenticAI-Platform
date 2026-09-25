@@ -111,6 +111,13 @@ class WorkspaceAPI:
             from workspace.directory import CognitoDirectory
             directory = CognitoDirectory(os.environ["WORKSPACE_USER_POOL_ID"])
         self.collaboration = collaboration if collaboration is not None else Collaboration(self.storage, directory=directory)
+        self.ontology_mode = os.environ.get("PROJECT_ONTOLOGY_MODE", "legacy")
+        if self.ontology_mode not in {"legacy", "canonical"}:
+            raise ValueError("Unknown project ontology backend")
+        self.collaboration.ontology_enabled = self.ontology_mode == "canonical"
+        # The foundation does not install a cloud adapter. The adapter milestone
+        # supplies a verified readiness installer; an environment label cannot.
+        self.ontology_analyzer_ready = False
         from workspace.git_service import configured_connections
         self.git_connections = git_connections or configured_connections
         from workbench.runtime import install
@@ -152,10 +159,17 @@ class WorkspaceAPI:
             project_id = project_headers[0] if project_headers else None
             if segments[0] in ("projects", "products", "comments"):
                 response = self.collaboration.handle(method, segments, _body(event) if method in ("POST", "PUT", "PATCH") else {},
-                                                       query, owner, project_id)
+                                                       query, owner, project_id,
+                                                       authorization_expires_at=int(claims["exp"]) * 1000 if claims.get("exp") is not None else None)
                 if response is not None:
                     return _json(response[0], response[1])
             scope = self.collaboration.resolve_scope(owner, project_id)
+            if segments[0] == "ontology":
+                from workspace.ontology_api import route
+                scope = self.collaboration.require(scope, "read")
+                result = route(self, scope, claims, method, segments[1:],
+                               _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
+                return _json(result[0], result[1])
             if segments[0] == "workbench":
                 from workbench.api import route
                 scope = self.collaboration.require(scope, "read")
@@ -244,6 +258,10 @@ class WorkspaceAPI:
 
     def _expire_job(self, owner, job, scope=None):
         """One CAS attempt per read; a concurrent heartbeat or completion wins."""
+        if job.get("task") == "workbench" and job.get("status") == "failed" and job.get("errorCode") == "job-timeout":
+            from workbench.worker import _mark_failed
+            _mark_failed(self, owner, job, "job-timeout")
+            return job
         if job.get("task") in ("document-finalize", "document-analysis"):
             from documents.jobs import expire_raw_job
             if scope is None:
@@ -255,11 +273,15 @@ class WorkspaceAPI:
                 or now - updated <= STALE_JOB_MS):
             return job
         try:
-            return self.storage.put(owner, "job", {
+            saved = self.storage.put(owner, "job", {
                 **job, "status": "failed", "stopReason": "timeout", "errorCode": "job-timeout",
                 "error": "작업 진행이 16분 이상 갱신되지 않아 종료했습니다. 다시 실행해 주세요.",
                 "finishedAt": now,
             }, job["version"])
+            if job.get("task") == "workbench":
+                from workbench.worker import _mark_failed
+                _mark_failed(self, owner, saved, "job-timeout")
+            return saved
         except Conflict:
             return self._get(owner, "job", job["id"])
 

@@ -22,6 +22,27 @@ def fail(status, code, message):
     raise CollaborationError(status, code, message)
 
 
+def check_source_deadlines(storage, checks, claims=None):
+    """Recheck the aggregate deadline after reads and transaction preparation."""
+    deadlines = []
+    for check in checks:
+        if check["kind"] != "wb_source":
+            continue
+        source = storage.get(check["owner"], check["kind"], check["id"])
+        if (not source or source["version"] != check["version"]
+                or type(source.get("accessExpiresAt")) is not int):
+            fail(409, "stale-evidence", "검증한 원본 권한이 변경되었습니다.")
+        deadlines.append(source["accessExpiresAt"])
+    expiry = (claims or {}).get("exp")
+    if expiry is None and not deadlines:
+        return
+    now = storage.clock()
+    if expiry is not None and int(expiry) * 1000 <= now:
+        fail(401, "authorization-expired", "인증이 만료되었습니다.")
+    if deadlines and min(deadlines) <= now:
+        fail(409, "stale-evidence", "검증한 원본의 유효 기간이 만료되었습니다.")
+
+
 def fields(body, allowed):
     if not isinstance(body, dict) or set(body) - set(allowed):
         fail(400, "invalid-input", "허용되지 않은 입력 필드입니다.")
@@ -103,6 +124,7 @@ class Service:
                 expired = True
             if expired:
                 fail(401, "authorization-expired", "인증이 만료되었습니다.")
+            self.scope = {**self.scope, "authorizationExpiresAt": int(expiry) * 1000}
         self.scope = self.collaboration.require(self.scope, "read")
         if self.scope["role"] not in self.required_roles:
             fail(403, "forbidden", "현재 역할로 수행할 수 없는 작업입니다.")
@@ -134,13 +156,34 @@ class Service:
         project = self.scope["project"]
         if self.claims.get("exp") is not None and int(self.claims["exp"]) * 1000 <= self.storage.clock():
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
-        if not checks:
-            return self.collaboration._commit(self.scope, writes)
-        written = {(w["kind"], w["item"]["id"]) for w in writes}
-        unique = {(c["kind"], c["id"]): c for c in checks if (c["kind"], c["id"]) not in written}
+        if len(writes) + 1 > 100:
+            fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
+        unique = {}
+        for check in checks:
+            key = check["owner"], check["kind"], check["id"]
+            if key in unique and unique[key] != check:
+                fail(409, "source-changed", "같은 원본의 서로 다른 버전이 관찰되었습니다.")
+            unique[key] = check
+        for write in writes:
+            key = write["owner"], write["kind"], write["item"]["id"]
+            if key in unique:
+                if unique[key]["version"] != write.get("expected_version"):
+                    fail(409, "source-changed", "검증한 원본과 저장 기준 버전이 다릅니다.")
+                del unique[key]
+        project_key = self.owner, "project", project["id"]
+        if project_key in unique:
+            if unique[project_key]["version"] != project["version"]:
+                fail(409, "source-changed", "검증한 프로젝트 권한 버전이 다릅니다.")
+            del unique[project_key]
+        if len(writes) + len(unique) + 1 > 100:
+            fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         fence = self.write("project", project, project["version"])
         try:
-            return self.storage.put_many([*writes, fence], checks=list(unique.values()))[:-1]
+            # Timed authority/source checks belong to the caller. A contention
+            # retry must return there for reauthorization before another send.
+            observed = list(unique.values())
+            return self.storage.put_many([*writes, fence], checks=observed, retry_conflicts=False,
+                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims))[:-1]
         except Conflict as error:
             raise CollaborationError(409, "conflict", "프로젝트 또는 근거가 변경되었습니다.") from error
 

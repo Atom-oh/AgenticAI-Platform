@@ -106,8 +106,22 @@ Bound size, page all results and expose incomplete coverage.
 
 ## Change and task objects
 
+When explicitly configured with `PROJECT_ONTOLOGY_MODE=canonical`, dependency
+reads project the workspace canonical ontology instead of independently
+publishing workbench graph state. An owner may explicitly import the accessible
+legacy graph into candidate canonical mappings. Current source ACLs, generations
+and project fences still apply. Canonical-mode legacy dependency mutation is
+rejected; use the source-bound human review APIs in
+[`workspace/ONTOLOGY_CONTRACT.md`](../workspace/ONTOLOGY_CONTRACT.md).
+The default remains `legacy` until the separate cutover gate.
+
 Nodes: `{id,label,title,version,role?,sourceRef?,provenance}`.
 Edges: `{src,rel,dst,sourceRef?,provenance}`.
+Canonical projections additionally retain `canonicalType` on nodes,
+`canonicalRelation` on edges, the full `canonical` record and a `sourceRefs`
+array on both. Compatibility labels are display aliases; canonical types
+determine role routing. Impact items preserve all inspected `witnessEdges`,
+the union of `sourceRefs`, and `staleWitness` alongside one display path.
 Use dependency edge types; ownership is terminal assignment metadata. An impact
 item includes target, role, reason, witness path, source revision and confidence
 class (`confirmed`, `candidate`, `unknown`), not invented probability scores.

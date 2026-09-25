@@ -273,9 +273,9 @@ class Worker:
                 result = process_analysis(self, owner, job)
             else:
                 raise ValueError("지원하지 않는 작업입니다.")
-            # Document tasks commit their result and terminal job state under
+            # These tasks commit their result and terminal job state under
             # the same authority fence; do not add a later unfenced write.
-            if task.startswith("document-"):
+            if task.startswith("document-") or task == "workbench" and job["input"].get("operation") == "ontology-analyze":
                 current_job = self.storage.get(owner, "job", identifier)
                 if not current_job or current_job.get("status") != "completed":
                     raise ValueError("문서 작업의 원자적 완료 기록을 확인하지 못했습니다.")
@@ -283,6 +283,24 @@ class Worker:
                 self._update(owner, "job", identifier, status="completed", progress=100, result=result)
             return {"status": "completed", "jobId": identifier}
         except Exception as error:
+            if job.get("task") == "workbench" and job.get("input", {}).get("operation") == "ontology-analyze":
+                # A read/response failure after the atomic commit must never
+                # turn an already published analysis into a failed job.
+                try:
+                    current_job = self.storage.get(owner, "job", identifier)
+                    if current_job and current_job.get("status") == "completed":
+                        return {"status": "completed", "jobId": identifier}
+                    if current_job and current_job.get("status") in {"queued", "running"}:
+                        from workspace.collaboration import CollaborationError
+                        code = error.code if isinstance(error, CollaborationError) else "ontology-processing-failed"
+                        current_job = self.storage.put(owner, "job", {**current_job, "status": "failed",
+                            "error": "온톨로지 분석을 완료하지 못했습니다.", "errorCode": code}, current_job["version"])
+                    if current_job and current_job.get("status") == "failed":
+                        from workbench.worker import _mark_failed
+                        _mark_failed(self, owner, current_job, current_job.get("errorCode", "ontology-processing-failed"))
+                except Exception:
+                    return {"status": "failed", "jobId": identifier, "failurePersisted": False}
+                return {"status": "failed", "jobId": identifier}
             # Known validation messages are bounded and contain no SDK secrets.
             from engine.gate import GateRefused, GateUnsupported
             message = str(error)[:300] if isinstance(error, (ValueError, GateRefused, GateUnsupported)) else f"작업 처리 실패: {type(error).__name__}"

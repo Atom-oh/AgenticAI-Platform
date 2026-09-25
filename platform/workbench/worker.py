@@ -11,7 +11,7 @@ def process(worker, owner, job):
             fail(400, "invalid-job", "올바른 workbench 작업이 아닙니다.")
         pinned = job["input"]
         operation = pinned.get("operation", "")
-        if operation not in {"index", "skill-propose", "skill-validate", "skill-execute"}:
+        if operation not in {"index", "skill-propose", "skill-validate", "skill-execute", "ontology-analyze"}:
             from workbench import business
             handler = getattr(business, "process", None)
             if not callable(handler):
@@ -28,6 +28,9 @@ def process(worker, owner, job):
         claims = {"sub": actor, "exp": expiry // 1000,
                   "cognito:groups": ["platform-operators"] if pinned.get("operator") is True else []}
         ctx = Service(worker, scope, claims)
+        if operation == "ontology-analyze":
+            from workspace.ontology_jobs import process
+            return process(ctx, pinned, job)
         from workbench import knowledge, skills
         for source_id, binding in pinned.get("sourceVersions", {}).items():
             source = ctx.get("wb_source", source_id)
@@ -60,16 +63,20 @@ def _mark_failed(worker, owner, job, code):
         return
     data = job["input"]
     operation = data.get("operation")
-    kind = {"index": "wb_batch", "skill-propose": "wb_skill", "skill-validate": "wb_skill",
+    kind = {"index": "wb_batch", "skill-propose": "wb_skill", "skill-validate": "wb_skill", "ontology-analyze": "wb_artifact",
             "skill-execute": "wb_artifact"}.get(operation)
     if not kind:
         return
     try:
+        if code == "dispatch-failed":
+            live_job = worker.storage.get(owner, "job", job.get("id"))
+            if live_job and live_job.get("status") in {"running", "completed"}:
+                return
         identifier = (data.get("batchId") if operation == "index" else data.get("artifactId")
-                      if operation == "skill-execute" else data.get("skillId"))
+                      if operation in {"skill-execute", "ontology-analyze"} else data.get("skillId"))
         current = worker.storage.get(owner, kind, identifier)
         if (not current or current.get("jobId") != job.get("id")
-                or current.get("status") in {"completed", "DRAFT", "APPROVED", "DEPRECATED"}):
+                or current.get("status") in {"completed", "failed", "cancelled", "FAILED", "DRAFT", "APPROVED", "DEPRECATED"}):
             return
         collab = getattr(worker, "collaboration", None) or Collaboration(worker.storage)
         project_id = current["projectId"]

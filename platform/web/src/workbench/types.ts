@@ -1,7 +1,7 @@
 import type { Product, Project, Role } from '../workspace/types';
 
 export type WorkbenchView = 'planning' | 'changes' | 'deliverables' | 'components' | 'development' |
-  'knowledge' | 'skills' | 'pension' | 'reports' | 'sources' | 'batches' | 'tools' | 'operations';
+  'knowledge' | 'ontology' | 'skills' | 'pension' | 'reports' | 'sources' | 'batches' | 'tools' | 'operations';
 export type JsonRecord = Record<string, unknown>;
 export type Job = { id: string; status: string; progress?: unknown; error?: string; result?: JsonRecord };
 export type Overview = {
@@ -12,6 +12,7 @@ export type Overview = {
 export type Task = {
   id: string; changeId: string; impactHash: string; targetId: string; title: string; role: string;
   status: string; assigneeSub?: string; evidenceRefs: unknown[]; sourceRefs?: unknown[]; version: number;
+  evidenceKind?: string; targetEvidence?: unknown; evidenceStates?: unknown[]; staleWitness?: boolean;
 };
 export type Source = {
   id: string; name: string; kind: string; version: number; status?: string; description?: string;

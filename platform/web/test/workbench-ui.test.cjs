@@ -8,7 +8,7 @@ const { chromium } = require('playwright');
 // Browser plugin not available. All requests below are intercepted API fixtures;
 // this suite neither submits model requests nor connects to external services.
 const root = path.resolve(__dirname, '..');
-const views = ['planning', 'changes', 'deliverables', 'components', 'development', 'knowledge', 'skills', 'pension', 'reports', 'sources', 'batches', 'tools', 'operations'];
+const views = ['planning', 'changes', 'deliverables', 'components', 'development', 'knowledge', 'ontology', 'skills', 'pension', 'reports', 'sources', 'batches', 'tools', 'operations'];
 const hash = 'a'.repeat(64);
 const clone = value => JSON.parse(JSON.stringify(value));
 const ref = { sourceId: 'source-1', documentId: 'doc-1', revision: 'synthetic-v1', contentHash: hash, generation: 'generation-1' };
@@ -62,7 +62,15 @@ async function harness() {
       { id: 'example-api', label: 'API', title: '출금 신청 API', version: '1', provenance: 'synthetic-fixture', sourceRef: ref }],
     edges: [{ src: 'example-screen', rel: 'USES', dst: 'example-icon', provenance: 'synthetic-fixture', sourceRef: ref }],
     generation: 'generation-1', coverage: { complete: false, unknown: ['unmapped-dependencies'] } },
-    sessions: {}, jobs: {}, executions: {},
+    ontology: { generation: hash, backend: 'workspace-project-ontology', cursor: null,
+      coverage: { complete: false, unknown: ['outside-snapshot-not-certified'] },
+      nodes: [
+        { id: 'icon', type: 'Foundation', title: `${scope.toUpperCase()} 이미지`, revision: 1, reviewState: 'candidate', provenance: 'declared',
+          sourceRefs: [{ sourceKind: 'asset', sourceId: 'image', revision: '1', sha256: hash, audienceRevision: '1' }] },
+        { id: 'screen', type: 'Screen', title: `${scope.toUpperCase()} 화면`, revision: 1, reviewState: 'candidate', provenance: 'declared',
+          sourceRefs: [{ sourceKind: 'asset', sourceId: 'screen-file', revision: '1', sha256: hash, audienceRevision: '1' }] }],
+      edges: [{ id: 'edge', type: 'USES', src: { id: 'screen' }, dst: { id: 'icon' }, sourceRefs: [], provenance: 'declared' }] },
+    sessions: {}, jobs: {}, executions: {}, assets: [], analyses: [],
   };
   const catalog = { ...JSON.parse(fs.readFileSync(path.join(root, '../react-kit/catalog.json'), 'utf8')), hash };
   const css = ['workspace/workspace.css', 'workbench/workbench.css'].map(file => fs.readFileSync(path.join(root, 'src', file), 'utf8')).join('\n');
@@ -119,8 +127,44 @@ async function harness() {
         } else if (method === 'PUT') { assert.equal(body.version, product.version); Object.assign(product, body, { version: product.version + 1 }); }
         return json({ product });
       }
-      if (['/runs', '/assets', '/releases'].includes(target)) return json({ [target.slice(1)]: [] });
+      if (target === '/assets') return json({ assets: data.assets });
+      if (['/runs', '/releases'].includes(target)) return json({ [target.slice(1)]: [] });
       if (target === '/components') return json({ catalog });
+      if (target === '/ontology') return json(data.ontology);
+      if (target === '/ontology/schema') return json({ analyzerConfigured: Boolean(fixture.analyzerConfigured) });
+      if (target === '/ontology/analyses' && method === 'POST') {
+        data.jobs['analysis-job'] = { id: 'analysis-job', kind: 'ontology-analysis', status: 'queued' };
+        const artifact = { id: 'analysis-artifact', jobId: 'analysis-job', status: 'queued',
+          name: body.name, requestId: body.requestId };
+        data.analyses.push(artifact);
+        return json({ artifact, job: data.jobs['analysis-job'] }, 202);
+      }
+      if (target === '/ontology/analyses' && method === 'GET') return json({ items: data.analyses });
+      if (target === '/ontology/analyses/analysis-artifact') {
+        const artifact = data.analyses[0];
+        if (data.jobs['analysis-job'].status === 'completed') Object.assign(artifact, {
+          status: 'completed', execution: { backend: 'local-offline', inputHash: hash, sourceExecuted: false,
+            analyzerCodeHash: hash, dependencyLockHash: hash },
+          coverage: { complete: false, truncated: false, unknown: ['unreviewed-design-mappings'] } });
+        if (fixture.malformedAnalysisReceipt && artifact.status === 'completed')
+          return json({ artifact: { ...artifact, execution: { backend: 'local-offline', inputHash: hash } } });
+        if (fixture.unknownAnalysisBackend && artifact.status === 'completed')
+          return json({ artifact: { ...artifact, execution: { ...artifact.execution, backend: 'future-runtime' } } });
+        return json({ artifact });
+      }
+      if (target === '/ontology/impact') {
+        const response = { generation: data.ontology.generation, coverage: { complete: false }, items: [
+          { nodeId: body.nodeIds[0], title: '선택한 항목의 영향', type: 'Screen', evidenceKind: 'candidate', witnessPath: body.nodeIds }] };
+        if (fixture.holdOntology) { fixture.heldOntology = () => json(response).catch(() => {}); return; }
+        return json(response);
+      }
+      if (/^\/ontology\/nodes\/[^/]+\/review$/.test(target)) {
+        const node = data.ontology.nodes.find(item => item.id === target.split('/')[3]);
+        assert.equal(body.revision, node.revision); assert.equal(body.expectedGeneration, data.ontology.generation);
+        assert.equal(Object.hasOwn(body, 'actor'), false);
+        node.reviewState = body.decision; data.ontology.generation = 'b'.repeat(64);
+        return json({ node, generation: data.ontology.generation });
+      }
       if (target === '/workbench/dependencies') return json(data.graph);
       if (target === '/workbench/knowledge') {
         const payload = { items: data.knowledge, generation: 'generation-1', coverage: { complete: false }, backend: { vector: 'private-artifact', embedding: 'hashing-v1' } };
@@ -308,6 +352,90 @@ test('React components expose source download and link the selected component wi
     assert.equal(params.get('projectId'), 'a');
     assert.equal(params.get('tab'), null);
   } finally { await h.close(); }
+});
+
+test('canonical ontology shows provenance and unknown coverage, keeps review revisions and cancels stale impact', { timeout: 60000 }, async () => {
+  const h = await harness();
+  try {
+    await h.open('ontology');
+    await h.page.getByRole('heading', { name: '자산·상품·규정·코드의 연결', exact: true }).waitFor();
+    assert.equal(await h.page.getByRole('button', { name: '원본 분석·매핑 후보 등록', exact: true }).isDisabled(), true);
+    const choose = title => h.page.locator('.wb-record-list button').filter({ hasText: title }).click();
+    await choose('A 이미지');
+    assert.equal(await h.page.getByRole('button', { name: '이 버전 승인', exact: true }).isDisabled(), true);
+    h.fixture.holdOntology = true;
+    await h.page.getByRole('button', { name: '이 항목 변경 영향 보기', exact: true }).click();
+    while (!h.fixture.heldOntology) await new Promise(resolve => setTimeout(resolve, 10));
+    await choose('A 화면');
+    await h.fixture.heldOntology();
+    assert.equal(await h.page.getByRole('heading', { name: '변경 영향 경로', exact: true }).count(), 0);
+    await h.page.getByLabel('검토 근거', { exact: true }).fill('원본의 화면 연결을 확인했습니다.');
+    await h.page.getByRole('button', { name: '검토 완료 기록', exact: true }).click();
+    await h.page.waitForFunction(() => [...document.querySelectorAll('.wb-record-list button')].some(el => el.textContent.includes('검토 완료')));
+    await choose('A 화면');
+    await h.page.getByLabel('검토 근거', { exact: true }).fill('현재 버전 승인');
+    assert.equal(await h.page.getByRole('button', { name: '이 버전 승인', exact: true }).isDisabled(), false);
+    await h.page.getByLabel('프로젝트', { exact: true }).selectOption('b');
+    await h.page.locator('.wb-record-list button').filter({ hasText: 'B 이미지' }).waitFor();
+    assert.equal(await h.page.getByLabel('검토 근거', { exact: true }).count(), 0);
+    assert.equal(await h.page.locator('.wb-record-list button').filter({ hasText: 'A 화면' }).count(), 0);
+  } finally { await h.close(); }
+});
+
+test('ontology analysis displays the actual backend and receipt and clears it on project switch', { timeout: 60000 }, async () => {
+  const h = await harness();
+  try {
+    h.fixture.analyzerConfigured = true;
+    h.data('a').assets = [{ id: 'code', name: 'App.tsx', uploadStatus: 'stored' }];
+    await h.open('ontology');
+    await h.page.getByRole('checkbox', { name: 'App.tsx', exact: true }).check();
+    await h.page.getByRole('button', { name: '원본 분석·매핑 후보 등록', exact: true }).click();
+    await h.page.getByText('실제 분석 환경: 로컬 테스트 실행', { exact: true }).waitFor();
+    await h.page.getByText('분석 작업·실행 증거', { exact: true }).click();
+    assert.match(await h.page.getByRole('region', { name: '원본 분석 실행 근거' }).innerText(), /analysis-artifact/);
+    await h.page.getByLabel('프로젝트', { exact: true }).selectOption('b');
+    await h.page.locator('.wb-record-list button').filter({ hasText: 'B 이미지' }).waitFor();
+    assert.equal(await h.page.getByText('실제 분석 환경: 로컬 테스트 실행', { exact: true }).count(), 0);
+    assert(!h.page.url().includes('analysisId='));
+  } finally { await h.close(); }
+});
+
+test('accepted ontology analysis can be recovered after remount without another paid request', { timeout: 60000 }, async () => {
+  const h = await harness();
+  try {
+    h.fixture.analyzerConfigured = true;
+    h.fixture.holdJobs = true;
+    h.data('a').assets = [{ id: 'code', name: 'App.tsx', uploadStatus: 'stored' }];
+    await h.open('ontology');
+    await h.page.getByRole('checkbox', { name: 'App.tsx', exact: true }).check();
+    await h.page.getByRole('button', { name: '원본 분석·매핑 후보 등록', exact: true }).click();
+    await h.page.waitForURL(/analysisId=analysis-artifact/);
+    const requestId = h.data('a').analyses[0].requestId;
+    await h.open('planning');
+    await h.open('ontology');
+    h.fixture.holdJobs = false;
+    await h.page.getByRole('button').filter({ hasText: 'source-collection' }).click();
+    await h.page.getByText('실제 분석 환경: 로컬 테스트 실행', { exact: true }).waitFor();
+    await h.page.getByText('분석 작업·실행 증거', { exact: true }).click();
+    assert.match(await h.page.getByRole('region', { name: '원본 분석 실행 근거' }).innerText(), new RegExp(requestId));
+    assert.equal(h.fixture.calls.filter(call => call.method === 'POST' && call.target === '/ontology/analyses').length, 1);
+  } finally { await h.close(); }
+});
+
+test('ontology never presents a backend label or unsupported receipt as completed execution evidence', { timeout: 60000 }, async () => {
+  for (const flag of ['malformedAnalysisReceipt', 'unknownAnalysisBackend']) {
+    const h = await harness();
+    try {
+      h.fixture.analyzerConfigured = true; h.fixture[flag] = true;
+      h.data('a').assets = [{ id: 'code', name: 'App.tsx', uploadStatus: 'stored' }];
+      await h.open('ontology');
+      await h.page.getByRole('checkbox', { name: 'App.tsx', exact: true }).check();
+      await h.page.getByRole('button', { name: '원본 분석·매핑 후보 등록', exact: true }).click();
+      await h.page.getByText('분석 작업 상태: 실행 근거 미확인', { exact: true }).waitFor();
+      assert.equal(await h.page.getByText(/^실제 분석 환경:/).count(), 0);
+      assert.equal(await h.page.getByText('저장된 분석의 실행 근거를 조회했습니다.', { exact: true }).count(), 0);
+    } finally { await h.close(); }
+  }
 });
 
 test('Workbench creates a project, saves and publishes real product fields, preserves opaque navigation', { timeout: 60000 }, async () => {
@@ -548,7 +676,7 @@ test('optional free feedback requires server availability and does not claim suc
 test('all workbench routes render meaningful screens and failed load can recover', { timeout: 60000 }, async () => {
   const h = await harness();
   try {
-    for (const view of ['deliverables', 'components', 'knowledge', 'development', 'operations']) {
+    for (const view of ['deliverables', 'components', 'knowledge', 'ontology', 'development', 'operations']) {
       await h.open(view);
       await h.page.getByText('서버에서 확인한 현재 권한', { exact: true }).waitFor();
       assert.equal(await h.page.title(), 'Workbench fixture');
