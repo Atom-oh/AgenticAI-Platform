@@ -4,7 +4,8 @@ One mapping serves every consumer (review round 32, AZ1): E12 codegen, E13 contr
 exclusion and the Browser boxes and checkpoints all call `Registry`; no module builds a target string itself.
 
 - `page_id(screen)`: the Screen's published `pageId`, unchanged when it matches the kit pattern (AX1); otherwise
-  `p-` + 12 hex characters of `digest(screen)`. Collisions get a numeric suffix.
+  `p-` + 12 hex characters of `digest(screen)`, also when the published id falls in the reserved state-page
+  namespace `k<n>--<state>`. Collisions get a numeric suffix; after `MAX_PAGE_ID_RETRIES` allocation fails.
 - `page_key(screen)`: a persisted ordinal `k<n>` (<= 6 characters) used for every derived id, so derived ids stay
   short even for 64-character published page ids.
 - Test ids: `k<p>-cta` (primary action), `k<p>-f<n>` (controlled inputs), `k<p>-n<n>` (other nodes) and
@@ -32,6 +33,9 @@ from .composition import walk
 from .route import shown_assets
 
 PAGE_ID = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
+# `k<n>--<state>` is the state-page id namespace (`state_page_id`); no default page id may enter it.
+RESERVED_PAGE_ID = re.compile(r"k[0-9]+--.+\Z")
+MAX_PAGE_ID_RETRIES = 1000
 MAX_KEY = 99999
 # The adapter-owned prop that carries a controlled input's value, and its dataBinding field.
 VALUE_FIELD = {"controlled-text": "value", "controlled-choice": "value", "controlled-bool": "checked"}
@@ -77,12 +81,12 @@ class Registry:
         if screen not in self.k.screens:
             raise KeyError(screen)
         published = self.k.screens[screen].get("pageId")
-        base = published if isinstance(published, str) and PAGE_ID.fullmatch(published) else "p-" + digest(screen)[:12]
-        taken, candidate, n = self._taken_ids(), base, 1
-        while candidate in taken or re.fullmatch(r"k[0-9]+--.+", candidate):
-            n += 1
-            suffix = f"-{n}"
-            candidate = base[:64 - len(suffix)] + suffix
+        # A reserved-looking published id is replaced BEFORE suffix allocation (appending a suffix never leaves the
+        # namespace), and collision retries are bounded (PR #30 review 1, #8).
+        bases = ["p-" + digest(screen)[:12]]
+        if isinstance(published, str) and PAGE_ID.fullmatch(published) and not RESERVED_PAGE_ID.match(published):
+            bases.insert(0, published)
+        candidate = self._free_page_id(bases, self._taken_ids())
         ordinals = [int(e["key"][1:]) for e in pages.values()]
         ordinal = max(ordinals, default=0) + 1
         if ordinal > MAX_KEY:
@@ -93,6 +97,20 @@ class Registry:
             if _adapter(self.k, asset_id) in VALUE_FIELD:
                 self._field(entry, field_key(self.k, asset_id))
         return entry
+
+    @staticmethod
+    def _free_page_id(bases, taken):
+        """First free id: each base, then base + `-<n>`. A base whose suffixed form falls in the reserved namespace
+        (e.g. `k1-` + `-2`) moves on to the next base; retries per base are bounded."""
+        for base in bases:
+            for n in range(1, MAX_PAGE_ID_RETRIES + 2):
+                suffix = "" if n == 1 else f"-{n}"
+                candidate = base[:64 - len(suffix)] + suffix
+                if RESERVED_PAGE_ID.match(candidate):
+                    break
+                if candidate not in taken:
+                    return candidate
+        raise ValueError("registry-page-id-collision")
 
     def register_flow(self, flow):
         """Allocate every flow screen in flow order, so keys never depend on which consumer calls first."""

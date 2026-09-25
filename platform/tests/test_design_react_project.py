@@ -271,3 +271,34 @@ def test_generated_visible_text_rejects_unbound_financial_quantities():
     with pytest.raises(ValueError, match="literal-financial-value"):
         project(flow, screens, k, bindings(GOOD), cases=cases)
 
+
+def test_reserved_looking_published_page_ids_do_not_loop():
+    """PR #30 review 1, #8: `k<n>--<state>` is the state-page namespace; a published id in it is replaced by the
+    digest id before any suffix allocation, and collision retries are bounded."""
+    import signal
+    from design_loop import convention as conv
+
+    def boom(*_):
+        raise TimeoutError("registry allocation did not terminate")
+    old = signal.signal(signal.SIGALRM, boom)
+    signal.alarm(5)
+    try:
+        k = copy.deepcopy(K)
+        k.screens["done"]["pageId"] = "k1--error"
+        k.screens["confirm"]["pageId"] = "k1-"                    # "k1-" + "-2" would enter the namespace
+        k.screens["intro"]["pageId"] = "k1-"
+        r = Registry(k)
+        assert re.fullmatch(r"p-[0-9a-f]{12}", r.page_id("done"))
+        assert r.page_id("confirm") == "k1-"
+        assert r.page_id("intro") not in ("k1-", "k1--2") and not re.fullmatch(r"k[0-9]+--.+", r.page_id("intro"))
+        digest_id = "p-" + conv.digest("amount")[:12]
+        taken = {f"x-{n}" for n in range(2, conv.MAX_PAGE_ID_RETRIES + 2)} | {"x"}
+        taken |= {digest_id} | {f"{digest_id}-{n}" for n in range(2, conv.MAX_PAGE_ID_RETRIES + 2)}
+        state = {"schemaVersion": 1, "pages": {f"s{n}": {"key": f"k{n + 10}", "pageId": pid, "fields": {}, "nodes": {}}
+                                               for n, pid in enumerate(sorted(taken))}}
+        k.screens["amount"]["pageId"] = "x"
+        with pytest.raises(ValueError, match="registry-page-id-collision"):
+            Registry(k, state).page_id("amount")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
