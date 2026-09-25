@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_workspace_collaboration import DRAFT
 from test_workspace_project_http import make_api, request, shared
+import workspace.http as http_module
 from workspace.react_runtime import evaluate_react
 from workspace.worker import Worker
 
@@ -411,3 +412,52 @@ def test_ambiguous_page_comment_requires_every_producing_round_authorized():
     assert status == 200 and any(row["id"] == "c-legacy-ambiguous" for row in data["comments"])
     status, data = request(api, "GET", "/comments", actor="bob", project=project["id"])
     assert status == 200 and not any(row["id"] == "c-legacy-ambiguous" for row in data["comments"]), data
+
+
+def test_contract_creation_response_authorizes_its_own_exact_revision(monkeypatch):
+    """Review 7 #4: stored-record views (`ResponseGate._one` for any kind in
+    `_STORED`) authorized whatever the CURRENT record now is and returned the
+    response's OWN, possibly-older item regardless -- generalizing round 5 #5's
+    exact-revision fence (built only for publications) to contracts and every
+    other stored-record kind with the same build-then-authorize-a-different-
+    version shape. Reproduced: after POST /contracts builds its 201 response from
+    revision 1 (bound to a reference asset), concurrently edit the contract to drop
+    that asset (a new revision 2, still authorizable) and revoke the asset, before
+    the gate's own final per-field authorization runs. The stale revision 1 body
+    (still citing the now-revoked asset) must not be released with 201."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    ref_bytes = b"contract reference bytes"
+    status, data = request(api, "POST", "/assets", {"name": "reference.txt", "size": len(ref_bytes),
+                           "sha256": hashlib.sha256(ref_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    reference = data["asset"]
+    original = api.storage.key_for(owner, "asset", reference["id"], "original")
+    api.storage.put_blob(original, ref_bytes, "text/plain")
+    reference = api.storage.put(owner, "asset", {**reference, "status": "stored", "uploadStatus": "stored",
+                                "parseStatus": "complete", "originalKey": original, "projectId": project["id"]},
+                                expected_version=reference["version"])
+    original_one = http_module.ResponseGate._one
+    armed = {"on": True}
+
+    def racing(self, view, item):
+        if armed["on"] and view == "contract" and isinstance(item, dict) and item.get("assetIds"):
+            armed["on"] = False
+            status, edited = request(api, "PUT", f"/contracts/{item['id']}",
+                                     {"version": item["version"], "assetIds": []},
+                                     actor="carol", project=project["id"])
+            assert status == 200, edited
+            api.storage.put(owner, "asset", {**reference, "accessRevoked": True}, reference["version"])
+        return original_one(self, view, item)
+    monkeypatch.setattr(http_module.ResponseGate, "_one", racing)
+    rule = {"id": "R1", "title": "확인", "steps": [{"action": "expectVisible", "target": "next", "value": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내",
+                           "rules": [rule], "assetIds": [reference["id"]]}, actor="carol", project=project["id"])
+    assert status == 404, data
+    assert not armed["on"]

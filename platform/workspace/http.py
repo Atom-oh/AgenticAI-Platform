@@ -523,6 +523,15 @@ class ResponseGate:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
                 raise self._unavailable()
             stored = self.api.storage.get(self.owner, self._STORED[view], item["id"])
+            # The response was built from THIS exact stored version, never a
+            # replacement authorized in its place: a write between response
+            # construction and this final check (e.g. a concurrent edit that removes
+            # or revokes an input) must not let the CURRENT record's authorization
+            # release the OLDER item's now-possibly-invalid content. Generalizes the
+            # exact-revision fence publications already applies
+            # (`publication_visible`) to every other stored-record kind.
+            if stored is not None and item.get("version") != stored.get("version"):
+                return None
             authorized = self.authorize(view, stored) if stored else None
             if authorized is None:
                 return None
