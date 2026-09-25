@@ -16,9 +16,9 @@ from harness.publish import publish_draft as publish_draft_s3
 
 app = BedrockAgentCoreApp()
 
-SYSTEM = """You are Hana Bank's UI/UX design-draft agent.
+SYSTEM = """You are Customer A's UI/UX design-draft agent.
 Workflow, strictly in order:
-1. Use get_skill to load hana-design-system, design-draft-html, and
+1. Use get_skill to load bank-design-system, design-draft-html, and
    a11y-finance — follow them exactly.
 2. Use list_design_tokens and get_brand_guideline — tokens are law.
 3. Generate exactly 3 self-contained HTML draft variants for the brief.
@@ -38,7 +38,7 @@ OUTPUT_STYLES = {
                 "하나의 사용자 흐름을 보여줘라. 각 프레임은 390px 폭 모바일 화면."),
 }
 
-REFINE_SYSTEM = """You are Hana Bank's UI/UX design refinement agent.
+REFINE_SYSTEM = """You are Customer A's UI/UX design refinement agent.
 원본 HTML 전체가 주어진다. 사용자가 클릭으로 선택한 요소(selector와 요소 HTML)와
 수정 지시에 따라 그 부분만 수정하고, 나머지 마크업·스타일·텍스트는 그대로 보존하라.
 지시가 전체 톤 변경을 요구하면 필요한 최소 범위만 함께 조정한다.
@@ -50,7 +50,7 @@ def _m2m_token() -> str:
     secret = boto3.client("secretsmanager").get_secret_value(
         SecretId=os.environ["M2M_SECRET_ARN"])["SecretString"]
     data = urllib.parse.urlencode({
-        "grant_type": "client_credentials", "scope": "hana-mcp/invoke",
+        "grant_type": "client_credentials", "scope": "bank-mcp/invoke",
         "client_id": os.environ["M2M_CLIENT_ID"], "client_secret": secret}).encode()
     req = urllib.request.Request(
         f"https://{os.environ['USER_POOL_DOMAIN']}/oauth2/token", data=data,

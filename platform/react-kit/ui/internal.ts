@@ -1,6 +1,6 @@
 import type { ChoiceOption } from './types';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.2.0';
 export function choice<T extends string | number>(value: unknown, allowed: readonly T[], fallback: T): T {
   return allowed.includes(value as T) ? value as T : fallback;
 }

@@ -12,7 +12,7 @@ import time
 import uuid
 from functools import partial
 
-from common import costguard, tracing
+from common import costguard, public_scan, tracing
 from common.ctx import Ctx
 from common.log import log_event
 from studio import loop, spec as specmod
@@ -180,8 +180,12 @@ def handler(event, context):
                 base_html = body.read().decode("utf-8", "ignore")
             parent_id = base["draftId"]
 
+        # 공개 게시 게이트 (engine plan E2 3a): deny-list 가 없으면 경고 후 식별자 검사만 생략한다(정적화·CSP·미디어 검사는 유지).
+        patterns = public_scan.load_patterns()
+
         def publish(job_id: str, n: int, html: str) -> str:
-            s3.put_object(Bucket=BUCKET, Key=_s3_key(job_id, n), Body=secure_html(html).encode("utf-8"),
+            body = public_scan.prepare_static_html(secure_html(html), patterns)   # 적중·불완전 → 쓰기 0건
+            s3.put_object(Bucket=BUCKET, Key=_s3_key(job_id, n), Body=body.encode("utf-8"),
                           ContentType="text/html; charset=utf-8", CacheControl="no-cache")
             return f"{WEB_URL}/studio/drafts/{job_id}-r{n}.html"
 

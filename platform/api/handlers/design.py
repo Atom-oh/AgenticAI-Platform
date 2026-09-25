@@ -25,7 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common import tracing
+from common import public_scan, tracing
 from common.ctx import Ctx
 from common.log import log_event
 
@@ -171,11 +171,16 @@ def store_run(run_id: str, result: dict, meta: dict) -> dict:
     steps_out: List[dict] = []
     flow = result.get("flow") or {}
     from studio.artifacts import secure_html
+    # 공개 게시 게이트 (engine plan E2 3a): 사설 deny-list 로 정적화·검사를 모두 마친 뒤에만 쓴다.
+    # deny-list 가 설정돼 있으면 적중·불완전 검사·미검토 미디어는 PublicationBlocked 로 쓰기 0건(호출부가 storeError 로 보고).
+    # 설정이 없으면 경고 후 식별자 검사만 생략하고 정적화·CSP·미디어 레지스트리는 그대로 적용한다.
+    patterns = public_scan.load_patterns() if WEB_BUCKET else []
+    pages: List[tuple] = []
     for s in flow.get("steps") or []:
         key = f"{PREFIX}/{run_id}/{s['id']}.html"
         url = f"{WEB_URL}/{key}" if WEB_URL else key
         if WEB_BUCKET:
-            _put(key, secure_html(s.get("html", "")).encode("utf-8"), "text/html; charset=utf-8")
+            pages.append((key, public_scan.prepare_static_html(secure_html(s.get("html", "")), patterns)))
         steps_out.append({"id": s["id"], "title": s.get("title"), "url": url, "htmlChars": len(s.get("html", ""))})
     run = {"runId": run_id, **meta, "createdAt": int(time.time() * 1000), "status": "검토중",
            "validationScope": "static-design", "functionalVerification": "not-run",
@@ -186,7 +191,11 @@ def store_run(run_id: str, result: dict, meta: dict) -> dict:
     full = {**run, "prd": result.get("prd"), "checklist": result.get("checklist"), "report": result.get("report"),
             "flow": _strip_html(result).get("flow")}
     if WEB_BUCKET:
-        _put(f"{PREFIX}/{run_id}.json", json.dumps(full, ensure_ascii=False).encode("utf-8"), "application/json")
+        report = json.dumps(full, ensure_ascii=False)
+        public_scan.check_publishable(report, patterns, language="code")   # 리포트 JSON 도 공개 산출물
+        for key, page in pages:
+            _put(key, page.encode("utf-8"), "text/html; charset=utf-8")
+        _put(f"{PREFIX}/{run_id}.json", report.encode("utf-8"), "application/json")
         idx = _get_json(INDEX_KEY, {"runs": []})
         idx["runs"] = ([run] + [r for r in idx.get("runs", []) if r.get("runId") != run_id])[:MAX_INDEX]
         _put(INDEX_KEY, json.dumps(idx, ensure_ascii=False).encode("utf-8"), "application/json")

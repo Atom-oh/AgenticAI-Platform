@@ -1,9 +1,9 @@
 ---
-name: hana-design-system
-description: How to apply Hana design tokens and registry components in generated UI.
+name: bank-design-system
+description: How to apply Bank design tokens and registry components in generated UI.
 ---
 
-# Hana Design System
+# Bank Design System
 
 Original HTML Studio prompt guidance. The token/component registry is reference metadata, not the executable `platform/react-kit/` package or proof of customer component approval.
 

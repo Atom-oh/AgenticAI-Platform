@@ -16,7 +16,9 @@ Exact versions: React/ReactDOM 18.3.1, TypeScript 5.6.3, esbuild 0.25.12,
 
 - `ui/index.tsx`: real named exports listed below; generated code imports from `@studio/approved-ui`.
 - `ui/tokens.css`: authoritative styles/tokens. Generated code cannot replace this file or supply CSS.
-- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.0.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
+  Every `font-size` is `calc(var(--studio-text-scale, 1) * <n>px)`; unitless line-heights are unchanged, so the kit
+  is identical at scale 1. Only the verifier sets `--studio-text-scale` (engine plan E12a).
+- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.2.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
   Each component has `{name,description,props,variationAxes}`. `props` is descriptive data; actual TS types are the compiler authority.
 - `manifest.cjs`: `catalog()` returns descriptor plus `{hash,files:[{path,sha256}]}` calculated from actual `ui/*` and catalog bytes.
   `hash` is SHA256 of canonical JSON of sorted file hashes. It excludes generated timestamps and node_modules.
@@ -83,7 +85,35 @@ Compilation does not execute generated module code, user configuration or packag
 A `kind="react"` task runs compilation in the credential-free browser child, then
 the behavioral/a11y/image verifier checks the actual static bundle. The response contains build fields and browser report.
 `evaluate_html` remains compatible; `evaluate_bundle` fulfills only exact local bundle URLs in memory and denies every other request.
+`evaluate_html`/`evaluate_bundle(..., text_scale=1.0)`: a scale in 1..3 other than 1 sets `--studio-text-scale` through the
+verifier's init script and adds `largeText: {status, overflow:[testId], unscaled:[testId]}` (tagged elements that overflow,
+and tagged elements whose text did not scale). A failed or unmeasured large-text pass is a blocking finding. The 1.1.0
+catalog bump changes `catalogHash`, so runs approved under 1.0.0 become historical.
+The exported runner (`templates/flow.test.cjs`, E12b) matches the verifier for `expectVisible false`: it polls the
+target count up to the step timeout; 0 passes (a conditionally unmounted node), 1 must not be visible, more than 1
+fails with "Unique target required". The 1.2.0 catalog bump records this runner change.
+
+Engine-derived contracts (`design_loop/contract.py`, engine plan E13) are composition-independent and frozen at
+flow approval. Targets come only from `design_loop.convention.Registry`: the page root `<pageId>`, `k<p>-cta`,
+`k<p>-f<n>`, `k<p>-n<n>`, `k<p>-f<n>-o<j>`, `case-select` (the generated App's `검증용 케이스` Select, options
+`<caseIndex>:<screenId>:<state>[:empty]`) and `flow-finished`. `derive` returns one normalized contract or the
+critical findings `contract-capacity`, `published-page-missing`, `visibility-unverifiable` or
+`contract-unsupported`, never a partial contract. Every compile, repair and Browser run uses that exact contract.
 Do not silently replace a failed React build with HTML or a stub.
+
+Engine handoff package (`design_loop/handoff.py`, engine plan E17; offline and unwired until C). The customer
+screen id comes from `Registry.assign` (`<area>-<num>` under the synthetic `seed/design_poc/convention.json`; the
+tenant copy is private) and is compiled into each page as `export const meta = {sid, type, dver, status, level1,
+level2, level3} as const;`. `handoff.build(release source.zip, layout, manifest_fields=...)` places every release
+`source.zip` entry byte-identical under `project/` (nothing is relocated, so the policy and relative imports hold),
+adds `convention/screens.json` (`project/src/pages/<slug>.tsx` → `{sid, type, dver, status, levels,
+conventionPath, state, sha256}`), `convention/apply.cjs`, `manifest.json` (`approvalHash`, `releaseId`,
+`sourceHash`, `bundleHash`, `sourceZipSha256`, `componentPackage: "@studio/approved-ui"`,
+`customerPackage: "not-verified"`), `CHANGES.md` and `verification-report.json`. It refuses a `sourceHash` that
+differs from the entries, an unmapped page, a page whose compiled meta sid differs from the layout, and duplicate
+convention paths. The ZIP is deterministic, at most 512 entries and 40 MiB. The customer applies the physical path
+layout after approval with `convention/apply.cjs`, which type-checks the relocated layout with its own
+`convention/tsconfig.json`; the project's `npm run typecheck` covers only `src/`.
 
 ## Projects, scoped access and planning
 

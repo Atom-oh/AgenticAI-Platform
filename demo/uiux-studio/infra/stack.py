@@ -16,13 +16,13 @@ from constructs import Construct
 ACCOUNT = "180294183052"
 
 
-class HanaUiuxPlatformStack(cdk.Stack):
+class BankUiuxPlatformStack(cdk.Stack):
     def __init__(self, scope: Construct, cid: str, **kw):
         super().__init__(scope, cid, **kw)
 
         def bucket(name):
             return s3.Bucket(self, name.title().replace("-", ""),
-                             bucket_name=f"hana-{name}-{ACCOUNT}",
+                             bucket_name=f"bank-{name}-{ACCOUNT}",
                              block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
                              removal_policy=cdk.RemovalPolicy.DESTROY,
                              auto_delete_objects=True)
@@ -31,13 +31,13 @@ class HanaUiuxPlatformStack(cdk.Stack):
         skills = bucket("skill-registry")
         drafts = bucket("design-drafts")
 
-        registry = ddb.Table(self, "Registry", table_name="hana-design-registry",
+        registry = ddb.Table(self, "Registry", table_name="bank-design-registry",
                              partition_key=ddb.Attribute(name="asset_id",
                                                          type=ddb.AttributeType.STRING),
                              billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
                              removal_policy=cdk.RemovalPolicy.DESTROY)
 
-        history = ddb.Table(self, "History", table_name="hana-asset-history",
+        history = ddb.Table(self, "History", table_name="bank-asset-history",
                             partition_key=ddb.Attribute(name="asset_id",
                                                         type=ddb.AttributeType.STRING),
                             sort_key=ddb.Attribute(name="version",
@@ -45,7 +45,7 @@ class HanaUiuxPlatformStack(cdk.Stack):
                             billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
                             removal_policy=cdk.RemovalPolicy.DESTROY)
 
-        figma_secret = sm.Secret(self, "FigmaToken", secret_name="hana/figma-token",
+        figma_secret = sm.Secret(self, "FigmaToken", secret_name="bank/figma-token",
                                  description="Figma PAT (operator-injected, temporary)",
                                  removal_policy=cdk.RemovalPolicy.DESTROY)
 
@@ -56,15 +56,15 @@ class HanaUiuxPlatformStack(cdk.Stack):
         common_env = {"ASSETS_BUCKET": assets.bucket_name,
                       "REGISTRY_TABLE": registry.table_name,
                       "SKILLS_BUCKET": skills.bucket_name,
-                      "FIGMA_SECRET_ID": "hana/figma-token"}
+                      "FIGMA_SECRET_ID": "bank/figma-token"}
 
         figma_sync = lambda_.Function(
-            self, "FigmaSync", function_name="hana-figma-sync",
+            self, "FigmaSync", function_name="bank-figma-sync",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="ingestion.figma_sync.handler", code=code,
             timeout=cdk.Duration.minutes(2), environment=common_env)
         asset_tools = lambda_.Function(
-            self, "AssetTools", function_name="hana-design-asset-tools",
+            self, "AssetTools", function_name="bank-design-asset-tools",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="mcp.asset_tools.handler", code=code,
             timeout=cdk.Duration.seconds(30), environment=common_env)
@@ -77,7 +77,7 @@ class HanaUiuxPlatformStack(cdk.Stack):
         registry.grant_read_data(asset_tools)
 
         dispatcher = lambda_.Function(
-            self, "Dispatcher", function_name="hana-generate-dispatcher",
+            self, "Dispatcher", function_name="bank-generate-dispatcher",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="dispatch.handler.handler", code=code,
             timeout=cdk.Duration.seconds(900),
@@ -90,12 +90,12 @@ class HanaUiuxPlatformStack(cdk.Stack):
         dispatcher.configure_async_invoke(retry_attempts=0)
 
         pool = cognito.UserPool(
-            self, "Pool", user_pool_name="hana-uiux-platform",
+            self, "Pool", user_pool_name="bank-uiux-platform",
             self_sign_up_enabled=False,  # org policy: admin-created users only
             removal_policy=cdk.RemovalPolicy.DESTROY)
         domain = pool.add_domain("Domain", cognito_domain=cognito.CognitoDomainOptions(
-            domain_prefix=f"hana-uiux-{ACCOUNT}"))
-        server = pool.add_resource_server("Rs", identifier="hana-mcp", scopes=[
+            domain_prefix=f"bank-uiux-{ACCOUNT}"))
+        server = pool.add_resource_server("Rs", identifier="bank-mcp", scopes=[
             cognito.ResourceServerScope(scope_name="invoke", scope_description="invoke MCP")])
         m2m = pool.add_client("M2M", generate_secret=True, o_auth=cognito.OAuthSettings(
             flows=cognito.OAuthFlows(client_credentials=True),
@@ -126,7 +126,7 @@ class HanaUiuxPlatformStack(cdk.Stack):
             })
 
         feedback = lambda_.Function(
-            self, "Feedback", function_name="hana-draft-feedback",
+            self, "Feedback", function_name="bank-draft-feedback",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="feedback.handler.handler", code=code,
             timeout=cdk.Duration.seconds(15),
@@ -169,11 +169,11 @@ class HanaUiuxPlatformStack(cdk.Stack):
             origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY)
 
-        gw_role = iam.Role(self, "GatewayRole", role_name="hana-agentcore-gateway",
+        gw_role = iam.Role(self, "GatewayRole", role_name="bank-agentcore-gateway",
                            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"))
         asset_tools.grant_invoke(gw_role)
 
-        rt_role = iam.Role(self, "RuntimeRole", role_name="hana-agentcore-runtime",
+        rt_role = iam.Role(self, "RuntimeRole", role_name="bank-agentcore-runtime",
                            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"))
         drafts.grant_read_write(rt_role)
         skills.grant_read(rt_role)
@@ -195,7 +195,7 @@ class HanaUiuxPlatformStack(cdk.Stack):
         rt_role.add_to_policy(iam.PolicyStatement(
             actions=["secretsmanager:GetSecretValue"],
             resources=[f"arn:aws:secretsmanager:{self.region}:{ACCOUNT}:secret:"
-                       f"hana/m2m-client-secret*"]))
+                       f"bank/m2m-client-secret*"]))
 
         discovery = (f"https://cognito-idp.{self.region}.amazonaws.com/"
                      f"{pool.user_pool_id}/.well-known/openid-configuration")

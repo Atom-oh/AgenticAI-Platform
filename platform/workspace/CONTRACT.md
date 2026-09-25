@@ -159,6 +159,10 @@ color/backgroundColor/fontSize/fontWeight/fontFamily/borderRadius/padding/margin
 gap/minHeight/height/width/borderColor/borderWidth/display against computed CSS.
 Max20 rules, each max20 steps; every rule has an expectation. Unresolved requirements
 block approval; unsupported rules are never silently dropped or marked passed.
+`expectText`/`expectValue` values hold up to 4000 characters, the published-notice limit, so one step
+can assert a complete notice; `fill`, `select` and `expectStyle` values keep the 2000-character limit and
+source quotes stay at 2000. An optional top-level `designSnapshotHash` (64 hex) binds the design procedure
+snapshot separately from the product `ontologyHash`; contracts without it keep their existing hash.
 Explicit source quotes must be present in the selected asset's extracted text.
 Inferred/manual sources are labelled honestly and require designer approval.
 Contract edits reset approval. Every run freezes the exact contract and assets.

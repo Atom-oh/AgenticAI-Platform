@@ -71,6 +71,9 @@ fi
 
 echo "== 1) api-dist 조립 =="
 assemble_api api-dist
+# 공개 게시 게이트(api/common/public_scan.py)의 스캐너 코어와 승인 미디어 레지스트리 — 두 번째 사본을 두지 않고 복사한다
+cp ../scripts/check_public_identifiers.py api-dist/common/public_scan_core.py
+cp ../scripts/public-assets.sha256 api-dist/common/public-assets.sha256
 # Harness·Registry API는 최신 boto3가 필요하다 (Lambda 기본 boto3에는 없음) — 배포 패키지에 동봉
 pip3 install -q --upgrade --target api-dist boto3 botocore >> "$LOG" 2>&1 || { echo "boto3 vendoring failed"; tail -5 "$LOG"; exit 1; }
 # PyPI botocore 모델이 AWS CLI v2 번들보다 뒤처질 수 있다(Harness memory/disabled 등) — CLI 서비스 모델을 덧씌운다

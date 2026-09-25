@@ -15,7 +15,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Public identifier scan of tracked files and names. Fail-closed when the PUBLIC_DENYLIST secret is set;
+  # without it the scan warns and Pages still deploys (user decision, PR #30 fix round 1).
+  safety:
+    uses: ./.github/workflows/public-safety.yml
+    secrets: inherit
+
   build:
+    needs: safety
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +36,13 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run docs:build
+      - name: Scan the built site
+        env: { PUBLIC_DENYLIST: '${{ secrets.PUBLIC_DENYLIST }}' }
+        run: |
+          allow=
+          if [ -z "$PUBLIC_DENYLIST" ]; then allow=--allow-missing-patterns; fi
+          umask 077; printf '%s\n' "$PUBLIC_DENYLIST" > "$RUNNER_TEMP/denylist.txt"
+          python3 scripts/check_public_identifiers.py --patterns-file "$RUNNER_TEMP/denylist.txt" --no-tree --site docs/.vitepress/dist $allow
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

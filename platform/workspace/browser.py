@@ -93,6 +93,46 @@ def _visible(page, target: str, bindings) -> bool:
     })(""" + json.dumps({"target": target, "selector": (bindings or {}).get(target)}) + ")"))
 
 
+_TEXT_SCALE_INIT = """(() => {
+  const scale = %s;
+  const apply = () => document.documentElement.style.setProperty('--studio-text-scale', scale, 'important');
+  if (document.documentElement) apply(); else document.addEventListener('readystatechange', apply, {once: true});
+})();"""
+
+
+def _large_text(page, large: dict, scale: float) -> None:
+    """Second-pass evidence: every text node's computed size scaled, and no tagged element overflows."""
+    measured = _isolated_eval(page, """((scale) => {
+      const root=document.documentElement;
+      const tagged=[...document.querySelectorAll('[data-testid]')];
+      const texts=element=>[element,...element.querySelectorAll('*')].filter(node=>[...node.childNodes]
+        .some(child=>child.nodeType===3&&child.textContent.trim()));
+      const sizes=()=>tagged.map(element=>texts(element).map(node=>parseFloat(getComputedStyle(node).fontSize)));
+      const scaled=sizes(), overflow=[];
+      for(const element of tagged) {
+        const rect=element.getBoundingClientRect();
+        if(!rect.width||!rect.height) continue;
+        if((element.clientWidth>0&&element.scrollWidth>element.clientWidth+1)||rect.right>innerWidth+1)
+          overflow.push(element.getAttribute('data-testid'));
+      }
+      const value=root.style.getPropertyValue('--studio-text-scale'), priority=root.style.getPropertyPriority('--studio-text-scale');
+      root.style.setProperty('--studio-text-scale','1','important');
+      const base=sizes();
+      root.style.setProperty('--studio-text-scale',value,priority);
+      const unscaled=[];
+      tagged.forEach((element,index)=>{
+        if(scaled[index].some((size,item)=>Math.abs(size-base[index][item]*scale)>0.5)) unscaled.push(element.getAttribute('data-testid'));
+      });
+      return {overflow,unscaled,count:tagged.length};
+    })(""" + json.dumps(scale) + ")")
+    if not isinstance(measured, dict):
+        raise EngineUnavailable("큰글씨 검증 결과를 확인하지 못했습니다.")
+    large["overflow"] += [str(v)[:80] for v in measured.get("overflow", [])][:100]
+    large["unscaled"] += [str(v)[:80] for v in measured.get("unscaled", [])][:100]
+    if measured.get("count"):
+        large["measured"] += 1
+
+
 def _safe_url(value: str) -> str:
     try:
         parts = urlsplit(value)
@@ -212,7 +252,7 @@ def _action(page, step: dict, bindings=None) -> tuple[bool, object]:
 
 
 def evaluate_bundle(files: dict[str, bytes], contract: dict, reference_png: bytes | None = None,
-                    visual_tolerance: float = 0.15, expected_hash: str | None = None) -> dict:
+                    visual_tolerance: float = 0.15, expected_hash: str | None = None, text_scale: float = 1.0) -> dict:
     """Render exact local build bytes; never fetch missing files or outside URLs."""
     if not isinstance(files, dict) or not files or len(files) > 100 or "index.html" not in files:
         raise ValueError("React 빌드의 index.html과 로컬 파일이 필요합니다.")
@@ -229,14 +269,15 @@ def evaluate_bundle(files: dict[str, bytes], contract: dict, reference_png: byte
     if expected_hash is not None and expected_hash != digest:
         raise ValueError("빌드 파일 해시가 검증 대상과 일치하지 않습니다.")
     result = evaluate_html(files["index.html"].decode("utf-8"), contract, reference_png,
-                           visual_tolerance, _bundle=files)
+                           visual_tolerance, _bundle=files, text_scale=text_scale)
     result["bundleHash"] = digest
     result["renderer"] = "react-bundle"
     return result
 
 
 def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
-                  visual_tolerance: float = 0.15, *, _bundle: dict[str, bytes] | None = None) -> dict:
+                  visual_tolerance: float = 0.15, *, _bundle: dict[str, bytes] | None = None,
+                  text_scale: float = 1.0) -> dict:
     from playwright.sync_api import sync_playwright
     from studio.artifacts import secure_html
 
@@ -245,10 +286,14 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
         raise ValueError("실행할 HTML은 비어 있지 않은 1MB 이하의 문서여야 합니다.")
     if isinstance(visual_tolerance, bool) or not 0 <= float(visual_tolerance) <= 0.5:
         raise ValueError("시각 허용 오차는 0~0.5 범위여야 합니다.")
+    if isinstance(text_scale, bool) or not isinstance(text_scale, (int, float)) or not 1 <= float(text_scale) <= 3:
+        raise ValueError("글자 크기 배율은 1~3 범위여야 합니다.")
+    text_scale = float(text_scale)
     started = time.monotonic()
     result = {"passed": False, "functionalStatus": "incomplete", "checks": [],
               "networkRequests": [], "consoleErrors": [], "accessibility": {"status": "incomplete", "violations": []},
               "visual": {"status": "not-run"}, "blockingFindings": [], "viewport": contract["viewport"]}
+    large = {"status": "incomplete", "overflow": [], "unscaled": [], "measured": 0} if text_scale != 1 else None
     if contract["unresolved"]:
         result["blockingFindings"] = ["미정의 요구사항이 남아 있습니다."]
         return result
@@ -322,6 +367,9 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                     }});
                   }
                 })();""")
+                if large is not None:
+                    # The verifier, not the page, sets the scale (E12a): generated pages cannot author styles.
+                    context.add_init_script(_TEXT_SCALE_INIT % json.dumps(str(text_scale)))
                 context.on("page", lambda popup: popup.on("download", lambda download: download.cancel()))
                 page = context.new_page()
                 page.on("popup", lambda popup: (result["networkRequests"].append("popup"), popup.close()))
@@ -346,6 +394,12 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                             check["status"] = "incomplete"
                             check["reason"] = "실행 시간 상한"
                             break
+                        if large is not None:
+                            # Measure the screen this step is about to navigate away from. The final,
+                            # post-loop measurement alone only sees the last screen; a required screen left
+                            # behind mid-rule would otherwise escape large-text verification entirely
+                            # (PR #30 review round 2, #3).
+                            _large_text(page, large, text_scale)
                         try:
                             passed, actual = _action(page, step, contract["bindings"])
                             item = {"index": index, "action": step["action"], "target": step["target"],
@@ -374,6 +428,8 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                     if axe_source:
                         _accessibility(page, axe_source, result, rule["id"] + ":final")
                     check["visibleText"] = page.locator("body").inner_text(timeout=1000)[:4000]
+                    if large is not None:
+                        _large_text(page, large, text_scale)
                 except Exception as error:
                     if _engine_failure(error):
                         result["engineError"] = True
@@ -410,6 +466,14 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
         result["blockingFindings"].append("브라우저 오류")
     if result["accessibility"]["status"] != "pass":
         result["blockingFindings"].append("접근성 검사 실패 또는 미판정")
+    if large is not None:
+        large["overflow"], large["unscaled"] = sorted(set(large["overflow"])), sorted(set(large["unscaled"]))
+        large["status"] = ("fail" if large["overflow"] or large["unscaled"] else
+                           "pass" if large["measured"] else "incomplete")
+        result["largeText"] = {key: large[key] for key in ("status", "overflow", "unscaled")}
+        result["textScale"] = text_scale
+        if large["status"] != "pass":
+            result["blockingFindings"].append("큰글씨 검증 실패 또는 미판정")
     if result["visual"]["status"] in ("fail", "incomplete"):
         result["blockingFindings"].append("시각 비교 실패 또는 미판정")
     result["passed"] = not result["blockingFindings"]

@@ -38,6 +38,41 @@ def test_tls_denial_is_not_mistaken_for_public_grant():
     assert any("wildcard principal" in item for item in audit_template(source))
 
 
+PARAM = "/bank-platform/public-denylist"
+PARAM_ARN = {"Fn::Join": ["", ["arn:aws:ssm:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"},
+                               ":parameter/bank-platform/public-denylist"]]}
+
+
+def publisher_template():
+    source = template()
+    for fn in ("WsFn", "StudioLoopFn"):
+        source["Resources"][f"{fn}ABCD1234"] = {"Type": "AWS::Lambda::Function", "Properties": {
+            "Role": {"Fn::GetAtt": [f"{fn}ServiceRoleEF01", "Arn"]},
+            "Environment": {"Variables": {"PUBLIC_DENYLIST_PARAM": PARAM}}}}
+        source["Resources"][f"{fn}ServiceRoleDefaultPolicy99"] = {"Type": "AWS::IAM::Policy", "Properties": {
+            "Roles": [{"Ref": f"{fn}ServiceRoleEF01"}],
+            "PolicyDocument": {"Statement": [{"Effect": "Allow", "Action": "ssm:GetParameter", "Resource": PARAM_ARN}]}}}
+    return source
+
+
+def test_legacy_public_writers_read_exactly_the_private_deny_list():
+    # Both legacy publishers (engine plan E2 3a, review round 21, AO2) receive the parameter name and
+    # ssm:GetParameter on exactly that parameter ARN; the release gate fails otherwise.
+    good = publisher_template()
+    assert audit_template(good, require_publishers=True) == []
+    assert any("publisher" in item for item in audit_template(template(), require_publishers=True))
+    no_env = copy.deepcopy(good)
+    no_env["Resources"]["WsFnABCD1234"]["Properties"]["Environment"]["Variables"].pop("PUBLIC_DENYLIST_PARAM")
+    assert any("WsFn" in item and "PUBLIC_DENYLIST_PARAM" in item for item in audit_template(no_env, require_publishers=True))
+    no_grant = copy.deepcopy(good)
+    no_grant["Resources"]["StudioLoopFnServiceRoleDefaultPolicy99"]["Properties"]["PolicyDocument"]["Statement"] = []
+    assert any("StudioLoopFn" in item and "ssm:GetParameter" in item for item in audit_template(no_grant, require_publishers=True))
+    wide = copy.deepcopy(good)
+    wide["Resources"]["WsFnServiceRoleDefaultPolicy99"]["Properties"]["PolicyDocument"]["Statement"][0]["Resource"] = \
+        {"Fn::Join": ["", ["arn:aws:ssm:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":parameter/bank-platform/*"]]}
+    assert any("WsFn" in item and "ssm:GetParameter" in item for item in audit_template(wide, require_publishers=True))
+
+
 def _worker(template, parameter="/bank/intake/denylist", resource=None, actions=("ssm:GetParameter",)):
     template["Resources"]["DesignerWorkspaceWorkerABC"] = {"Type": "AWS::Lambda::Function", "Properties": {
         "Environment": {"Variables": {"INTAKE_DENYLIST_PARAM": parameter, "INTAKE_DEPLOYMENT": "BankPlatform"}}}}

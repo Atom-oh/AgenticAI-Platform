@@ -1,6 +1,6 @@
 # Original UI/UX Studio
 
-This is the original designer PoC, recorded as migrated from `hana/uiux-platform/` in the earlier account-test repository on 2026-09-02. Its external Figma ingestion, shared MCP assets, Strands Runtime, and HTML gallery are separate from the main React workspace in `platform/workspace/`.
+This is the original designer PoC, recorded as migrated from the `uiux-platform/` project in the earlier account-test repository on 2026-09-02. Its external Figma ingestion, shared MCP assets, Strands Runtime, and HTML gallery are separate from the main React workspace in `platform/workspace/`.
 
 Recorded gallery: <https://d4zwmnh2s47e9.cloudfront.net/>. Obtain current administrator-issued access through the approved credential channel; see [security/governance](../SECURITY-GOVERNANCE.md). A historical endpoint is not current deployment evidence.
 
@@ -30,7 +30,7 @@ Feedback updates the gallery manifest and copies approved HTML into `approved-pa
 
 ## Authentication and remaining concerns
 
-The stack disables Cognito self-registration, supplies human SPA and M2M clients, and uses an `AWS_IAM` Function URL behind CloudFront OAC. Normal POST routes require a designer access token through `x-hana-auth`. Therefore the original “all APIs are unauthenticated” description is stale.
+The stack disables Cognito self-registration, supplies human SPA and M2M clients, and uses an `AWS_IAM` Function URL behind CloudFront OAC. Normal POST routes require a designer access token through `x-bank-auth`. Therefore the original “all APIs are unauthenticated” description is stale.
 
 However, `feedback/handler.py` retains a no-`rawPath` compatibility POST before authentication; asset/job reads and gallery artifacts are not private per-user resources. Generated HTML/same-origin previews, unconditional wildcard IAM grants, and runtime credential configuration also need remediation/review. These are gaps, not policy exemptions. Do not call this implementation production-ready or assign it the main workspace's approval/browser guarantees.
 

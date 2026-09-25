@@ -1187,6 +1187,8 @@ Run: `python3 -m pytest tests/test_public_identifiers.py -q` → PASS. From the 
 
 - [ ] **Step 5: Operator note (live, repository settings).** The repository owner adds the `PUBLIC_DENYLIST` Actions secret and marks the `Public safety scan / scan` check as required on `main`. Record completion in the PR. Do not claim the check is enforced until it is required.
 
+  *Amendment (PR #30 fix round 1, user decision):* while no deny-list is configured (the `PUBLIC_DENYLIST` secret absent or empty; the SSM parameter unset, unreadable or empty), the scans and both publishers **warn and pass** (`--allow-missing-patterns`, passed by CI only when the secret is empty) instead of blocking Pages or publication. A configured deny-list stays fail-closed as specified above. Sanitization, the `script-src 'none'` CSP and the approved-media registry apply in both cases.
+
 - [ ] **Step 6: Commit**
 
 ```bash

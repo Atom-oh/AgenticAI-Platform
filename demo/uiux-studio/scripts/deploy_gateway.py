@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from mcp.tool_schemas import TOOL_SCHEMAS  # noqa: E402
 
-GW_NAME = "hana-design-assets-gw"
+GW_NAME = "bank-design-assets-gw"
 TARGET_NAME = "design-asset-tools"
 
 
@@ -44,7 +44,7 @@ def main():
             authorizerConfiguration={"customJWTAuthorizer": {
                 "discoveryUrl": cfg["discovery_url"],
                 "allowedClients": [cfg["m2m_client_id"]]}},
-            description="Org-shared Hana design asset MCP")
+            description="Org-shared Bank design asset MCP")
     gw_id = gw["gatewayId"]
     for attempt in range(60):
         detail = client.get_gateway(gatewayIdentifier=gw_id)

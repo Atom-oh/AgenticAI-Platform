@@ -18,7 +18,7 @@ def m2m_token(cfg):
         ClientId=cfg["m2m_client_id"])["UserPoolClient"]["ClientSecret"]
     basic = base64.b64encode(f"{cfg['m2m_client_id']}:{secret}".encode()).decode()
     data = urllib.parse.urlencode({"grant_type": "client_credentials",
-                                   "scope": "hana-mcp/invoke"}).encode()
+                                   "scope": "bank-mcp/invoke"}).encode()
     req = urllib.request.Request(f"https://{cfg['cognito_domain']}/oauth2/token", data=data,
                                  headers={"Authorization": f"Basic {basic}",
                                           "Content-Type": "application/x-www-form-urlencoded"})

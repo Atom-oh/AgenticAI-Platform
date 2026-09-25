@@ -104,6 +104,95 @@ is hidden; an opaque changed seed can expose only independently readable depende
 nodes/evidence and reports a restricted boundary. Context/reuse/approval still
 require current sources.
 
+## uxModel property (v1)
+
+`workspace/ontology_ux.py` validates the bounded `properties.uxModel` design
+property. It is allowed on `Atom`, `Molecule`, `Organism`, `Pattern`,
+`PageTemplate` and `Component`. `Foundation` may carry it restricted to
+`layers` and `changeReason`, so every asset level carries the three O-01 layers
+(`layers.code` token import, `layers.gui` swatch/icon snapshot,
+`layers.wireframe` block ids); Foundation `token`/`name` stay the value source.
+`Screen` and `Procedure` reject `uxModel`: screen code is generated and
+procedure semantics live in `NEXT` edges.
+
+| Key | Allowed on | Contents |
+|---|---|---|
+| `intent` | any level | text, at most 500 characters |
+| `conditions` | any level | at most 50 `{id, when, effect: include\|exclude\|state, target, state?}`; `target` is a node id; `state` is required iff `effect == "state"`; `when` is `term (" & " term)*` with `term = "!"? "cond:" id` |
+| `dataBindings` | any level | at most 50 `{field, source: product\|session\|static, path, required}`; `path` must be in the fixed binding catalog (`ontology_ux.BINDING_PATH`) |
+| `requiredStates` | any level | unique subset of `default, empty, error, ineligible, loading, done, zero, many` |
+| `stateProps` | any level | `{state: {prop: literal}}`, keys limited to declared `requiredStates` |
+| `slots` | PageTemplate only | 1–12 `{slot: {required, allowed: [nodeId]}}`; an empty `allowed` is an error, never "unrestricted" |
+| `layers.wireframe` | any level | `{blocks: [id]}` |
+| `layers.gui` | any level | `{snapshotHash: sha256, width, height}` (1–4096) |
+| `layers.code` | any level | `{importPath, exportName, props: {name: {type, required, values?, item?}}, childrenProp?, adapter?}`; prop types `string, number, boolean, enum, node, list, callback`; `callback` requires a trusted adapter (`controlled-text, controlled-bool, controlled-choice, action`); template slots must be `node` props of the same name |
+| `changeReason` | any level | text, at most 500 characters |
+
+Unknown keys fail closed. `ontology_ux.references(value)` enumerates condition
+targets and slot `allowed` ids. `publish_candidate` applies
+`ontology_ux.rewrite` to `properties.uxModel` with the same partition
+`identities` map it uses for `usageIds`/`slots`; ids outside that map are left
+unchanged. These references are properties, not edges, so closure does not
+follow them.
+
+`ontology_ux.evaluate(when, case)` is the single evaluator of the `when`
+grammar: `None` holds, and every referenced condition needs a boolean in
+`case` or it raises (fail closed). `ontology_ux.visible(spec, case)` is
+`evaluate(spec.when, case) != spec.negate`, a whole-expression negation shared
+by flow traversal, composition visibility, coverage and generated
+`src/logic/flow.ts`.
+
+`PolicyRule` properties also accept `severity` (`critical|major|minor`),
+`citation` `{sourceKind: document-revision|product-guideline, page >= 1, quote,
+derivativeHash, region?, normalizedImageHash?}`, `extraction` `{method: model,
+model, promptVersion, admissionId}` and `appliesWhen` (the `when` grammar;
+absent means the rule applies to every case). They keep model provenance even
+though the node `provenance` is set by the publishing producer.
+
+Compatible v1 change: canonical JSON nesting is limited to depth 14 (was 8) so
+a graph or partition envelope can carry `uxModel.layers.code.props.<name>.values`.
+Canonical bytes do not depend on the limit, so existing hashes are unchanged.
+
+## Procedure snapshot (design view)
+
+`Ontology.procedure_snapshot(procedure_id, *, max_screens=20, max_nodes=300,
+max_edges=1000)` is a read view for design generation, not approval. It reads
+the Procedure, collects member Screens through `PART_OF` edges whose `dst` is
+the procedure, keeps `NEXT` edges whose endpoints are both members at their
+exact revisions, and runs `closure(direction="dependencies")` over the members.
+`uxModel` slot alternatives and condition targets are properties, not edges, so
+after the closure it reads missing referenced ids with `read` in batches of at
+most 50 and runs `closure` on them in batches of at most 20 seeds. All batches
+share the aggregate node/edge budgets and must observe the same generation; it
+repeats for at most four rounds. It applies the same visibility, exact-revision
+and final `_recheck` rules as `closure`; tombstoned, rejected and deprecated
+nodes and edges are excluded.
+
+The result is `{schemaVersion, projectId, generation, nodes, edges, coverage}`
+with scope `authorized-procedure-snapshot` and `complete: false`.
+`coverage.unknown` is the union of the closure reasons and its own:
+`too-many-screens`, `unmapped-or-inaccessible` (including an unreadable
+`uxModel` reference), `stale-endpoint-revisions` and
+`retired-or-rejected-mapping` (a member Screen or dependency that was rejected
+or retired). `coverage.truncated` is true when any limit is hit.
+
+Design views accept unreviewed edges between approved nodes; rejected/deprecated
+edges are excluded. The ontology has no edge review step, so edge usability is:
+not tombstoned, `reviewState` not `rejected`/`deprecated`, and both endpoints
+live (approved, or reviewed/candidate when candidates are explicitly included)
+at the exact revisions the edge names. `design_loop.knowledge.from_snapshot`
+reports a non-live dependency as `unapproved-dependency` and a rejected or
+retired one as `retired-or-rejected-mapping`; both block `Knowledge.complete`,
+as do truncation, unresolved `uxModel` references and `ambiguous-entry`.
+
+Schema amendment (v1 compatible): `Procedure` properties accept
+`entryScreenId`, rewritten through the publication `identities` map like
+`slots`. `NEXT` edge properties accept `navigation: forward|back|cancel`
+(default `forward`). The entry is `entryScreenId` when present (it must be a
+member); otherwise the unique member with no incoming forward edge. Zero or
+several candidates yield `ambiguous-entry`. Back and cancel edges are user
+actions and do not participate in entry detection or forward ordering.
+
 ## Source authority
 
 `ontology_sources.py` resolves assets, current published product guidelines,

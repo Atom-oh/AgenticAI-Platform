@@ -20,7 +20,7 @@ def aws(monkeypatch):
     for k, v in {"AWS_DEFAULT_REGION": "ap-northeast-2", "DRAFTS_BUCKET": "drafts",
                  "ASSETS_BUCKET": "assets", "SKILLS_BUCKET": "skills",
                  "REGISTRY_TABLE": "registry", "HISTORY_TABLE": "history",
-                 "DISPATCHER_FN": "hana-generate-dispatcher"}.items():
+                 "DISPATCHER_FN": "bank-generate-dispatcher"}.items():
         monkeypatch.setenv(k, v)
     with mock_aws():
         s3 = boto3.client("s3", region_name="ap-northeast-2")
@@ -80,7 +80,7 @@ def test_register_validation(aws):
 def test_list_assets_includes_figma_synced(aws):
     from feedback.handler import handler
     boto3.resource("dynamodb", region_name="ap-northeast-2").Table("registry").put_item(
-        Item={"asset_id": "token:latest", "type": "token", "name": "hana-tokens",
+        Item={"asset_id": "token:latest", "type": "token", "name": "bank-tokens",
               "version": "latest", "s3_key": "tokens/latest.json",
               "figma_node_id": "k", "updated_at": "t"})
     handler(_event("POST", "/api/assets", {"name": "팔", "type": "palette", "scope": "mine",

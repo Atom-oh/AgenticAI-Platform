@@ -242,7 +242,7 @@ test('project scope, collaboration, guided baselines and real release metadata r
     await page.getByRole('button', { name: '실행 컴포넌트', exact: true }).click();
     await page.getByText('컴포넌트 목록·개발 속성', { exact: true }).click();
     await page.getByText('Button', { exact: true }).waitFor();
-    assert.match(await page.locator('.ws-component-catalog').innerText(), /플랫폼 기본 React 컴포넌트.*1\.0\.0/s);
+    assert.match(await page.locator('.ws-component-catalog').innerText(), /플랫폼 기본 React 컴포넌트.*1\.2\.0/s);
     await page.getByRole('button', { name: '개발 전달', exact: true }).click();
     assert.equal(await page.getByRole('button', { name: '승인 소스 재빌드·릴리스 검사' }).isDisabled(), true);
     await page.getByLabel('전달할 React 시안', { exact: true }).selectOption('b-approved');
