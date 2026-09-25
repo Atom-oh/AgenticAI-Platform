@@ -903,6 +903,32 @@ class WorkspaceAPI:
         return _json(200, {"currentGuidelineId": product.get("publishedGuidelineId"), "affectedRuns": page["items"],
                            **({"cursor": page["cursor"]} if "cursor" in page else {})})
 
+    def _comments_listing(self, gate, owner, scope, query):
+        """Authorized comments, paged with an opaque cursor: the gate filters comments,
+        but a raw storage cursor still encodes a hidden comment's own storage key even
+        while it contributes nothing to the visible page. Fold the same anchor filter
+        and run/round visibility (`gate._one("comment", ...)`, review 6 #2) into the
+        page scan itself, so a hidden row's key never becomes a public continuation
+        token either (ONT-09, no-existence-disclosure)."""
+        if gate is None or gate.context is None:
+            raise HTTPError(400, "project-required", "Select a project first")
+        from workspace.collaboration import _ANCHORS
+        from workspace.ontology_sources import authorized_page
+        filters = {key: value for key, value in query.items() if key in _ANCHORS}
+        anchor = self.collaboration._anchor(scope, filters) if filters else {}
+
+        def include(row):
+            if not isinstance(row, dict) or row.get("projectId") != scope["project"]["id"]:
+                return None
+            row_anchor = row.get("anchor") if isinstance(row.get("anchor"), dict) else {}
+            if not all(row_anchor.get(key) == value for key, value in anchor.items()):
+                return None
+            return gate._one("comment", row)
+        page = authorized_page(gate.context, query, "comments", owner, "comment", "", include,
+                               purpose="comments", token="commentcur", stale_code="list-cursor-stale",
+                               default=50, reader=gate.aggregate)
+        return _json(200, {"comments": page["items"], **({"cursor": page["cursor"]} if "cursor" in page else {})})
+
     def _route(self, owner, method, parts, event, query, scope=None, claims=None, gate=None):
         """Handlers of the registered `ROUTES`; `gate` authorized the addressed resource and round,
         and serializes the response (the caller runs `gate.finish`)."""
@@ -921,6 +947,10 @@ class WorkspaceAPI:
                 return _json(error.status, {"error": error.message, "code": error.code})
         if parts[0] == "products" and len(parts) == 3 and parts[2] == "impact" and method == "GET":
             return self._product_impact(gate, owner, parts[1], query, scope)
+        if parts == ["comments"] and method == "GET":
+            # A gated, opaquely-paged read (see `_comments_listing`); Collaboration
+            # itself is used only for validating/building the query anchor filter.
+            return self._comments_listing(gate, owner, scope, query)
         if parts == ["comments"]:
             # Collaboration owns discussion writes; the gate authorizes every run anchor.
             expiry = (claims or {}).get("exp")

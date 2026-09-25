@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -279,3 +280,37 @@ def test_batch_authorizes_its_pinned_contract_revision_not_the_current_one():
     assert status == 404, payload
     status, payload = request(api, "GET", "/batches", actor="dana", project=project["id"])
     assert status == 200 and batch["id"] not in {row["id"] for row in payload["batches"]}, payload
+
+
+def test_comment_listing_never_forwards_a_raw_storage_cursor():
+    """Review 6 #4: the gate filtered each comment row but forwarded Collaboration's
+    raw storage `list_page` cursor unchanged; once every comment on a scanned page
+    belongs to a run that has since become inaccessible, the visible list is empty but
+    the cursor still encoded that page's last (hidden) comment's own storage key.
+    Reproduced with 101 comments anchored to a run that is later revoked (the storage
+    page size is 100, so the raw cursor after the first page names the 100th comment)."""
+    api = make_api()
+    project = shared(api)
+    publication, run = _queued_run(api, project, "comment-cursor-gate")
+    for index in range(101):
+        body = {"requestId": f"leak-{index}", "text": f"질문 {index}", "anchor": {"runId": run["id"]}}
+        status, data = request(api, "POST", "/comments", body, actor="dana", project=project["id"])
+        assert status == 201, data
+    owner = "project:" + project["id"]
+    asset = api.storage.get(owner, "asset", publication["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", "/runs/" + run["id"], actor="dana", project=project["id"])[0] == 404
+    status, data = request(api, "GET", "/comments", actor="dana", project=project["id"])
+    assert status == 200 and data["comments"] == [], data
+    assert "cursor" not in data, data
+    # When a real continuation IS needed (enough still-visible comments to exceed one
+    # page), the cursor is the opaque `commentcur-<hex>` token, never a raw storage key.
+    _, visible_run = _queued_run(api, project, "comment-cursor-visible")
+    for index in range(55):
+        body = {"requestId": f"visible-{index}", "text": f"보이는 질문 {index}", "anchor": {"runId": visible_run["id"]}}
+        status, data = request(api, "POST", "/comments", body, actor="dana", project=project["id"])
+        assert status == 201, data
+    status, data = request(api, "GET", "/comments", actor="dana", project=project["id"],
+                           query={"runId": visible_run["id"]})
+    assert status == 200 and len(data["comments"]) <= 50 and "cursor" in data, data
+    assert re.fullmatch(r"commentcur-[a-f0-9]{48}", data["cursor"]), data["cursor"]
