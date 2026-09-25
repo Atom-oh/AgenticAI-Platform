@@ -568,7 +568,6 @@ class GitExporter:
             raise GitExportError("invalid-response", _MESSAGES["invalid-response"]) from None
 
     def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch, guard=None):
-        from workspace.ontology_sources import ProtectedCallRefused
         deadline = time.monotonic() + 120
         if self.connection["provider"] == "local":
             backend = _Local(self.connection, deadline)
@@ -609,11 +608,18 @@ class GitExporter:
         # delivery); instead the caller gets the observed facts to persist for
         # attribution/recovery without claiming they were verified. The receipt is tied
         # to "did the remote actually receive this commit", never to which exception
-        # class interrupted confirming it -- including an ordinary parsing/metadata
-        # failure (e.g. a verification response missing an expected field) that
-        # `export_release`'s own outer wrapper would otherwise convert to a plain
-        # GitExportError OUTSIDE this scope, losing `sha`/`delivered` (and so the
-        # receipt) entirely: catch those here too, before they ever get that far.
+        # class interrupted confirming it. Enumerating exception types here is a
+        # losing game (a guard revocation, a lookup failure, malformed verification
+        # metadata, a one-shot storage error -- anything a dependency can raise) and
+        # `export_release`'s own outer wrapper would convert whatever escapes this
+        # scope to a plain GitExportError OUTSIDE it, with no access to
+        # `sha`/`delivered`, losing the receipt regardless of which specific type it
+        # was. Structurally: once delivery is confirmed (GitLab's `create` already
+        # returned `sha`), ANY exception from the verification/publish step below
+        # means only that verification did not COMPLETE -- never that delivery did
+        # not happen -- so catch bare `Exception` (not `BaseException`: a real
+        # interpreter-level signal like `SystemExit`/`KeyboardInterrupt` still
+        # propagates untouched) and report delivered-unverified independent of type.
         try:
             sha = backend.create(base, tree, target, files, message, when, branch)
             delivered = self.connection["provider"] == "gitlab"
@@ -622,7 +628,7 @@ class GitExporter:
                 if backend.ref(self.connection["baseBranch"]) != base:
                     _fail("conflict")
                 backend.publish(branch, sha, self.connection["baseBranch"], base)
-            except (ProtectedCallRefused, GitExportError, KeyError, TypeError, ValueError, UnicodeError):
+            except Exception:
                 if delivered:
                     raise GitExportDeliveredUnverified(branch, base, sha, source_hash, target) from None
                 raise

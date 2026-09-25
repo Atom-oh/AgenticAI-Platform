@@ -1309,6 +1309,75 @@ def test_git_export_preserves_a_gitlab_receipt_on_malformed_verification_metadat
     assert exported.get("commitSha") == delivered_sha, exported
 
 
+def test_git_export_preserves_a_gitlab_receipt_on_any_verification_exception(env, queued_export, monkeypatch):
+    """PR #33 review 2 #1: enumerating exception types in `_export`'s inner
+    `except` is a losing game -- review 1 added `KeyError` for malformed
+    metadata, but a one-shot storage/SDK exception of a completely different,
+    never-enumerated type still escaped untouched. Specifically: `Storage.call`
+    wraps ONLY the transport call in its own try/except (converting anything
+    into `GitExportError`), but `self.guard()` -- the retained-authority
+    recheck -- runs BEFORE that try/except, on every outbound call including
+    the verification ones; `authority_guard`'s `check()` only converts a
+    `ValueError` from `recheck_job` into `ProtectedCallRefused`, so any OTHER
+    exception `reader.recheck()` raises (e.g. a one-shot `OSError` from a real
+    storage read) propagates raw, past every layer, all the way to
+    `export_release`'s own outer wrapper -- outside `_export`'s scope, with no
+    access to `sha`/`delivered` -- losing the receipt even though GitLab's
+    atomic `POST /commits` had already delivered it. Fixed structurally this
+    time: the inner `except` now catches bare `Exception` (not enumerated
+    types), so "was delivery confirmed" alone decides receipt preservation,
+    independent of which exception interrupted verification afterward.
+    Reproduced with `recheck_job` itself raising a plain `OSError` on the
+    first guard check after delivery -- a type in neither this round's nor
+    any prior round's exception tuple."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote
+    from workspace import ontology_sources
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    delivered = {"on": False}
+    raised = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if method == "POST" and url.endswith("/commits"):
+            delivered["on"] = True
+        return result
+
+    original_recheck_job = ontology_sources.recheck_job
+
+    def racing_recheck_job(reader):
+        if delivered["on"] and not raised["on"]:
+            # The first guard check after delivery: a one-shot storage
+            # exception of a type `authority_guard`'s own `check()` never
+            # converts to `ProtectedCallRefused` (that only happens for a
+            # `ValueError`) -- propagates raw, exactly like a real backing
+            # store's transient I/O error would.
+            raised["on"] = True
+            raise OSError("simulated one-shot storage failure")
+        return original_recheck_job(reader)
+    monkeypatch.setattr(ontology_sources, "recheck_job", racing_recheck_job)
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert delivered["on"] and raised["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The delivered SHA is retained for attribution, never silently lost -- even
+    # though the interrupting exception is a plain OSError, a type this fix
+    # never specifically enumerates.
+    assert exported.get("commitSha") == delivered_sha, exported
+
+
 def approvable_run(env, contract, run_id, admissions=None):
     """A React run whose round carries stored passing evidence (verifier checks stubbed by the caller)."""
     import hashlib
