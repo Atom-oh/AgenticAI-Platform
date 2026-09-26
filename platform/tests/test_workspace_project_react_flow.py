@@ -8,8 +8,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_workspace_collaboration import DRAFT
+from test_workspace_git_export import repo
 from test_workspace_project_http import make_api, request, shared
 import workspace.http as http_module
+from workspace.git_service import connection_hash
 from workspace.react_runtime import evaluate_react
 from workspace.worker import Worker
 
@@ -1201,3 +1203,263 @@ def test_existing_job_retry_authorizes_before_comparing_its_fingerprint():
                                               actor="carol", project=project["id"])
     assert (status_exact, payload_exact.get("code")) == (status_changed, payload_changed.get("code"))
     assert status_exact == 404 and payload_exact.get("code") == "not-found", (status_exact, payload_exact)
+
+
+def test_batch_retry_authorizes_before_comparing_its_fingerprint():
+    """PR #33 review 8: `create_batch()` had the SAME `_existing_job` shape,
+    but for the batch record itself: `batch.get("requestHash") != fingerprint`
+    compared before authorizing the batch. A revoked batch's own GET already
+    404s, but retrying the same requestId with a DIFFERENT variationCount
+    (a mismatched fingerprint) returned 409 request-changed instead -- an
+    existence oracle. Authorize the batch (the same pinned-contract lineage
+    check its own GET's response gate applies) before ever comparing
+    fingerprints."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    ref_bytes = b"batch retry reference"
+    status, data = request(api, "POST", "/assets", {"name": "reference.txt", "size": len(ref_bytes),
+                           "sha256": hashlib.sha256(ref_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    reference = data["asset"]
+    original = api.storage.key_for(owner, "asset", reference["id"], "original")
+    api.storage.put_blob(original, ref_bytes, "text/plain")
+    reference = api.storage.put(owner, "asset", {**reference, "status": "stored", "uploadStatus": "stored",
+                                "parseStatus": "complete", "originalKey": original,
+                                "projectId": project["id"]}, expected_version=reference["version"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내",
+                           "rules": [rule], "assetIds": [reference["id"]]}, actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    batch_body = {"contractId": contract["id"], "contractVersion": contract["version"],
+                  "mode": "guided", "variationCount": 2, "requestId": "batch-retry-fingerprint"}
+    status, data = request(api, "POST", "/batches", batch_body, actor="carol", project=project["id"])
+    assert status == 202, data
+    batch_id = data["batch"]["id"]
+    api.storage.put(owner, "asset", {**reference, "accessRevoked": True}, reference["version"])
+    assert request(api, "GET", f"/batches/{batch_id}", actor="carol", project=project["id"])[0] == 404
+    status_exact, payload_exact = request(api, "POST", "/batches", batch_body, actor="carol", project=project["id"])
+    status_changed, payload_changed = request(api, "POST", "/batches",
+                                              {**batch_body, "variationCount": 3},
+                                              actor="carol", project=project["id"])
+    assert (status_exact, payload_exact.get("code")) == (status_changed, payload_changed.get("code"))
+    assert status_exact == 404 and payload_exact.get("code") == "not-found", (status_exact, payload_exact)
+
+
+def test_retained_run_after_job_eviction_authorizes_before_checking_status():
+    """PR #33 review 8: `_run_create`'s `retained_run` check (reached only
+    when the OPERATIONAL job has already expired/been evicted, but the run
+    record itself is still retained) inspected `retained_run.get("status")`
+    BEFORE ever authorizing that run -- a separate check from the job-level
+    one already fixed for `_existing_job`. A revoked retained run's own GET
+    already 404s, but `POST /runs` with its original requestId returned 409
+    request-expired instead -- an existence oracle. Authorize the retained
+    run (the same lineage check its own GET's response gate applies) before
+    ever inspecting its status."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    run_body = {"contractId": contract["id"], "contractVersion": contract["version"], "requestId": "run-ttl-test"}
+    status, data = request(api, "POST", "/runs", run_body, actor="carol", project=project["id"])
+    assert status == 202, data
+    run_id, job_id = data["run"]["id"], data["job"]["id"]
+    # The retained-run check only fires once the run has moved past "queued"
+    # (a terminal outcome); force that directly, matching the review's own
+    # "terminal-job TTL eviction" repro.
+    run = api.storage.get(owner, "run", run_id)
+    api.storage.put(owner, "run", {**run, "status": "completed"}, run["version"])
+    table = api.storage.table()
+    # Simulate DynamoDB TTL deleting only the operational job, retaining the run.
+    job_key = next(key for key in table.items if key[1] == f"job#{job_id}")
+    del table.items[job_key]
+    asset = api.storage.get(owner, "asset", publication["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", f"/runs/{run_id}", actor="carol", project=project["id"])[0] == 404
+    status, payload = request(api, "POST", "/runs", run_body, actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_release_retry_authorizes_before_comparing_its_fingerprint(monkeypatch):
+    """PR #33 review 8: `create_release()` has the SAME `_existing_job` shape,
+    but for the release record itself: `release.get("requestHash") !=
+    fingerprint` compared before authorizing the release. A revoked release's
+    own GET already 404s, but reusing the SAME requestId string to target a
+    genuinely DIFFERENT run (the identifier is a pure hash of the caller's
+    requestId string, not scoped to any particular run) -- a mismatched
+    fingerprint -- returned 409 request-changed instead of 404. Authorize
+    the release (the same round-delivery lineage check its own GET's
+    response gate applies) before ever comparing fingerprints.
+
+    Uses two FULLY ISOLATED products/contracts/runs (not one shared product)
+    so that revoking product A's guideline asset leaves run B's own lineage
+    genuinely intact -- otherwise `POST /releases`'s route-level
+    `gate.round(runId, round)` pre-check (its `round="body"` fallback) would
+    already deny run B before `create_release()` ever runs, masking whether
+    this specific fix does anything."""
+    browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
+        monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
+    api = make_api()
+    project = shared(api)
+    owner = "project:" + project["id"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+
+    def approved_run(label, request_id):
+        _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+        product = data["product"]
+        _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                                  {"version": product["version"]}, actor="bob", project=project["id"])
+        product = publication["product"]
+        rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+                "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+            {"action": "click", "target": "guide-open"},
+            {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+        status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": label, "rules": [rule]},
+                               actor="carol", project=project["id"])
+        assert status == 201, data
+        contract = data["contract"]
+        _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                          actor="carol", project=project["id"])
+        contract = data["contract"]
+        status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                               "outputType": "react", "maxRounds": 1, "requestId": request_id},
+                               actor="carol", project=project["id"])
+        assert status == 202, data
+        assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+        run = api.storage.get(owner, "run", data["run"]["id"])
+        row = run["rounds"][0]
+        assert row["passed"], row
+        approval = {"round": 1, "artifactSha256": row["artifactSha256"], "sourceHash": row["sourceHash"],
+                    "bundleHash": row["bundleHash"], "contractVersion": run["contractVersion"]}
+        assert request(api, "POST", f"/runs/{run['id']}/approve", approval, actor="carol", project=project["id"])[0] == 200
+        return run, publication
+
+    run_a, publication_a = approved_run("release retry A", "run-release-collide-a")
+    run_b, publication_b = approved_run("release retry B", "run-release-collide-b")
+    status, release = request(api, "POST", "/releases", {"runId": run_a["id"], "round": 1,
+                              "requestId": "release-collide"}, actor="carol", project=project["id"])
+    assert status == 202, release
+    release_id = release["release"]["id"]
+    asset = api.storage.get(owner, "asset", publication_a["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", f"/releases/{release_id}", actor="carol", project=project["id"])[0] == 404
+    # Run B's own lineage (a completely separate product/guideline asset) is
+    # untouched -- confirm it is genuinely reachable, so the 404 below can
+    # only come from this fix, not from the unrelated route-level round gate.
+    assert request(api, "GET", f"/runs/{run_b['id']}", actor="carol", project=project["id"])[0] == 200
+    status, payload = request(api, "POST", "/releases", {"runId": run_b["id"], "round": 1,
+                              "requestId": "release-collide"}, actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_git_export_retry_authorizes_before_comparing_its_fingerprint(monkeypatch, repo):
+    """PR #33 review 8: `create_export()` has the SAME `_existing_job` shape,
+    but for the export record itself: `exported.get("requestHash") !=
+    fingerprint` compared before authorizing the export. A revoked export's
+    own lineage (its release's round-delivery) already denies a plain GET
+    of that release, but reusing the SAME requestId string to target a
+    genuinely DIFFERENT, unaffected release (the identifier is a pure hash
+    of the caller's requestId string, not scoped to any particular release)
+    -- a mismatched fingerprint -- returned 409 request-changed instead of
+    404. Authorize the export (the same round-delivery lineage its own
+    authorization view applies) before ever comparing fingerprints.
+
+    Uses two FULLY ISOLATED products/releases so revoking product A's
+    guideline asset leaves release B's own lineage genuinely intact."""
+    browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
+        monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
+    api = make_api()
+    project = shared(api)
+    owner = "project:" + project["id"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+    bare, connection, base, _ = repo
+    connection = {**connection, "visibility": "internal"}
+    api.git_connections = worker.git_connections = lambda: {connection["id"]: connection}
+
+    def ready_release(label, run_request_id, release_request_id):
+        _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+        product = data["product"]
+        _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                                  {"version": product["version"]}, actor="bob", project=project["id"])
+        product = publication["product"]
+        rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+                "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+            {"action": "click", "target": "guide-open"},
+            {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+        status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": label, "rules": [rule]},
+                               actor="carol", project=project["id"])
+        assert status == 201, data
+        contract = data["contract"]
+        _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                          actor="carol", project=project["id"])
+        contract = data["contract"]
+        status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                               "outputType": "react", "maxRounds": 1, "requestId": run_request_id},
+                               actor="carol", project=project["id"])
+        assert status == 202, data
+        assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+        run = api.storage.get(owner, "run", data["run"]["id"])
+        row = run["rounds"][0]
+        assert row["passed"], row
+        approval = {"round": 1, "artifactSha256": row["artifactSha256"], "sourceHash": row["sourceHash"],
+                    "bundleHash": row["bundleHash"], "contractVersion": run["contractVersion"]}
+        assert request(api, "POST", f"/runs/{run['id']}/approve", approval, actor="carol", project=project["id"])[0] == 200
+        status, prepared = request(api, "POST", "/releases", {"runId": run["id"], "round": 1,
+                                   "requestId": release_request_id}, actor="carol", project=project["id"])
+        assert status == 202, prepared
+        assert worker.handle({"owner": owner, "jobId": prepared["job"]["id"]})["status"] == "completed"
+        release = api.storage.get(owner, "release", prepared["release"]["id"])
+        assert release["status"] == "ready", release
+        return release, publication
+
+    release_a, publication_a = ready_release("git export retry A", "run-git-collide-a", "release-git-collide-a")
+    release_b, publication_b = ready_release("git export retry B", "run-git-collide-b", "release-git-collide-b")
+    export_body = {"connectionId": connection["id"], "connectionHash": connection_hash(connection),
+                   "requestId": "export-collide"}
+    status, exported = request(api, "POST", f"/releases/{release_a['id']}/git", export_body,
+                               actor="dana", project=project["id"])
+    assert status == 202, exported
+    asset = api.storage.get(owner, "asset", publication_a["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", f"/releases/{release_a['id']}", actor="carol", project=project["id"])[0] == 404
+    # Release B's own lineage (a completely separate product/guideline asset)
+    # is untouched -- confirm it is genuinely reachable, so the 404 below can
+    # only come from this fix, not from an unrelated denial of release B itself.
+    assert request(api, "GET", f"/releases/{release_b['id']}", actor="carol", project=project["id"])[0] == 200
+    status, payload = request(api, "POST", f"/releases/{release_b['id']}/git", export_body,
+                              actor="dana", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
