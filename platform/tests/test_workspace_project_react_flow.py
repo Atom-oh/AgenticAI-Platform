@@ -1463,3 +1463,194 @@ def test_git_export_retry_authorizes_before_comparing_its_fingerprint(monkeypatc
     status, payload = request(api, "POST", f"/releases/{release_b['id']}/git", export_body,
                               actor="dana", project=project["id"])
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_batch_child_run_creation_authorizes_before_disclosing_its_fingerprint(monkeypatch):
+    """PR #33 review 9 #1: create_batch() received `gate` but never passed it
+    to `_run_create()` for each slot's own child run. Every gate-based
+    authorization check inside `_run_create` (its own existing-job lookup,
+    the retained-run status check, and the run's own Conflict-recovery
+    check) silently no-ops for a batch's children, since `gate` defaults to
+    None there. Reproduced by forcing a genuine content mismatch on the
+    child job's stored input (simulating drift) and denying that SAME
+    child run/job via a targeted authorize override (independent of any
+    particular asset's lineage, so the batch's OWN already-fixed top-level
+    check is unaffected): its own GET already 404s, but pre-fix, batch
+    retry exposed the un-authorized comparison's content-dependent
+    "request-changed" in a successful 202 instead of the same "not-found"
+    a GET would show."""
+    api = make_api()
+    project = shared(api)
+    owner = "project:" + project["id"]
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "배치 자식", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    batch_body = {"contractId": contract["id"], "contractVersion": contract["version"],
+                  "mode": "guided", "variationCount": 2, "requestId": "batch-child-gate"}
+    status, data = request(api, "POST", "/batches", batch_body, actor="carol", project=project["id"])
+    assert status == 202, data
+    slot0 = next(s for s in data["batch"]["slots"] if s["index"] == 0)
+    child_run_id, child_job_id = slot0["runId"], slot0["jobId"]
+    job = api.storage.get(owner, "job", child_job_id)
+    api.storage.put(owner, "job", {**job, "requestHash": "0" * 64}, job["version"])
+    # Clear only slot 0's recorded runId so the retry's loop re-attempts THIS
+    # slot's `_run_create()` call again (a slot with a recorded runId is
+    # skipped entirely) -- the underlying job/run records themselves are left
+    # in place, matching the review's "an inaccessible job occupying the
+    # derived child request ID" repro.
+    stored_batch = api.storage.get(owner, "batch", data["batch"]["id"])
+    cleared_slots = [{**slot, "runId": None} if slot["index"] == 0 else slot for slot in stored_batch["slots"]]
+    api.storage.put(owner, "batch", {**stored_batch, "slots": cleared_slots,
+                    "runIds": [s["runId"] for s in cleared_slots if s.get("runId")]}, stored_batch["version"])
+    original_authorize = http_module.ResponseGate.authorize
+
+    def denying(self, view, record):
+        if view in ("run", "job") and isinstance(record, dict) and record.get("id") in (child_run_id, child_job_id):
+            return None
+        return original_authorize(self, view, record)
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", denying)
+    assert request(api, "GET", f"/runs/{child_run_id}", actor="carol", project=project["id"])[0] == 404
+    status, retry = request(api, "POST", "/batches", batch_body, actor="carol", project=project["id"])
+    assert status == 202, retry
+    slot = next(s for s in retry["batch"]["slots"] if s["index"] == 0)
+    assert slot.get("errorCode") == "not-found", slot
+
+
+def test_run_creation_conflict_race_authorizes_before_comparing_its_fingerprint(monkeypatch):
+    """PR #33 review 9 #2: `_run_create`'s OWN Conflict-recovery block
+    (reached when `storage.put(owner, "run", run_data)` itself raises --
+    another request created a run with this same identifier) compared
+    `run.get("contractHash")`/fingerprint against the raced-in run BEFORE
+    ever authorizing it -- a SEPARATE checkpoint from the retained-run
+    status check fixed in review 8. Reproduced: seed a run at the exact
+    identifier a fresh POST /runs would derive, with different (mismatched)
+    content, then deny that SAME run via a targeted authorize override
+    (independent of any particular asset's lineage): its own GET already
+    404s, but pre-fix, POST /runs with the colliding requestId exposed the
+    un-authorized comparison's "request-changed" 409 instead of the same
+    404 a GET would show."""
+    api = make_api()
+    project = shared(api)
+    owner = "project:" + project["id"]
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "런 충돌", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    run_body = {"contractId": contract["id"], "contractVersion": contract["version"], "requestId": "run-conflict-race"}
+    target_identifier = http_module.WorkspaceAPI._request_id(run_body, "run")
+    # Build a genuinely valid run record (a normal, separate creation), then
+    # relocate it to the TARGET identifier with different content, simulating
+    # another request having concurrently created a run there with a
+    # different instruction -- a real Conflict on the write below.
+    status, other = request(api, "POST", "/runs", {**run_body, "requestId": "run-conflict-template",
+                            "instruction": "다른 지시문"}, actor="carol", project=project["id"])
+    assert status == 202, other
+    template = api.storage.get(owner, "run", other["run"]["id"])
+    api.storage.put(owner, "run", {**template, "id": target_identifier}, expected_version=None)
+    original_authorize = http_module.ResponseGate.authorize
+    calls = {"n": 0}
+
+    def racing(self, view, record):
+        if view == "run" and isinstance(record, dict) and record.get("id") == target_identifier:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Let the retained-run check's own (already-fixed, review 8)
+                # authorization succeed normally -- this test targets the
+                # SEPARATE Conflict-recovery block reached afterward, once
+                # `storage.put()` below raises Conflict. Every authorize call
+                # for this SAME run from that point on (a race denying it
+                # between the retained-run check and this write) is denied,
+                # matching what a plain GET performed at that same moment
+                # would show.
+                return original_authorize(self, view, record)
+            return None
+        return original_authorize(self, view, record)
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "POST", "/runs", run_body, actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+    assert calls["n"] >= 2, "the race must reach the Conflict-recovery block's own second authorize call"
+
+
+def test_propose_retry_recheck_closes_a_race_after_existing_jobs_authorization(monkeypatch):
+    """PR #33 review 9 #3: `_existing_job()`'s own comparison branch
+    (`job.get("requestHash") != fingerprint`) raised its content-dependent
+    409 directly, with no recheck of the SAME aggregate its own successful
+    authorize() call just joined. A revocation racing in AFTER that
+    authorize() succeeds (but before this comparison raises) is never
+    caught: an HTTPError raised here skips straight past `gate.finish()`'s
+    final aggregate recheck entirely (that recheck only runs for a 2xx
+    response), so a MISMATCHED retry brief disclosed 409 request-changed
+    while the EXACT brief -- which reaches `finish()`'s own recheck through
+    a completed 202 -- 404ed on the identical race. Both must produce the
+    same denial regardless of which branch fingerprint comparison took."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    owner = "project:" + project["id"]
+    guide_bytes = b"propose retry-recheck guide bytes"
+    status, data = request(api, "POST", "/assets", {"name": "guide.txt", "size": len(guide_bytes),
+                           "sha256": hashlib.sha256(guide_bytes).hexdigest(), "purpose": "guide"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    guide = data["asset"]
+    original = api.storage.key_for(owner, "asset", guide["id"], "original")
+    api.storage.put_blob(original, guide_bytes, "text/plain")
+    guide = api.storage.put(owner, "asset", {**guide, "status": "stored", "uploadStatus": "stored",
+                            "parseStatus": "complete", "originalKey": original,
+                            "projectId": project["id"]}, expected_version=guide["version"])
+    status, data = request(api, "POST", "/contracts/propose", {"productId": product["id"], "assetIds": [guide["id"]],
+                           "brief": "첫 요청", "requestId": "propose-retry-recheck"}, actor="carol", project=project["id"])
+    assert status == 202, data
+    job_id = data["job"]["id"]
+    original_authorize = http_module.ResponseGate.authorize
+    calls = {"n": 0}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if view == "job" and isinstance(record, dict) and record.get("id") == job_id:
+            calls["n"] += 1
+            if calls["n"] == 1 and result is not None:
+                # `_existing_job`'s own authorize() succeeds normally here (the
+                # job is genuinely still accessible); revoke immediately
+                # afterward so its LATER fingerprint comparison -- reached
+                # right after, in the SAME call -- is what must be caught by
+                # this fix's own recheck, not the authorize() call itself.
+                asset = self.api.storage.get(owner, "asset", guide["id"])
+                self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status_changed, payload_changed = request(api, "POST", "/contracts/propose",
+                                              {"productId": product["id"], "assetIds": [guide["id"]],
+                                               "brief": "다른 요청", "requestId": "propose-retry-recheck"},
+                                              actor="carol", project=project["id"])
+    assert status_changed == 404 and payload_changed.get("code") == "not-found", (status_changed, payload_changed)
+    assert calls["n"] >= 1
