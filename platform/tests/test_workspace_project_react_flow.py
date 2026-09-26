@@ -1654,3 +1654,282 @@ def test_propose_retry_recheck_closes_a_race_after_existing_jobs_authorization(m
                                               actor="carol", project=project["id"])
     assert status_changed == 404 and payload_changed.get("code") == "not-found", (status_changed, payload_changed)
     assert calls["n"] >= 1
+
+
+def test_propose_exact_retry_recheck_normalizes_finish_s_final_check(monkeypatch):
+    """PR #33 review 10 #1: review 9's fix normalized ONLY the MISMATCH
+    branch inside `_existing_job` (an explicit recheck-before-raise). The
+    EXACT-match branch never raises there -- it proceeds to a 202, which
+    reaches `gate.finish()`'s own success-path recheck instead
+    (`ResponseGate.recheck()` -> `self.aggregate.recheck()`). That call let
+    a raw `CollaborationError` (e.g. "ontology-source-changed") propagate
+    UNCAUGHT, unlike `ResponseGate.authorize()` which explicitly catches
+    and normalizes the same class of failure to 404. A revocation racing
+    in at the identical moment therefore disclosed 409 on the exact-match
+    retry while the mismatched retry (fixed in review 9) correctly 404ed
+    on the SAME race -- a NEW asymmetry replacing the old one. Fixed by
+    making `ResponseGate.recheck()` itself perform the SAME normalization
+    `authorize()` already does."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    owner = "project:" + project["id"]
+    guide_bytes = b"propose exact-retry recheck guide bytes"
+    status, data = request(api, "POST", "/assets", {"name": "guide.txt", "size": len(guide_bytes),
+                           "sha256": hashlib.sha256(guide_bytes).hexdigest(), "purpose": "guide"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    guide = data["asset"]
+    original = api.storage.key_for(owner, "asset", guide["id"], "original")
+    api.storage.put_blob(original, guide_bytes, "text/plain")
+    guide = api.storage.put(owner, "asset", {**guide, "status": "stored", "uploadStatus": "stored",
+                            "parseStatus": "complete", "originalKey": original,
+                            "projectId": project["id"]}, expected_version=guide["version"])
+    status, data = request(api, "POST", "/contracts/propose", {"productId": product["id"], "assetIds": [guide["id"]],
+                           "brief": "첫 요청", "requestId": "propose-exact-retry-recheck"}, actor="carol", project=project["id"])
+    assert status == 202, data
+    job_id = data["job"]["id"]
+    original_authorize = http_module.ResponseGate.authorize
+    calls = {"n": 0}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if view == "job" and isinstance(record, dict) and record.get("id") == job_id:
+            calls["n"] += 1
+            if calls["n"] == 1 and result is not None:
+                # `_existing_job`'s own authorize() succeeds normally here (the
+                # job is genuinely still accessible); revoke immediately
+                # afterward. Since this retry's brief EXACTLY matches, no
+                # mismatch raise fires -- this request proceeds to a 202,
+                # reaching `gate.finish()`'s OWN final recheck instead.
+                asset = self.api.storage.get(owner, "asset", guide["id"])
+                self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status_exact, payload_exact = request(api, "POST", "/contracts/propose",
+                                          {"productId": product["id"], "assetIds": [guide["id"]],
+                                           "brief": "첫 요청", "requestId": "propose-exact-retry-recheck"},
+                                          actor="carol", project=project["id"])
+    assert status_exact == 404 and payload_exact.get("code") == "not-found", (status_exact, payload_exact)
+    assert calls["n"] >= 1
+
+
+def test_batch_retry_recheck_closes_a_race_after_its_own_authorization(monkeypatch):
+    """PR #33 review 10 #2: `create_batch()`'s own mismatch raise
+    (`batch.get("requestHash") != fingerprint`) authorized the batch first
+    (review 8), but never rechecked retained authority before disclosing
+    the comparison itself -- a revocation racing in AFTER that authorize()
+    succeeds (but before this comparison raises) still discloses the
+    content-dependent 409 instead of 404. Fixed by routing this raise
+    through the gate's own normalized final recheck (review 10's core fix
+    to `ResponseGate.recheck()`)."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    ref_bytes = b"batch recheck race reference"
+    status, data = request(api, "POST", "/assets", {"name": "reference.txt", "size": len(ref_bytes),
+                           "sha256": hashlib.sha256(ref_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    reference = data["asset"]
+    original = api.storage.key_for(owner, "asset", reference["id"], "original")
+    api.storage.put_blob(original, ref_bytes, "text/plain")
+    reference = api.storage.put(owner, "asset", {**reference, "status": "stored", "uploadStatus": "stored",
+                                "parseStatus": "complete", "originalKey": original,
+                                "projectId": project["id"]}, expected_version=reference["version"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "상품 안내",
+                           "rules": [rule], "assetIds": [reference["id"]]}, actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    batch_body = {"contractId": contract["id"], "contractVersion": contract["version"],
+                  "mode": "guided", "variationCount": 2, "requestId": "batch-recheck-race"}
+    status, data = request(api, "POST", "/batches", batch_body, actor="carol", project=project["id"])
+    assert status == 202, data
+    batch_id = data["batch"]["id"]
+    original_authorize = http_module.ResponseGate.authorize
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if view == "batch" and isinstance(record, dict) and record.get("id") == batch_id and result is not None:
+            # The batch's own authorize() succeeds normally here (still
+            # genuinely accessible); revoke immediately afterward so the
+            # LATER fingerprint comparison -- reached moments later, in the
+            # SAME call -- is exactly where the race lands.
+            asset = self.api.storage.get(owner, "asset", reference["id"])
+            self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "POST", "/batches", {**batch_body, "variationCount": 3},
+                              actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_release_retry_recheck_closes_a_race_after_its_own_authorization(monkeypatch):
+    """PR #33 review 10 #2: `create_release()`'s own mismatch raise had the
+    SAME gap as the batch one above. Uses two fully ISOLATED products/runs
+    (as in review 9's release test) so retrying the SAME requestId against
+    a genuinely DIFFERENT run produces a real content mismatch, while
+    timing the revocation to land immediately after release A's own
+    (already-fixed, authorize-before-compare) checkpoint succeeds -- fixed
+    the same way as the batch test above."""
+    api = make_api()
+    project = shared(api)
+    owner = "project:" + project["id"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+
+    def approved_run(label, request_id):
+        _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+        product = data["product"]
+        _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                                  {"version": product["version"]}, actor="bob", project=project["id"])
+        rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+                "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+            {"action": "click", "target": "guide-open"},
+            {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+        status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": label, "rules": [rule]},
+                               actor="carol", project=project["id"])
+        assert status == 201, data
+        contract = data["contract"]
+        _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                          actor="carol", project=project["id"])
+        contract = data["contract"]
+        status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                               "outputType": "react", "maxRounds": 1, "requestId": request_id},
+                               actor="carol", project=project["id"])
+        assert status == 202, data
+        assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+        run = api.storage.get(owner, "run", data["run"]["id"])
+        row = run["rounds"][0]
+        assert row["passed"], row
+        approval = {"round": 1, "artifactSha256": row["artifactSha256"], "sourceHash": row["sourceHash"],
+                    "bundleHash": row["bundleHash"], "contractVersion": run["contractVersion"]}
+        assert request(api, "POST", f"/runs/{run['id']}/approve", approval, actor="carol", project=project["id"])[0] == 200
+        return run, publication
+
+    run_a, publication_a = approved_run("release recheck A", "run-release-recheck-a")
+    run_b, publication_b = approved_run("release recheck B", "run-release-recheck-b")
+    status, release = request(api, "POST", "/releases", {"runId": run_a["id"], "round": 1,
+                              "requestId": "release-recheck-race"}, actor="carol", project=project["id"])
+    assert status == 202, release
+    release_a_id = release["release"]["id"]
+    original_authorize = http_module.ResponseGate.authorize
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if view == "release" and isinstance(record, dict) and record.get("id") == release_a_id and result is not None:
+            # Release A's own authorize() (checking run A's round-delivery
+            # lineage) succeeds normally here; revoke run A's own guideline
+            # asset immediately afterward so the LATER fingerprint
+            # comparison against release B's colliding retry -- reached
+            # moments later, in the SAME call -- is exactly where the race
+            # lands. Run B's own lineage is untouched.
+            asset = self.api.storage.get(owner, "asset", publication_a["assetId"])
+            self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "POST", "/releases", {"runId": run_b["id"], "round": 1,
+                              "requestId": "release-recheck-race"}, actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_git_export_retry_recheck_closes_a_race_after_its_own_authorization(monkeypatch, repo):
+    """PR #33 review 10 #2: `create_export()`'s own mismatch raise had the
+    SAME gap as the batch/release ones above -- fixed the same way. Uses
+    two fully isolated ready releases (as in review 8's git-export test)
+    so retrying the SAME requestId against a genuinely different release
+    produces a real content mismatch, while timing the revocation to land
+    immediately after export A's own (already-fixed) checkpoint succeeds."""
+    browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
+        monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
+    api = make_api()
+    project = shared(api)
+    owner = "project:" + project["id"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+    bare, connection, base, _ = repo
+    connection = {**connection, "visibility": "internal"}
+    api.git_connections = worker.git_connections = lambda: {connection["id"]: connection}
+
+    def ready_release(label, run_request_id, release_request_id):
+        _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+        product = data["product"]
+        _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                                  {"version": product["version"]}, actor="bob", project=project["id"])
+        product = publication["product"]
+        rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+                "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+            {"action": "click", "target": "guide-open"},
+            {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+        status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": label, "rules": [rule]},
+                               actor="carol", project=project["id"])
+        assert status == 201, data
+        contract = data["contract"]
+        _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                          actor="carol", project=project["id"])
+        contract = data["contract"]
+        status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                               "outputType": "react", "maxRounds": 1, "requestId": run_request_id},
+                               actor="carol", project=project["id"])
+        assert status == 202, data
+        assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+        run = api.storage.get(owner, "run", data["run"]["id"])
+        row = run["rounds"][0]
+        assert row["passed"], row
+        approval = {"round": 1, "artifactSha256": row["artifactSha256"], "sourceHash": row["sourceHash"],
+                    "bundleHash": row["bundleHash"], "contractVersion": run["contractVersion"]}
+        assert request(api, "POST", f"/runs/{run['id']}/approve", approval, actor="carol", project=project["id"])[0] == 200
+        status, prepared = request(api, "POST", "/releases", {"runId": run["id"], "round": 1,
+                                   "requestId": release_request_id}, actor="carol", project=project["id"])
+        assert status == 202, prepared
+        assert worker.handle({"owner": owner, "jobId": prepared["job"]["id"]})["status"] == "completed"
+        release = api.storage.get(owner, "release", prepared["release"]["id"])
+        assert release["status"] == "ready", release
+        return release, publication
+
+    release_a, publication_a = ready_release("git recheck race A", "run-git-recheck-a", "release-git-recheck-a")
+    release_b, publication_b = ready_release("git recheck race B", "run-git-recheck-b", "release-git-recheck-b")
+    export_body = {"connectionId": connection["id"], "connectionHash": connection_hash(connection),
+                   "requestId": "export-recheck-race"}
+    status, exported = request(api, "POST", f"/releases/{release_a['id']}/git", export_body,
+                               actor="dana", project=project["id"])
+    assert status == 202, exported
+    export_a_id = exported["export"]["id"]
+    original_authorize = http_module.ResponseGate.authorize
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if view == "export" and isinstance(record, dict) and record.get("id") == export_a_id and result is not None:
+            # Export A's own authorize() (checking release A's round-delivery
+            # lineage) succeeds normally here; revoke immediately afterward
+            # so the LATER fingerprint comparison against release B's
+            # colliding retry -- reached moments later, in the SAME call --
+            # is exactly where the race lands. Release B's own lineage is
+            # untouched.
+            asset = self.api.storage.get(owner, "asset", publication_a["assetId"])
+            self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "POST", f"/releases/{release_b['id']}/git", export_body,
+                              actor="dana", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
