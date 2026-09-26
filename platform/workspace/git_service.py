@@ -103,6 +103,16 @@ def create_export(api, owner, release, body, scope, gate=None):
             **({"projectId": scope["project"]["id"]} if scope.get("project") else {})}
     fingerprint = api._fingerprint(data)
     exported = api.storage.get(owner, "gitexport", identifier)
+    if exported is not None and gate is not None:
+        # Authorize the SAME export (its own round-delivery lineage) before
+        # ever comparing the private requestHash fingerprint against it -- an
+        # inaccessible export must 404 identically to a missing one, not
+        # disclose through this 409 that a DIFFERENT-content export with
+        # this exact requestId still exists.
+        authorized = gate.authorize("export", exported)
+        if authorized is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        exported = authorized
     if exported and exported.get("requestHash") != fingerprint:
         raise HTTPError(409, "request-changed", "Git 요청의 대상 또는 승인본이 변경되었습니다.")
     if exported is None:
@@ -123,6 +133,11 @@ def create_export(api, owner, release, body, scope, gate=None):
             except Conflict:
                 exported = api.storage.get(owner, "gitexport", identifier)
                 if exported:
+                    if gate is not None:
+                        authorized = gate.authorize("export", exported)
+                        if authorized is None:
+                            raise HTTPError(404, "not-found", "Resource not found")
+                        exported = authorized
                     if exported.get("requestHash") != fingerprint:
                         raise HTTPError(409, "request-changed", "Git 요청이 변경되었습니다.")
                     break
@@ -130,7 +145,7 @@ def create_export(api, owner, release, body, scope, gate=None):
                     raise
     job = api._existing_job(owner, identifier, fingerprint, gate=gate)
     if not job:
-        job = api._new_job(owner, identifier, "git", {"exportId": identifier}, fingerprint)
+        job = api._new_job(owner, identifier, "git", {"exportId": identifier}, fingerprint, gate=gate)
     job = api._retry_dispatch(owner, job)
     api._invoke(owner, job)
     return _json(202, {"export": exported, "release": hydrate_release(api.storage, owner, api._get(owner, "release", release["id"])), "job": job})
