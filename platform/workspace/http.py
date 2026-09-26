@@ -1669,20 +1669,27 @@ class WorkspaceAPI:
                     if any(ref not in data.get("guideRefs", []) for screen in data["changeRequest"]["screens"]
                            for ref in screen.get("sourceRefs", [])):
                         raise HTTPError(400, "source-reference-mismatch", "화면별 원문 연결을 현재 선택한 페이지와 다시 대조하세요.")
-            except ValueError as error:
+            except (HTTPError, ValueError) as error:
                 # A validation failure (e.g. a guide page whose textSha256 no
-                # longer matches, or a change request's baseline hash) must never be
-                # distinguishable from an asset or baseline revoked while ITS OWN or
-                # a LATER read was being performed for that same comparison (same
-                # shape as review 8 #3 / review 1 #2's fix for
-                # `_validated_contract`, and review 5's fix to `baseline_project`
-                # itself, both extended here to cover this validation path too).
-                # Every asset above, and the baseline (when authorized successfully),
-                # already joined this gate's aggregate reader; recheck it as a
-                # single aggregate ONCE, strictly after every read this validation
-                # performed, so a revocation racing ANY of them raises the same 404
-                # a plain GET (or the matching-value path's own later gate recheck)
-                # would, instead of this content-revealing 400.
+                # longer matches, a change request's baseline hash, or its own
+                # sourceRefs/guideRefs mismatch) must never be distinguishable
+                # from an asset or baseline revoked while ITS OWN or a LATER read
+                # was being performed for that same comparison (same shape as
+                # review 8 #3 / review 1 #2's fix for `_validated_contract`, and
+                # review 5's fix to `baseline_project` itself, both extended here
+                # to cover this validation path too). The recheck below must be
+                # structural, not exception-type-dependent (review 7 found that
+                # catching only `ValueError` still let the source-reference-
+                # mismatch check's own `HTTPError` bypass it entirely, the same
+                # "enumerate types" trap the git_export.py receipt fix hit
+                # earlier) -- every content-dependent failure raised in this
+                # block, of EITHER type, goes through the SAME recheck before
+                # being reported or re-raised. Every asset above, and the
+                # baseline (when authorized successfully), already joined this
+                # gate's aggregate reader; recheck it as a single aggregate ONCE,
+                # strictly after every read this validation performed, so a
+                # revocation racing ANY of them raises the same 404 a plain GET
+                # (or the matching-value path's own later gate recheck) would.
                 if gate is not None and gate.aggregate is not None:
                     from workspace.collaboration import CollaborationError
                     from workspace.ontology_sources import _AUTHORITY_CODES
@@ -1692,6 +1699,12 @@ class WorkspaceAPI:
                         if changed.status == 401 or changed.code in _AUTHORITY_CODES:
                             raise
                         raise HTTPError(404, "not-found", "Resource not found") from None
+                # The recheck found nothing newly wrong: an HTTPError already
+                # carries its own correct status/code (e.g. baseline_project's
+                # own 404, or this block's 400 source-reference-mismatch) and is
+                # preserved as-is; only a plain ValueError is converted.
+                if isinstance(error, HTTPError):
+                    raise
                 raise HTTPError(400, "invalid-input", str(error)[:240]) from error
             job = self._new_job(owner, identifier, "propose", {
                 **data, "assetSnapshots": self._snapshot_assets(assets)}, fingerprint)

@@ -1067,3 +1067,87 @@ def test_propose_baseline_recheck_closes_a_race_after_its_own_authorization(monk
                               "requestId": "propose-baseline-race"}, actor="carol", project=project["id"])
     assert not armed["on"]
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_propose_source_reference_mismatch_recheck_is_not_exception_type_dependent(monkeypatch):
+    """PR #33 review 7: round 6 caught only `ValueError` around `_propose`'s
+    guarded validation block, but the `source-reference-mismatch` check
+    inside it raises `HTTPError` directly -- a DIFFERENT exception type that
+    the same `except ValueError:` never caught, bypassing the aggregate
+    recheck entirely (the exact "enumerate exception types, miss one" trap
+    the git_export.py receipt fix hit a few rounds earlier). Reproduced: a
+    screen `sourceRef` absent from `guideRefs` (always triggers this 400,
+    a purely structural/content check unrelated to authorization), with the
+    baseline's own guideline asset revoked immediately after its own
+    successful authorization and a MATCHING baseline hash (so
+    `baseline_project` itself raises nothing -- only the sourceRefs check
+    does). Must 404 identically to the already-fixed wrong-hash case,
+    not the content-revealing 400. Fixed structurally: the guarded block now
+    catches `(HTTPError, ValueError)` together and always rechecks the
+    aggregate before reporting OR re-raising either one."""
+    from test_workspace_change_requests import change_request
+    browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
+        monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product_a = data["product"]
+    _, publication_a = request(api, "POST", f"/products/{product_a['id']}/publish",
+                               {"version": product_a["version"]}, actor="bob", project=project["id"])
+    product_a = publication_a["product"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication_a["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product_a["id"], "title": "베이스", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": "baseline-source-3"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    owner = "project:" + project["id"]
+    assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+    run = api.storage.get(owner, "run", data["run"]["id"])
+    row = run["rounds"][0]
+    assert row["passed"], row
+    approval = {"round": 1, "artifactSha256": row["artifactSha256"], "sourceHash": row["sourceHash"],
+                "bundleHash": row["bundleHash"], "contractVersion": run["contractVersion"]}
+    assert request(api, "POST", f"/runs/{run['id']}/approve", approval, actor="carol", project=project["id"])[0] == 200
+    status, baseline_data = request(api, "GET", f"/runs/{run['id']}/baseline", actor="carol", project=project["id"])
+    assert status == 200, baseline_data
+    correct_baseline = baseline_data["baseline"]
+    _, data_b = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product_b = data_b["product"]
+    _, publication_b = request(api, "POST", f"/products/{product_b['id']}/publish",
+                               {"version": product_b["version"]}, actor="bob", project=project["id"])
+    product_b = publication_b["product"]
+    original_authorize = http_module.ResponseGate.authorize
+    armed = {"on": True}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if (armed["on"] and view == "contract" and isinstance(record, dict)
+                and record.get("id") == contract["id"] and result is not None):
+            armed["on"] = False
+            asset = self.api.storage.get(owner, "asset", publication_a["assetId"])
+            self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    change = {**change_request(), "baseline": correct_baseline}
+    change["screens"] = [{**change["screens"][0], "sourceRefs": [{"assetId": "fake-guide-asset", "sourceId": "s1",
+                          "page": 1, "sourceSha256": "a" * 64, "textSha256": "b" * 64}]}, change["screens"][1]]
+    status, payload = request(api, "POST", "/contracts/propose", {"productId": product_b["id"], "brief": "요약",
+                              "changeRequest": change, "requestId": "propose-source-ref-race"},
+                              actor="carol", project=project["id"])
+    assert not armed["on"]
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
