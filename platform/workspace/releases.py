@@ -92,7 +92,7 @@ def create_release(api, owner, body, scope, gate=None):
             release = api._get(owner, "release", identifier)
             if release.get("requestHash") != fingerprint:
                 raise HTTPError(409, "request-changed", "릴리스 요청이 변경되었습니다.")
-    job = api._existing_job(owner, identifier, fingerprint)
+    job = api._existing_job(owner, identifier, fingerprint, gate=gate)
     if not job:
         job = api._new_job(owner, identifier, "release", {"releaseId": identifier}, fingerprint)
     job = api._retry_dispatch(owner, job)

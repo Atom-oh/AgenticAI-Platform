@@ -1623,8 +1623,18 @@ class WorkspaceAPI:
     def _fingerprint(data):
         return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
-    def _existing_job(self, owner, identifier, fingerprint):
+    def _existing_job(self, owner, identifier, fingerprint, gate=None):
         job = self.storage.get(owner, "job", identifier)
+        if job is not None and gate is not None:
+            # Authorize the SAME job (its task-specific input lineage) before
+            # ever comparing the private requestHash fingerprint against it --
+            # a job whose input has since been revoked must 404 identically to
+            # a missing one, not disclose through this 409 that a DIFFERENT-
+            # content job with this exact requestId still exists.
+            authorized = gate.authorize("job", job)
+            if authorized is None:
+                raise HTTPError(404, "not-found", "Resource not found")
+            job = authorized
         if job and job.get("requestHash") != fingerprint:
             raise HTTPError(409, "request-changed", "The request ID was already used with different input")
         return job
@@ -1646,7 +1656,7 @@ class WorkspaceAPI:
             data["changeRequest"] = normalize_request(body["changeRequest"])
         data["actor"] = scope["actor"] if scope else owner
         fingerprint = self._fingerprint(data)
-        job = self._existing_job(owner, identifier, fingerprint)
+        job = self._existing_job(owner, identifier, fingerprint, gate=gate)
         if job:
             job = self._retry_dispatch(owner, job)
         if not job:
@@ -1769,7 +1779,7 @@ class WorkspaceAPI:
             if key in body:
                 data[key] = body[key]
         fingerprint = self._fingerprint(data)
-        job = self._existing_job(owner, identifier, fingerprint)
+        job = self._existing_job(owner, identifier, fingerprint, gate=gate)
         if job:
             existing_run = self._get(owner, "run", job["input"]["runId"])
             if job.get("errorCode") == "dispatch-failed" and existing_run.get("outputType") == "react":

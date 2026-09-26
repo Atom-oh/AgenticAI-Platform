@@ -128,7 +128,7 @@ def create_export(api, owner, release, body, scope, gate=None):
                     break
                 if attempt == 2:
                     raise
-    job = api._existing_job(owner, identifier, fingerprint)
+    job = api._existing_job(owner, identifier, fingerprint, gate=gate)
     if not job:
         job = api._new_job(owner, identifier, "git", {"exportId": identifier}, fingerprint)
     job = api._retry_dispatch(owner, job)

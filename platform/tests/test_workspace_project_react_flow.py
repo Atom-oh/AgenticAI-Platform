@@ -1151,3 +1151,53 @@ def test_propose_source_reference_mismatch_recheck_is_not_exception_type_depende
                               actor="carol", project=project["id"])
     assert not armed["on"]
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_existing_job_retry_authorizes_before_comparing_its_fingerprint():
+    """PR #33 review 7: `_existing_job()` compared a retry's fingerprint
+    against the STORED job's private input fingerprint BEFORE ever
+    authorizing that job. A revoked job's own GET already 404s, and an
+    EXACT retry (matching fingerprint) already 404ed too (via the response
+    gate's own final check on the returned job), but retrying the SAME
+    requestId with DIFFERENT content (a mismatched fingerprint) returned 409
+    request-changed instead -- an existence oracle disclosing that a
+    DIFFERENT-content job with this exact requestId still exists, even
+    though the caller cannot read it. Authorize the job (the same lineage
+    check its own GET's response gate applies) before ever comparing
+    fingerprints."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    owner = "project:" + project["id"]
+    guide_bytes = b"propose retry guide bytes"
+    status, data = request(api, "POST", "/assets", {"name": "guide.txt", "size": len(guide_bytes),
+                           "sha256": hashlib.sha256(guide_bytes).hexdigest(), "purpose": "guide"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    guide = data["asset"]
+    original = api.storage.key_for(owner, "asset", guide["id"], "original")
+    api.storage.put_blob(original, guide_bytes, "text/plain")
+    guide = api.storage.put(owner, "asset", {**guide, "status": "stored", "uploadStatus": "stored",
+                            "parseStatus": "complete", "originalKey": original,
+                            "projectId": project["id"]}, expected_version=guide["version"])
+    status, data = request(api, "POST", "/contracts/propose", {"productId": product["id"], "assetIds": [guide["id"]],
+                           "brief": "첫 요청", "requestId": "propose-retry-target"}, actor="carol", project=project["id"])
+    assert status == 202, data
+    job_id = data["job"]["id"]
+    asset = api.storage.get(owner, "asset", guide["id"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", f"/jobs/{job_id}", actor="carol", project=project["id"])[0] == 404
+    status_exact, payload_exact = request(api, "POST", "/contracts/propose",
+                                          {"productId": product["id"], "assetIds": [guide["id"]],
+                                           "brief": "첫 요청", "requestId": "propose-retry-target"},
+                                          actor="carol", project=project["id"])
+    status_changed, payload_changed = request(api, "POST", "/contracts/propose",
+                                              {"productId": product["id"], "assetIds": [guide["id"]],
+                                               "brief": "다른 요청", "requestId": "propose-retry-target"},
+                                              actor="carol", project=project["id"])
+    assert (status_exact, payload_exact.get("code")) == (status_changed, payload_changed.get("code"))
+    assert status_exact == 404 and payload_exact.get("code") == "not-found", (status_exact, payload_exact)
