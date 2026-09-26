@@ -618,10 +618,28 @@ class ResponseGate:
             return None
 
     def recheck(self):
-        if self.aggregate is not None:
-            self.aggregate.recheck()
-        for recheck in self.retained.values():
-            recheck()
+        """The final aggregate recheck, normalized exactly like `authorize()`.
+
+        `authorize()` already catches a non-401/non-authority-code
+        `CollaborationError` and converts it to `None` -> 404 (review 9's
+        fix to `_existing_job` replicated this locally for one raise site).
+        This recheck -- reached from `finish()` on every ordinary successful
+        response -- let the SAME class of failure escape raw (e.g. a private
+        "ontology-source-changed" 409), disclosing that a race landed here
+        rather than 404ing identically to an already-inaccessible record.
+        Normalize it here once, so every caller of this recheck (not just
+        the sites that already do their own local try/except) is covered.
+        """
+        from workspace.ontology_sources import _AUTHORITY_CODES
+        try:
+            if self.aggregate is not None:
+                self.aggregate.recheck()
+            for recheck in self.retained.values():
+                recheck()
+        except CollaborationError as error:
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            raise HTTPError(404, "not-found", "Resource not found") from None
 
     def finish(self, response):
         """Serialize the response through its declared views; one final recheck, then release it."""
@@ -1447,26 +1465,20 @@ class WorkspaceAPI:
             # 400 -- a race that revoked one raises the same 404 a plain GET (or the
             # matching-quote path's own later gate recheck) would.
             self._assets(owner, [asset["id"] for asset in assets], gate=gate)
-            if gate is not None and gate.aggregate is not None:
-                # The re-check above still authorizes/reads each asset one at a
-                # time (each asset's own blob_info read can take time), so a
-                # revocation racing a LATER asset's read in that SAME pass -- not
-                # only the very first one checked -- was still invisible to it
-                # (review 8 #3 only closed the window up to that pass's own
-                # first check). Every one of those re-checks already joined this
-                # gate's aggregate reader; recheck it as a single aggregate ONCE,
-                # strictly after every read this validation performed, exactly
-                # like the response gate's own final recheck does for a
-                # successful response -- so it does not matter which asset's read
-                # raced the revocation.
-                from workspace.collaboration import CollaborationError
-                from workspace.ontology_sources import _AUTHORITY_CODES
-                try:
-                    gate.aggregate.recheck()
-                except CollaborationError as changed:
-                    if changed.status == 401 or changed.code in _AUTHORITY_CODES:
-                        raise
-                    raise HTTPError(404, "not-found", "Resource not found") from None
+            # The re-check above still authorizes/reads each asset one at a
+            # time (each asset's own blob_info read can take time), so a
+            # revocation racing a LATER asset's read in that SAME pass -- not
+            # only the very first one checked -- was still invisible to it
+            # (review 8 #3 only closed the window up to that pass's own
+            # first check). Every one of those re-checks already joined this
+            # gate's aggregate reader; recheck it through the gate's own
+            # normalized final recheck (review 10: converts a caught
+            # authorization change to the canonical 404, exactly like
+            # `authorize()` itself does), strictly after every read this
+            # validation performed -- so it does not matter which asset's
+            # read raced the revocation.
+            if gate is not None:
+                gate.recheck()
             raise HTTPError(400, "invalid-contract", str(error)[:240]) from error
         return normalized, assets
 
@@ -1655,18 +1667,13 @@ class WorkspaceAPI:
             # straight past `gate.finish()`'s final aggregate recheck entirely, so
             # the matching-fingerprint retry (which DOES reach `finish()`) 404s on
             # the exact same race while this one still discloses the private
-            # brief/input mismatch via a distinguishable 409. Recheck the SAME
-            # aggregate this job's own authorization just joined, so a race here
-            # 404s identically to the matching-fingerprint path's own recheck.
-            if gate is not None and gate.aggregate is not None:
-                from workspace.collaboration import CollaborationError
-                from workspace.ontology_sources import _AUTHORITY_CODES
-                try:
-                    gate.aggregate.recheck()
-                except CollaborationError as changed:
-                    if changed.status == 401 or changed.code in _AUTHORITY_CODES:
-                        raise
-                    raise HTTPError(404, "not-found", "Resource not found") from None
+            # brief/input mismatch via a distinguishable 409. Recheck through the
+            # gate's own normalized final recheck (review 10: it now converts a
+            # caught authorization change to the canonical 404, exactly like
+            # `authorize()` itself does), so a race here 404s identically to the
+            # matching-fingerprint path's own recheck.
+            if gate is not None:
+                gate.recheck()
             raise HTTPError(409, "request-changed", "The request ID was already used with different input")
         return job
 
@@ -1727,19 +1734,15 @@ class WorkspaceAPI:
                 # block, of EITHER type, goes through the SAME recheck before
                 # being reported or re-raised. Every asset above, and the
                 # baseline (when authorized successfully), already joined this
-                # gate's aggregate reader; recheck it as a single aggregate ONCE,
-                # strictly after every read this validation performed, so a
-                # revocation racing ANY of them raises the same 404 a plain GET
-                # (or the matching-value path's own later gate recheck) would.
-                if gate is not None and gate.aggregate is not None:
-                    from workspace.collaboration import CollaborationError
-                    from workspace.ontology_sources import _AUTHORITY_CODES
-                    try:
-                        gate.aggregate.recheck()
-                    except CollaborationError as changed:
-                        if changed.status == 401 or changed.code in _AUTHORITY_CODES:
-                            raise
-                        raise HTTPError(404, "not-found", "Resource not found") from None
+                # gate's aggregate reader; recheck it through the gate's own
+                # normalized final recheck (review 10: converts a caught
+                # authorization change to the canonical 404, exactly like
+                # `authorize()` itself does), strictly after every read this
+                # validation performed, so a revocation racing ANY of them
+                # raises the same 404 a plain GET (or the matching-value
+                # path's own later gate recheck) would.
+                if gate is not None:
+                    gate.recheck()
                 # The recheck found nothing newly wrong: an HTTPError already
                 # carries its own correct status/code (e.g. baseline_project's
                 # own 404, or this block's 400 source-reference-mismatch) and is
