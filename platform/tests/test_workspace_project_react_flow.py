@@ -980,3 +980,90 @@ def test_change_request_baseline_404s_for_a_revoked_run_regardless_of_hash_match
                               "changeRequest": {**change_request(), "baseline": wrong_baseline},
                               "requestId": "propose-baseline-wrong"}, actor="carol", project=project["id"])
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_propose_baseline_recheck_closes_a_race_after_its_own_authorization(monkeypatch):
+    """PR #33 review 6: round 5's fix authorized `baseline_project`'s run and
+    contract before comparing hashes, but `_propose` called it OUTSIDE the
+    try/except that wraps `validate_selection` and rechecks the gate's
+    aggregate on failure -- so a revocation racing in AFTER the baseline's
+    own successful authorization (but before its hash comparison raises)
+    still escaped straight past `_propose` to the generic top-level
+    `except ValueError`, bypassing the aggregate recheck entirely and
+    returning the content-revealing 400 instead of 404. Reproduced: revoke
+    the baseline run's own guideline asset exactly when `ResponseGate.
+    authorize("run", ...)` succeeds for it (mid-`baseline_project`, after
+    authorization, before the hash check), submitting a mismatching
+    baseline hash so the hash comparison itself is what raises. Moving the
+    `baseline_project` call inside the SAME guarded block as
+    `validate_selection` closes this: the recheck now covers whatever the
+    baseline's own successful authorization joined to the aggregate too."""
+    from test_workspace_change_requests import change_request
+    browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
+        monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product_a = data["product"]
+    _, publication_a = request(api, "POST", f"/products/{product_a['id']}/publish",
+                               {"version": product_a["version"]}, actor="bob", project=project["id"])
+    product_a = publication_a["product"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication_a["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product_a["id"], "title": "베이스", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": "baseline-source-2"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    owner = "project:" + project["id"]
+    assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+    run = api.storage.get(owner, "run", data["run"]["id"])
+    row = run["rounds"][0]
+    assert row["passed"], row
+    approval = {"round": 1, "artifactSha256": row["artifactSha256"], "sourceHash": row["sourceHash"],
+                "bundleHash": row["bundleHash"], "contractVersion": run["contractVersion"]}
+    assert request(api, "POST", f"/runs/{run['id']}/approve", approval, actor="carol", project=project["id"])[0] == 200
+    status, baseline_data = request(api, "GET", f"/runs/{run['id']}/baseline", actor="carol", project=project["id"])
+    assert status == 200, baseline_data
+    wrong_baseline = {**baseline_data["baseline"], "sourceHash": hashlib.sha256(b"wrong source, again").hexdigest()}
+    _, data_b = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product_b = data_b["product"]
+    _, publication_b = request(api, "POST", f"/products/{product_b['id']}/publish",
+                               {"version": product_b["version"]}, actor="bob", project=project["id"])
+    product_b = publication_b["product"]
+    original_authorize = http_module.ResponseGate.authorize
+    armed = {"on": True}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        # Revoke only after BOTH the run's and the contract's own baseline
+        # authorization have already succeeded (immediately after
+        # `baseline_project`'s own authorization completes, matching the
+        # review's exact repro) -- not mid-authorization, which would trip
+        # the contract's OWN (already-fixed, review 5) authorization instead
+        # of reaching the hash-mismatch ValueError this test targets.
+        if (armed["on"] and view == "contract" and isinstance(record, dict)
+                and record.get("id") == contract["id"] and result is not None):
+            armed["on"] = False
+            asset = self.api.storage.get(owner, "asset", publication_a["assetId"])
+            self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "POST", "/contracts/propose", {"productId": product_b["id"], "brief": "요약",
+                              "changeRequest": {**change_request(), "baseline": wrong_baseline},
+                              "requestId": "propose-baseline-race"}, actor="carol", project=project["id"])
+    assert not armed["on"]
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)

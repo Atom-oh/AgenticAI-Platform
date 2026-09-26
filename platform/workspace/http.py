@@ -1642,11 +1642,8 @@ class WorkspaceAPI:
             from workspace.rules import normalize_required_states
             data["requiredStates"] = normalize_required_states(body["requiredStates"])
         if "changeRequest" in body:
-            from workspace.change_requests import baseline_project, normalize_request
+            from workspace.change_requests import normalize_request
             data["changeRequest"] = normalize_request(body["changeRequest"])
-            baseline_project(self.storage, owner, data["changeRequest"], gate=gate)
-            if any(ref not in data.get("guideRefs", []) for screen in data["changeRequest"]["screens"] for ref in screen.get("sourceRefs", [])):
-                raise HTTPError(400, "source-reference-mismatch", "화면별 원문 연결을 현재 선택한 페이지와 다시 대조하세요.")
         data["actor"] = scope["actor"] if scope else owner
         fingerprint = self._fingerprint(data)
         job = self._existing_job(owner, identifier, fingerprint)
@@ -1658,17 +1655,33 @@ class WorkspaceAPI:
             from workspace.guidelines import validate_selection
             try:
                 validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
+                if "changeRequest" in data:
+                    # The baseline's own lineage (review 5) must be authorized inside
+                    # THIS SAME guarded block, not before it: review 6 found that a
+                    # revocation racing the read here still bypassed the aggregate
+                    # recheck entirely when this call sat outside every local
+                    # except-ValueError handler, propagating its 400 straight past
+                    # the gate (baseline_project's own successful authorization still
+                    # joins the aggregate below, but only a recheck INSIDE this
+                    # handler ever consults it).
+                    from workspace.change_requests import baseline_project
+                    baseline_project(self.storage, owner, data["changeRequest"], gate=gate)
+                    if any(ref not in data.get("guideRefs", []) for screen in data["changeRequest"]["screens"]
+                           for ref in screen.get("sourceRefs", [])):
+                        raise HTTPError(400, "source-reference-mismatch", "화면별 원문 연결을 현재 선택한 페이지와 다시 대조하세요.")
             except ValueError as error:
                 # A validation failure (e.g. a guide page whose textSha256 no
-                # longer matches) must never be distinguishable from an asset
-                # revoked while ITS OWN or a LATER asset's guideline pack was
-                # being read for that same comparison (same shape as review 8
-                # #3 / review 1 #2's fix for `_validated_contract`, never
-                # applied here). Every asset above already joined this gate's
-                # aggregate reader; recheck it as a single aggregate ONCE,
-                # strictly after every read this validation performed, so a
-                # revocation racing ANY of them raises the same 404 a plain
-                # GET (or the matching-hash path's own later gate recheck)
+                # longer matches, or a change request's baseline hash) must never be
+                # distinguishable from an asset or baseline revoked while ITS OWN or
+                # a LATER read was being performed for that same comparison (same
+                # shape as review 8 #3 / review 1 #2's fix for
+                # `_validated_contract`, and review 5's fix to `baseline_project`
+                # itself, both extended here to cover this validation path too).
+                # Every asset above, and the baseline (when authorized successfully),
+                # already joined this gate's aggregate reader; recheck it as a
+                # single aggregate ONCE, strictly after every read this validation
+                # performed, so a revocation racing ANY of them raises the same 404
+                # a plain GET (or the matching-value path's own later gate recheck)
                 # would, instead of this content-revealing 400.
                 if gate is not None and gate.aggregate is not None:
                     from workspace.collaboration import CollaborationError
