@@ -36,6 +36,15 @@ def create_batch(api, owner, body, scope, gate=None):
             raise HTTPError(404, "not-found", "Resource not found")
         batch = authorized
     if batch and batch.get("requestHash") != fingerprint:
+        # A revocation racing in between the authorize() above and this
+        # comparison must still 404 identically to an already-inaccessible
+        # batch, not disclose this content-dependent mismatch (review 10):
+        # recheck the SAME aggregate this batch's own authorization just
+        # joined through the gate's own normalized final recheck (it
+        # converts a caught authorization change to the canonical 404,
+        # exactly like `authorize()` itself does).
+        if gate is not None:
+            gate.recheck()
         raise HTTPError(409, "request-changed", "이 비교 요청의 입력이 변경되었습니다.")
     # Authorize the referenced contract (the same lineage check a plain GET's
     # response gate would apply) before any of its stale fields are read to
@@ -62,6 +71,8 @@ def create_batch(api, owner, body, scope, gate=None):
                     raise HTTPError(404, "not-found", "Resource not found")
                 batch = authorized
             if batch.get("requestHash") != fingerprint:
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "request-changed", "비교 요청이 변경되었습니다.")
     directions = ["baseline", *VARIANTS[:variations]] if mode == "guided" else ["balanced"]
     for index, variant in enumerate(directions):
