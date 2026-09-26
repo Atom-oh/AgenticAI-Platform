@@ -433,10 +433,12 @@ class ResponseGate:
     def _anchor(self, query, event):
         """A run-anchored discussion (query filter or new comment) names an authorized run and round.
 
-        A page-anchored comment without an explicit `round` inherits the exact round
-        that produced the page: page content carries the same publishing-handoff/1
-        state and lineage permission as its round's own download, never a generic
-        "the run exists" pass.
+        New comments always persist the exact round that produced their page (see
+        `Collaboration._anchor`), so an explicit `round` is the normal case here. A
+        page anchor with no `round` at all only occurs on a comment stored before
+        that fix: fall back to authorizing EVERY round that could have produced the
+        page (conservative -- a page ambiguous between two rounds is denied unless
+        both authorize), never just the first match.
         """
         anchor = query if self.route.method == "GET" else (_body(event).get("anchor") or {})
         if not isinstance(anchor, dict) or not isinstance(anchor.get("runId"), str):
@@ -447,28 +449,34 @@ class ResponseGate:
         number = anchor.get("round")
         if isinstance(number, str) and number.isdigit():
             number = int(number)
-        if type(number) is not int and isinstance(anchor.get("pageId"), str):
-            number = self._page_round(run, anchor["pageId"])
         if type(number) is int:
             self.round(run["id"], number)
+        elif isinstance(anchor.get("pageId"), str):
+            for candidate in self._page_rounds(run, anchor["pageId"]):
+                self.round(run["id"], candidate)
 
     @staticmethod
-    def _page_round(run, page_id):
-        """The round (if any) whose produced pages include `page_id`."""
-        for row in run.get("rounds", []) if isinstance(run, dict) else []:
-            if isinstance(row, dict) and any(isinstance(entry, dict) and entry.get("pageId") == page_id
-                                             for entry in row.get("pageSources", [])):
-                return row.get("number")
-        return None
+    def _page_rounds(run, page_id):
+        """Every round number whose produced pages include `page_id`."""
+        return [row.get("number") for row in (run.get("rounds", []) if isinstance(run, dict) else [])
+                if isinstance(row, dict) and any(isinstance(entry, dict) and entry.get("pageId") == page_id
+                                                 for entry in row.get("pageSources", []))]
 
     def _run_visible(self, run_id, number=None, page_id=None):
-        """The run (and, with `number` or a round-produced `page_id`, that round) is readable now."""
+        """The run (and, with `number` or a round-produced `page_id`, that round/those
+        rounds) is readable now. A page with no `round` binding at all (a comment
+        stored before rounds were persisted) is visible only if EVERY round that
+        could have produced it is authorized -- never just one of several candidates."""
         run = self.api.storage.get(self.owner, "run", run_id) if isinstance(run_id, str) else None
         authorized = self.authorize("run", run) if run else None
         if authorized is None:
             return False
         if number is None and isinstance(page_id, str):
-            number = self._page_round(run, page_id)
+            numbers = self._page_rounds(run, page_id)
+            if not numbers:
+                return True  # A declared (not round-specific) page: plain run visibility.
+            allowed = {row.get("number") for row in authorized.get("rounds", []) if isinstance(row, dict)}
+            return all(candidate in allowed for candidate in numbers)
         if number is None:
             return True
         return any(isinstance(row, dict) and row.get("number") == number for row in authorized.get("rounds", []))
@@ -518,6 +526,22 @@ class ResponseGate:
             authorized = self.authorize(view, stored) if stored else None
             if authorized is None:
                 return None
+            if item.get("version") != stored.get("version"):
+                # The record moved since this response was built. Ordinary progress
+                # (a job the worker has since claimed, a round it has since recorded)
+                # bumps the version too, and must not 404 a perfectly normal, still-
+                # authorized submission -- but the OLDER item's own content must never
+                # be released once a NEWER version exists, since that content was
+                # never re-authorized (generalizes the exact-revision fence
+                # publications already applies via `publication_visible`). Serve the
+                # CURRENT, just-authorized record's own content instead of the stale
+                # item: `authorized` already decided whether the CURRENT version may
+                # be released at all. `item` (from the already-serialized response
+                # body) went through `_public()` in `_json()`; `authorized` is the
+                # raw stored record and has not -- run it through the same filter
+                # before it substitutes for `item`, or private storage keys/fields
+                # (assetSnapshots[].originalKey/analysisKey, requestHash, etc.) leak.
+                item = _public(authorized)
             if view == "run":
                 numbers = {row.get("number") for row in authorized.get("rounds", []) if isinstance(row, dict)}
                 item = {**item, "rounds": [row for row in item.get("rounds", [])
@@ -559,7 +583,9 @@ class ResponseGate:
         ctx, storage = self.context, self.api.storage
         try:
             if view == "impact-origin":
-                publications._origin_publication(ctx, item)
+                record = publications._origin_publication(ctx, item)
+                if not publications._origin_readable(ctx, record, self.aggregate):
+                    publications._not_found()
                 return item
             if view in ("publication", "publication-withdrawn"):
                 record = publications._publication(storage, item.get("id") if isinstance(item, dict) else None)
@@ -592,10 +618,28 @@ class ResponseGate:
             return None
 
     def recheck(self):
-        if self.aggregate is not None:
-            self.aggregate.recheck()
-        for recheck in self.retained.values():
-            recheck()
+        """The final aggregate recheck, normalized exactly like `authorize()`.
+
+        `authorize()` already catches a non-401/non-authority-code
+        `CollaborationError` and converts it to `None` -> 404 (review 9's
+        fix to `_existing_job` replicated this locally for one raise site).
+        This recheck -- reached from `finish()` on every ordinary successful
+        response -- let the SAME class of failure escape raw (e.g. a private
+        "ontology-source-changed" 409), disclosing that a race landed here
+        rather than 404ing identically to an already-inaccessible record.
+        Normalize it here once, so every caller of this recheck (not just
+        the sites that already do their own local try/except) is covered.
+        """
+        from workspace.ontology_sources import _AUTHORITY_CODES
+        try:
+            if self.aggregate is not None:
+                self.aggregate.recheck()
+            for recheck in self.retained.values():
+                recheck()
+        except CollaborationError as error:
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            raise HTTPError(404, "not-found", "Resource not found") from None
 
     def finish(self, response):
         """Serialize the response through its declared views; one final recheck, then release it."""
@@ -765,6 +809,39 @@ class WorkspaceAPI:
         if record is None:
             raise HTTPError(404, "not-found", "Resource not found")
         return record
+
+    def _authorized_run(self, owner, identifier, gate=None):
+        """The current, accessible run (its round list already filtered by
+        permission), or a 404 identical to a missing one.
+
+        A run whose own upstream lineage is revoked must never be distinguishable
+        from a missing/foreign one by a DIFFERENT, content-dependent status (e.g.
+        a refinement-compatibility or base-round check reached using its stale
+        fields) -- authorize it the same way a plain GET's response gate would,
+        before any of its fields are read for that purpose.
+        """
+        stored = self._get(owner, "run", identifier)
+        run = gate.authorize("run", stored) if gate is not None else stored
+        if run is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        return run
+
+    def _authorized_contract(self, owner, identifier, gate=None):
+        """The current, accessible contract, or a 404 identical to a missing one.
+
+        A contract whose own lineage (its referenced assets, historically, or its
+        change-request baseline) is revoked must never be distinguishable from a
+        missing/foreign one by a DIFFERENT, content-dependent status (a
+        criteria/catalog-compatibility check reached using its stale
+        catalogHash/guidelineId/version before authorization) -- authorize it the
+        same way a plain GET's response gate would, before any of its fields are
+        read for that purpose.
+        """
+        stored = self._get(owner, "contract", identifier)
+        contract = gate.authorize("contract", stored) if gate is not None else stored
+        if contract is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        return contract
 
     def _run_view(self, owner, record, scope, cache=None, seen=()):
         """Report current criteria independently of the browser's product filter."""
@@ -976,7 +1053,7 @@ class WorkspaceAPI:
             return _json(200, {"connections": public_connections(self.git_connections())})
         if parts == ["batches"] and method == "POST":
             from workspace.batches import create_batch
-            return create_batch(self, owner, _body(event), scope)
+            return create_batch(self, owner, _body(event), scope, gate=gate)
         if parts == ["batches"] and method == "GET":
             return self._listing(gate, owner, "batch", "batches", query, scope)
         if len(parts) == 2 and parts[0] == "batches" and method == "GET":
@@ -984,7 +1061,7 @@ class WorkspaceAPI:
             return _json(200, batch_view(self, owner, self._get(owner, "batch", parts[1])))
         if parts == ["releases"] and method == "POST":
             from workspace.releases import create_release
-            return create_release(self, owner, _body(event), scope)
+            return create_release(self, owner, _body(event), scope, gate=gate)
         if parts == ["releases"] and method == "GET":
             return self._listing(gate, owner, "release", "releases", query, scope)
         if parts[0] == "releases" and len(parts) in (2, 3) and method == "GET":
@@ -997,18 +1074,18 @@ class WorkspaceAPI:
         if len(parts) == 3 and parts[0] == "releases" and parts[2] == "git" and method == "POST":
             from workspace.git_service import create_export
             release = self._get(owner, "release", parts[1])
-            return create_export(self, owner, release, _body(event), scope)
+            return create_export(self, owner, release, _body(event), scope, gate=gate)
         if len(parts) == 1 and parts[0] in ("assets", "contracts", "runs") and method == "GET":
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
             return self._listing(gate, owner, kind, parts[0], query, scope)
         if parts == ["assets"] and method == "POST":
             return self._create_asset(owner, _body(event), gate=gate)
         if parts == ["contracts", "propose"] and method == "POST":
-            return self._propose(owner, _body(event), scope=scope)
+            return self._propose(owner, _body(event), scope=scope, gate=gate)
         if parts == ["contracts"] and method == "POST":
-            return self._contract_create(owner, _body(event), scope=scope)
+            return self._contract_create(owner, _body(event), scope=scope, gate=gate)
         if parts == ["runs"] and method == "POST":
-            return self._run_create(owner, _body(event), scope=scope)
+            return self._run_create(owner, _body(event), scope=scope, gate=gate)
         if len(parts) < 2 or parts[0] not in ("assets", "contracts", "runs", "jobs"):
             raise HTTPError(404, "not-found", "Route not found")
         kind = {"assets": "asset", "contracts": "contract", "runs": "run", "jobs": "job"}[parts[0]]
@@ -1025,7 +1102,7 @@ class WorkspaceAPI:
             # The gate authorized this round before artifact validation; its final recheck
             # runs after these artifact reads, before the response is released.
             try:
-                row, project, _ = approved_artifacts(self.storage, owner, record, number)
+                row, project, _ = approved_artifacts(self.storage, owner, record, number, gate=gate)
             except (ValueError, TypeError) as error:
                 raise HTTPError(409, "baseline-unavailable", "기준 시안의 현재 승인을 확인할 수 없습니다.") from error
             return _json(200, {"baseline": {"runId": record["id"], "round": number, "sourceHash": row["sourceHash"]},
@@ -1068,7 +1145,7 @@ class WorkspaceAPI:
                     record = self.storage.put(owner, kind, {**record, "archived": True}, record["version"])
                 return _json(200, {"asset": record})
         if kind == "contract" and len(parts) == 2 and method == "PUT":
-            return self._contract_edit(owner, record, _body(event), scope=scope)
+            return self._contract_edit(owner, record, _body(event), scope=scope, gate=gate)
         if len(parts) == 3 and parts[2] == "approve" and method == "POST":
             if kind == "contract":
                 return self._contract_approve(owner, record, _body(event), scope=scope, gate=gate)
@@ -1228,7 +1305,7 @@ class WorkspaceAPI:
         except Conflict:
             return self._get(owner, "job", job["id"])
 
-    def _new_job(self, owner, identifier, task, data, request_hash=None):
+    def _new_job(self, owner, identifier, task, data, request_hash=None, gate=None):
         from workspace.storage import RESERVED_TASKS
         if task in RESERVED_TASKS:
             raise HTTPError(400, "reserved-task", "이 작업 유형은 별도 실행 경로에서만 생성됩니다.")
@@ -1238,8 +1315,27 @@ class WorkspaceAPI:
         try:
             return self.storage.put(owner, "job", record)
         except Conflict:
+            # A genuine concurrent race: another request created a job with this
+            # SAME identifier between this call's own pre-check and this write.
+            # Authorize that job (the same lineage check its own GET's response
+            # gate applies) before ever comparing requestHash/task against it --
+            # an inaccessible job must 404 identically to a missing one, not
+            # disclose through this 409 that a DIFFERENT-content job with this
+            # exact requestId now exists.
             existing = self._get(owner, "job", identifier)
+            if gate is not None:
+                authorized = gate.authorize("job", existing)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                existing = authorized
             if existing.get("requestHash") != request_hash or existing["task"] != task:
+                # A revocation racing in between the authorize() above and
+                # this comparison must still 404 identically to an already-
+                # inaccessible job, not disclose this content-dependent
+                # mismatch (review 11 #2/#3, same shape as review 10's
+                # batches/releases/git_service fixes, applied here too).
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "request-changed", "The request ID was already used with different input")
             return existing
 
@@ -1283,13 +1379,31 @@ class WorkspaceAPI:
         self._invoke(owner, job)
         return _json(202, {"asset": asset, "job": job})
 
-    def _assets(self, owner, identifiers):
+    def _authorized_asset(self, owner, identifier, gate=None):
+        """The current, accessible asset, or a 404 identical to a missing one.
+
+        Revoked, tombstoned, deleted and never-existed must all be indistinguishable
+        (never an existence oracle): access is decided BEFORE readiness, using the
+        same authorization a plain GET would apply. When a gate is given, the
+        observation joins its aggregate for the response's own final recheck.
+        """
+        stored = self.storage.get(owner, "asset", identifier)
+        asset = gate.authorize("asset", stored) if gate is not None and stored is not None else stored
+        if (asset is None or asset.get("accessRevoked") or asset.get("tombstone")
+                or asset.get("status") == "deleted"):
+            raise HTTPError(404, "not-found", "Resource not found")
+        return asset
+
+    def _assets(self, owner, identifiers, gate=None):
         if (not isinstance(identifiers, list) or len(identifiers) > 20
                 or any(not isinstance(identifier, str) for identifier in identifiers)
                 or len(set(identifiers)) != len(identifiers)):
             raise HTTPError(400, "invalid-assets", "Select at most 20 distinct assets")
-        assets = [self._get(owner, "asset", identifier) for identifier in identifiers]
+        assets = [self._authorized_asset(owner, identifier, gate) for identifier in identifiers]
         for asset in assets:
+            # Readiness (still uploading) and identity (bytes changed) are checked
+            # only once access is already confirmed -- neither ever discloses whether
+            # an inaccessible id exists.
             if asset.get("archived") or asset.get("uploadStatus") != "stored":
                 raise HTTPError(409, "asset-not-ready", "Selected files must be stored and not archived")
             info = self.storage.blob_info(self._blob_key(owner, asset.get("originalKey")))
@@ -1341,16 +1455,37 @@ class WorkspaceAPI:
                 texts[asset["id"]], _ = context_for(load_pack(self.storage, owner, asset), selected)
         return texts
 
-    def _validated_contract(self, owner, data):
-        assets = self._assets(owner, data.get("assetIds", []))
+    def _validated_contract(self, owner, data, gate=None):
+        assets = self._assets(owner, data.get("assetIds", []), gate=gate)
         try:
             from workspace.guidelines import validate_citations, validate_selection
             refs, pages = validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
             normalized = self.rules().validate_contract(data, asset_texts=self._asset_texts(owner, assets, refs))
             validate_citations(normalized, pages)
             from workspace.change_requests import baseline_project
-            baseline_project(self.storage, owner, normalized.get("changeRequest", {}))
+            baseline_project(self.storage, owner, normalized.get("changeRequest", {}), gate=gate)
         except ValueError as error:
+            # A validation failure (e.g. a quote that doesn't match) must never be
+            # distinguishable from an asset that lost access while its text was being
+            # read for that same comparison (review 8 #3): re-authorize every
+            # referenced asset one more time before reporting the content-revealing
+            # 400 -- a race that revoked one raises the same 404 a plain GET (or the
+            # matching-quote path's own later gate recheck) would.
+            self._assets(owner, [asset["id"] for asset in assets], gate=gate)
+            # The re-check above still authorizes/reads each asset one at a
+            # time (each asset's own blob_info read can take time), so a
+            # revocation racing a LATER asset's read in that SAME pass -- not
+            # only the very first one checked -- was still invisible to it
+            # (review 8 #3 only closed the window up to that pass's own
+            # first check). Every one of those re-checks already joined this
+            # gate's aggregate reader; recheck it through the gate's own
+            # normalized final recheck (review 10: converts a caught
+            # authorization change to the canonical 404, exactly like
+            # `authorize()` itself does), strictly after every read this
+            # validation performed -- so it does not matter which asset's
+            # read raced the revocation.
+            if gate is not None:
+                gate.recheck()
             raise HTTPError(400, "invalid-contract", str(error)[:240]) from error
         return normalized, assets
 
@@ -1401,21 +1536,21 @@ class WorkspaceAPI:
         result["assetIds"] = assets
         return result
 
-    def _contract_create(self, owner, body, scope=None):
+    def _contract_create(self, owner, body, scope=None, gate=None):
         data = self._with_criteria({key: body[key] for key in _EDITABLE if key in body},
                                    self._criteria(owner, body, scope, allow_request_draft=isinstance(body.get("changeRequest"), dict)))
-        normalized, _ = self._validated_contract(owner, data)
+        normalized, _ = self._validated_contract(owner, data, gate=gate)
         record = self.storage.put(owner, "contract", {**normalized, "id": uuid.uuid4().hex, "status": "draft"})
         return _json(201, {"contract": record})
 
-    def _contract_edit(self, owner, record, body, scope=None):
+    def _contract_edit(self, owner, record, body, scope=None, gate=None):
         version = _integer(body.get("version"), "Version", 1, 2**53 - 1)
         if version != record["version"]:
             raise Conflict("Contract changed")
         editable = {key: body.get(key, record.get(key)) for key in _EDITABLE if key in body or key in record}
         editable = self._with_criteria(editable, self._criteria(owner, body, scope, record,
                                       allow_request_draft=isinstance(editable.get("changeRequest"), dict)))
-        normalized, _ = self._validated_contract(owner, editable)
+        normalized, _ = self._validated_contract(owner, editable, gate=gate)
         revisions = list(record.get("revisions", []))
         if record.get("status") == "approved":
             digest = self.rules().contract_hash(record)
@@ -1438,7 +1573,7 @@ class WorkspaceAPI:
         checks.extend({"owner": owner, "kind": "asset", "id": asset["id"], "version": asset["version"]} for asset in assets)
         from workspace.change_requests import baseline_project
         criteria = record["contract"] if kind == "run" else record
-        baseline_project(self.storage, owner, criteria.get("changeRequest", {}), checks=checks)
+        baseline_project(self.storage, owner, criteria.get("changeRequest", {}), checks=checks, gate=gate)
         unique = {}
         written = {(write["owner"], write["kind"], write["item"]["id"]) for write in writes}
         for check in checks:
@@ -1482,7 +1617,7 @@ class WorkspaceAPI:
             raise Conflict("Contract changed")
         if record.get("catalogHash"):
             self._criteria(owner, {}, scope, record)
-        normalized, assets = self._validated_contract(owner, record)
+        normalized, assets = self._validated_contract(owner, record, gate=gate)
         from workspace.rules import state_coverage_issues
         coverage_issues = state_coverage_issues(normalized)
         if coverage_issues:
@@ -1519,13 +1654,37 @@ class WorkspaceAPI:
     def _fingerprint(data):
         return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
-    def _existing_job(self, owner, identifier, fingerprint):
+    def _existing_job(self, owner, identifier, fingerprint, gate=None):
         job = self.storage.get(owner, "job", identifier)
+        if job is not None and gate is not None:
+            # Authorize the SAME job (its task-specific input lineage) before
+            # ever comparing the private requestHash fingerprint against it --
+            # a job whose input has since been revoked must 404 identically to
+            # a missing one, not disclose through this 409 that a DIFFERENT-
+            # content job with this exact requestId still exists.
+            authorized = gate.authorize("job", job)
+            if authorized is None:
+                raise HTTPError(404, "not-found", "Resource not found")
+            job = authorized
         if job and job.get("requestHash") != fingerprint:
+            # Recheck retained authority before disclosing this content-dependent
+            # mismatch (review 9 #3): a revocation racing in AFTER the authorize()
+            # above (but before this comparison raises) is never caught by the
+            # caller's own success-path recheck -- an HTTPError raised here skips
+            # straight past `gate.finish()`'s final aggregate recheck entirely, so
+            # the matching-fingerprint retry (which DOES reach `finish()`) 404s on
+            # the exact same race while this one still discloses the private
+            # brief/input mismatch via a distinguishable 409. Recheck through the
+            # gate's own normalized final recheck (review 10: it now converts a
+            # caught authorization change to the canonical 404, exactly like
+            # `authorize()` itself does), so a race here 404s identically to the
+            # matching-fingerprint path's own recheck.
+            if gate is not None:
+                gate.recheck()
             raise HTTPError(409, "request-changed", "The request ID was already used with different input")
         return job
 
-    def _propose(self, owner, body, scope=None):
+    def _propose(self, owner, body, scope=None, gate=None):
         from engine import model_catalog
         identifier = self._request_id(body, "propose")
         data = {"assetIds": body.get("assetIds", []), "brief": _text(body.get("brief", ""), "brief", 4000, empty=True),
@@ -1538,31 +1697,76 @@ class WorkspaceAPI:
             from workspace.rules import normalize_required_states
             data["requiredStates"] = normalize_required_states(body["requiredStates"])
         if "changeRequest" in body:
-            from workspace.change_requests import baseline_project, normalize_request
+            from workspace.change_requests import normalize_request
             data["changeRequest"] = normalize_request(body["changeRequest"])
-            baseline_project(self.storage, owner, data["changeRequest"])
-            if any(ref not in data.get("guideRefs", []) for screen in data["changeRequest"]["screens"] for ref in screen.get("sourceRefs", [])):
-                raise HTTPError(400, "source-reference-mismatch", "화면별 원문 연결을 현재 선택한 페이지와 다시 대조하세요.")
         data["actor"] = scope["actor"] if scope else owner
         fingerprint = self._fingerprint(data)
-        job = self._existing_job(owner, identifier, fingerprint)
+        job = self._existing_job(owner, identifier, fingerprint, gate=gate)
         if job:
             job = self._retry_dispatch(owner, job)
         if not job:
             self._worker_ready()
-            assets = self._assets(owner, data["assetIds"])
+            assets = self._assets(owner, data["assetIds"], gate=gate)
             from workspace.guidelines import validate_selection
-            validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
+            try:
+                validate_selection(self.storage, owner, assets, data.get("guideRefs", []))
+                if "changeRequest" in data:
+                    # The baseline's own lineage (review 5) must be authorized inside
+                    # THIS SAME guarded block, not before it: review 6 found that a
+                    # revocation racing the read here still bypassed the aggregate
+                    # recheck entirely when this call sat outside every local
+                    # except-ValueError handler, propagating its 400 straight past
+                    # the gate (baseline_project's own successful authorization still
+                    # joins the aggregate below, but only a recheck INSIDE this
+                    # handler ever consults it).
+                    from workspace.change_requests import baseline_project
+                    baseline_project(self.storage, owner, data["changeRequest"], gate=gate)
+                    if any(ref not in data.get("guideRefs", []) for screen in data["changeRequest"]["screens"]
+                           for ref in screen.get("sourceRefs", [])):
+                        raise HTTPError(400, "source-reference-mismatch", "화면별 원문 연결을 현재 선택한 페이지와 다시 대조하세요.")
+            except (HTTPError, ValueError) as error:
+                # A validation failure (e.g. a guide page whose textSha256 no
+                # longer matches, a change request's baseline hash, or its own
+                # sourceRefs/guideRefs mismatch) must never be distinguishable
+                # from an asset or baseline revoked while ITS OWN or a LATER read
+                # was being performed for that same comparison (same shape as
+                # review 8 #3 / review 1 #2's fix for `_validated_contract`, and
+                # review 5's fix to `baseline_project` itself, both extended here
+                # to cover this validation path too). The recheck below must be
+                # structural, not exception-type-dependent (review 7 found that
+                # catching only `ValueError` still let the source-reference-
+                # mismatch check's own `HTTPError` bypass it entirely, the same
+                # "enumerate types" trap the git_export.py receipt fix hit
+                # earlier) -- every content-dependent failure raised in this
+                # block, of EITHER type, goes through the SAME recheck before
+                # being reported or re-raised. Every asset above, and the
+                # baseline (when authorized successfully), already joined this
+                # gate's aggregate reader; recheck it through the gate's own
+                # normalized final recheck (review 10: converts a caught
+                # authorization change to the canonical 404, exactly like
+                # `authorize()` itself does), strictly after every read this
+                # validation performed, so a revocation racing ANY of them
+                # raises the same 404 a plain GET (or the matching-value
+                # path's own later gate recheck) would.
+                if gate is not None:
+                    gate.recheck()
+                # The recheck found nothing newly wrong: an HTTPError already
+                # carries its own correct status/code (e.g. baseline_project's
+                # own 404, or this block's 400 source-reference-mismatch) and is
+                # preserved as-is; only a plain ValueError is converted.
+                if isinstance(error, HTTPError):
+                    raise
+                raise HTTPError(400, "invalid-input", str(error)[:240]) from error
             job = self._new_job(owner, identifier, "propose", {
-                **data, "assetSnapshots": self._snapshot_assets(assets)}, fingerprint)
+                **data, "assetSnapshots": self._snapshot_assets(assets)}, fingerprint, gate=gate)
         self._invoke(owner, job)
         return _json(202, {"job": job})
 
-    def _run_create(self, owner, body, scope=None, batch_context=None):
+    def _run_create(self, owner, body, scope=None, batch_context=None, gate=None):
         from engine import model_catalog
         inherited_policy = None
         if body.get("baseRunId"):
-            base_run = self._get(owner, "run", body["baseRunId"])
+            base_run = self._authorized_run(owner, body["baseRunId"], gate)
             if (base_run.get("outputType") == "react" and body.get("contractId") == base_run.get("contractId")
                     and body.get("contractVersion") == base_run.get("contractVersion")):
                 body = dict(body)
@@ -1616,27 +1820,44 @@ class WorkspaceAPI:
             if key in body:
                 data[key] = body[key]
         fingerprint = self._fingerprint(data)
-        job = self._existing_job(owner, identifier, fingerprint)
+        job = self._existing_job(owner, identifier, fingerprint, gate=gate)
         if job:
             existing_run = self._get(owner, "run", job["input"]["runId"])
             if job.get("errorCode") == "dispatch-failed" and existing_run.get("outputType") == "react":
-                self._criteria(owner, {}, scope, self._get(owner, "contract", existing_run["contractId"]))
+                self._criteria(owner, {}, scope, self._authorized_contract(owner, existing_run["contractId"], gate))
             job = self._retry_dispatch(owner, job)
             run = self._get(owner, "run", job["input"]["runId"])
             self._invoke(owner, job)
             return _json(202, {"job": job, "run": run})
         retained_run = self.storage.get(owner, "run", identifier)
+        if retained_run is not None and gate is not None:
+            # Authorize the SAME retained run before ever inspecting its
+            # status -- an inaccessible run must 404 identically to a missing
+            # one (the normal, expected case that proceeds to create a new
+            # run below), not disclose through this 409 that a run with this
+            # exact requestId still exists and has moved past "queued".
+            authorized = gate.authorize("run", retained_run)
+            if authorized is None:
+                raise HTTPError(404, "not-found", "Resource not found")
+            retained_run = authorized
         if retained_run and retained_run.get("status") != "queued":
+            # A revocation racing in between the authorize() above and this
+            # status check must still 404 identically to an already-
+            # inaccessible retained run, not disclose this content-dependent
+            # status (review 11 #3, completing review 8's fix to this same
+            # checkpoint).
+            if gate is not None:
+                gate.recheck()
             raise HTTPError(409, "request-expired",
                             "The operational job expired. Open the stored run or start a new request.")
         self._worker_ready()
-        contract = self._get(owner, "contract", data["contractId"])
+        contract = self._authorized_contract(owner, data["contractId"], gate)
         output_type = "html" if mode == "verify" else data.get("outputType", "react" if contract.get("catalogHash") else "html")
         if output_type == "react":
             if not contract.get("catalogHash"):
                 raise HTTPError(409, "code-criteria-required", "React 코드 기준을 포함한 새 규칙을 승인하세요.")
             self._criteria(owner, {}, scope, contract)
-        normalized, assets = self._validated_contract(owner, contract)
+        normalized, assets = self._validated_contract(owner, contract, gate=gate)
         digest = self.rules().contract_hash(normalized)
         approval = contract.get("approval") or {}
         if (contract["version"] != version or contract.get("status") != "approved"
@@ -1648,7 +1869,11 @@ class WorkspaceAPI:
             source = next((asset for asset in assets if asset["id"] == data.get("sourceAssetId")), None)
             if not source:
                 if data.get("sourceAssetId"):
-                    self._get(owner, "asset", data["sourceAssetId"])
+                    # Resolve access before existence: a revoked/tombstoned/deleted
+                    # asset that just is not one of the contract's own selected
+                    # inputs must 404 identically to a foreign/missing id, never
+                    # the distinguishable 409 below.
+                    self._authorized_asset(owner, data["sourceAssetId"], gate)
                 raise HTTPError(409, "source-not-selected", "확정된 규칙에 포함된 HTML 파일을 선택하세요.")
             if (source["name"].rsplit(".", 1)[-1].lower() not in ("html", "htm")
                     or source.get("parseStatus") not in ("complete", "partial")):
@@ -1662,7 +1887,7 @@ class WorkspaceAPI:
         if "baseRound" in data and not data.get("baseRunId"):
             raise HTTPError(400, "invalid-base", "Select a base run for the requested round")
         if data.get("baseRunId"):
-            base = self._get(owner, "run", data["baseRunId"])
+            base = self._authorized_run(owner, data["baseRunId"], gate)
             number = _integer(data.get("baseRound", base.get("bestRound")), "Base round", 1, 5)
             selected = next((row for row in base.get("rounds", []) if row.get("number") == number), None)
             if not selected or not selected.get("htmlKey") or not selected.get("artifactSha256"):
@@ -1684,8 +1909,14 @@ class WorkspaceAPI:
         if data.get("referenceAssetId"):
             reference = next((asset for asset in assets if asset["id"] == data["referenceAssetId"]), None)
             if reference is None:
-                # Resolve ownership first so a foreign identifier never becomes an existence oracle.
-                self._get(owner, "asset", data["referenceAssetId"])
+                # Resolve access before existence (review 2 #2): plain ownership/
+                # existence alone let a revoked/tombstoned/deleted-but-unselected
+                # asset return this 409 while a truly missing one 404s --
+                # distinguishable. Authorize it the same way `assetIds` is, so
+                # every inaccessible reason 404s identically; only an asset that
+                # is genuinely accessible yet not one of the contract's own
+                # selected inputs reaches the 409 below.
+                self._authorized_asset(owner, data["referenceAssetId"], gate)
                 raise HTTPError(409, "reference-not-selected", "The reference must be an approved contract asset")
             page = _integer(data.get("referencePage", 1), "Reference page", 1, 10000)
             preview = next((row for row in reference.get("previews", []) if row.get("page") == page), None)
@@ -1701,10 +1932,29 @@ class WorkspaceAPI:
         try:
             run = self.storage.put(owner, "run", run_data)
         except Conflict:
+            # A genuine concurrent race: another request created a run with this
+            # SAME identifier between this call's own pre-check and this write.
+            # Authorize that run (the same lineage check its own GET's response
+            # gate applies) before ever comparing contractHash/fingerprint against
+            # it -- an inaccessible run must 404 identically to a missing one,
+            # not disclose through this 409 that a DIFFERENT-content run with
+            # this exact requestId now exists.
             run = self._get(owner, "run", identifier)
+            if gate is not None:
+                authorized = gate.authorize("run", run)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                run = authorized
             if run.get("contractHash") != digest or self._fingerprint({key: run[key] for key in data}) != fingerprint:
+                # A revocation racing in between the authorize() above and
+                # this comparison must still 404 identically to an already-
+                # inaccessible run, not disclose this content-dependent
+                # mismatch (review 11 #2, same shape applied to
+                # batches/releases/git_service in review 10).
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "request-changed", "The request ID was already used")
-        job = self._new_job(owner, identifier, "run", {"runId": run["id"]}, fingerprint)
+        job = self._new_job(owner, identifier, "run", {"runId": run["id"]}, fingerprint, gate=gate)
         self._invoke(owner, job)
         return _json(202, {"job": job, "run": run})
 
@@ -1749,7 +1999,7 @@ class WorkspaceAPI:
                 or not isinstance(digest, str) or not _SHA.fullmatch(digest)
                 or digest != selected.get("artifactSha256") or not selected.get("reportKey")):
             raise HTTPError(409, "approval-evidence-required", "Approve only the exact artifact with passing required evidence")
-        _, approval_assets = self._validated_contract(owner, contract)
+        _, approval_assets = self._validated_contract(owner, contract, gate=gate)
         html_key = self._blob_key(owner, selected.get("htmlKey"))
         report_key = self._blob_key(owner, selected["reportKey"])
         if self.storage.blob_info(html_key)["sha256"] != digest:
@@ -1783,7 +2033,7 @@ class WorkspaceAPI:
                         from workspace.change_requests import baseline_project, enforce_scope
                         from workspace.react_artifacts import generated_files
                         change = run["contract"]["changeRequest"]
-                        baseline = baseline_project(self.storage, owner, change)
+                        baseline = baseline_project(self.storage, owner, change, gate=gate)
                         enforce_scope(change, generated_files(baseline) if baseline else {}, generated_files(project))
                 except ValueError as error:
                     raise HTTPError(409, "artifact-changed", "검증된 React 파일 구성과 해시가 일치하지 않습니다.") from error

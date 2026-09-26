@@ -25,6 +25,20 @@ _ROUND = re.compile(r"[1-9][0-9]{0,3}\Z")
 _VERSION = re.compile(r"[1-9][0-9]{0,15}\Z")
 # Authority failures pass through unchanged; they are not upstream lineage outcomes.
 _AUTHORITY_CODES = {"ontology-authority-changed", "ontology-authority-limit", "authorization-expired"}
+# `recheck_deadlines()` review-11 fix: kinds a background process (the
+# worker) legitimately mutates mid-request get re-authorized against their
+# CURRENT row on a version change, instead of failing on version-equality
+# alone. Scoped to "run" only (review 11 #1's own named reproduction --
+# Worker._update() advancing a run through its normal progress) after
+# testing found "asset"/"contract" are NOT safe to include here: asset_
+# access()/contract_access() check accessRevoked/tombstone/deleted/status,
+# but NOT every field that legitimately makes a record's PRIOR observation
+# stale for a specific caller's purpose (e.g. an asset's own "archived" flag,
+# which test_ontology_store.py::test_publication_rechecks_source_versions_
+# atomically depends on still failing atomically when set mid-publish, not
+# just when access is revoked). Every other kind keeps the original,
+# conservative fail-closed check.
+_RECHECK_METHODS = {"run": "run_access"}
 
 
 def _not_found():
@@ -332,6 +346,34 @@ class Sources:
             fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
         return record
 
+    def _reauthorize_current(self, kind, row):
+        """Re-run the SAME per-kind authorization this kind's own GET already
+        applies, against the record's CURRENT row -- not the originally-
+        observed version. Raises the SAME `fail(409, "ontology-source-
+        changed", ...)` a genuine revocation would (or re-raises an
+        authority/expiry failure unchanged); returns nothing on success.
+
+        Used wherever a version change alone would otherwise be treated as
+        a disclosure (review 11 #1): ordinary progress -- e.g.
+        `Worker._update()` advancing a run/job through its normal
+        queued -> running -> completed lifecycle -- legitimately bumps a
+        record's version without revoking access to it. Runs on an isolated
+        probe reader so re-verifying does not itself trip on the very
+        staleness it exists to tolerate. Kinds with no dedicated re-check
+        (rarely if ever mutated by a concurrent background process) keep
+        the original, conservative fail-closed behavior.
+        """
+        method_name = _RECHECK_METHODS.get(kind)
+        if method_name is None:
+            fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
+        probe = self._probe()
+        try:
+            getattr(probe, method_name)(row)
+        except CollaborationError as error:
+            if error.status == 401 or error.code in _AUTHORITY_CODES:
+                raise
+            fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
+
     def absorb(self, other):
         """Retain every observation of another reader for this reader's single final recheck.
 
@@ -340,8 +382,24 @@ class Sources:
         """
         if other.authority != self.authority:
             fail(409, "ontology-authority-changed", "조회 중 프로젝트 역할 또는 권한이 변경되었습니다.")
-        for (owner, kind, _), check in list(other.observed.items()):
-            self._remember_owned(owner, kind, check)
+        for (owner, kind, identifier), check in list(other.observed.items()):
+            key = (owner, kind, identifier)
+            prior = self.observed.get(key)
+            if prior and prior != check:
+                # `other` just finished successfully re-authorizing this
+                # record at its OWN current version -- a version bump alone
+                # is not itself a conflict merely because this aggregate had
+                # already observed an OLDER version of the same record
+                # (review 11 #1). Re-run the same per-kind check before
+                # treating this merge as a version-changed disclosure.
+                row = self.storage.get(owner, kind, identifier)
+                if not row:
+                    fail(409, "ontology-source-changed", "온톨로지 원본이 조회 중 변경되었습니다.")
+                self._reauthorize_current(kind, row)
+                check = {**check, "version": row["version"]}
+            self.observed[key] = check
+            if len(self.observed) > self.max_records:
+                fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
         self.package_hashes |= other.package_hashes
         self.workbench_refs.update(other.workbench_refs)
         self.historical_refs.update(other.historical_refs)
@@ -1138,8 +1196,19 @@ class Sources:
         deadlines = []
         for check in self.observed.values():
             row = self.storage.get(check["owner"], check["kind"], check["id"])
-            if not row or row["version"] != check["version"]:
+            if not row:
                 fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
+            if row["version"] != check["version"]:
+                # A version change alone does not distinguish an actual
+                # revocation (review 8-10's fixes) from ordinary progress
+                # (review 11 #1) -- re-run the same per-kind check via the
+                # shared helper before treating this as a disclosure.
+                self._reauthorize_current(check["kind"], row)
+                # Still genuinely accessible: adopt the current version as
+                # this observation's new baseline (the SAME `check` object
+                # `self.observed` already holds), so a later recheck in the
+                # same request does not re-flag this same benign progress.
+                check["version"] = row["version"]
             if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "capability",
                                  "adm_sharing"):
                 if row.get("status") not in ("active", "admitted") or type(row.get("expiresAt")) is not int:

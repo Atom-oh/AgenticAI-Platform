@@ -134,8 +134,19 @@ def coverage_issues(contract):
     return issues
 
 
-def baseline_project(storage, owner, request, *, checks=None, seen=None):
-    """Resolve within the authenticated storage scope; never accept source bytes."""
+def baseline_project(storage, owner, request, *, checks=None, seen=None, gate=None):
+    """Resolve within the authenticated storage scope; never accept source bytes.
+
+    `gate` (a `workspace.http.ResponseGate`, when the caller has one) authorizes
+    the baseline run and its contract BEFORE any of their fields are read for
+    approval, hash or artifact comparisons -- never after. A revoked baseline
+    (or its contract) must 404 identically to a missing one, not surface
+    through whatever content-dependent check happens to run next. A successful
+    authorization also joins `gate`'s aggregate reader, so a revocation racing
+    the reads below is still caught by the caller's own final recheck, exactly
+    like every other authorized reference this module's callers already
+    close over.
+    """
     from workspace.react_artifacts import read_archive
     reference = request.get("baseline")
     if not reference:
@@ -145,11 +156,23 @@ def baseline_project(storage, owner, request, *, checks=None, seen=None):
         raise ValueError("기준 시안의 순환 참조 또는 최대 24단계 의존성을 확인하세요.")
     seen.add(reference["runId"])
     run = storage.get(owner, "run", reference["runId"])
+    if gate is not None:
+        authorized_run = gate.authorize("run", run) if run else None
+        if authorized_run is None:
+            from workspace.http import HTTPError
+            raise HTTPError(404, "not-found", "Resource not found")
+        run = authorized_run
     if not run:
         raise ValueError("현재 작업 공간에서 기준 시안을 찾을 수 없습니다.")
     row = next((row for row in run.get("rounds", []) if row["number"] == reference["round"]), None)
     approval = run.get("approval") or {}
     contract = storage.get(owner, "contract", run.get("contractId"))
+    if gate is not None:
+        authorized_contract = gate.authorize("contract", contract) if contract else None
+        if authorized_contract is None:
+            from workspace.http import HTTPError
+            raise HTTPError(404, "not-found", "Resource not found")
+        contract = authorized_contract
     if (run.get("outputType") != "react" or not row or row.get("passed") is not True
             or approval.get("round") != reference["round"] or not contract or contract.get("status") != "approved"
             or contract["version"] != run["contractVersion"]
@@ -180,7 +203,7 @@ def baseline_project(storage, owner, request, *, checks=None, seen=None):
         raise ValueError("기준 소스 파일이 변경되었습니다.")
     project = read_archive(source, row["sourceHash"])
     parent_request = run.get("contract", {}).get("changeRequest", {})
-    parent = baseline_project(storage, owner, parent_request, checks=checks, seen=seen)
+    parent = baseline_project(storage, owner, parent_request, checks=checks, seen=seen, gate=gate)
     if parent:
         from workspace.react_artifacts import generated_files
         enforce_scope(parent_request, generated_files(parent), generated_files(project))

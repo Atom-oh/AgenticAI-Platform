@@ -71,6 +71,7 @@ class Ontology:
         self._snapshot = None
         self._anchor = None
         self._last_inspection = (0, 0)
+        self._last_generation = None
 
     def current(self):
         self.ctx.fresh()
@@ -648,6 +649,13 @@ class Ontology:
     def source_nodes(self, reference, *, for_impact=False, include_history=True):
         ref = schema.source_ref(reference)
         current = self.current()
+        # Recorded from this exact read, not a later separate `current()` call: a
+        # caller that captures the generation only after this method returns would
+        # otherwise open a gap for an intervening republish between the two reads.
+        # `_recheck` below re-confirms this same generation is still current before
+        # `source_nodes` itself returns, so it is verified consistent for its whole
+        # execution, not just its start.
+        self._last_generation = (current or {}).get("generation")
         if not current or not for_impact and not self._visible([ref]):
             return []
         key = source_identity(ref)

@@ -504,6 +504,47 @@ def test_reference_selection_defaults_to_human_page_one(api):
     assert call(api, "POST", "/runs", {**request, "requestId": "reference-zero", "referencePage": 0})[0] == 400
 
 
+def test_unselected_revoked_reference_asset_404s_like_a_missing_one(api):
+    """PR #33 review 2 #2: `referenceAssetId` is not necessarily one of the
+    contract's own `assetIds` (an "unselected" reference), so it was never
+    authorized through `_assets`/`_authorized_asset` -- only a plain `_get`
+    existence check distinguished it from a truly missing/foreign id. A
+    revoked-but-unselected asset returned 409 reference-not-selected; a
+    missing one returned 404 not-found -- an existence oracle. Both must now
+    404 identically: authorize the reference before deciding it was not
+    selected."""
+    aid, contract = approved_contract(api)
+    other = stored_asset(api, data=b"other reference asset", name="other.txt")
+    record = api.storage.get("alice", "asset", other)
+    api.storage.put("alice", "asset", {**record, "accessRevoked": True}, record["version"])
+    request = {"contractId": contract["id"], "contractVersion": contract["version"],
+               "referenceAssetId": other, "requestId": "reference-revoked"}
+    status, payload, _ = call(api, "POST", "/runs", request)
+    status_missing, payload_missing, _ = call(api, "POST", "/runs",
+                                              {**request, "referenceAssetId": "does-not-exist", "requestId": "reference-missing"})
+    assert (status, payload.get("code")) == (status_missing, payload_missing.get("code"))
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_unselected_revoked_verify_source_asset_404s_like_a_missing_one(api):
+    """PR #33 review 2 #2: `sourceAssetId` (verify mode) has the same gap as
+    `referenceAssetId` -- not necessarily part of the contract's own
+    `assetIds`, so a revoked-but-unselected one returned 409
+    source-not-selected while a missing one returned 404 not-found. Both must
+    now 404 identically."""
+    aid, contract = approved_contract(api)
+    other = stored_asset(api, data=b"other verify source", name="other.html")
+    record = api.storage.get("alice", "asset", other)
+    api.storage.put("alice", "asset", {**record, "accessRevoked": True}, record["version"])
+    request = {"contractId": contract["id"], "contractVersion": contract["version"], "mode": "verify",
+               "sourceAssetId": other, "requestId": "source-revoked"}
+    status, payload, _ = call(api, "POST", "/runs", request)
+    status_missing, payload_missing, _ = call(api, "POST", "/runs",
+                                              {**request, "sourceAssetId": "does-not-exist", "requestId": "source-missing"})
+    assert (status, payload.get("code")) == (status_missing, payload_missing.get("code"))
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
 def test_approved_version_matches_returned_storage_version_with_real_rules(api):
     api._rules = None
     aid = stored_asset(api)

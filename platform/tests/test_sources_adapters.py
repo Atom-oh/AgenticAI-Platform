@@ -1071,7 +1071,7 @@ def test_baseline_rechecks_authority_after_its_artifact_reads(env, design, monke
     row = run["rounds"][0]
     armed = {"on": True}
 
-    def reading(storage, owner, record, number):
+    def reading(storage, owner, record, number, gate=None):
         if armed["on"]:
             armed["on"] = False
             _grant_revoked(env)
@@ -1155,6 +1155,227 @@ def test_git_export_preserves_the_delivered_commit_after_a_revocation_racing_pub
     with pytest.raises(Exception):
         process_export(queued_export.worker, owner, queued_export.job)
     assert storage.get(owner, "gitexport", requeued["id"])["status"] != "committed"
+
+
+def test_git_export_gitlab_revocation_during_verify_never_claims_committed_on_mismatch(env, queued_export, monkeypatch):
+    """Review 7 #5: the round-6 fix for #6 treated ANY `ProtectedCallRefused` racing
+    GitLab's atomic create (which delivers commit+branch in one call) as "already
+    delivered, report committed" -- but a guard-blocked verify and a genuine content
+    mismatch are indistinguishable from that call site: the guard fires before the
+    verify's own network read, whether or not the committed content actually matches.
+    Reproduced: a fake GitLab provider silently commits MISMATCHED source bytes (the
+    same tampering `test_remote_success_response_with_wrong_source_is_not_committed_
+    evidence` uses, with no guard at all), combined with revoking the admission grant
+    at the exact moment `POST /commits` (delivery) returns -- the guard then blocks
+    the verify before it ever reads the tampered tree back. The export must never be
+    reported/persisted as "committed" (that would launder the mismatch as verified
+    success); it must fail, while the observed (possibly-wrong) commit SHA is still
+    retained on the record for attribution -- never silently lost either."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote, blob_id
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    revoked = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if method == "POST" and url.endswith("/commits"):
+            # A misbehaving provider silently commits different bytes than requested.
+            sha = result["id"]
+            tree = service.trees[service.commits[sha]["tree"]]
+            tree["generated/studio/run-1/src/App.tsx"] = ("100644", "blob", blob_id(b"wrong source"))
+            revoked["on"] = True
+            _grant_revoked(env)
+        return result
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert revoked["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The observed (possibly-wrong) SHA is retained for attribution, never silently lost.
+    assert exported.get("commitSha") == delivered_sha, exported
+
+
+def test_git_export_preserves_a_gitlab_receipt_on_a_plain_verify_failure(env, queued_export, monkeypatch):
+    """Review 8 #4: the round-7 fix for #5 only widened the inner `except` to also
+    treat a guard-interrupted verify as delivered-unverified when raised alongside
+    `ProtectedCallRefused` -- but a genuine `_verify` failure with NO guard
+    interruption at all (no admission revoked, nothing racing) is a plain
+    `GitExportError`, which the inner `except ProtectedCallRefused:` never caught.
+    That `GitExportError` escaped to `_export`'s outer handler, which retried via
+    `existing()` (failing identically), then propagated all the way to
+    `process_export`'s `except GitExportError` -- discarding the commitSha even
+    though GitLab's atomic `POST /commits` had already delivered it. Reproduced
+    with no revocation anywhere: a fake GitLab provider silently commits mismatched
+    source bytes, and nothing ever blocks a guarded call. The export must still
+    fail (a mismatch is never reported as committed), but the delivered commitSha
+    must be retained on the record, exactly like the guard-interrupted case."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote, blob_id
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    tampered = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if method == "POST" and url.endswith("/commits"):
+            # A misbehaving provider silently commits different bytes than requested --
+            # no guard is ever revoked, so any `_verify` failure here is a plain,
+            # unrelated `GitExportError`, never a `ProtectedCallRefused`.
+            sha = result["id"]
+            tree = service.trees[service.commits[sha]["tree"]]
+            tree["generated/studio/run-1/src/App.tsx"] = ("100644", "blob", blob_id(b"wrong source"))
+            tampered["on"] = True
+        return result
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert tampered["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The observed (possibly-wrong) SHA is retained for attribution, never silently lost --
+    # even though nothing here ever raised `ProtectedCallRefused`.
+    assert exported.get("commitSha") == delivered_sha, exported
+
+
+def test_git_export_preserves_a_gitlab_receipt_on_malformed_verification_metadata(env, queued_export, monkeypatch):
+    """PR #33 review 1 #3: review 8 #4 broadened the inner `except` to
+    `(ProtectedCallRefused, GitExportError)`, but a plain parsing/metadata
+    failure -- e.g. `_Remote.commit`'s `result["parent_ids"]` raising `KeyError`
+    on a malformed verification response -- is neither. That `KeyError` escaped
+    `_export`'s inner AND outer handlers untouched, all the way out to
+    `export_release`'s own outer wrapper, which converts
+    `(KeyError, TypeError, ValueError, UnicodeError)` to a plain
+    `GitExportError("invalid-response", ...)` -- but that conversion happens
+    OUTSIDE `_export`'s scope, with no access to `sha`/`delivered`, so the
+    receipt is lost even though GitLab's atomic `POST /commits` already
+    delivered it. Reproduced with no guard/revocation anywhere: a fake GitLab
+    provider strips `parent_ids` from the verification GET's response."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    stripped = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if (method == "GET" and "/commits/" in url and not url.endswith("/commits/" + service.base)
+                and isinstance(result, dict) and "parent_ids" in result):
+            # A misbehaving provider's verification response (the delivered
+            # commit, fetched AFTER `POST /commits` -- never the base commit
+            # fetched earlier while building the tree) is missing an expected
+            # field -- an ordinary parsing failure, never a guard interruption
+            # and never a content mismatch either.
+            stripped["on"] = True
+            return {key: value for key, value in result.items() if key != "parent_ids"}
+        return result
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert stripped["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The delivered SHA is retained for attribution, never silently lost -- even
+    # though the interrupting exception was an ordinary KeyError, not
+    # ProtectedCallRefused or GitExportError.
+    assert exported.get("commitSha") == delivered_sha, exported
+
+
+def test_git_export_preserves_a_gitlab_receipt_on_any_verification_exception(env, queued_export, monkeypatch):
+    """PR #33 review 2 #1: enumerating exception types in `_export`'s inner
+    `except` is a losing game -- review 1 added `KeyError` for malformed
+    metadata, but a one-shot storage/SDK exception of a completely different,
+    never-enumerated type still escaped untouched. Specifically: `Storage.call`
+    wraps ONLY the transport call in its own try/except (converting anything
+    into `GitExportError`), but `self.guard()` -- the retained-authority
+    recheck -- runs BEFORE that try/except, on every outbound call including
+    the verification ones; `authority_guard`'s `check()` only converts a
+    `ValueError` from `recheck_job` into `ProtectedCallRefused`, so any OTHER
+    exception `reader.recheck()` raises (e.g. a one-shot `OSError` from a real
+    storage read) propagates raw, past every layer, all the way to
+    `export_release`'s own outer wrapper -- outside `_export`'s scope, with no
+    access to `sha`/`delivered` -- losing the receipt even though GitLab's
+    atomic `POST /commits` had already delivered it. Fixed structurally this
+    time: the inner `except` now catches bare `Exception` (not enumerated
+    types), so "was delivery confirmed" alone decides receipt preservation,
+    independent of which exception interrupted verification afterward.
+    Reproduced with `recheck_job` itself raising a plain `OSError` on the
+    first guard check after delivery -- a type in neither this round's nor
+    any prior round's exception tuple."""
+    import test_workspace_git_export
+    from test_workspace_git_export import Remote
+    from workspace import ontology_sources
+    from workspace.git_export import GitExporter
+    from workspace.git_service import process_export
+    monkeypatch.setattr(test_workspace_git_export, "TARGET", "generated/studio/run-1")
+    service = Remote("gitlab")
+    delivered = {"on": False}
+    raised = {"on": False}
+
+    def transport(method, url, headers, payload):
+        result = service(method, url, headers, payload)
+        if method == "POST" and url.endswith("/commits"):
+            delivered["on"] = True
+        return result
+
+    original_recheck_job = ontology_sources.recheck_job
+
+    def racing_recheck_job(reader):
+        if delivered["on"] and not raised["on"]:
+            # The first guard check after delivery: a one-shot storage
+            # exception of a type `authority_guard`'s own `check()` never
+            # converts to `ProtectedCallRefused` (that only happens for a
+            # `ValueError`) -- propagates raw, exactly like a real backing
+            # store's transient I/O error would.
+            raised["on"] = True
+            raise OSError("simulated one-shot storage failure")
+        return original_recheck_job(reader)
+    monkeypatch.setattr(ontology_sources, "recheck_job", racing_recheck_job)
+
+    def factory(connection, token):
+        merged = {**connection, "provider": "gitlab", "repository": "acme/screens",
+                 "baseBranch": "main", "pathPrefix": "generated/studio", "branchPrefix": "feature/studio-"}
+        return GitExporter(merged, token_provider=lambda c: "test-token", transport=transport)
+    queued_export.worker.git_exporter_factory = factory
+    with pytest.raises(Exception):
+        process_export(queued_export.worker, queued_export.owner, queued_export.job)
+    assert delivered["on"] and raised["on"]
+    branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+    delivered_sha = service.refs[branch]
+    exported = env.api.storage.get(queued_export.owner, "gitexport", "export-1")
+    assert exported["status"] != "committed", exported
+    # The delivered SHA is retained for attribution, never silently lost -- even
+    # though the interrupting exception is a plain OSError, a type this fix
+    # never specifically enumerates.
+    assert exported.get("commitSha") == delivered_sha, exported
 
 
 def approvable_run(env, contract, run_id, admissions=None):

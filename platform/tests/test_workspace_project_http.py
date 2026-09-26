@@ -105,9 +105,9 @@ def test_guideline_change_during_approval_cannot_cross_the_project_fence(monkeyp
     validate = api._validated_contract
     changed = False
 
-    def interleaved(owner, data):
+    def interleaved(owner, data, gate=None):
         nonlocal changed
-        result = validate(owner, data)
+        result = validate(owner, data, gate=gate)
         if not changed:
             changed = True
             status, updated = request(api, "PUT", f"/products/{product['id']}",
