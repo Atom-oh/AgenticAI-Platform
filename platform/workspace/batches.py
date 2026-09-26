@@ -76,7 +76,7 @@ def create_batch(api, owner, body, scope, gate=None):
                        visualPolicy="exact" if variant == "baseline" else "variation-review")
         slot = {"index": index, "variant": variant, "role": "baseline" if variant == "baseline" else mode if mode == "creative" else "variation"}
         try:
-            response = api._run_create(owner, request, scope=scope, batch_context=current)
+            response = api._run_create(owner, request, scope=scope, batch_context=current, gate=gate)
             value = json.loads(response["body"])
             slot.update(runId=value["run"]["id"], jobId=value["job"]["id"])
         except HTTPError as error:
