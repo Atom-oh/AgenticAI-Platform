@@ -1801,6 +1801,16 @@ class WorkspaceAPI:
             self._invoke(owner, job)
             return _json(202, {"job": job, "run": run})
         retained_run = self.storage.get(owner, "run", identifier)
+        if retained_run is not None and gate is not None:
+            # Authorize the SAME retained run before ever inspecting its
+            # status -- an inaccessible run must 404 identically to a missing
+            # one (the normal, expected case that proceeds to create a new
+            # run below), not disclose through this 409 that a run with this
+            # exact requestId still exists and has moved past "queued".
+            authorized = gate.authorize("run", retained_run)
+            if authorized is None:
+                raise HTTPError(404, "not-found", "Resource not found")
+            retained_run = authorized
         if retained_run and retained_run.get("status") != "queued":
             raise HTTPError(409, "request-expired",
                             "The operational job expired. Open the stored run or start a new request.")
