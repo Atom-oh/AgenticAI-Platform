@@ -1946,6 +1946,13 @@ class WorkspaceAPI:
                     raise HTTPError(404, "not-found", "Resource not found")
                 run = authorized
             if run.get("contractHash") != digest or self._fingerprint({key: run[key] for key in data}) != fingerprint:
+                # A revocation racing in between the authorize() above and
+                # this comparison must still 404 identically to an already-
+                # inaccessible run, not disclose this content-dependent
+                # mismatch (review 11 #2, same shape applied to
+                # batches/releases/git_service in review 10).
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "request-changed", "The request ID was already used")
         job = self._new_job(owner, identifier, "run", {"runId": run["id"]}, fingerprint, gate=gate)
         self._invoke(owner, job)
