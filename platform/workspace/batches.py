@@ -25,6 +25,16 @@ def create_batch(api, owner, body, scope, gate=None):
             data[key] = body[key]
     fingerprint = api._fingerprint(data)
     batch = api.storage.get(owner, "batch", identifier)
+    if batch is not None and gate is not None:
+        # Authorize the SAME batch (its own pinned-contract lineage) before
+        # ever comparing the private requestHash fingerprint against it -- an
+        # inaccessible batch must 404 identically to a missing one, not
+        # disclose through this 409 that a DIFFERENT-content batch with this
+        # exact requestId still exists.
+        authorized = gate.authorize("batch", batch)
+        if authorized is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        batch = authorized
     if batch and batch.get("requestHash") != fingerprint:
         raise HTTPError(409, "request-changed", "이 비교 요청의 입력이 변경되었습니다.")
     # Authorize the referenced contract (the same lineage check a plain GET's
@@ -46,6 +56,11 @@ def create_batch(api, owner, body, scope, gate=None):
             batch = api.storage.put(owner, "batch", record)
         except Conflict:
             batch = api._get(owner, "batch", identifier)
+            if gate is not None:
+                authorized = gate.authorize("batch", batch)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                batch = authorized
             if batch.get("requestHash") != fingerprint:
                 raise HTTPError(409, "request-changed", "비교 요청이 변경되었습니다.")
     directions = ["baseline", *VARIANTS[:variations]] if mode == "guided" else ["balanced"]
