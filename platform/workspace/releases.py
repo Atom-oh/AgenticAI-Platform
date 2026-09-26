@@ -79,6 +79,16 @@ def create_release(api, owner, body, scope, gate=None):
             data[key] = run[key]
     fingerprint = api._fingerprint(data)
     release = api.storage.get(owner, "release", identifier)
+    if release is not None and gate is not None:
+        # Authorize the SAME release (its own round-delivery lineage) before
+        # ever comparing the private requestHash fingerprint against it -- an
+        # inaccessible release must 404 identically to a missing one, not
+        # disclose through this 409 that a DIFFERENT-content release with
+        # this exact requestId still exists.
+        authorized = gate.authorize("release", release)
+        if authorized is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        release = authorized
     if release and release.get("requestHash") != fingerprint:
         raise HTTPError(409, "request-changed", "이 릴리스 요청의 승인본이 변경되었습니다.")
     if release is None:
@@ -90,11 +100,16 @@ def create_release(api, owner, body, scope, gate=None):
                                       _writer=storage_module._human_writer())
         except Conflict:
             release = api._get(owner, "release", identifier)
+            if gate is not None:
+                authorized = gate.authorize("release", release)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                release = authorized
             if release.get("requestHash") != fingerprint:
                 raise HTTPError(409, "request-changed", "릴리스 요청이 변경되었습니다.")
     job = api._existing_job(owner, identifier, fingerprint, gate=gate)
     if not job:
-        job = api._new_job(owner, identifier, "release", {"releaseId": identifier}, fingerprint)
+        job = api._new_job(owner, identifier, "release", {"releaseId": identifier}, fingerprint, gate=gate)
     job = api._retry_dispatch(owner, job)
     api._invoke(owner, job)
     return _json(202, {"release": api._get(owner, "release", identifier), "job": job})
