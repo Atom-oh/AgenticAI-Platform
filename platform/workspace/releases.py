@@ -90,6 +90,14 @@ def create_release(api, owner, body, scope, gate=None):
             raise HTTPError(404, "not-found", "Resource not found")
         release = authorized
     if release and release.get("requestHash") != fingerprint:
+        # A revocation racing in between the authorize() above and this
+        # comparison must still 404 identically to an already-inaccessible
+        # release, not disclose this content-dependent mismatch (review 10):
+        # recheck through the gate's own normalized final recheck (it
+        # converts a caught authorization change to the canonical 404,
+        # exactly like `authorize()` itself does).
+        if gate is not None:
+            gate.recheck()
         raise HTTPError(409, "request-changed", "이 릴리스 요청의 승인본이 변경되었습니다.")
     if release is None:
         api._worker_ready()
@@ -106,6 +114,8 @@ def create_release(api, owner, body, scope, gate=None):
                     raise HTTPError(404, "not-found", "Resource not found")
                 release = authorized
             if release.get("requestHash") != fingerprint:
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "request-changed", "릴리스 요청이 변경되었습니다.")
     job = api._existing_job(owner, identifier, fingerprint, gate=gate)
     if not job:
