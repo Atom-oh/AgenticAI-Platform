@@ -1287,7 +1287,7 @@ class WorkspaceAPI:
         except Conflict:
             return self._get(owner, "job", job["id"])
 
-    def _new_job(self, owner, identifier, task, data, request_hash=None):
+    def _new_job(self, owner, identifier, task, data, request_hash=None, gate=None):
         from workspace.storage import RESERVED_TASKS
         if task in RESERVED_TASKS:
             raise HTTPError(400, "reserved-task", "이 작업 유형은 별도 실행 경로에서만 생성됩니다.")
@@ -1297,7 +1297,19 @@ class WorkspaceAPI:
         try:
             return self.storage.put(owner, "job", record)
         except Conflict:
+            # A genuine concurrent race: another request created a job with this
+            # SAME identifier between this call's own pre-check and this write.
+            # Authorize that job (the same lineage check its own GET's response
+            # gate applies) before ever comparing requestHash/task against it --
+            # an inaccessible job must 404 identically to a missing one, not
+            # disclose through this 409 that a DIFFERENT-content job with this
+            # exact requestId now exists.
             existing = self._get(owner, "job", identifier)
+            if gate is not None:
+                authorized = gate.authorize("job", existing)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                existing = authorized
             if existing.get("requestHash") != request_hash or existing["task"] != task:
                 raise HTTPError(409, "request-changed", "The request ID was already used with different input")
             return existing
@@ -1717,7 +1729,7 @@ class WorkspaceAPI:
                     raise
                 raise HTTPError(400, "invalid-input", str(error)[:240]) from error
             job = self._new_job(owner, identifier, "propose", {
-                **data, "assetSnapshots": self._snapshot_assets(assets)}, fingerprint)
+                **data, "assetSnapshots": self._snapshot_assets(assets)}, fingerprint, gate=gate)
         self._invoke(owner, job)
         return _json(202, {"job": job})
 
@@ -1877,7 +1889,7 @@ class WorkspaceAPI:
             run = self._get(owner, "run", identifier)
             if run.get("contractHash") != digest or self._fingerprint({key: run[key] for key in data}) != fingerprint:
                 raise HTTPError(409, "request-changed", "The request ID was already used")
-        job = self._new_job(owner, identifier, "run", {"runId": run["id"]}, fingerprint)
+        job = self._new_job(owner, identifier, "run", {"runId": run["id"]}, fingerprint, gate=gate)
         self._invoke(owner, job)
         return _json(202, {"job": job, "run": run})
 
