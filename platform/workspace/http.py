@@ -1915,7 +1915,19 @@ class WorkspaceAPI:
         try:
             run = self.storage.put(owner, "run", run_data)
         except Conflict:
+            # A genuine concurrent race: another request created a run with this
+            # SAME identifier between this call's own pre-check and this write.
+            # Authorize that run (the same lineage check its own GET's response
+            # gate applies) before ever comparing contractHash/fingerprint against
+            # it -- an inaccessible run must 404 identically to a missing one,
+            # not disclose through this 409 that a DIFFERENT-content run with
+            # this exact requestId now exists.
             run = self._get(owner, "run", identifier)
+            if gate is not None:
+                authorized = gate.authorize("run", run)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                run = authorized
             if run.get("contractHash") != digest or self._fingerprint({key: run[key] for key in data}) != fingerprint:
                 raise HTTPError(409, "request-changed", "The request ID was already used")
         job = self._new_job(owner, identifier, "run", {"runId": run["id"]}, fingerprint, gate=gate)
