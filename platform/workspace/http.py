@@ -1841,6 +1841,13 @@ class WorkspaceAPI:
                 raise HTTPError(404, "not-found", "Resource not found")
             retained_run = authorized
         if retained_run and retained_run.get("status") != "queued":
+            # A revocation racing in between the authorize() above and this
+            # status check must still 404 identically to an already-
+            # inaccessible retained run, not disclose this content-dependent
+            # status (review 11 #3, completing review 8's fix to this same
+            # checkpoint).
+            if gate is not None:
+                gate.recheck()
             raise HTTPError(409, "request-expired",
                             "The operational job expired. Open the stored run or start a new request.")
         self._worker_ready()
