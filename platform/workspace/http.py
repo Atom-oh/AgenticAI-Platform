@@ -1648,6 +1648,25 @@ class WorkspaceAPI:
                 raise HTTPError(404, "not-found", "Resource not found")
             job = authorized
         if job and job.get("requestHash") != fingerprint:
+            # Recheck retained authority before disclosing this content-dependent
+            # mismatch (review 9 #3): a revocation racing in AFTER the authorize()
+            # above (but before this comparison raises) is never caught by the
+            # caller's own success-path recheck -- an HTTPError raised here skips
+            # straight past `gate.finish()`'s final aggregate recheck entirely, so
+            # the matching-fingerprint retry (which DOES reach `finish()`) 404s on
+            # the exact same race while this one still discloses the private
+            # brief/input mismatch via a distinguishable 409. Recheck the SAME
+            # aggregate this job's own authorization just joined, so a race here
+            # 404s identically to the matching-fingerprint path's own recheck.
+            if gate is not None and gate.aggregate is not None:
+                from workspace.collaboration import CollaborationError
+                from workspace.ontology_sources import _AUTHORITY_CODES
+                try:
+                    gate.aggregate.recheck()
+                except CollaborationError as changed:
+                    if changed.status == 401 or changed.code in _AUTHORITY_CODES:
+                        raise
+                    raise HTTPError(404, "not-found", "Resource not found") from None
             raise HTTPError(409, "request-changed", "The request ID was already used with different input")
         return job
 
