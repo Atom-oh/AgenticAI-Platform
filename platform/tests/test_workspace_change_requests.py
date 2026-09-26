@@ -236,12 +236,17 @@ def test_model_cannot_drop_or_rewrite_request_scope():
 
 
 def test_baseline_cannot_be_read_from_another_storage_scope():
+    """PR #33 review 5: `baseline_project` now authorizes the baseline run
+    through the response gate before reading any of its fields (never after),
+    so a foreign-scope baseline is denied the same way ANY inaccessible one
+    is -- 404, identical to `GET .../baseline` on the same id -- instead of a
+    distinguishable 400 with its own message."""
     store, api, _ = environment()
     store.put("other-owner", "run", {"id": "someone-elses-run", "outputType": "react"})
     value = contract()
     value["changeRequest"]["baseline"] = {"runId": "someone-elses-run", "round": 1, "sourceHash": "a" * 64}
     status, result = request(api, "POST", "/contracts", value)
-    assert status == 400 and "현재 작업 공간" in result["error"]
+    assert status == 404 and result["code"] == "not-found"
     assert request(api, "GET", "/runs/someone-elses-run/baseline")[0] == 404
 
 

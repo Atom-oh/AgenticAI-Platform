@@ -78,7 +78,7 @@ def secret_token(connection):
     return text
 
 
-def create_export(api, owner, release, body, scope):
+def create_export(api, owner, release, body, scope, gate=None):
     from workspace.http import HTTPError, _json
     connections = api.git_connections()
     connection = connections.get(body.get("connectionId"))
@@ -94,7 +94,7 @@ def create_export(api, owner, release, body, scope):
     run = api._get(owner, "run", release["runId"])
     api._criteria(owner, {}, scope, api._get(owner, "contract", run["contractId"]))
     try:
-        approved_artifacts(api.storage, owner, run, release["round"], release["approvalHash"])
+        approved_artifacts(api.storage, owner, run, release["round"], release["approvalHash"], gate=gate)
     except ValueError as error:
         raise HTTPError(409, "release-approval-changed", str(error)) from error
     identifier = api._request_id(body, "git")

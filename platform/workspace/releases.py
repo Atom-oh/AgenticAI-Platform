@@ -16,7 +16,7 @@ def approval_hash(approval):
     return hashlib.sha256(json.dumps(approval, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def approved_artifacts(storage, owner, run, number, expected_approval=None):
+def approved_artifacts(storage, owner, run, number, expected_approval=None, gate=None):
     row = next((item for item in run.get("rounds", []) if item.get("number") == number), None)
     approval = run.get("approval") or {}
     contract = storage.get(owner, "contract", run.get("contractId"))
@@ -46,7 +46,7 @@ def approved_artifacts(storage, owner, run, number, expected_approval=None):
     if run["contract"].get("changeRequest"):
         from workspace.change_requests import baseline_project, enforce_scope
         request = run["contract"]["changeRequest"]
-        baseline = baseline_project(storage, owner, request)
+        baseline = baseline_project(storage, owner, request, gate=gate)
         enforce_scope(request, generated_files(baseline) if baseline else {}, generated_files(source))
     read_archive(contents["dist"], row["bundleHash"])
     report = json.loads(contents["report"])
@@ -60,13 +60,13 @@ def approved_artifacts(storage, owner, run, number, expected_approval=None):
     return row, source, contents
 
 
-def create_release(api, owner, body, scope):
+def create_release(api, owner, body, scope, gate=None):
     from workspace.http import HTTPError, _integer, _json
     number = _integer(body.get("round"), "Round", 1, 5)
     run = api._get(owner, "run", body.get("runId"))
     api._criteria(owner, {}, scope, api._get(owner, "contract", run["contractId"]))
     try:
-        row, _, _ = approved_artifacts(api.storage, owner, run, number)
+        row, _, _ = approved_artifacts(api.storage, owner, run, number, gate=gate)
     except ValueError as error:
         raise HTTPError(409, "release-approval-required", str(error)) from error
     identifier = api._request_id(body, "release")

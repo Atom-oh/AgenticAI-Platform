@@ -1071,7 +1071,7 @@ def test_baseline_rechecks_authority_after_its_artifact_reads(env, design, monke
     row = run["rounds"][0]
     armed = {"on": True}
 
-    def reading(storage, owner, record, number):
+    def reading(storage, owner, record, number, gate=None):
         if armed["on"]:
             armed["on"] = False
             _grant_revoked(env)

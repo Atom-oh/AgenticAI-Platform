@@ -1043,7 +1043,7 @@ class WorkspaceAPI:
             return _json(200, batch_view(self, owner, self._get(owner, "batch", parts[1])))
         if parts == ["releases"] and method == "POST":
             from workspace.releases import create_release
-            return create_release(self, owner, _body(event), scope)
+            return create_release(self, owner, _body(event), scope, gate=gate)
         if parts == ["releases"] and method == "GET":
             return self._listing(gate, owner, "release", "releases", query, scope)
         if parts[0] == "releases" and len(parts) in (2, 3) and method == "GET":
@@ -1056,7 +1056,7 @@ class WorkspaceAPI:
         if len(parts) == 3 and parts[0] == "releases" and parts[2] == "git" and method == "POST":
             from workspace.git_service import create_export
             release = self._get(owner, "release", parts[1])
-            return create_export(self, owner, release, _body(event), scope)
+            return create_export(self, owner, release, _body(event), scope, gate=gate)
         if len(parts) == 1 and parts[0] in ("assets", "contracts", "runs") and method == "GET":
             kind = {"assets": "asset", "contracts": "contract", "runs": "run"}[parts[0]]
             return self._listing(gate, owner, kind, parts[0], query, scope)
@@ -1084,7 +1084,7 @@ class WorkspaceAPI:
             # The gate authorized this round before artifact validation; its final recheck
             # runs after these artifact reads, before the response is released.
             try:
-                row, project, _ = approved_artifacts(self.storage, owner, record, number)
+                row, project, _ = approved_artifacts(self.storage, owner, record, number, gate=gate)
             except (ValueError, TypeError) as error:
                 raise HTTPError(409, "baseline-unavailable", "기준 시안의 현재 승인을 확인할 수 없습니다.") from error
             return _json(200, {"baseline": {"runId": record["id"], "round": number, "sourceHash": row["sourceHash"]},
@@ -1426,7 +1426,7 @@ class WorkspaceAPI:
             normalized = self.rules().validate_contract(data, asset_texts=self._asset_texts(owner, assets, refs))
             validate_citations(normalized, pages)
             from workspace.change_requests import baseline_project
-            baseline_project(self.storage, owner, normalized.get("changeRequest", {}))
+            baseline_project(self.storage, owner, normalized.get("changeRequest", {}), gate=gate)
         except ValueError as error:
             # A validation failure (e.g. a quote that doesn't match) must never be
             # distinguishable from an asset that lost access while its text was being
@@ -1542,7 +1542,7 @@ class WorkspaceAPI:
         checks.extend({"owner": owner, "kind": "asset", "id": asset["id"], "version": asset["version"]} for asset in assets)
         from workspace.change_requests import baseline_project
         criteria = record["contract"] if kind == "run" else record
-        baseline_project(self.storage, owner, criteria.get("changeRequest", {}), checks=checks)
+        baseline_project(self.storage, owner, criteria.get("changeRequest", {}), checks=checks, gate=gate)
         unique = {}
         written = {(write["owner"], write["kind"], write["item"]["id"]) for write in writes}
         for check in checks:
@@ -1644,7 +1644,7 @@ class WorkspaceAPI:
         if "changeRequest" in body:
             from workspace.change_requests import baseline_project, normalize_request
             data["changeRequest"] = normalize_request(body["changeRequest"])
-            baseline_project(self.storage, owner, data["changeRequest"])
+            baseline_project(self.storage, owner, data["changeRequest"], gate=gate)
             if any(ref not in data.get("guideRefs", []) for screen in data["changeRequest"]["screens"] for ref in screen.get("sourceRefs", [])):
                 raise HTTPError(400, "source-reference-mismatch", "화면별 원문 연결을 현재 선택한 페이지와 다시 대조하세요.")
         data["actor"] = scope["actor"] if scope else owner
@@ -1920,7 +1920,7 @@ class WorkspaceAPI:
                         from workspace.change_requests import baseline_project, enforce_scope
                         from workspace.react_artifacts import generated_files
                         change = run["contract"]["changeRequest"]
-                        baseline = baseline_project(self.storage, owner, change)
+                        baseline = baseline_project(self.storage, owner, change, gate=gate)
                         enforce_scope(change, generated_files(baseline) if baseline else {}, generated_files(project))
                 except ValueError as error:
                     raise HTTPError(409, "artifact-changed", "검증된 React 파일 구성과 해시가 일치하지 않습니다.") from error

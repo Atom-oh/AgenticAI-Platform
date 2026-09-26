@@ -886,3 +886,97 @@ def test_revoked_contract_404s_instead_of_a_criteria_changed_status():
                                               actor="carol", project=project["id"])
     assert (status, payload.get("code")) == (status_missing, payload_missing.get("code"))
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_change_request_baseline_404s_for_a_revoked_run_regardless_of_hash_match(monkeypatch):
+    """PR #33 review 5: `baseline_project` compared the supplied source hash
+    BEFORE ever authorizing the baseline run/contract, so neither
+    `_validated_contract`'s nor `_propose`'s validation-error aggregate-
+    recheck (review 1 #2 / review 3 #2) ever observed the baseline's own
+    lineage. Reproduced with the baseline (product A's run) and the calling
+    contract (product B, unaffected by the revocation below) kept separate,
+    so this isolates the BASELINE's own lineage from the already-fixed
+    current-guideline-asset oracle: after revoking product A's guideline
+    asset (the base run's own lineage input) -- `GET /runs/:id` on it already
+    404s -- submitting its CORRECT source hash in a NEW contract's
+    (product B's) `changeRequest.baseline` still 404s (via the created
+    contract's own final gate check on its `changeRequest.baseline`
+    lineage), but an INCORRECT hash used to return 400 instead -- the
+    validation-error path bypassing the gate entirely, never observing the
+    baseline's lineage at all. Authorizing the baseline before any hash
+    comparison closes this: both now 404 identically, in both
+    `POST /contracts` and `/contracts/propose`."""
+    from test_workspace_change_requests import change_request
+    browser = Path("/home/atomoh/.cache/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell")
+    if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and browser.is_file():
+        monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", str(browser))
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product_a = data["product"]
+    _, publication_a = request(api, "POST", f"/products/{product_a['id']}/publish",
+                               {"version": product_a["version"]}, actor="bob", project=project["id"])
+    product_a = publication_a["product"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication_a["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product_a["id"], "title": "베이스", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": "baseline-source"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    owner = "project:" + project["id"]
+    assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+    run = api.storage.get(owner, "run", data["run"]["id"])
+    row = run["rounds"][0]
+    assert row["passed"], row
+    approval = {"round": 1, "artifactSha256": row["artifactSha256"], "sourceHash": row["sourceHash"],
+                "bundleHash": row["bundleHash"], "contractVersion": run["contractVersion"]}
+    assert request(api, "POST", f"/runs/{run['id']}/approve", approval, actor="carol", project=project["id"])[0] == 200
+    status, baseline_data = request(api, "GET", f"/runs/{run['id']}/baseline", actor="carol", project=project["id"])
+    assert status == 200, baseline_data
+    correct_baseline = baseline_data["baseline"]
+    wrong_baseline = {**correct_baseline, "sourceHash": hashlib.sha256(b"wrong source").hexdigest()}
+    # A second, independent product -- its own guideline is never touched by
+    # the revocation below, isolating the baseline's OWN lineage check from
+    # the already-fixed "current guideline asset revoked" oracle.
+    _, data_b = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product_b = data_b["product"]
+    _, publication_b = request(api, "POST", f"/products/{product_b['id']}/publish",
+                               {"version": product_b["version"]}, actor="bob", project=project["id"])
+    product_b = publication_b["product"]
+    # Revoke the base run's own guideline asset -- its upstream lineage is now
+    # genuinely inaccessible, like the other "revoked run input" tests.
+    asset = api.storage.get(owner, "asset", publication_a["assetId"])
+    api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+    assert request(api, "GET", f"/runs/{run['id']}", actor="carol", project=project["id"])[0] == 404
+    manual_rule = {"id": "R1", "title": "진행", "source": {"kind": "manual"},
+                  "steps": [{"action": "expectVisible", "target": "next", "value": True}]}
+    delta_body = {"productId": product_b["id"], "title": "델타", "rules": [manual_rule]}
+    status, payload = request(api, "POST", "/contracts",
+                              {**delta_body, "changeRequest": {**change_request(), "baseline": correct_baseline}},
+                              actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+    status, payload = request(api, "POST", "/contracts",
+                              {**delta_body, "changeRequest": {**change_request(), "baseline": wrong_baseline}},
+                              actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+    status, payload = request(api, "POST", "/contracts/propose", {"productId": product_b["id"], "brief": "요약",
+                              "changeRequest": {**change_request(), "baseline": correct_baseline},
+                              "requestId": "propose-baseline"}, actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+    status, payload = request(api, "POST", "/contracts/propose", {"productId": product_b["id"], "brief": "요약",
+                              "changeRequest": {**change_request(), "baseline": wrong_baseline},
+                              "requestId": "propose-baseline-wrong"}, actor="carol", project=project["id"])
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
