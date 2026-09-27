@@ -1923,6 +1923,12 @@ class WorkspaceAPI:
                 # is genuinely accessible yet not one of the contract's own
                 # selected inputs reaches the 409 below.
                 self._authorized_asset(owner, data["referenceAssetId"], gate)
+                # A revocation racing in between that authorize() and this
+                # raise must still 404 identically to an already-
+                # inaccessible asset, not disclose this content-dependent
+                # "not selected" status (review 12 #2).
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "reference-not-selected", "The reference must be an approved contract asset")
             page = _integer(data.get("referencePage", 1), "Reference page", 1, 10000)
             preview = next((row for row in reference.get("previews", []) if row.get("page") == page), None)
