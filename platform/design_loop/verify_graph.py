@@ -32,10 +32,12 @@ from pathlib import Path
 
 from workspace.ontology_schema import digest, seal, validate_edge, validate_node
 from workspace.ontology_schema import source_ref as _source_ref
+from workspace.ontology_ux import evaluate, parse_when
 
 from . import coverage as coverage_mod
 from . import rules_v2
-from .composition import text_of, validate
+from .composition import text_of, validate, visible
+from .flow import enumerate_cases
 from .convention import Registry
 from .evidence import EvidenceUnavailable, contract_hash
 from .model_call import call
@@ -117,6 +119,7 @@ def design_checklist(prd, k):
         items.append({"id": f"d-rule-{rid}", "method": "llm", "target": "screen",
                       "severity": rule.get("severity") if rule.get("severity") in SEVERITIES else "major",
                       "text": rule["statement"], "targets": list(rule.get("targets", [])),
+                      "appliesWhen": rule.get("appliesWhen"),
                       "source": {"kind": "policy-rule", "ruleId": rule.get("ruleId", rid),
                                  "citation": rule.get("citation")}})
     return items
@@ -128,13 +131,18 @@ def _values(bundle):
     return bundle.get("binding_values") or {}
 
 
-def review_context(bundle, screen_id, state, k=None):
-    """Per-page judge context: the flow's step list and only this page's text, with resolved PRD values."""
+def review_context(bundle, screen_id, state, k=None, case=None):
+    """Per-page judge context: the flow's step list and only this page's text, with resolved PRD values.
+
+    With `case`, the page is first reduced to what that case actually shows (`composition.visible`), exactly
+    as coverage.py already does; a node hidden by a condition the case does not satisfy must not leak its text
+    into the judge's context (PR #30 review round 3, #2)."""
     flow = bundle["flow"]
     titles = {s: ((k.screens.get(s) or {}).get("title") if k is not None else None) or s for s in flow["screens"]}
     page = bundle["screens"][(screen_id, state)]
+    shown = visible(page, case) if case is not None else page
     return {"prd": {"steps": [{"id": s, "title": titles[s]} for s in flow["screens"]]},
-            "flowText": f"[{screen_id}:{state}] " + text_of(page, _values(bundle), k)}
+            "flowText": f"[{screen_id}:{state}] " + text_of(shown, _values(bundle), k)}
 
 
 def judge_payload(items, context):
@@ -324,15 +332,52 @@ def _reviewer(bundle, k, deps, mode, judgments):
         return findings, incomplete + [{"item": "*", "reason": "judge-unavailable"}], {"items": len(checklist)}
     calls = 0
     by_page = {}
+    case_of = {}
+    # Items with `appliesWhen` (policy rules only; PR #30 review round 3, #2) are reviewed once per case where
+    # the condition actually holds, against that case's visibility-filtered text -- never the raw, all-branches
+    # composition, which would let a node hidden in the applicable case still "prove" the item. An item with no
+    # `appliesWhen` keeps today's single, case-agnostic review (case=None), so existing behavior is unchanged.
+    all_cases = enumerate_cases((bundle.get("expectation") or {}).get("conditions", []))["cases"]
     for item in llm:
         unresolved = _unresolved_targets(item, k)
         if unresolved:                  # a required target that names nothing known cannot be reviewed: block
             incomplete.append({"item": item["id"], "reason": "target-unresolved", "targets": unresolved})
             continue
+        applies_when = item.get("appliesWhen")
+        if applies_when is None:
+            item_cases = [None]
+        else:
+            # Group applicable cases by their projection onto only the variables appliesWhen itself references:
+            # a condition the item never mentions cannot change whether it applies, and reviewing the same
+            # rendering twice under two full cases that differ only in an irrelevant variable would both waste
+            # judge calls and (without this) report the same failure twice.
+            referenced = {cid for _, cid in parse_when(applies_when)}
+            item_cases, undecidable, seen_projections = [], False, set()
+            for case in all_cases:
+                try:
+                    applies = evaluate(applies_when, case)
+                except ValueError:
+                    undecidable = True
+                    continue
+                if not applies:
+                    continue
+                projection = tuple(sorted((cid, case[cid]) for cid in referenced))
+                if projection in seen_projections:
+                    continue
+                seen_projections.add(projection)
+                item_cases.append(case)
+            if undecidable:
+                incomplete.append({"item": item["id"], "reason": "condition-undecidable"})
+            if not item_cases:
+                continue     # never applicable in any decidable case: nothing to review
         for page in _item_pages(item, bundle, k):
-            by_page.setdefault(page, []).append(item)
-    for (screen, state), items in by_page.items():
-        context = review_context(bundle, screen, state, k)
+            for case in item_cases:
+                case_key = tuple(sorted(case.items())) if case is not None else None
+                case_of[case_key] = case
+                by_page.setdefault((page[0], page[1], case_key), []).append(item)
+    for (screen, state, case_key), items in by_page.items():
+        case = case_of[case_key]
+        context = review_context(bundle, screen, state, k, case=case)
         if len(context["flowText"]) > MAX_FLOW_TEXT:
             incomplete += [{"item": i["id"], "screen": screen, "state": state, "reason": "page-text-limit"} for i in items]
             continue
@@ -351,14 +396,16 @@ def _reviewer(bundle, k, deps, mode, judgments):
         else:
             verdicts = _judge_one_by_one(items, context, deps)
             calls += len(items)
+        case_extra = {"case": case} if case is not None else {}
         for item in items:
             v = verdicts.get(item["id"]) or {"verdict": "incomplete", "evidence": "missing-verdict"}
             severity = item.get("severity") if item.get("severity") in SEVERITIES else "major"
             if v["verdict"] == "fail":
                 findings.append(_finding("reviewer", severity, "checklist-fail", v["evidence"], item=item["id"],
-                                         screen=screen, state=state))
+                                         screen=screen, state=state, **case_extra))
             elif v["verdict"] != "pass":
-                incomplete.append({"item": item["id"], "screen": screen, "state": state, "reason": v["evidence"]})
+                incomplete.append({"item": item["id"], "screen": screen, "state": state, "reason": v["evidence"],
+                                   **case_extra})
     return findings, incomplete, {"items": len(checklist), "judgeCalls": calls}
 
 

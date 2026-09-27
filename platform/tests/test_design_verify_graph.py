@@ -147,6 +147,41 @@ def test_adapt_mode_uses_the_retained_baseline():
     assert any(f["code"] == "adapt-scope" for f in r["findings"]), r["findings"]
 
 
+def test_reviewer_ignores_text_hidden_in_the_applicable_case():
+    """PR #30 review round 3, #2: a critical notice required only when autoTransfer=False must not be judged
+    against text that is only actually visible when autoTransfer=True. review_context() must apply case
+    visibility, and design_checklist()'s policy-rule items must carry appliesWhen so the reviewer knows which
+    case(s) to check each item against."""
+    from design_loop.verify_graph import _reviewer
+    SENTINEL = "특별 조건부 안내문 999"
+    b = bundle()
+    confirm = copy.deepcopy(b["screens"][("confirm", "default")])
+    confirm["slots"]["body"].append({"id": "hidden-notice", "asset": "body-text",
+                                     "props": {"children": SENTINEL},
+                                     "visibleWhen": {"when": "cond:autoTransfer", "negate": False}})
+    b["screens"][("confirm", "default")] = confirm
+    b["checklist"] = [{"id": "d-rule-x", "method": "llm", "severity": "critical",
+                       "text": f"필수 고지 '{SENTINEL}'가 confirm 화면에 있다", "targets": ["confirm"],
+                       "appliesWhen": "!cond:autoTransfer"}]
+    content_aware_judge = {"llm_judge": lambda item, ctx: {"verdict": "pass" if SENTINEL in ctx["flowText"]
+                                                            else "fail", "evidence": "checked"},
+                           "normalize": OK, **PROD}
+    findings, incomplete, meta = _reviewer(b, K, content_aware_judge, "fill", {})
+    assert not incomplete, incomplete
+    fails = [f for f in findings if f["code"] == "checklist-fail" and f["item"] == "d-rule-x"]
+    assert len(fails) == 1, findings
+    assert fails[0]["case"]["autoTransfer"] is False
+
+
+def test_design_checklist_carries_applies_when_from_policy_rules():
+    """PR #30 review round 3, #2: a policy rule's appliesWhen must reach its checklist item, or the reviewer
+    has no way to know which case(s) the item applies to."""
+    items = design_checklist(GOOD, K)
+    by_id = {i["id"]: i for i in items}
+    assert by_id["d-rule-r-terms-required"]["appliesWhen"] == "cond:eligible"
+    assert by_id["d-rule-r-ineligible-reason"]["appliesWhen"] == "!cond:eligible"
+
+
 def test_new_asset_candidate_is_never_approvable():
     b = bundle()
     comp = copy.deepcopy(b["screens"][("amount", "default")])
