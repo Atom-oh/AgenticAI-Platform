@@ -372,6 +372,52 @@ def test_procedure_snapshot_unreadable_reference_blocks(wb):
     assert not from_snapshot(snap).complete
 
 
+def test_procedure_snapshot_flags_a_next_edge_stale_after_a_screen_revision(wb):
+    """PR #30 review round 3, #3: a NEXT edge published separately (its own partition, referencing the
+    already-resolved canonical Screen ids -- e.g. a later flow-derivation step) must not silently disappear
+    from the transitions once one of its Screens is revised in ITS OWN partition. It must be flagged
+    stale-endpoint-revisions, exactly like a stale PART_OF member already is, so Knowledge.complete cannot
+    stay True over a gap."""
+    from design_fixtures import raw_graph_with, seed_document_ref
+    from design_loop.knowledge import from_snapshot
+    ontology = Ontology(context(wb))
+    ref = seed_document_ref(wb)
+    graph = raw_graph_with(ref, project_id=wb.project["id"])
+    graph_no_edge = copy.deepcopy(graph)
+    graph_no_edge["edges"] = [e for e in graph_no_edge["edges"] if e["id"] != "n01-intro-eligibility"]
+    first = ontology.publish_candidate("design-seed", graph_no_edge, expected_generation=None, request_id="seed-1")
+    ids = first["identities"]
+    _review_all(ontology, ids)
+    edge_only = {"schemaVersion": 1, "projectId": wb.project["id"], "nodes": [],
+                "edges": [schema.seal({"id": "n01-intro-eligibility", "type": "NEXT",
+                                      "src": {"id": ids["intro"], "revision": 1},
+                                      "dst": {"id": ids["eligibility"], "revision": 1},
+                                      "sourceRefs": [ref], "provenance": "declared",
+                                      "reviewState": "candidate", "tombstone": False})]}
+    ontology.publish_candidate("flow-edges", edge_only, expected_generation=ontology.current()["generation"],
+                               request_id="edges-1")
+    baseline = ontology.procedure_snapshot(ids["savings-signup"])
+    assert sum(1 for e in baseline["edges"] if e["type"] == "NEXT") == 9
+    # Revise "intro" (bump its revision) in the "design-seed" partition without touching "flow-edges" at all:
+    # that edge still records intro's OLD revision.
+    graph2 = copy.deepcopy(graph_no_edge)
+    for i, n in enumerate(graph2["nodes"]):
+        if n["id"] == "intro":
+            graph2["nodes"][i] = schema.seal({**{k: v for k, v in n.items() if k != "contentHash"},
+                                              "title": "변경된 제목"})
+    ontology.publish_candidate("design-seed", graph2, expected_generation=ontology.current()["generation"],
+                               request_id="seed-2")
+    revised = ontology.read([ids["intro"]])["nodes"][0]
+    for decision in ("reviewed", "approved"):
+        ontology.review_node(ids["intro"], expected_generation=ontology.current()["generation"],
+                             revision=revised["revision"], decision=decision, reason="revise",
+                             request_id=f"{decision}-intro-v2")
+    snap = ontology.procedure_snapshot(ids["savings-signup"])
+    assert sum(1 for e in snap["edges"] if e["type"] == "NEXT") == 8   # the stale edge is excluded
+    assert "stale-endpoint-revisions" in snap["coverage"]["unknown"]  # ...and never silently
+    assert not from_snapshot(snap).complete
+
+
 def test_procedure_snapshot_reports_a_deprecated_member(wb):
     from design_fixtures import seed_document_ref, review_all
     ontology = Ontology(context(wb))

@@ -695,9 +695,15 @@ class Ontology:
             flow_edges[edge["id"]] = edge
         for identifier in list(members):
             for edge in edges_of(identifier):
-                if (edge["type"] == "NEXT" and edge["src"]["id"] == identifier and edge["dst"]["id"] in members
-                        and all(members[edge[end]["id"]]["revision"] == edge[end]["revision"] for end in ("src", "dst"))):
-                    flow_edges[edge["id"]] = edge
+                if edge["type"] != "NEXT" or edge["src"]["id"] != identifier or edge["dst"]["id"] not in members:
+                    continue
+                if not all(members[edge[end]["id"]]["revision"] == edge[end]["revision"] for end in ("src", "dst")):
+                    # A transition recorded against a Screen's old revision must not silently drop out of the
+                    # count once that Screen is revised (PR #30 review round 3, #3); flag it exactly like a
+                    # stale PART_OF member already is, rather than excluding it without a trace.
+                    unknown.add("stale-endpoint-revisions")
+                    continue
+                flow_edges[edge["id"]] = edge
         design = self.closure(sorted(members), direction="dependencies", max_nodes=max_nodes, max_edges=max_edges) \
             if members else {"generation": current["generation"], "nodes": [], "edges": [],
                              "coverage": {"unknown": [], "truncated": False}}
