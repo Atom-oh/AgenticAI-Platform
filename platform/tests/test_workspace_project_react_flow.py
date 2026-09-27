@@ -2192,3 +2192,223 @@ def test_new_job_conflict_recheck_closes_a_race_after_its_own_authorization(monk
                               "brief": "새 요청", "requestId": "new-job-conflict-recheck"}, actor="carol", project=project["id"])
     assert injected["done"]
     assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_round_visibility_regression_during_the_final_recheck_still_404s(monkeypatch):
+    """PR #33 review 12 #1 (regression from review 11): `_reauthorize_current()`
+    called `run_access()` only to check pass/fail, discarded its FILTERED
+    result, and advanced the version fence -- so a run that legitimately
+    transitions in a way that changes what is VISIBLE (e.g. an unapproved
+    but reviewable round losing that state when the run's own status
+    regresses from "completed" to "failed") kept serving the OLD,
+    unfiltered round content instead of failing. Reproduced: a planner
+    (not a ROUND_EDITOR) GETs a run whose only round is "reviewable";
+    racing the run's status to "failed" immediately after that SAME run's
+    own successful authorize() must now 404 (matching a fresh GET), never
+    substitute a generic "still accessible" check for round-specific
+    content visibility. Paired with the test below, which confirms
+    genuinely benign progression (review 11's own case) still succeeds
+    under the identical timing."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    product = publication["product"]
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "회귀 재현", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    owner = "project:" + project["id"]
+
+    def model(system, user, images, model_id, maximum, trace_id, purpose):
+        return json.dumps({"files": {"src/App.tsx": APP}}), {}, {"modelId": model_id}
+    worker = Worker(storage=api.storage, model_call=model, react_call=evaluate_react)
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": "round-visibility-regression"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    run_id = data["run"]["id"]
+    assert worker.handle({"owner": owner, "jobId": data["job"]["id"]})["status"] == "completed"
+    run = api.storage.get(owner, "run", run_id)
+    assert run["status"] == "completed" and run["rounds"][0]["passed"] is True
+    original_authorize = http_module.ResponseGate.authorize
+    armed = {"on": True}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if armed["on"] and view == "run" and isinstance(record, dict) and record.get("id") == run_id and result is not None:
+            armed["on"] = False
+            # The run's own round content was VISIBLE (reviewable) to a
+            # planner at this moment; now make it invisible by regressing
+            # the run's overall status -- an ordinary write, not a
+            # revocation, but one that changes round-state visibility.
+            worker._update(owner, "run", run_id, status="failed")
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    # "bob" is a planner, not a ROUND_EDITOR (owner/designer/developer) --
+    # only reviewable/approved rounds are visible to this role.
+    status, payload = request(api, "GET", f"/runs/{run_id}", actor="bob", project=project["id"])
+    assert not armed["on"]
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_ordinary_run_progress_with_no_visibility_change_still_succeeds(monkeypatch):
+    """PR #33 review 12 #1 (paired case): the identical race timing as the
+    test above, but the run's progress does NOT change any round's
+    visibility (queued -> running, before any round exists -- review 11's
+    own original case) -- confirms the round-state fence does not
+    regress review 11's fix for genuinely benign progress."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "정상 진행 재확인", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    owner = "project:" + project["id"]
+    status, data = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                           "outputType": "react", "maxRounds": 1, "requestId": "progress-no-visibility-change"},
+                           actor="carol", project=project["id"])
+    assert status == 202, data
+    run_id = data["run"]["id"]
+    worker = Worker(storage=api.storage)
+    original_authorize = http_module.ResponseGate.authorize
+    armed = {"on": True}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if armed["on"] and view == "run" and isinstance(record, dict) and record.get("id") == run_id and result is not None:
+            armed["on"] = False
+            worker._update(owner, "run", run_id, status="running")
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "GET", f"/runs/{run_id}", actor="carol", project=project["id"])
+    assert not armed["on"]
+    assert status == 200 and payload["run"]["status"] == "running", (status, payload)
+
+
+def test_reference_not_selected_recheck_closes_a_race_after_its_own_authorization(monkeypatch):
+    """PR #33 review 12 #2: `_run_create`'s optional-reference validation
+    (review 2's fix) called `_authorized_asset()` before raising
+    "reference-not-selected", but never rechecked retained authority
+    before disclosing the raise itself. A revocation racing in AFTER that
+    authorize() succeeds still disclosed 409 reference-not-selected
+    instead of 404. Fixed by routing this raise through the gate's own
+    normalized final recheck (round 10's mechanism)."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    ref_bytes = b"reference-not-selected recheck race"
+    status, data = request(api, "POST", "/assets", {"name": "reference.txt", "size": len(ref_bytes),
+                           "sha256": hashlib.sha256(ref_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    reference = data["asset"]
+    original = api.storage.key_for(owner, "asset", reference["id"], "original")
+    api.storage.put_blob(original, ref_bytes, "text/plain")
+    # NOT added to the contract's own assetIds -- accessible, but not one
+    # of the contract's selected inputs, matching review 2's own repro.
+    reference = api.storage.put(owner, "asset", {**reference, "status": "stored", "uploadStatus": "stored",
+                                "parseStatus": "complete", "originalKey": original,
+                                "projectId": project["id"]}, expected_version=reference["version"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "참고 화면 재확인", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    original_authorize = http_module.ResponseGate.authorize
+    armed = {"on": True}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if armed["on"] and view == "asset" and isinstance(record, dict) and record.get("id") == reference["id"] and result is not None:
+            armed["on"] = False
+            asset = self.api.storage.get(owner, "asset", reference["id"])
+            self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                              "outputType": "react", "maxRounds": 1, "referenceAssetId": reference["id"],
+                              "requestId": "reference-not-selected-recheck"}, actor="carol", project=project["id"])
+    assert not armed["on"]
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
+
+
+def test_source_not_selected_recheck_closes_a_race_after_its_own_authorization(monkeypatch):
+    """PR #33 review 12 #2 (also applies to mode="verify"'s sourceAssetId
+    validation): same gap as the reference-not-selected fix above -- fixed
+    the same way."""
+    api = make_api()
+    project = shared(api)
+    _, data = request(api, "POST", "/products", DRAFT, actor="bob", project=project["id"])
+    product = data["product"]
+    _, publication = request(api, "POST", f"/products/{product['id']}/publish",
+                              {"version": product["version"]}, actor="bob", project=project["id"])
+    owner = "project:" + project["id"]
+    html_bytes = b"<html><body>original</body></html>"
+    status, data = request(api, "POST", "/assets", {"name": "source.html", "size": len(html_bytes),
+                           "sha256": hashlib.sha256(html_bytes).hexdigest(), "purpose": "reference"},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    source_asset = data["asset"]
+    original = api.storage.key_for(owner, "asset", source_asset["id"], "original")
+    api.storage.put_blob(original, html_bytes, "text/html")
+    source_asset = api.storage.put(owner, "asset", {**source_asset, "status": "stored", "uploadStatus": "stored",
+                                    "parseStatus": "complete", "originalKey": original,
+                                    "projectId": project["id"]}, expected_version=source_asset["version"])
+    rule = {"id": "Notice", "title": "필수 안내 페이지 확인", "source": {"kind": "explicit",
+            "assetId": publication["assetId"], "quote": DRAFT["notices"][0]["content"]}, "steps": [
+        {"action": "click", "target": "guide-open"},
+        {"action": "expectText", "target": "notice-consent", "value": DRAFT["notices"][0]["content"], "normalizeWhitespace": True}]}
+    status, data = request(api, "POST", "/contracts", {"productId": product["id"], "title": "원본 검사 재확인", "rules": [rule]},
+                           actor="carol", project=project["id"])
+    assert status == 201, data
+    contract = data["contract"]
+    _, data = request(api, "POST", f"/contracts/{contract['id']}/approve", {"version": contract["version"]},
+                      actor="carol", project=project["id"])
+    contract = data["contract"]
+    original_authorize = http_module.ResponseGate.authorize
+    armed = {"on": True}
+
+    def racing(self, view, record):
+        result = original_authorize(self, view, record)
+        if armed["on"] and view == "asset" and isinstance(record, dict) and record.get("id") == source_asset["id"] and result is not None:
+            armed["on"] = False
+            asset = self.api.storage.get(owner, "asset", source_asset["id"])
+            self.api.storage.put(owner, "asset", {**asset, "accessRevoked": True}, asset["version"])
+        return result
+    monkeypatch.setattr(http_module.ResponseGate, "authorize", racing)
+    status, payload = request(api, "POST", "/runs", {"contractId": contract["id"], "contractVersion": contract["version"],
+                              "mode": "verify", "sourceAssetId": source_asset["id"],
+                              "requestId": "source-not-selected-recheck"}, actor="carol", project=project["id"])
+    assert not armed["on"]
+    assert status == 404 and payload.get("code") == "not-found", (status, payload)
