@@ -1874,6 +1874,12 @@ class WorkspaceAPI:
                     # inputs must 404 identically to a foreign/missing id, never
                     # the distinguishable 409 below.
                     self._authorized_asset(owner, data["sourceAssetId"], gate)
+                    # A revocation racing in between that authorize() and
+                    # this raise must still 404 identically to an already-
+                    # inaccessible asset, not disclose this content-
+                    # dependent "not selected" status (review 12 #2).
+                    if gate is not None:
+                        gate.recheck()
                 raise HTTPError(409, "source-not-selected", "확정된 규칙에 포함된 HTML 파일을 선택하세요.")
             if (source["name"].rsplit(".", 1)[-1].lower() not in ("html", "htm")
                     or source.get("parseStatus") not in ("complete", "partial")):
