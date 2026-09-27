@@ -7,7 +7,7 @@ import os
 import re
 
 from workspace.criteria import resolve_generation_context
-from workspace.git_export import GitExporter, GitExportError
+from workspace.git_export import GitExportDeliveredUnverified, GitExporter, GitExportError
 from workspace.react_artifacts import read_archive
 from workspace.releases import approved_artifacts
 from workspace.storage import Conflict
@@ -78,7 +78,7 @@ def secret_token(connection):
     return text
 
 
-def create_export(api, owner, release, body, scope):
+def create_export(api, owner, release, body, scope, gate=None):
     from workspace.http import HTTPError, _json
     connections = api.git_connections()
     connection = connections.get(body.get("connectionId"))
@@ -94,7 +94,7 @@ def create_export(api, owner, release, body, scope):
     run = api._get(owner, "run", release["runId"])
     api._criteria(owner, {}, scope, api._get(owner, "contract", run["contractId"]))
     try:
-        approved_artifacts(api.storage, owner, run, release["round"], release["approvalHash"])
+        approved_artifacts(api.storage, owner, run, release["round"], release["approvalHash"], gate=gate)
     except ValueError as error:
         raise HTTPError(409, "release-approval-changed", str(error)) from error
     identifier = api._request_id(body, "git")
@@ -103,7 +103,25 @@ def create_export(api, owner, release, body, scope):
             **({"projectId": scope["project"]["id"]} if scope.get("project") else {})}
     fingerprint = api._fingerprint(data)
     exported = api.storage.get(owner, "gitexport", identifier)
+    if exported is not None and gate is not None:
+        # Authorize the SAME export (its own round-delivery lineage) before
+        # ever comparing the private requestHash fingerprint against it -- an
+        # inaccessible export must 404 identically to a missing one, not
+        # disclose through this 409 that a DIFFERENT-content export with
+        # this exact requestId still exists.
+        authorized = gate.authorize("export", exported)
+        if authorized is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        exported = authorized
     if exported and exported.get("requestHash") != fingerprint:
+        # A revocation racing in between the authorize() above and this
+        # comparison must still 404 identically to an already-inaccessible
+        # export, not disclose this content-dependent mismatch (review 10):
+        # recheck through the gate's own normalized final recheck (it
+        # converts a caught authorization change to the canonical 404,
+        # exactly like `authorize()` itself does).
+        if gate is not None:
+            gate.recheck()
         raise HTTPError(409, "request-changed", "Git 요청의 대상 또는 승인본이 변경되었습니다.")
     if exported is None:
         api._worker_ready()
@@ -123,14 +141,21 @@ def create_export(api, owner, release, body, scope):
             except Conflict:
                 exported = api.storage.get(owner, "gitexport", identifier)
                 if exported:
+                    if gate is not None:
+                        authorized = gate.authorize("export", exported)
+                        if authorized is None:
+                            raise HTTPError(404, "not-found", "Resource not found")
+                        exported = authorized
                     if exported.get("requestHash") != fingerprint:
+                        if gate is not None:
+                            gate.recheck()
                         raise HTTPError(409, "request-changed", "Git 요청이 변경되었습니다.")
                     break
                 if attempt == 2:
                     raise
-    job = api._existing_job(owner, identifier, fingerprint)
+    job = api._existing_job(owner, identifier, fingerprint, gate=gate)
     if not job:
-        job = api._new_job(owner, identifier, "git", {"exportId": identifier}, fingerprint)
+        job = api._new_job(owner, identifier, "git", {"exportId": identifier}, fingerprint, gate=gate)
     job = api._retry_dispatch(owner, job)
     api._invoke(owner, job)
     return _json(202, {"export": exported, "release": hydrate_release(api.storage, owner, api._get(owner, "release", release["id"])), "job": job})
@@ -169,6 +194,20 @@ def process_export(worker, owner, job):
                                          release.get("productId") or release["runId"],
                                          commit_time=exported["createdAt"] // 1000,
                                          **({"guard": authority_guard(reader)} if reader is not None else {}))
+    except GitExportDeliveredUnverified as delivered:
+        # The remote branch/commit genuinely exists now (cannot be undone), but
+        # whatever interrupted confirming its content matches what was requested --
+        # a guard revocation, a lookup failure, or a genuine mismatch -- means it was
+        # never verified. Persist the observed receipt for attribution/recovery --
+        # never "committed" (that would claim verified success for a possibly-wrong
+        # delivery) -- then fail the job normally; the generic failure path below
+        # only sets status and error, so these fields are retained even after it runs.
+        if (delivered.sha and re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", delivered.sha)
+                and delivered.source_hash == release["sourceHash"]):
+            worker._update(owner, "gitexport", exported["id"], status="delivered-unverified",
+                           commitSha=delivered.sha, branch=delivered.branch, baseSha=delivered.base,
+                           sourceHash=delivered.source_hash, connectionId=connection["id"])
+        raise ValueError("Git 배포가 이루어졌지만 내용을 확인하지 못했습니다. 별도로 검증하세요.") from None
     except GitExportError as error:
         raise ValueError(f"Git 내보내기를 완료하지 못했습니다: {error.code}") from None
     if (not isinstance(result, dict) or result.get("status") != "committed"

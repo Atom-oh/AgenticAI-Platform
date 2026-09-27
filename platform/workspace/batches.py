@@ -8,7 +8,7 @@ from workspace.storage import Conflict
 VARIANTS = ("layout", "dense", "emphasis", "flow", "information")
 
 
-def create_batch(api, owner, body, scope):
+def create_batch(api, owner, body, scope, gate=None):
     from engine import model_catalog
     from workspace.http import HTTPError, _integer, _json
     mode = body.get("mode", "guided")
@@ -25,9 +25,33 @@ def create_batch(api, owner, body, scope):
             data[key] = body[key]
     fingerprint = api._fingerprint(data)
     batch = api.storage.get(owner, "batch", identifier)
+    if batch is not None and gate is not None:
+        # Authorize the SAME batch (its own pinned-contract lineage) before
+        # ever comparing the private requestHash fingerprint against it -- an
+        # inaccessible batch must 404 identically to a missing one, not
+        # disclose through this 409 that a DIFFERENT-content batch with this
+        # exact requestId still exists.
+        authorized = gate.authorize("batch", batch)
+        if authorized is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        batch = authorized
     if batch and batch.get("requestHash") != fingerprint:
+        # A revocation racing in between the authorize() above and this
+        # comparison must still 404 identically to an already-inaccessible
+        # batch, not disclose this content-dependent mismatch (review 10):
+        # recheck the SAME aggregate this batch's own authorization just
+        # joined through the gate's own normalized final recheck (it
+        # converts a caught authorization change to the canonical 404,
+        # exactly like `authorize()` itself does).
+        if gate is not None:
+            gate.recheck()
         raise HTTPError(409, "request-changed", "이 비교 요청의 입력이 변경되었습니다.")
-    contract = api._get(owner, "contract", data["contractId"])
+    # Authorize the referenced contract (the same lineage check a plain GET's
+    # response gate would apply) before any of its stale fields are read to
+    # decide readiness/criteria compatibility -- inaccessible (e.g. a revoked
+    # guideline asset) must 404 identically to a missing contract, never this
+    # 409 or the criteria-changed one below.
+    contract = api._authorized_contract(owner, data["contractId"], gate)
     if (contract.get("status") != "approved" or contract["version"] != data["contractVersion"]
             or not contract.get("catalogHash")):
         raise HTTPError(409, "code-criteria-required", "현재 React 코드·상품 기준이 승인된 규칙을 선택하세요.")
@@ -41,7 +65,14 @@ def create_batch(api, owner, body, scope):
             batch = api.storage.put(owner, "batch", record)
         except Conflict:
             batch = api._get(owner, "batch", identifier)
+            if gate is not None:
+                authorized = gate.authorize("batch", batch)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                batch = authorized
             if batch.get("requestHash") != fingerprint:
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "request-changed", "비교 요청이 변경되었습니다.")
     directions = ["baseline", *VARIANTS[:variations]] if mode == "guided" else ["balanced"]
     for index, variant in enumerate(directions):
@@ -56,7 +87,7 @@ def create_batch(api, owner, body, scope):
                        visualPolicy="exact" if variant == "baseline" else "variation-review")
         slot = {"index": index, "variant": variant, "role": "baseline" if variant == "baseline" else mode if mode == "creative" else "variation"}
         try:
-            response = api._run_create(owner, request, scope=scope, batch_context=current)
+            response = api._run_create(owner, request, scope=scope, batch_context=current, gate=gate)
             value = json.loads(response["body"])
             slot.update(runId=value["run"]["id"], jobId=value["job"]["id"])
         except HTTPError as error:

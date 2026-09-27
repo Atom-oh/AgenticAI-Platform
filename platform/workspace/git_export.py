@@ -63,6 +63,20 @@ class GitExportError(Exception):
         super().__init__(message)
 
 
+class GitExportDeliveredUnverified(Exception):
+    """The remote branch/commit now genuinely exists (delivery already happened and
+    cannot be undone), but a guard revocation raced the follow-up integrity
+    verification, so its content was never confirmed against what was requested.
+    Deliberately NOT a `GitExportError`: the caller must persist the observed
+    receipt for attribution/recovery without ever treating this as verified
+    success -- a real content mismatch must still fail loudly, never silently
+    reported as "committed"."""
+    def __init__(self, branch, base, sha, source_hash, target):
+        super().__init__("delivered-unverified")
+        self.branch, self.base, self.sha = branch, base, sha
+        self.source_hash, self.target = source_hash, target
+
+
 def _fail(code):
     raise GitExportError(code, _MESSAGES[code])
 
@@ -554,7 +568,6 @@ class GitExporter:
             raise GitExportError("invalid-response", _MESSAGES["invalid-response"]) from None
 
     def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch, guard=None):
-        from workspace.ontology_sources import ProtectedCallRefused
         deadline = time.monotonic() + 120
         if self.connection["provider"] == "local":
             backend = _Local(self.connection, deadline)
@@ -582,12 +595,31 @@ class GitExporter:
         # atomically -- delivery happens there, not at `backend.publish` (which only
         # re-reads to confirm). GitHub and local instead create loose, unreachable
         # objects first and only deliver at `backend.publish` (`POST /git/refs` / the
-        # local ref transaction). A guard revocation between delivery and any further
-        # guarded call raises `ProtectedCallRefused` (never `GitExportError`, so the
-        # `except` below does not see it) -- once delivery has genuinely happened,
-        # that must not discard the one record of an action that already cannot be
-        # undone, while a revocation BEFORE delivery must keep blocking it exactly as
-        # it always has.
+        # local ref transaction). Anything that interrupts the follow-up verification
+        # after that point -- a guard revocation (`ProtectedCallRefused`), a lookup
+        # failure, or a genuine content/base mismatch (`GitExportError`) -- never
+        # undoes a GitLab delivery that already happened. For GitHub/local nothing has
+        # been delivered yet at this point, so it must keep blocking/failing exactly as
+        # it always has. For GitLab the branch+commit already exist and cannot be
+        # undone, but the SAME failure also blocked the only calls that could have
+        # confirmed their content matches what was requested -- an interrupted check and
+        # a genuine mismatch are indistinguishable here, so this must never be reported
+        # as verified "committed" success (that would silently launder a possibly-wrong
+        # delivery); instead the caller gets the observed facts to persist for
+        # attribution/recovery without claiming they were verified. The receipt is tied
+        # to "did the remote actually receive this commit", never to which exception
+        # class interrupted confirming it. Enumerating exception types here is a
+        # losing game (a guard revocation, a lookup failure, malformed verification
+        # metadata, a one-shot storage error -- anything a dependency can raise) and
+        # `export_release`'s own outer wrapper would convert whatever escapes this
+        # scope to a plain GitExportError OUTSIDE it, with no access to
+        # `sha`/`delivered`, losing the receipt regardless of which specific type it
+        # was. Structurally: once delivery is confirmed (GitLab's `create` already
+        # returned `sha`), ANY exception from the verification/publish step below
+        # means only that verification did not COMPLETE -- never that delivery did
+        # not happen -- so catch bare `Exception` (not `BaseException`: a real
+        # interpreter-level signal like `SystemExit`/`KeyboardInterrupt` still
+        # propagates untouched) and report delivered-unverified independent of type.
         try:
             sha = backend.create(base, tree, target, files, message, when, branch)
             delivered = self.connection["provider"] == "gitlab"
@@ -596,9 +628,9 @@ class GitExporter:
                 if backend.ref(self.connection["baseBranch"]) != base:
                     _fail("conflict")
                 backend.publish(branch, sha, self.connection["baseBranch"], base)
-            except ProtectedCallRefused:
+            except Exception:
                 if delivered:
-                    return self._result(branch, base, sha, source_hash, target)
+                    raise GitExportDeliveredUnverified(branch, base, sha, source_hash, target) from None
                 raise
         except GitExportError:
             occupied = backend.ref(branch)
