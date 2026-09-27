@@ -302,6 +302,13 @@ class Sources:
         self.ctx = context
         self.storage = context.storage
         self.observed = {}
+        # Per (owner, kind, id): the objective round-state fence for "run"
+        # observations (review 12 #1). Kept OUT of `self.observed`'s own
+        # check dicts -- those are also used verbatim as optimistic-
+        # concurrency `checks=` for storage transactions elsewhere
+        # (workbench/service.py), which requires their exact
+        # {"owner","kind","id","version"} shape.
+        self._round_fences = {}
         self.package_hashes = set()
         self.workbench_refs = {}
         self.historical_refs = {}
@@ -323,9 +330,30 @@ class Sources:
         if self._authority() != self.authority:
             fail(409, "ontology-authority-changed", "조회 중 프로젝트 역할 또는 권한이 변경되었습니다.")
 
+    @staticmethod
+    def _round_states(run):
+        """The objective (role-independent) `round_state()` of every round on
+        `run`, in stable list order -- a pure function of the run's OWN
+        content, unaffected by which actor/role is observing it. Two reads
+        of the SAME run content always compute the SAME tuple here,
+        regardless of who observes it, so storing it in `self.observed` per
+        review 12 #1 never spuriously conflicts across different callers
+        remembering the same run for different reasons (round_delivery's one
+        round vs run_access's every round)."""
+        return tuple(round_state(run, row) for row in run.get("rounds", []) if isinstance(row, dict))
+
     def _remember(self, kind, record):
         check = self.ctx.check(kind, record)
         key = (check["owner"], kind, record["id"])
+        if kind == "run":
+            # See `_reauthorize_current`: a version bump alone must not be
+            # treated as benign progress if it moved any round OUT of the
+            # objective state it was in when this reader first observed it
+            # (review 12 #1) -- e.g. an unapproved round silently losing its
+            # "reviewable" state when the run's own status regresses. Kept
+            # OUT of `check` itself -- see `self._round_fences`'s own
+            # comment for why.
+            self._round_fences[key] = self._round_states(record)
         prior = self.observed.get(key)
         if prior and prior != check:
             fail(409, "ontology-source-changed", "온톨로지 원본이 조회 중 변경되었습니다.")
@@ -346,12 +374,13 @@ class Sources:
             fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
         return record
 
-    def _reauthorize_current(self, kind, row):
+    def _reauthorize_current(self, key, check, row):
         """Re-run the SAME per-kind authorization this kind's own GET already
         applies, against the record's CURRENT row -- not the originally-
-        observed version. Raises the SAME `fail(409, "ontology-source-
+        observed version -- and mutate `check` in place to the CURRENT
+        baseline on success. Raises the SAME `fail(409, "ontology-source-
         changed", ...)` a genuine revocation would (or re-raises an
-        authority/expiry failure unchanged); returns nothing on success.
+        authority/expiry failure unchanged) otherwise.
 
         Used wherever a version change alone would otherwise be treated as
         a disclosure (review 11 #1): ordinary progress -- e.g.
@@ -362,17 +391,42 @@ class Sources:
         staleness it exists to tolerate. Kinds with no dedicated re-check
         (rarely if ever mutated by a concurrent background process) keep
         the original, conservative fail-closed behavior.
+
+        For "run" specifically, generic accessibility alone is NOT enough
+        (review 12 #1): `run_access()`'s own filtering means an unapproved
+        round can silently drop out of what a planner may see (e.g. a round
+        moving from "reviewable" to "failed" when the run's overall status
+        regresses) while the run itself stays perfectly accessible. Content
+        already read/served from that round before this recheck runs must
+        not be treated as still current just because the RUN is still
+        reachable -- so this also fails if any round's objective state
+        changed from what was originally observed, never substituting a
+        generic "still accessible" check for that content-specific one.
         """
+        # Fails as `_not_found()` (404), not a distinguishable 409, in every
+        # branch below: this helper can be reached from `absorb()` (a nested
+        # `authorize()` call, e.g. during response serialization) which is
+        # NOT wrapped by `ResponseGate.recheck()`'s own 409->404
+        # normalization -- so this failure must already be the canonical
+        # 404 at the source, identical to a genuinely missing/inaccessible
+        # record, regardless of which call path reached it.
+        kind = check["kind"]
         method_name = _RECHECK_METHODS.get(kind)
         if method_name is None:
-            fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
+            _not_found()
         probe = self._probe()
         try:
             getattr(probe, method_name)(row)
         except CollaborationError as error:
             if error.status == 401 or error.code in _AUTHORITY_CODES:
                 raise
-            fail(409, "ontology-source-changed", "조회 중 원본 또는 접근 권한이 변경되었습니다.")
+            _not_found()
+        if kind == "run":
+            fresh_states = self._round_states(row)
+            if self._round_fences.get(key) != fresh_states:
+                _not_found()
+            self._round_fences[key] = fresh_states
+        check["version"] = row["version"]
 
     def absorb(self, other):
         """Retain every observation of another reader for this reader's single final recheck.
@@ -390,14 +444,24 @@ class Sources:
                 # record at its OWN current version -- a version bump alone
                 # is not itself a conflict merely because this aggregate had
                 # already observed an OLDER version of the same record
-                # (review 11 #1). Re-run the same per-kind check before
-                # treating this merge as a version-changed disclosure.
+                # (review 11 #1). Re-run the same per-kind check (against
+                # the ABSOLUTE freshest row, not just `other`'s own read, in
+                # case yet another write landed since) before treating this
+                # merge as a version-changed disclosure; this mutates
+                # `prior` (== `self.observed[key]`) in place on success.
                 row = self.storage.get(owner, kind, identifier)
                 if not row:
-                    fail(409, "ontology-source-changed", "온톨로지 원본이 조회 중 변경되었습니다.")
-                self._reauthorize_current(kind, row)
-                check = {**check, "version": row["version"]}
+                    # A genuinely deleted record, reached via `absorb()` (not
+                    # wrapped by `ResponseGate.recheck()`'s normalization) --
+                    # fail as `_not_found()` (404) at the source, same as
+                    # `_reauthorize_current` does, rather than a
+                    # distinguishable raw 409 that could escape unconverted.
+                    _not_found()
+                self._reauthorize_current(key, prior, row)
+                continue
             self.observed[key] = check
+            if key in other._round_fences:
+                self._round_fences[key] = other._round_fences[key]
             if len(self.observed) > self.max_records:
                 fail(422, "ontology-authority-limit", "근거 조회 범위 제한을 초과했습니다. 분석 단위를 나누세요.")
         self.package_hashes |= other.package_hashes
@@ -1201,14 +1265,14 @@ class Sources:
             if row["version"] != check["version"]:
                 # A version change alone does not distinguish an actual
                 # revocation (review 8-10's fixes) from ordinary progress
-                # (review 11 #1) -- re-run the same per-kind check via the
-                # shared helper before treating this as a disclosure.
-                self._reauthorize_current(check["kind"], row)
-                # Still genuinely accessible: adopt the current version as
-                # this observation's new baseline (the SAME `check` object
-                # `self.observed` already holds), so a later recheck in the
-                # same request does not re-flag this same benign progress.
-                check["version"] = row["version"]
+                # (review 11 #1) from a content-visibility regression
+                # (review 12 #1) -- re-run the same per-kind check (and, for
+                # "run", the round-state fence) via the shared helper before
+                # treating this as a disclosure. Mutates `check` (the SAME
+                # object `self.observed` already holds) to the current
+                # baseline on success, so a later recheck in the same
+                # request does not re-flag this same benign progress.
+                self._reauthorize_current((check["owner"], check["kind"], check["id"]), check, row)
             if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "capability",
                                  "adm_sharing"):
                 if row.get("status") not in ("active", "admitted") or type(row.get("expiresAt")) is not int:
