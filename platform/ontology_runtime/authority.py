@@ -6,10 +6,10 @@ import hashlib
 import secrets
 
 from ontology_runtime import admission
-from ontology_runtime.authorization import active_job, commit_execution
+from ontology_runtime.authorization import active_job, attempt_deadline, commit_execution, key_check, key_deadline
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.tools import EXECUTIONS, KEYS
-from workbench.service import fail, fields
+from workbench.service import fail, fields, reader_deadlines
 from workspace import ontology_schema as schema
 from workspace.collaboration import Collaboration
 from workspace.ontology_analysis import source_input, validate_analysis
@@ -21,6 +21,22 @@ class Authority:
         self.storage, self.runtime, self.capabilities, self.evidence = storage, runtime, capabilities, evidence
         self.config = configuration
         self.collaboration = Collaboration(storage)
+
+    def _keys(self, key_id, claims, verified):
+        """Both registry keys, revalidated now (state, KMS and exact versions)."""
+        return self.capabilities.active(key_id), self.evidence.active(claims, verified)
+
+    def _deliver(self, ctx, checks, key_id, claims, verified, deadline, collected=()):
+        """The aggregate final delivery guard of a replay: a check-only
+        transaction fencing `checks` plus both keys' exact versions, whose
+        guard collects both keys' validity windows and the attempt deadline
+        with the deadlines already collected by the caller's reads."""
+        keys = self._keys(key_id, claims, verified)
+
+        def guard():
+            current = self._keys(key_id, claims, verified)
+            return [*collected, *(key_deadline(record) for record in current), attempt_deadline(deadline)]
+        commit_execution(ctx, [], [*checks, *(key_check(record) for record in keys)], guard=guard)
 
     def dispatch(self, event):
         fields(event, {"projectId", "artifactId", "inputHash"})
@@ -77,21 +93,20 @@ class Authority:
                 result = json.loads(raw_result)
                 evidence_key = self.evidence.verify(previous["capabilityClaims"],
                     {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"])
-                # This branch commits no transaction: the admission checks
-                # collected above (before the cached result was read) are
-                # rechecked now, after that read, at their exact versions and
-                # deadlines -- a retirement during the read must abort the replay.
-                admission.recheck(ctx, admissions)
-                sources.recheck()
-                # AUTH-04: a cached replay still requires the capability key that
-                # authorized this attempt to be current; a revocation after the
-                # original dispatch must abort every later replay, not just a
-                # fresh `verify`. Checked LAST, after every other read, so a
-                # revocation reaching only after those reads still aborts the replay.
-                self.capabilities.active(previous["capabilityKeyId"])
-                # ...and so does the evidence key that verified the cached
-                # receipt, at the exact registry version that verified it.
-                self.evidence.active(previous["capabilityClaims"], evidence_key)
+                # source-admission/1 final delivery check (AUTH-04/08): this
+                # branch writes nothing, so its linearization point is one
+                # check-only transaction over every fence -- the artifact/job,
+                # ontology, source and admission records, both registry keys
+                # and this execution -- taken after the cached result read.
+                # Every deadline (source access, intake decision/policy/
+                # provenance/grant expiry, token, both keys' validity and the
+                # execution deadline) is collected by the reads and compared
+                # once, with a single clock read taken after the last of them.
+                fences, reader = sources.recheck_deadlines()
+                self._deliver(ctx, [*checks, *fences, {"owner": EXECUTIONS, "kind": "ac_execution",
+                              "id": previous["id"], "version": previous["version"]}],
+                              previous["capabilityKeyId"], previous["capabilityClaims"], evidence_key,
+                              previous["deadline"], reader_deadlines(reader))
                 return result
             fail(409, "agentcore-already-dispatched", "이미 실행된 작업입니다. 현재 작업 상태를 확인하세요.")
         identity = "execution-" + secrets.token_hex(24)

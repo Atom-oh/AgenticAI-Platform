@@ -31,7 +31,7 @@ def _admin(storage, monkeypatch, event):
     return result["record"]
 
 
-def authorize_admission(wb, monkeypatch, refs, *, data_class="synthetic"):
+def authorize_admission(wb, monkeypatch, refs, *, data_class="synthetic", provenance_ttl_ms=30 * 86_400_000):
     """Register the real IAM-administered policy/provenance a `require()` call now demands.
 
     Mirrors `Env.policy`/`Env.provenance` in test_intake_admission.py (B0 intake):
@@ -54,7 +54,7 @@ def authorize_admission(wb, monkeypatch, refs, *, data_class="synthetic"):
                 "policyRevision": policy["revision"], "kind": "fixture" if data_class == "synthetic" else "public-reference",
                 "reference": {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256")},
                 "scope": {"deployment": INTAKE_DEPLOYMENT, "projectIds": [wb.project["id"]]},
-                "expiresAt": wb.storage.clock() + 30 * 86_400_000}})
+                "expiresAt": wb.storage.clock() + provenance_ttl_ms}})
     else:
         _admin(wb.storage, monkeypatch, {"op": "grant_reviewer", "record": {
             "id": "ontology-admission-grant", "actor": "alice", "policyId": policy["id"],
@@ -88,13 +88,13 @@ def classify_admitted(wb, ref, *, request_id, data_class="synthetic", reason="Sy
                                   "reason": reason, "decisionId": decision["id"]})
 
 
-def admitted(wb, monkeypatch, *, data_class="synthetic", files=None):
+def admitted(wb, monkeypatch, *, data_class="synthetic", files=None, provenance_ttl_ms=30 * 86_400_000):
     wb.api.ontology_analyzer_ready = True
     wb.api.ontology_analyzer = RuntimeAnalyzer(
         "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
     files = files or collection(wb)
     refs = [asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files]
-    authorize_admission(wb, monkeypatch, refs, data_class=data_class)
+    authorize_admission(wb, monkeypatch, refs, data_class=data_class, provenance_ttl_ms=provenance_ttl_ms)
     for file, ref in zip(files, refs):
         classify_admitted(wb, ref, request_id=file["assetId"], data_class=data_class)
     queued = submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files})

@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 
 from ontology_runtime import admission
-from ontology_runtime.authorization import active_job, commit_execution
+from ontology_runtime.authorization import active_job, attempt_deadline, commit_execution, key_check, key_deadline
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.identity import RESERVED
 from workbench.service import fail, fields
@@ -123,9 +123,19 @@ class Tools:
         if prior:
             if prior["resultHash"] != schema.digest(result):
                 fail(409, "execution-result-changed", "이전 작업과 현재 결과의 근거가 다릅니다.")
-            # A replay returns without a transaction: recheck the admissions
-            # (collected before this call's reads) after its last read.
-            admission.recheck(ctx, admissions)
+            # source-admission/1 final delivery check (AUTH-04/08): a replay
+            # writes nothing, so its linearization point is one check-only
+            # transaction, after its last read, over every fence (artifact/job,
+            # ontology, source and admission records, this execution and its
+            # capability key); every deadline -- source/intake expiry, token,
+            # the key's validity window and the execution deadline -- is
+            # compared once, with one clock read taken after the last read.
+            key_id = latest["capabilityKeyId"]
+            key = self.capabilities.active(key_id)
+            commit_execution(ctx, [], [*checks, key_check(key), {"owner": EXECUTIONS, "kind": "ac_execution",
+                             "id": latest["id"], "version": latest["version"]}],
+                             guard=lambda: [key_deadline(self.capabilities.active(key_id)),
+                                            attempt_deadline(latest["deadline"])])
             return result
         size = len(schema.canonical(result))
         if size > 300000 or ledger.get("retrievedBytes", 0) + size > 4 * 1024 * 1024:

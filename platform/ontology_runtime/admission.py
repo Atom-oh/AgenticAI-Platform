@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from intake import admission as intake_admission
-from workbench.service import check_source_deadlines, fail, fields
+from workbench.service import fail, fields
 from workspace import ontology_schema as schema
 from workspace.ontology_sources import Sources, authority_identity
 from workspace.collaboration import CollaborationError
@@ -270,19 +270,3 @@ def require(ctx, reference):
     # "any current" authority), and fence their observed versions into the
     # caller's commit so a revocation racing the final write aborts it too.
     return [ctx.check("ac_admission", row), *_recheck_authority(ctx, row)]
-
-
-def recheck(ctx, checks):
-    """Final recheck of `require()`'s returned checks for a path that returns
-    without a transaction (a cached dispatch replay, a replayed tool operation):
-    run after that path's last result read, it re-reads every record at its
-    exact observed version and compares the intake records' status and expiry
-    (and the token expiry) with one fresh clock read taken after those reads
-    (source-admission/1 final delivery recheck, AUTH-08)."""
-    for check in checks:
-        if check["kind"] in _ADMISSION_KINDS:
-            continue  # version, status and expiry: `check_source_deadlines` below
-        row = ctx.storage.get(check["owner"], check["kind"], check["id"])
-        if not row or row.get("version") != check["version"]:
-            fail(403, "agentcore-input-unclassified", "AgentCore에 사용할 원본의 비민감 분류 검토가 변경되었습니다.")
-    check_source_deadlines(ctx.storage, checks, ctx.claims)

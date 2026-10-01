@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 
 from ontology_runtime.capability import AuthorizationDenied
-from workbench.service import Service, check_source_deadlines
+from workbench.service import Service, collect_source_deadlines, compare_deadlines
 from workspace.collaboration import CollaborationError
 from workspace.storage import Conflict
 from workspace import ontology_schema as schema
@@ -39,8 +39,40 @@ def active_job(storage, collaboration, project_id, artifact_id, *, deadline=None
     return ctx, artifact, job, sources, checks
 
 
-def commit_execution(ctx, writes, checks):
-    """The Runtime roles can write only their execution partition."""
+def _denied():
+    raise AuthorizationDenied()
+
+
+def key_deadline(record):
+    """A key registry record's validity end (`notAfter`, seconds) as a collected
+    `(expiresAt_ms, rank, raise_error)` deadline: expiry changes no version, so
+    a version fence alone never sees it (execution-capability/1, AUTH-04)."""
+    if type(record.get("notAfter")) is not int:
+        raise AuthorizationDenied()
+    return record["notAfter"] * 1000, 0, _denied
+
+
+def attempt_deadline(deadline):
+    """The execution attempt's deadline (seconds) as a collected deadline."""
+    if type(deadline) is not int:
+        raise AuthorizationDenied()
+    return deadline * 1000, 0, _denied
+
+
+def key_check(record):
+    from ontology_runtime.tools import KEYS
+    return {"owner": KEYS, "kind": "ac_key", "id": record["id"], "version": record["version"]}
+
+
+def commit_execution(ctx, writes, checks, *, guard=None):
+    """The Runtime roles can write only their execution partition.
+
+    `writes` may be empty: a delivery that commits nothing (a cached replay)
+    still takes its linearization point here, as a check-only transaction over
+    every fence. Before every attempt, the source/admission deadlines of
+    `checks` and every deadline `guard()` collects with its own later reads
+    (key registry validity, the attempt deadline) join ONE aggregate compared
+    with a single fresh clock read taken after the last of those reads."""
     if any(write["owner"] != "ontology-executions" or write["kind"] not in {"ac_execution", "ac_operation"}
            for write in writes):
         raise AuthorizationDenied()
@@ -55,8 +87,14 @@ def commit_execution(ctx, writes, checks):
     observed = list(unique.values())
     if len(writes) + len(observed) > 100:
         raise AuthorizationDenied()
+
+    def before_attempt():
+        deadlines = collect_source_deadlines(ctx.storage, observed, ctx.claims)
+        if guard is not None:
+            deadlines.extend(guard())
+        compare_deadlines(ctx.storage, deadlines)  # after every read above
+
     try:
-        return ctx.storage.put_many(writes, checks=observed, retry_conflicts=False,
-            before_attempt=lambda: check_source_deadlines(ctx.storage, observed, ctx.claims))
+        return ctx.storage.put_many(writes, checks=observed, retry_conflicts=False, before_attempt=before_attempt)
     except Conflict as error:
         raise CollaborationError(409, "execution-conflict", "실행 또는 원본 권한이 변경되었습니다.") from error

@@ -49,8 +49,8 @@ def pipeline(wb, monkeypatch):
     return build_pipeline(wb, monkeypatch)
 
 
-def build_pipeline(wb, monkeypatch, files=None):
-    artifact = admitted(wb, monkeypatch, files=files)
+def build_pipeline(wb, monkeypatch, files=None, **admission):
+    artifact = admitted(wb, monkeypatch, files=files, **admission)
     kms = PhysicalKms()
     for key, purpose in [("cap-v1", "execution-capability"), ("evidence-v1", "runtime-evidence")]:
         wb.storage.put(KEYS, "ac_key", {"id": key, "keyArn": key, "purpose": purpose,
@@ -212,35 +212,23 @@ def test_authority_rejects_a_cached_replay_once_its_capability_key_is_revoked(wb
         schema.canonical(result)).hexdigest()
 
 
-def test_authority_rejects_a_cached_replay_revoked_during_its_own_final_source_recheck(wb, pipeline, monkeypatch):
-    """PR #22 review 2, finding 2: "Recheck replay authority after its final
-    reads." The cached-replay branch's capability check must run LAST, after
-    `sources.recheck()` (its other final read) -- round 1's fix ran it BEFORE
-    that read, so a revocation landing during that very read would have gone
-    unnoticed until the next replay attempt."""
-    from workspace.ontology_sources import Sources
-    result = pipeline.dispatch()
-    assert pipeline.runtime_calls == 1
-    original = Sources.recheck
-    # `sources.verify(pinned["sourceRefs"])`, earlier in dispatch(), makes two of
-    # its own `recheck()`-equivalent reads before the cached-replay branch is
-    # even reached; only the THIRD call within this one dispatch() attempt is
-    # the branch's own explicit `sources.recheck()` -- the final read whose
-    # ordering relative to the capability check this test exercises.
-    calls = {"n": 0}
+def _revoke(wb, key_id):
+    key = wb.storage.get(KEYS, "ac_key", key_id)
+    wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
 
-    def revoke_on_the_branchs_own_recheck(self):
-        calls["n"] += 1
-        if calls["n"] == 3:
-            key = wb.storage.get(KEYS, "ac_key", "cap-v1")
-            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
-        return original(self)
 
-    monkeypatch.setattr(Sources, "recheck", revoke_on_the_branchs_own_recheck)
+@pytest.mark.parametrize("key_id", ["cap-v1", "evidence-v1"])
+def test_authority_rejects_a_cached_replay_whose_key_is_revoked_during_its_final_source_check(
+        wb, pipeline, monkeypatch, key_id):
+    """PR #22 review 2, finding 2 / PR #34 review 1, finding 3: either registry
+    key revoked during the replay's final source check (after the cached result
+    read) still aborts the replay; the keys are rechecked after that read and
+    fenced into the replay's check-only delivery transaction."""
+    pipeline.dispatch()
+    state = _arm_after_result_read(wb, monkeypatch, lambda: _revoke(wb, key_id))
     with pytest.raises((AuthorizationDenied, CollaborationError)):
         pipeline.dispatch()
-    assert pipeline.runtime_calls == 1
-    assert calls["n"] == 3
+    assert state["fired"] == 1 and pipeline.runtime_calls == 1
 
 
 def test_execution_writer_cannot_modify_project_sources_or_key_registry(wb, monkeypatch):
@@ -413,26 +401,6 @@ def test_authority_fences_each_registry_key_into_the_completion_transaction(wb, 
     assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
 
 
-def test_authority_rejects_a_cached_replay_once_its_evidence_key_is_revoked_during_the_final_reads(
-        wb, pipeline, monkeypatch):
-    from workspace.ontology_sources import Sources
-    pipeline.dispatch()
-    original = Sources.recheck
-    calls = {"n": 0}
-
-    def revoke_on_the_branchs_own_recheck(self):
-        calls["n"] += 1
-        if calls["n"] == 3:
-            key = wb.storage.get(KEYS, "ac_key", "evidence-v1")
-            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
-        return original(self)
-
-    monkeypatch.setattr(Sources, "recheck", revoke_on_the_branchs_own_recheck)
-    with pytest.raises((AuthorizationDenied, CollaborationError)):
-        pipeline.dispatch()
-    assert calls["n"] == 3 and pipeline.runtime_calls == 1
-
-
 def _text_sources(wb, count):
     files = []
     for index in range(count):
@@ -494,3 +462,124 @@ def test_a_source_set_over_the_budget_is_rejected_unchanged_at_submission(wb, mo
     assert error.value.code == "execution-completion-scope"
     assert wb.storage.list_page(wb.owner, "wb_artifact")["items"] == []
     assert wb.storage.list_page(wb.owner, "job")["items"] == []
+
+
+def _arm_after_result_read(wb, monkeypatch, action):
+    """Run `action` on the first `Sources.recheck_deadlines` (the replay's final
+    source check) after the cached result blob has been read."""
+    from workspace.ontology_sources import Sources
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    get_blob, recheck = type(wb.storage).get_blob, Sources.recheck_deadlines
+    state = {"armed": False, "fired": 0}
+
+    def reading(self, key, *args, **kwargs):
+        data = get_blob(self, key, *args, **kwargs)
+        if key == execution["resultKey"]:
+            state["armed"] = True
+        return data
+
+    def rechecking(self):
+        value = recheck(self)
+        if state["armed"]:
+            state["armed"] = False
+            state["fired"] += 1
+            action()
+        return value
+
+    monkeypatch.setattr(type(wb.storage), "get_blob", reading)
+    monkeypatch.setattr(Sources, "recheck_deadlines", rechecking)
+    return state
+
+
+def test_a_cached_replay_refuses_a_policy_retired_during_its_final_source_check(wb, pipeline, monkeypatch):
+    """PR #34 review 2, finding 1: the replay's final delivery guard aggregates
+    source, admission, key and attempt authority; a retirement during the last
+    source check must abort the replay, not only one before it."""
+    pipeline.dispatch()
+    state = _arm_after_result_read(wb, monkeypatch, lambda: _retire_policy(wb, monkeypatch))
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert state["fired"] == 1 and pipeline.runtime_calls == 1
+
+
+def test_a_cached_replay_refuses_a_decision_expiring_during_its_final_source_check(wb, monkeypatch):
+    """A legitimately short-lived decision (bounded by its provenance) expiring
+    during the final source check, before the execution deadline, refuses the
+    replay: every deadline is compared once, after the last read."""
+    state = build_pipeline(wb, monkeypatch, provenance_ttl_ms=300_000)
+    state.dispatch()
+    original = wb.storage.clock
+    armed = _arm_after_result_read(wb, monkeypatch, lambda: setattr(wb.storage, "clock", lambda: original() + 301_000))
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    assert (original() + 301_000) // 1000 < execution["deadline"]
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        state.dispatch()
+    assert armed["fired"] == 1 and state.runtime_calls == 1
+
+
+def test_a_cached_replay_refuses_an_execution_deadline_crossed_during_the_result_read(wb, pipeline, monkeypatch):
+    pipeline.dispatch()
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    original = type(wb.storage).get_blob
+    seen = {"result": 0}
+
+    def get_blob(self, key, *args, **kwargs):
+        data = original(self, key, *args, **kwargs)
+        if key == execution["resultKey"]:
+            seen["result"] += 1
+            wb.storage.clock = lambda: execution["deadline"] * 1000
+        return data
+
+    monkeypatch.setattr(type(wb.storage), "get_blob", get_blob)
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert seen["result"] == 1 and pipeline.runtime_calls == 1
+
+
+def test_a_replayed_tool_operation_refuses_a_capability_key_revoked_during_its_final_guard(
+        wb, pipeline, monkeypatch):
+    """The same aggregate guard on the `Tools.invoke` prior-marker replay: the
+    capability key is fenced with the admission, source and attempt authority,
+    so a revocation reaching after the token's own final verification aborts it."""
+    from intake.records import INTAKE_OWNER
+    tools, outcome = pipeline.tools, {}
+    invoke = tools.invoke
+    get = type(wb.storage).get
+    armed = {"on": False}
+
+    def revoking_get(self, owner, kind, identifier, *args, **kwargs):
+        value = get(self, owner, kind, identifier, *args, **kwargs)
+        if armed["on"] and owner == INTAKE_OWNER and kind == "adm_policy":
+            armed["on"] = False
+            key = get(self, KEYS, "ac_key", "cap-v1")
+            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
+        return value
+
+    def replaying(event, context):
+        result = invoke(event, context)
+        if context.client_context.custom["bedrockAgentCoreToolName"] == "ontology___finish" and not outcome:
+            from ontology_runtime.capability import Capabilities
+            verify = Capabilities.verify
+            calls = {"n": 0}
+
+            def arming_verify(self, *args, **kwargs):
+                value = verify(self, *args, **kwargs)
+                calls["n"] += 1
+                if calls["n"] == 2:  # the replay's own final token verification
+                    armed["on"] = True
+                return value
+
+            monkeypatch.setattr(Capabilities, "verify", arming_verify)
+            try:
+                invoke(event, context)
+                outcome["replay"] = "returned"
+            except (AuthorizationDenied, CollaborationError):
+                outcome["replay"] = "refused"
+            monkeypatch.setattr(Capabilities, "verify", verify)
+        return result
+
+    monkeypatch.setattr(type(wb.storage), "get", revoking_get)
+    tools.invoke = replaying
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert outcome == {"replay": "refused"}
