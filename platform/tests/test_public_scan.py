@@ -278,6 +278,54 @@ def test_design_store_run_gate(monkeypatch):
     assert "<p>clean</p>" in html and "<script" not in html and ps.CSP_META in html
 
 
+def _stored(monkeypatch, design, objects):
+    monkeypatch.setattr(design, "_get_json", lambda key, default: json.loads(json.dumps(objects.get(key, default))))
+
+
+def test_design_store_run_scans_the_merged_index_before_any_write(monkeypatch):
+    """PR #30 review 5 #1: a forbidden label already in the stored index must not be republished, and no
+    page or report is written either (every outgoing payload is scanned before the first write)."""
+    from handlers import design
+    design, writes = _design(monkeypatch, lambda: list(PATTERNS))
+    _stored(monkeypatch, design, {design.INDEX_KEY: {"runs": [{"runId": "old", "productName": "ACME 적금"}]}})
+    with pytest.raises(ps.PublicationBlocked):
+        design.store_run("r7", _run("<p>clean</p>"), {})
+    assert writes == []
+    _stored(monkeypatch, design, {design.INDEX_KEY: {"runs": [{"runId": "old", "productName": "적금"}]}})
+    design.store_run("r8", _run("<p>clean</p>"), {})          # clean control: pages, report and index all written
+    keys = [key for key, _ in writes]
+    assert keys == ["design-runs/r8/intro.html", "design-runs/r8.json", design.INDEX_KEY]
+    assert [r["runId"] for r in json.loads(dict(writes)[design.INDEX_KEY])["runs"]] == ["r8", "old"]
+
+
+def _review(design, body):
+    from common.ctx import Ctx
+    import test_design_handler as th
+    apigw = th._Apigw()
+    ctx = Ctx(apigw=apigw, conn_id="c", email="u@x", rid="r1")
+    design.review_decision(ctx, body)
+    return apigw.sent[-1]
+
+
+def test_design_review_decision_scans_every_payload_before_any_write(monkeypatch):
+    """PR #30 review 5 #1: the review decision rewrites the public index and run report; both are gated."""
+    from handlers import design
+    clean_full = {"runId": "r9", "ok": True, "validationScope": "static-design",
+                  "report": {"items": [{"id": "a", "verdict": "pass"}]}}
+    for index, full in (({"runs": [{"runId": "r9"}, {"runId": "old", "productName": "ACME 적금"}]}, clean_full),
+                        ({"runs": [{"runId": "r9"}]}, {**clean_full, "prd": {"title": "ACME 상품"}})):
+        design, writes = _design(monkeypatch, lambda: list(PATTERNS))
+        _stored(monkeypatch, design, {design.INDEX_KEY: index, "design-runs/r9.json": full})
+        for decision in ("approve", "reject"):
+            sent = _review(design, {"runId": "r9", "decision": decision})
+            assert sent["ok"] is False and sent["error"] and "ACME" not in json.dumps(sent, ensure_ascii=False)
+            assert writes == [], (decision, index)
+    design, writes = _design(monkeypatch, lambda: list(PATTERNS))
+    _stored(monkeypatch, design, {design.INDEX_KEY: {"runs": [{"runId": "r9"}]}, "design-runs/r9.json": clean_full})
+    assert _review(design, {"runId": "r9", "decision": "approve"})["ok"] is True      # clean control
+    assert [key for key, _ in writes] == [design.INDEX_KEY, "design-runs/r9.json"]
+
+
 def test_design_store_run_without_bucket_needs_no_deny_list(monkeypatch):
     from handlers import design
     monkeypatch.setattr(design, "WEB_BUCKET", "")
