@@ -1,7 +1,7 @@
 [
   {
     "id": "ps-lumpsum-savings",
-    "productName": "하나 목돈 적금",
+    "productName": "고객사 A 목돈 적금",
     "productType": "수신",
     "category": "적금",
     "shape": "정형",

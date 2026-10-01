@@ -26,11 +26,11 @@ def main():
     region = cfg["region"]
     ac = boto3.client("bedrock-agentcore-control", region_name=region)
     for rt in _paginate(ac.list_agent_runtimes, "agentRuntimes"):
-        if rt["agentRuntimeName"] == "hana_design_harness":
+        if rt["agentRuntimeName"] == "bank_design_harness":
             ac.delete_agent_runtime(agentRuntimeId=rt["agentRuntimeId"])
             print("deleted runtime", rt["agentRuntimeId"])
     for gw in _paginate(ac.list_gateways, "items"):
-        if gw["name"] == "hana-design-assets-gw":
+        if gw["name"] == "bank-design-assets-gw":
             gid = gw["gatewayId"]
             for t in _paginate(ac.list_gateway_targets, "items", gatewayIdentifier=gid):
                 ac.delete_gateway_target(gatewayIdentifier=gid, targetId=t["targetId"])
@@ -38,12 +38,12 @@ def main():
             print("deleted gateway", gid)
     ecr = boto3.client("ecr", region_name=region)
     try:
-        ecr.delete_repository(repositoryName="hana-design-harness", force=True)
+        ecr.delete_repository(repositoryName="bank-design-harness", force=True)
         print("deleted ECR repo")
     except ecr.exceptions.RepositoryNotFoundException:
         pass
     sm = boto3.client("secretsmanager", region_name=region)
-    for sid in ("hana/m2m-client-secret",):
+    for sid in ("bank/m2m-client-secret",):
         try:
             sm.delete_secret(SecretId=sid, ForceDeleteWithoutRecovery=True)
             print("deleted secret", sid)

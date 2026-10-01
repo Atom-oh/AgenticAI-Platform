@@ -5,10 +5,10 @@ from aws_cdk.assertions import Match, Template
 def synth():
     import sys, pathlib
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "infra"))
-    from stack import HanaUiuxPlatformStack
+    from stack import BankUiuxPlatformStack
     app = cdk.App()
-    return Template.from_stack(HanaUiuxPlatformStack(
-        app, "HanaUiuxPlatform",
+    return Template.from_stack(BankUiuxPlatformStack(
+        app, "BankUiuxPlatform",
         env=cdk.Environment(account="180294183052", region="ap-northeast-2")))
 
 
@@ -35,8 +35,8 @@ def test_no_public_bucket_and_oac_distribution():
 def test_lambdas_have_env():
     t = synth()
     t.has_resource_properties("AWS::Lambda::Function", Match.object_like({
-        "FunctionName": "hana-figma-sync",
-        "Environment": {"Variables": Match.object_like({"FIGMA_SECRET_ID": "hana/figma-token"})}}))
+        "FunctionName": "bank-figma-sync",
+        "Environment": {"Variables": Match.object_like({"FIGMA_SECRET_ID": "bank/figma-token"})}}))
 
 
 def test_feedback_lambda_and_api_behavior():
@@ -63,10 +63,10 @@ def test_dispatcher_async_invoke_has_no_retries():
 def test_history_table_and_dispatcher():
     t = synth()
     t.has_resource_properties("AWS::DynamoDB::Table", Match.object_like({
-        "TableName": "hana-asset-history"}))
+        "TableName": "bank-asset-history"}))
     t.has_resource_properties("AWS::Lambda::Function", Match.object_like({
-        "FunctionName": "hana-generate-dispatcher", "Timeout": 900}))
+        "FunctionName": "bank-generate-dispatcher", "Timeout": 900}))
     t.has_resource_properties("AWS::Lambda::Function", Match.object_like({
-        "FunctionName": "hana-draft-feedback",
+        "FunctionName": "bank-draft-feedback",
         "Environment": {"Variables": Match.object_like({
             "DISPATCHER_FN": Match.any_value(), "HISTORY_TABLE": Match.any_value()})}}))

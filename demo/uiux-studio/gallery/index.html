@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hana Design Studio</title>
+<title>Bank Design Studio</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='%23008485'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
 <style>
@@ -226,7 +226,7 @@
 </head>
 <body>
 <header>
-  <div class="logo"><i></i>Hana Design Studio</div>
+  <div class="logo"><i></i>Bank Design Studio</div>
   <nav id="nav">
     <a href="#gallery" data-tab="gallery">갤러리</a>
     <a href="#play" data-tab="play">플레이그라운드</a>
@@ -400,8 +400,8 @@
   <div class="login-wrap">
     <div class="login-brand">
       <div class="login-mark" aria-hidden="true"></div>
-      <div class="name">Hana Design Studio</div>
-      <div class="sub">하나은행 UI/UX Agentic AI 플랫폼</div>
+      <div class="name">Bank Design Studio</div>
+      <div class="sub">고객사 A UI/UX Agentic AI 플랫폼</div>
     </div>
     <form class="login-card" id="login-form">
       <div class="head">
@@ -445,8 +445,8 @@
 
   /* ---- designer identity (Cognito) ---- */
   let appConfig = null;
-  const getToken = () => sessionStorage.getItem('hana_token') || localStorage.getItem('hana_token') || '';
-  const getUser = () => sessionStorage.getItem('hana_user') || localStorage.getItem('hana_user') || '';
+  const getToken = () => sessionStorage.getItem('bank_token') || localStorage.getItem('bank_token') || '';
+  const getUser = () => sessionStorage.getItem('bank_user') || localStorage.getItem('bank_user') || '';
 
   async function loadConfig() {
     if (!appConfig) appConfig = await apiGet('/api/config');
@@ -458,7 +458,7 @@
     b.textContent = `${getUser()} · 로그아웃`;
     b.onclick = () => {
       for (const st of [sessionStorage, localStorage]) {
-        st.removeItem('hana_token'); st.removeItem('hana_user');
+        st.removeItem('bank_token'); st.removeItem('bank_user');
       }
       openLogin();
     };
@@ -500,8 +500,8 @@
         return;
       }
       const store = document.getElementById('login-remember').checked ? localStorage : sessionStorage;
-      store.setItem('hana_token', token);
-      store.setItem('hana_user', username);
+      store.setItem('bank_token', token);
+      store.setItem('bank_user', username);
       document.getElementById('login-password').value = '';
       closeLogin();
       renderAuthButton();
@@ -515,11 +515,11 @@
 
   async function bootAuth() {
     if (!getToken()) { openLogin(); return; }
-    const r = await fetch('/api/me', {headers: {'x-hana-auth': getToken()}, cache: 'no-store'})
+    const r = await fetch('/api/me', {headers: {'x-bank-auth': getToken()}, cache: 'no-store'})
       .catch(() => null);
     if (!r || !r.ok) {
       for (const st of [sessionStorage, localStorage]) {
-        st.removeItem('hana_token'); st.removeItem('hana_user');
+        st.removeItem('bank_token'); st.removeItem('bank_user');
       }
       openLogin();
       return;
@@ -531,7 +531,7 @@
     const body = JSON.stringify(payload);
     const sha256 = await sha256Hex(body);
     const headers = {'Content-Type': 'application/json', 'x-amz-content-sha256': sha256};
-    if (getToken()) headers['x-hana-auth'] = getToken();
+    if (getToken()) headers['x-bank-auth'] = getToken();
     const r = await fetch(path, {method: 'POST', headers, body});
     const out = await r.json().catch(() => ({}));
     if (r.status === 401) { openLogin(); return null; }  // session expired → login page
@@ -929,12 +929,12 @@
     doc.addEventListener('click', e => {
       if (!selectMode) return;
       e.preventDefault(); e.stopPropagation();
-      doc.querySelectorAll('[data-hana-picked]').forEach(n => {
-        n.style.outline = ''; n.removeAttribute('data-hana-picked');
+      doc.querySelectorAll('[data-bank-picked]').forEach(n => {
+        n.style.outline = ''; n.removeAttribute('data-bank-picked');
       });
       const el = e.target;
       const cleanHtml = el.outerHTML.slice(0, 4000);  // capture BEFORE visual markers
-      el.setAttribute('data-hana-picked', '1');
+      el.setAttribute('data-bank-picked', '1');
       el.style.outline = '3px solid #008485';
       const label = el.tagName.toLowerCase() +
         (el.textContent ? ` — "${el.textContent.trim().slice(0, 30)}"` : '');

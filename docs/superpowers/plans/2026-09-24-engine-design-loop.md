@@ -1187,6 +1187,8 @@ Run: `python3 -m pytest tests/test_public_identifiers.py -q` → PASS. From the 
 
 - [ ] **Step 5: Operator note (live, repository settings).** The repository owner adds the `PUBLIC_DENYLIST` Actions secret and marks the `Public safety scan / scan` check as required on `main`. Record completion in the PR. Do not claim the check is enforced until it is required.
 
+  *Amendment (PR #30 fix round 1, user decision):* while no deny-list is configured (the `PUBLIC_DENYLIST` secret absent or empty; the SSM parameter unset, unreadable or empty), the scans and both publishers **warn and pass** (`--allow-missing-patterns`, passed by CI only when the secret is empty) instead of blocking Pages or publication. A configured deny-list stays fail-closed as specified above. Sanitization, the `script-src 'none'` CSP and the approved-media registry apply in both cases.
+
 - [ ] **Step 6: Commit**
 
 ```bash
@@ -2754,7 +2756,8 @@ def test_mermaid_highlights_case_path():
 | A composition sets a `callback` prop directly | `callback-literal` | critical |
 | An `on.click` on a component whose adapter is not `action` | `unknown-transition` | critical |
 | `on.click` values: `"next"` is valid on any screen with ≥ 1 outgoing transition (review round 3, N14). `"finish"` is valid **only** on terminal screens (review round 6, Z4). An explicit transition id must leave this screen. Anything else → `unknown-transition` | `unknown-transition` | critical |
-| Any literal string, meaning every string-typed prop, text child and list-item field, that contains a financial quantity per the **shared grammar** `design_loop.financial.QUANTITY` (review round 28, AV2). The grammar is a number with optional sign and thousands separators, then an optional Korean magnitude (`천`, `만`, `억`, `조`), then a unit from `%p`, `%`, `bp`, `원`, `개월`, `년`, `일`, `세`, `회`, `배`. E7's value-unit check uses the same module | `literal-financial-value` | critical |
+| Any number displayed by a literal (every non-enum prop, text child, list-item field and the screen title): decimal digits of any script, or a Korean numeral word in quantity position (`삼십만원`, `오천원`, `만원`, `한 달`). No financial context is inferred (PR #30 review 6, #1). The only exemption is an explicit non-financial form in `design_loop.financial.NONFINANCIAL_FORMS` (currently the step counter `N단계`). Enum props count only when they hold a unit-bearing quantity. The PRD value grammar `design_loop.financial.QUANTITY` (review round 28, AV2) remains E7's value-unit check | `literal-financial-value` | critical |
+| A numeric character that is not a decimal digit (`①`, `Ⅳ`, `½`, `一`) in a displayed literal | `unsupported-numeral-form` | critical |
 | `on.click` transition not in flow or not leaving this screen | `unknown-transition` | critical |
 | `state ∉ STATES`, `surface` unknown | `bad-state`, `bad-surface` | critical |
 

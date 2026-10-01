@@ -23,17 +23,17 @@ os.environ.update({
 
 from feedback.assets_api import register_asset  # noqa: E402
 
-ACTOR = "하나 UX팀"
+ACTOR = "고객사 A UX팀"
 
 SAMPLES = [
-    {"name": "하나 시그니처 팔레트", "type": "palette", "scope": "shared",
+    {"name": "고객사 A 시그니처 팔레트", "type": "palette", "scope": "shared",
      "content": json.dumps({
          "primary": "#008485", "primaryDark": "#00615f", "mint": "#e6f3f2",
          "ink": "#17332f", "bg": "#fbfcfb", "warn": "#d9a441", "danger": "#b23b3b",
          "usage": "primary는 CTA·활성 상태 1곳에만, mint는 배경 틴트, warn/danger는 상태 전용"},
          ensure_ascii=False, indent=2)},
 
-    {"name": "하나 라이트 토큰", "type": "token", "scope": "shared",
+    {"name": "고객사 A 라이트 토큰", "type": "token", "scope": "shared",
      "content": json.dumps({
          "tokens": {
              "color": {"primary": "#008485", "ink": "#17332f", "bg": "#ffffff",
@@ -45,7 +45,7 @@ SAMPLES = [
              "radius": {"card": 16, "button": 14, "chip": 22}}},
          ensure_ascii=False, indent=2)},
 
-    {"name": "하나 코어 아이콘셋", "type": "icon-set", "scope": "shared",
+    {"name": "고객사 A 코어 아이콘셋", "type": "icon-set", "scope": "shared",
      "content": json.dumps({
          "style": "stroke 2px, 24px grid, round cap",
          "icons": {
@@ -70,8 +70,8 @@ SAMPLES = [
 - 이체 플로우 진행 중(위저드 2단계 이후)에는 숨긴다
 - 알림 탭은 미확인 건수 뱃지(8px 도트)만 — 숫자 뱃지 금지"""},
 
-    {"name": "하나 UI 라이팅 가이드", "type": "style-guide", "scope": "shared",
-     "content": """# 하나 UI 라이팅 가이드
+    {"name": "고객사 A UI 라이팅 가이드", "type": "style-guide", "scope": "shared",
+     "content": """# 고객사 A UI 라이팅 가이드
 
 톤: 정중하되 간결. 해요체 기본 ("이체가 완료됐어요"), 법적 고지는 합니다체.
 
@@ -116,7 +116,7 @@ description: 시안을 다크모드로 변환할 때의 규칙
                    "여백 많은 카드, 마이크로 인터랙션 힌트(hover/pressed 상태 명시). "
                    "그라디언트 남용 금지, 포인트 컬러는 한 곳에만.",
          "model_id": "global.anthropic.claude-sonnet-5",
-         "asset_ids": ["palette:하나-시그니처-팔레트", "style-guide:하나-ui-라이팅-가이드"],
+         "asset_ids": ["palette:고객사-a-시그니처-팔레트", "style-guide:고객사-a-ui-라이팅-가이드"],
          "skills": []}, ensure_ascii=False, indent=2)},
 ]
 

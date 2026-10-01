@@ -1,6 +1,6 @@
 ---
 name: design-draft-html
-description: Rules for generating a Hana UI draft screen as a single HTML file.
+description: Rules for generating a Bank UI draft screen as a single HTML file.
 ---
 
 # Design Draft HTML
@@ -15,8 +15,8 @@ Hard rules:
 
 - Hit targets >= 44px; body text >= 13px.
 - No fake device chrome: status bar, clock/battery, or keyboard.
-- Korean UI copy with fictional sample data. `김하나` and `하나 주거래 통장` are retained prompt fixtures, not actual customer records or product evidence.
-- All colors/type/spacing come from design tokens; see `hana-design-system`.
+- Korean UI copy with fictional sample data. `홍길동` and `고객사 A 주거래 통장` are retained prompt fixtures, not actual customer records or product evidence.
+- All colors/type/spacing come from design tokens; see `bank-design-system`.
 
 Ordinary generation requests exactly three variants, each moving ONE axis:
 

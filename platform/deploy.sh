@@ -39,6 +39,10 @@ assemble_api() {
   rm -rf "$dist" && mkdir -p "$dist/seed/out"
   cp api/*.py "$dist/"
   cp -r api/common api/handlers engine graph onprem semantic "$dist/"
+  # 공개 게시 게이트(api/common/public_scan.py)의 스캐너 코어와 승인 미디어 레지스트리 — 두 번째 사본을 두지 않고 복사한다.
+  # api/handlers/design.py 는 이 아티팩트 안에 있고 이 코어를 가져오므로, --assemble-only 출력도 예외가 아니다.
+  cp ../scripts/check_public_identifiers.py "$dist/common/public_scan_core.py"
+  cp ../scripts/public-assets.sha256 "$dist/common/public-assets.sha256"
   for m in registry screengen report agentcore design_loop studio workspace workbench documents intake ontology_runtime; do [ -d "$m" ] && cp -r "$m" "$dist/"; done
   mkdir -p "$dist/react-kit"
   cp react-kit/catalog.json "$dist/react-kit/"

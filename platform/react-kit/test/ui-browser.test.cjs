@@ -82,7 +82,7 @@ createRoot(document.getElementById('root')).render(<App/>);` },
     await page.getByRole('main', { name: '플랫폼 기본 가입 화면', exact: true }).waitFor();
     const names = await page.locator('[data-studio-component]').evaluateAll(nodes => [...new Set(nodes.map(node => node.dataset.studioComponent))].sort());
     assert.deepEqual(names, ['Screen', 'Stack', 'Grid', 'Inline', 'Panel', 'Text', 'Button', 'Input', 'Checkbox', 'Select', 'RadioGroup', 'Alert', 'Stepper', 'Summary', 'AssetImage'].sort());
-    assert(await page.locator('[data-studio-component]').evaluateAll(nodes => nodes.every(node => node.dataset.studioVersion === '1.0.0')));
+    assert(await page.locator('[data-studio-component]').evaluateAll(nodes => nodes.every(node => node.dataset.studioVersion === '1.2.0')));
     const amount = page.getByRole('spinbutton', { name: '납입금액', exact: true });
     assert.equal(await amount.getAttribute('data-testid'), 'amount');
     assert.equal(await amount.getAttribute('required'), '');

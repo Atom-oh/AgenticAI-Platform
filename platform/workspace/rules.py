@@ -15,6 +15,8 @@ STYLE_PROPERTIES = {"color", "backgroundColor", "fontSize", "fontWeight", "fontF
                     "padding", "margin", "gap", "minHeight", "height", "width", "borderColor", "borderWidth", "display"}
 CRITERIA_IDS = ("projectId", "productId", "guidelineId", "guidelineAssetId")
 CRITERIA_HASHES = ("catalogHash", "ontologyHash")
+# Published-notice limit (collaboration.py): one expectText/expectValue step can hold a complete notice (engine E13).
+TEXT_VALUE_MAX = {"expectText": 4000, "expectValue": 4000}
 UX_STATES = {"entry": "첫 진입", "input": "입력·선택", "consent": "동의", "error": "오류·수정",
              "empty": "결과 없음", "loading": "처리 중", "back": "이전·재진입", "cancel": "취소·이탈", "complete": "완료"}
 
@@ -99,6 +101,11 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
             if not isinstance(data[name], str) or not re.fullmatch(r"[a-f0-9]{64}", data[name]):
                 raise ValueError(f"{name}: 기준 코드/온톨로지 해시가 올바르지 않습니다.")
             normalized[name] = data[name]
+    if "designSnapshotHash" in data:
+        # The design procedure snapshot is bound separately from the product projection hash (engine E13, X2).
+        if not isinstance(data["designSnapshotHash"], str) or not re.fullmatch(r"[a-f0-9]{64}", data["designSnapshotHash"]):
+            raise ValueError("designSnapshotHash: 설계 스냅샷 해시가 올바르지 않습니다.")
+        normalized["designSnapshotHash"] = data["designSnapshotHash"]
     if any(name in normalized for name in CRITERIA_IDS):
         if not all(name in normalized for name in (*CRITERIA_IDS, *CRITERIA_HASHES)):
             raise ValueError("프로젝트·상품·가이드·컴포넌트 기준을 함께 고정해야 합니다.")
@@ -173,7 +180,7 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
             clean = {"action": action, "target": target,
                      "targetLabel": _text(step.get("targetLabel", target), "대상 이름", 180)}
             if action in TEXT_ACTIONS:
-                clean["value"] = _text(step.get("value"), "입력/기대값", 2000, empty=True)
+                clean["value"] = _text(step.get("value"), "입력/기대값", TEXT_VALUE_MAX.get(action, 2000), empty=True)
             elif action in BOOL_ACTIONS:
                 if not isinstance(step.get("value"), bool):
                     raise ValueError(f"{rid}: {action} 값은 참/거짓이어야 합니다.")

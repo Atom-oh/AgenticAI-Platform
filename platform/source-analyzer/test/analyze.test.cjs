@@ -338,3 +338,18 @@ test('HTML extraction connects literal resources without executing scripts or gu
   assert.equal(changed.references[0].resolution.reason, 'html-resource-base-unresolved');
   assert.ok(changed.unresolved.some(item => item.reason === 'html-resource-base-unresolved'));
 });
+
+test('JSX uses report the enclosing jsx-use index and nesting depth', () => {
+  const kit = 'import { Screen, Header, Stack, Title, Footer, Panel, Icon } from "@demo/kit";\n';
+  const input = request([
+    text('page.tsx', kit + 'export const P = () => <Screen>\n  <Header/>\n  <Stack><Title/></Stack>\n  <div><Footer/></div>\n  <Panel icon={<Icon/>}/>\n</Screen>;'),
+    text('flat.tsx', kit + 'export const F = () => <Title/>;'),
+  ]);
+  input.resolver = { aliases: {}, packages: { '@demo/kit': { version: '1.0.0', sha256: 'a'.repeat(64) } }, jsonAssetFields: [] };
+  const uses = analyze(input).references.filter(item => item.kind === 'jsx-use' && item.path === 'page.tsx');
+  assert.deepEqual(uses.map(u => [u.symbol, u.parent, u.depth]), [
+    ['Screen', null, 0], ['Header', 0, 1], ['Stack', 0, 1], ['Title', 2, 2], ['Footer', 0, 1], ['Panel', 0, 1], ['Icon', 5, 2]]);
+  const flat = analyze(input).references.find(item => item.kind === 'jsx-use' && item.path === 'flat.tsx');
+  assert.equal(flat.parent, null);
+  assert.equal(flat.depth, 0);
+});

@@ -66,6 +66,14 @@ for (const rule of required) test(rule.id + ' · ' + rule.title, { timeout: 4500
       const selector = contract.bindings?.[step.target];
       let target = byId;
       if (await byId.count() !== 1 && selector) target = page.locator(selector);
+      if (step.action === 'expectVisible' && step.value === false) {
+        // Same semantics as the Studio verifier: an absent (conditionally unmounted) target is not visible.
+        const deadline = Date.now() + 3000;
+        let count = await target.count();
+        while (count > 1 && Date.now() < deadline) { await page.waitForTimeout(50); count = await target.count(); }
+        if (count === 0) { assertions++; continue; }
+        assert.equal(count, 1, `Unique target required: ${step.target}`);
+      }
       await target.waitFor({ state: 'attached' });
       assert.equal(await target.count(), 1, `Unique target required: ${step.target}`);
       const execute = async () => {

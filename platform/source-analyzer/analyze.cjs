@@ -233,8 +233,13 @@ function analyze(input) {
           return importBinding(declaration.initializer, seen);
         return null;
       }
+      // Nesting evidence: `parent` is the ordinal of the enclosing jsx-use reference in this file (null at the
+      // file's root JSX) and `depth` is the number of enclosing jsx-use references.
+      const jsxStack = [];
+      let jsxCount = 0;
       function walk(node) {
         if (++visited > LIMITS.nodes) { truncate(file); return; }
+        let own = null;
         if (ts.isTaggedTemplateExpression(node))
           problem(file, 'tagged-template-transform-not-inspected', position(node).line, position(node).column);
         if (ts.isBinaryExpression(node) && /^(?:module(?:\.|\[)|exports(?:\.|\[|$))/.test(node.left.getText(source)))
@@ -296,9 +301,12 @@ function analyze(input) {
           const binding = importBinding(base);
           if (binding) {
             const unresolvedMember = Boolean(member) && (binding.symbol !== '*' || member.includes('.'));
+            const before = references.length;
             reference(file, 'jsx-use', binding.specifier, position(node),
-              { symbol: binding.symbol === '*' ? member || '*' : binding.symbol, localName: tag },
+              { symbol: binding.symbol === '*' ? member || '*' : binding.symbol, localName: tag,
+                parent: jsxStack.length ? jsxStack[jsxStack.length - 1] : null, depth: jsxStack.length },
               unresolvedMember ? { status: 'unresolved', reason: 'jsx-member-semantics-not-inspected' } : undefined);
+            if (references.length > before) own = jsxCount++;
           }
           else if (/^[A-Z]/.test(tag) || tag.includes('.'))
             problem(file, 'local-jsx-binding-not-traced', position(node).line, position(node).column);
@@ -317,7 +325,17 @@ function analyze(input) {
             else problem(file, 'computed-asset-reference', at.line, at.column);
           }
         }
+        if (ts.isJsxElement(node)) {
+          const depth = jsxStack.length;
+          walk(node.openingElement);   // pushes its own jsx-use index for the children
+          for (const child of node.children) walk(child);
+          walk(node.closingElement);
+          jsxStack.length = depth;
+          return;
+        }
+        if (own !== null) jsxStack.push(own);
         ts.forEachChild(node, walk);
+        if (own !== null && ts.isJsxSelfClosingElement(node)) jsxStack.pop();
       }
       walk(source);
     } else if (file.kind === 'style') {

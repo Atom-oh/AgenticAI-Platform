@@ -27,16 +27,16 @@ FOUNDATION_SUBTYPES = frozenset({"color", "typography", "spacing", "grid", "elev
                                "icon", "graphic", "motion"})
 MAX_NODES, MAX_EDGES, MAX_REFS = 500, 1000, 20
 DESIGN_PROPERTIES = {"componentName", "packageName", "sourcePath", "description",
-                     "slots", "usageIds", "legacyType", "legacyId", "pageId", "procedureId"}
+                     "slots", "usageIds", "legacyType", "legacyId", "pageId", "procedureId", "uxModel"}
 PROPERTIES = {
     **{kind: DESIGN_PROPERTIES for kind in LEVELS[1:]},
     "Component": DESIGN_PROPERTIES,
-    "Foundation": {"name", "path", "mime", "token", "width", "height", "normalizedImageHash"},
+    "Foundation": {"name", "path", "mime", "token", "width", "height", "normalizedImageHash", "uxModel"},
     "CodeFile": {"path", "language", "collectionId", "fileHash", "analyzerHash"},
     "CodeSymbol": {"path", "exportName", "fileId", "kind"},
     "Asset": {"path", "mime", "bytes", "width", "height", "normalizedImageHash", "classification"},
     "Product": {"productId", "guidelineId", "description"},
-    "PolicyRule": {"ruleId", "statement", "required", "guidelineId"},
+    "PolicyRule": {"ruleId", "statement", "required", "guidelineId", "severity", "citation", "extraction", "appliesWhen"},
     "Test": {"testId", "kind", "status", "sourceHash", "receiptId"},
     "Team": {"teamId", "role"},
     "API": {"apiId", "method", "route", "description"},
@@ -44,12 +44,15 @@ PROPERTIES = {
     "Skill": {"skillId", "description"},
 }
 PROPERTIES["Pattern"] = DESIGN_PROPERTIES | {"usageBindings"}
+# Screen code is generated and procedure semantics live in NEXT edges: neither carries a uxModel.
+PROPERTIES["Screen"] = PROPERTIES["Screen"] - {"uxModel"}
+PROPERTIES["Procedure"] = (PROPERTIES["Procedure"] - {"uxModel"}) | {"entryScreenId"}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
 
 
 def _json_value(value, depth=0):
-    if depth > 8:
+    if depth > 14:
         raise ValueError("Ontology metadata nesting exceeds the contract")
     if value is None or type(value) is bool:
         return
@@ -224,6 +227,8 @@ def validate_node(value):
         if key in properties and (not isinstance(properties[key], list) or len(properties[key]) > 100
                                   or any(not isinstance(item, str) or not _ID.fullmatch(item) for item in properties[key])):
             raise ValueError("Invalid design references")
+    if "entryScreenId" in properties:
+        _identifier(properties["entryScreenId"])
     if "required" in properties and type(properties["required"]) is not bool:
         raise ValueError("Invalid policy requirement flag")
     if "usageBindings" in properties:
@@ -243,7 +248,8 @@ def validate_node(value):
     hashes = {"fileHash", "analyzerHash", "normalizedImageHash", "sourceHash"}
     for key in properties.keys() & hashes:
         _hash(properties[key])
-    for key in properties.keys() - hashes - {"bytes", "width", "height", "usageIds", "slots", "required", "usageBindings"}:
+    for key in properties.keys() - hashes - {"bytes", "width", "height", "usageIds", "slots", "required",
+                                             "usageBindings", "uxModel", "citation", "extraction"}:
         _text(properties[key], 8000)
     aliases = value.get("aliases", [])
     if not isinstance(aliases, list) or len(aliases) > 20:
@@ -252,6 +258,35 @@ def validate_node(value):
         _fields(alias, {"namespace", "value"})
         _text(alias["namespace"], 80)
         _text(alias["value"], 500)
+    if "uxModel" in properties:
+        from workspace.ontology_ux import validate_ux_model
+        validate_ux_model(properties["uxModel"], value["type"])
+    if value["type"] == "PolicyRule":
+        if "severity" in properties and properties["severity"] not in {"critical", "major", "minor"}:
+            raise ValueError("Invalid policy severity")
+        if "citation" in properties:
+            _fields(properties["citation"], {"sourceKind", "page", "quote", "derivativeHash"}, {"region", "normalizedImageHash"})
+            if "region" in properties["citation"]:      # diagram transcription lineage (review round 9, AC2)
+                region = properties["citation"]["region"]
+                _fields(region, {"left", "top", "width", "height"})
+                if any(type(region[k]) is not int or not 0 <= region[k] <= 8192 for k in region) or not region["width"] or not region["height"]:
+                    raise ValueError("Invalid citation region")
+                _hash(properties["citation"]["normalizedImageHash"])
+            if properties["citation"]["sourceKind"] not in {"document-revision", "product-guideline"}:
+                raise ValueError("Policy citations require a business source")
+            if type(properties["citation"]["page"]) is not int or properties["citation"]["page"] < 1:
+                raise ValueError("Invalid citation page")
+            _text(properties["citation"]["quote"], 2000)
+            _hash(properties["citation"]["derivativeHash"])
+        if "appliesWhen" in properties:
+            from workspace.ontology_ux import parse_when
+            parse_when(properties["appliesWhen"])
+        if "extraction" in properties:
+            _fields(properties["extraction"], {"method", "model", "promptVersion", "admissionId"})
+            if properties["extraction"]["method"] != "model":
+                raise ValueError("Invalid extraction method")
+            for key in ("model", "promptVersion", "admissionId"):
+                _text(properties["extraction"][key], 200)
     expected = {k: v for k, v in value.items() if k != "contentHash"}
     if _hash(value["contentHash"]) != digest(expected):
         raise ValueError("Node content hash mismatch")
@@ -273,7 +308,7 @@ def validate_edge(value):
         raise ValueError("Invalid ontology edge lifecycle")
     properties = value.get("properties", {})
     if (not isinstance(properties, dict) or properties.keys() - {"conditionId", "condition", "retains", "line", "column",
-                                                                "symbol", "resolution", "conditional"}
+                                                                "symbol", "resolution", "conditional", "navigation"}
             or len(canonical(properties)) > 8000):
         raise ValueError("Edge metadata exceeds the contract")
     for key in properties.keys() & {"line", "column"}:
@@ -281,6 +316,8 @@ def validate_edge(value):
             raise ValueError("Invalid edge source position")
     if "conditional" in properties and type(properties["conditional"]) is not bool:
         raise ValueError("Invalid conditional dependency")
+    if "navigation" in properties and (value["type"] != "NEXT" or properties["navigation"] not in {"forward", "back", "cancel"}):
+        raise ValueError("Invalid transition navigation kind")
     for key in properties.keys() - {"line", "column", "conditional"}:
         _text(properties[key], 4000)
     if _hash(value["contentHash"]) != digest({k: v for k, v in value.items() if k != "contentHash"}):

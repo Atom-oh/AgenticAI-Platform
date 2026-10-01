@@ -45,7 +45,7 @@ test('fixed component markup ignores caller class/style/raw HTML', () => {
     })));
   assert(markup.includes('data-studio-component="Panel"'));
   assert(markup.includes('data-studio-component="Button"'));
-  assert(markup.includes('data-studio-version="1.0.0"'));
+  assert(markup.includes('data-studio-version="1.2.0"'));
   assert(markup.includes('data-testid="continue"'));
   assert(markup.includes('type="button"'));
   assert(markup.includes('&lt;script&gt;문자 그대로&lt;/script&gt;'));
@@ -146,7 +146,7 @@ test('catalog is honest, complete and source hash is canonical and sensitive to 
   const first = manifest.catalog();
   assert.equal(first.schemaVersion, 1);
   assert.equal(first.id, 'studio-ui');
-  assert.equal(first.version, '1.0.0');
+  assert.equal(first.version, '1.2.0');
   assert.equal(first.label, '플랫폼 기본 React 컴포넌트');
   assert.deepEqual(first.components.map(component => component.name).sort(), expected.sort());
   assert(first.components.every(component => component.description && component.props && Array.isArray(component.variationAxes)));

@@ -11,7 +11,7 @@ import time
 import boto3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MEMORY_NAME = "hana_design_memory"
+MEMORY_NAME = "bank_design_memory"
 
 
 def _paginate(fn, list_key, **kwargs):
@@ -37,7 +37,7 @@ def main():
     if mem is None:
         created = ac.create_memory(
             name=MEMORY_NAME,
-            description="Designer preference & feedback memory for the Hana UI/UX platform",
+            description="Designer preference & feedback memory for the Bank UI/UX platform",
             eventExpiryDuration=90,
             memoryStrategies=[{"semanticMemoryStrategy": {
                 "name": "designerPreferences",
@@ -57,7 +57,7 @@ def main():
     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 
     lam = boto3.client("lambda", region_name=cfg["region"])
-    for fn in ("hana-draft-feedback",):
+    for fn in ("bank-draft-feedback",):
         env = lam.get_function_configuration(FunctionName=fn)["Environment"]["Variables"]
         env["MEMORY_ID"] = memory_id
         lam.update_function_configuration(FunctionName=fn, Environment={"Variables": env})

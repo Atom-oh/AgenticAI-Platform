@@ -4,7 +4,7 @@ import os
 import boto3
 
 BRAND_GUIDELINE = {
-    "brand": "Hana Bank UI/UX PoC",
+    "brand": "Customer A UI/UX PoC",
     "palette": {"primary": "#008485", "primaryDark": "#00615f", "ink": "#17332f",
                 "bg": "#fbfcfb", "mist": "#e6f3f2"},
     "font": "Noto Sans KR",

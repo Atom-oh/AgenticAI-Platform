@@ -1,0 +1,12 @@
+[
+  {"id": "g-inel", "case": {"eligible": false, "autoTransfer": true},
+   "mustShow": [{"screen": "ineligible", "text": "가입 조건"}], "mustNotShow": [{"screen": "*", "text": "가입 완료"}],
+   "endsAt": "ineligible"},
+  {"id": "g-auto", "case": {"eligible": true, "autoTransfer": true},
+   "mustShow": [{"screen": "intro", "text": "연 2.0%"}, {"screen": "evidence-auto", "text": "자동이체 설정"},
+                {"screen": "confirm", "text": "예금자보호법"}],
+   "mustNotShow": [{"screen": "*", "text": "가입 불가"}], "endsAt": "done"},
+  {"id": "g-noauto", "case": {"eligible": true, "autoTransfer": false},
+   "mustShow": [{"screen": "confirm", "text": "예금자보호법"}], "mustNotShow": [{"screen": "*", "text": "자동이체 설정"}],
+   "endsAt": "done"}
+]

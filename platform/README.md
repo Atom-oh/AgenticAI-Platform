@@ -213,6 +213,20 @@ privacy contexts: preserve the reviewed `mydataPrivacyFunctionArn` and current
 plane/graph contexts when operating a privacy-enabled main stack. Use the
 [privacy runbook](infra/README-privacy.md) for the optional stack and manifest.
 
+The two legacy public writers (`design-runs/*` from `WsFn`, `studio/drafts/*` from
+`StudioLoopFn`) publish only through `api/common/public_scan.py`: generated HTML is
+made static, then scanned by the root `scripts/check_public_identifiers.py` core
+(copied into `api-dist/common/` with `public-assets.sha256`) against the private
+deny-list in the SecureString parameter `/bank-platform/public-denylist`. The
+operator creates that parameter outside Git. While it is missing, unreadable or
+empty, both writers log a warning and publish without the identifier scan; the
+static sanitization, the `script-src 'none'` CSP and the approved-media registry
+still apply. Once the parameter holds a deny-list, hits, incomplete scans and
+unreviewed media block publication. The GitHub `PUBLIC_DENYLIST` secret works the
+same way for the repository and Pages scans (`--allow-missing-patterns` is passed
+only when the secret is empty). `workspace/check_infra.py` asserts the environment
+variable and the exact `ssm:GetParameter` grant.
+
 Destructive cleanup commands exist as `bash teardown.sh` and
 `bash teardown.sh --all`. The first destroys `BankPlatformPlane`; `--all`
 currently targets `BankPlatform`, not the deployment script's default

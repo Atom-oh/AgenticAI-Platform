@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def main():
-    brief = sys.argv[1] if len(sys.argv) > 1 else "하나은행 모바일 계좌이체 화면 시안"
+    brief = sys.argv[1] if len(sys.argv) > 1 else "고객사 A 모바일 계좌이체 화면 시안"
     cfg = json.loads((ROOT / "config" / "stack.json").read_text())
     client = boto3.client("bedrock-agentcore", region_name=cfg["region"],
                      config=Config(read_timeout=900, connect_timeout=10, retries={"total_max_attempts": 1}))

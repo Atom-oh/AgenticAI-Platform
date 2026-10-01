@@ -1,4 +1,4 @@
-"""Read HanaUiuxPlatform stack outputs into config/stack.json (idempotent merge)."""
+"""Read BankUiuxPlatform stack outputs into config/stack.json (idempotent merge)."""
 import json
 import pathlib
 
@@ -20,7 +20,7 @@ KEYMAP = {
 
 def main():
     cfn = boto3.client("cloudformation", region_name="ap-northeast-2")
-    outputs = cfn.describe_stacks(StackName="HanaUiuxPlatform")["Stacks"][0]["Outputs"]
+    outputs = cfn.describe_stacks(StackName="BankUiuxPlatform")["Stacks"][0]["Outputs"]
     path = ROOT / "config" / "stack.json"
     path.parent.mkdir(exist_ok=True)
     cfg = json.loads(path.read_text()) if path.exists() else {}

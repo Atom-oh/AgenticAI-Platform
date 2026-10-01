@@ -1,6 +1,6 @@
 # UI/UX Studio PoC — historical implementation plan
 
-**Date: 2026-08-31. Status: historical design/implementation sequence.** The original path was `hana/uiux-platform/` in the account-test repository; it now lives at `demo/uiux-studio/`. This is not an active task list or an instruction to recreate resources, commit, or deploy. Use [the current README](../../README.md), [original design context](../specs/2026-08-31-uiux-agentic-platform-design.md), and `demo/SECURITY-GOVERNANCE.md` when reviewing this product.
+**Date: 2026-08-31. Status: historical design/implementation sequence.** The original path was the `uiux-platform/` project in the account-test repository; it now lives at `demo/uiux-studio/`. This is not an active task list or an instruction to recreate resources, commit, or deploy. Use [the current README](../../README.md), [original design context](../specs/2026-08-31-uiux-agentic-platform-design.md), and `demo/SECURITY-GOVERNANCE.md` when reviewing this product.
 
 ## Goal and constraints retained
 
