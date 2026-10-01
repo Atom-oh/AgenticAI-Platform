@@ -297,7 +297,6 @@ def test_published_notice_page_contract_passes_the_real_approval(content):
 @needs
 @pytest.mark.parametrize("length", [40, 41, 64])
 def test_published_page_ids_of_40_41_and_64_characters_approve_compile_and_verify(length, local_browser):
-    from workspace.browser import evaluate_bundle
     api, request, project, scope, criteria, pages = published_product(notice_id="a" * (length - len("notice-")))
     [page] = pages
     assert len(page["pageId"]) == length
@@ -323,7 +322,6 @@ def test_published_page_ids_of_40_41_and_64_characters_approve_compile_and_verif
 @pytest.mark.parametrize("content", [("안내 " * 1334)[:4000], "안" * 4000])
 def test_a_4000_character_notice_step_passes_the_browser(content, local_browser):
     from design_loop.react_project import compile_local, compile_request, kit_catalog_hash
-    from workspace.browser import evaluate_bundle
     app = ("import {Screen,Stack,Text} from '@studio/approved-ui';\n"
            "export default function App(){\n return <Screen pageId=\"notice-consent\" testId=\"notice-consent\" "
            f"title=\"필수 안내\"><Stack><Text>{{{json.dumps(content, ensure_ascii=False)}}}</Text></Stack></Screen>;\n}}")
@@ -351,6 +349,42 @@ def test_a_flow_without_the_published_screen_is_published_page_missing():
 def local_browser(monkeypatch):
     if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and os.path.isfile(CHROMIUM):
         monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", CHROMIUM)
+
+
+def once_more_on_engine_abort(verify):
+    """Retry a verifier call once only when Chromium itself aborted (engineError); never on a functional result."""
+    def call(*args, **kwargs):
+        report = verify(*args, **kwargs)
+        if report.get("engineError"):
+            report = verify(*args, **kwargs)
+        assert not report.get("engineError"), ("verifier engine aborted twice", report.get("blockingFindings"))
+        return report
+    return call
+
+
+def evaluate_bundle(*args, **kwargs):
+    from workspace.browser import evaluate_bundle as verify
+    return once_more_on_engine_abort(verify)(*args, **kwargs)
+
+
+def test_engine_abort_retry_never_retries_a_functional_result():
+    calls = []
+
+    def verifier(results):
+        def verify():
+            calls.append(1)
+            return results[len(calls) - 1]
+        return verify
+
+    calls.clear()
+    assert once_more_on_engine_abort(verifier([{"engineError": True}, {"functionalStatus": "pass"}]))() == \
+        {"functionalStatus": "pass"} and len(calls) == 2
+    calls.clear()
+    assert once_more_on_engine_abort(verifier([{"functionalStatus": "fail"}]))() == {"functionalStatus": "fail"}
+    assert len(calls) == 1
+    calls.clear()
+    with pytest.raises(AssertionError):
+        once_more_on_engine_abort(verifier([{"engineError": True}, {"engineError": True}]))()
 
 
 def seed_screens(k, flow, variant="a"):
@@ -388,7 +422,6 @@ def only(contract, *prefixes):
 @needs
 @pytest.mark.parametrize("confirm_page_id", [None, "notice-" + "c" * 57])
 def test_complete_generated_contract_passes_the_real_verifier(confirm_page_id, local_browser):
-    from workspace.browser import evaluate_bundle
     k = copy.deepcopy(K)
     if confirm_page_id:
         k.screens["confirm"]["pageId"] = confirm_page_id
@@ -407,7 +440,6 @@ def test_complete_generated_contract_passes_the_real_verifier(confirm_page_id, l
 
 @needs
 def test_interaction_rules_without_prefill_catch_a_noop_setfield_and_a_removed_guard(local_browser):
-    from workspace.browser import evaluate_bundle
     out, registry, flow = seed()
     contract = only(out["contract"], "input-")
     amount_field = registry.field_id("amount", "session.amount")
@@ -459,7 +491,6 @@ def choice_screens(k, flow):
 @needs
 def test_select_and_radio_contract_passes_and_noop_mutations_fail(local_browser):
     from design_loop.composition import validate
-    from workspace.browser import evaluate_bundle
     k = choice_knowledge()
     out, registry, flow = seed(k=k)
     contract = out["contract"]
@@ -507,7 +538,7 @@ def test_frozen_contract_binds_two_variants_and_the_real_run_approval(local_brow
 
     store = Storage(table=FakeTable(), s3=FakeS3(), bucket="private")
     api = WorkspaceAPI(storage=store, lambda_client=FakeLambda(), worker_fn="worker")
-    worker = Worker(storage=store, model_call=model, react_call=evaluate_react)
+    worker = Worker(storage=store, model_call=model, react_call=once_more_on_engine_abort(evaluate_react))
     status, data = request(api, "POST", "/contracts", derived)
     assert status == 201, data
     status, data = request(api, "POST", f"/contracts/{data['contract']['id']}/approve", {"version": data["contract"]["version"]})
