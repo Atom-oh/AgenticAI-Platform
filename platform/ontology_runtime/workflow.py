@@ -53,7 +53,7 @@ class Workflow:
         log.info("stage=analyze")
         value = self.interpreter(payload)
         log.info("stage=evidence")
-        receipt = self.evidence.sign(claims, value)
+        receipt = self.evidence.sign(claims, value, request["admissions"])
         self.memory.append(claims, "analyzed", schema.digest(receipt))
         call("stage", {"stage": "analyzed", "receiptHash": schema.digest(receipt)}, "stage-analyzed")
         call("finish", {"manifestHash": schema.digest(value)}, "finish")

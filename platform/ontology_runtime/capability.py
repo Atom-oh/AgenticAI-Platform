@@ -93,8 +93,10 @@ class Capabilities:
         with the same authoritative KMS/registry check `verify` makes per call.
         Used to fence finalization and cached replay, after the token itself was
         already verified earlier in the same attempt (AUTH-04: revocation must
-        still abort a completion or a replay reached without a fresh `verify`)."""
-        self._key(key_id)
+        still abort a completion or a replay reached without a fresh `verify`).
+        Returns the registry record so the caller can fence its exact version into
+        a protected commit, not only recheck it with a fresh Python-level read."""
+        return self._key(key_id)
 
     def issue(self, ledger, key_id):
         now = int(self.clock())
@@ -154,27 +156,58 @@ class Evidence:
     def __init__(self, kms, key_arn, state_provider=None):
         self.kms, self.key, self.state = kms, key_arn, state_provider
 
-    def sign(self, claims, result):
+    @staticmethod
+    def _body(claims, result, admissions):
+        """The signed receipt body. `admissions` -- the consumed private-intake
+        decisions `[{decisionId, revision, artifactHash}]` of the execution
+        request -- is part of it, so the signed evidence binds them
+        (platform-execution/1, RUN-04/05)."""
+        if not isinstance(admissions, list) or not admissions:
+            raise AuthorizationDenied()
         body = {key: claims[key] for key in ("executionId", "attemptId", "runtimeSessionId", "projectId", "iat")}
         body.update(resultHash=schema.digest(result), inputHash=result["execution"]["inputHash"],
-                    purpose="runtime-evidence-v1")
+                    admissions=admissions, purpose="runtime-evidence-v1")
+        return body
+
+    def sign(self, claims, result, admissions):
+        body = self._body(claims, result, admissions)
         signature = self.kms.sign(KeyId=self.key, Message=hashlib.sha256(schema.canonical(body)).digest(),
             MessageType="DIGEST", SigningAlgorithm=ALGORITHM)["Signature"]
         return {"claims": body, "signature": _encode(signature)}
 
-    def verify(self, claims, result, receipt):
+    def _registry(self, claims):
+        """The authoritative evidence-key registry record, valid for `claims["iat"]`."""
+        key = self.state() if callable(self.state) else None
+        if (not isinstance(key, dict) or key.get("purpose") != "runtime-evidence" or key.get("keyArn") != self.key
+                or key.get("state") not in {"active", "retired"} or key.get("algorithm") != "RS256"
+                or not key.get("notBefore", claims["iat"] + 1) <= claims["iat"] < key.get("notAfter", 0)):
+            raise AuthorizationDenied()
+        public = self.kms.get_public_key(KeyId=self.key)
+        if hashlib.sha256(public["PublicKey"]).hexdigest() != key.get("publicKeyHash"):
+            raise AuthorizationDenied()
+        return key
+
+    def active(self, claims, verified):
+        """Revalidate the evidence key `verify` returned as `verified`: the same
+        registry/KMS checks, and the exact registry version that verified the
+        receipt (execution-capability/1: a compromised key invalidates evidence
+        readiness). Returns the record so the caller fences that version into
+        its completion transaction, as for the capability key."""
         try:
-            key = self.state() if callable(self.state) else None
-            if (not key or key.get("purpose") != "runtime-evidence" or key.get("keyArn") != self.key
-                    or key.get("state") not in {"active", "retired"} or key.get("algorithm") != "RS256"
-                    or not key.get("notBefore", claims["iat"] + 1) <= claims["iat"] < key.get("notAfter", 0)):
+            key = self._registry(claims)
+            if (key.get("id") != verified.get("id") or key.get("version") != verified.get("version")
+                    or self.kms.describe_key(KeyId=self.key)["KeyMetadata"]["KeyState"] != "Enabled"):
                 raise AuthorizationDenied()
-            public = self.kms.get_public_key(KeyId=self.key)
-            if hashlib.sha256(public["PublicKey"]).hexdigest() != key.get("publicKeyHash"):
-                raise AuthorizationDenied()
-            expected = {key: claims[key] for key in ("executionId", "attemptId", "runtimeSessionId", "projectId", "iat")}
-            expected.update(resultHash=schema.digest(result), inputHash=result["execution"]["inputHash"],
-                            purpose="runtime-evidence-v1")
+            return key
+        except Exception:
+            raise AuthorizationDenied() from None
+
+    def verify(self, claims, result, receipt, admissions):
+        """Verify a Runtime receipt signed over `admissions`; returns the
+        evidence-key registry record used."""
+        try:
+            key = self._registry(claims)
+            expected = self._body(claims, result, admissions)
             if receipt["claims"] != expected:
                 raise AuthorizationDenied()
             if self.kms.describe_key(KeyId=self.key)["KeyMetadata"]["KeyState"] != "Enabled":
@@ -183,5 +216,6 @@ class Evidence:
                 MessageType="DIGEST", SigningAlgorithm=ALGORITHM, Signature=_decode(receipt["signature"]))
             if verified.get("SignatureValid") is not True:
                 raise AuthorizationDenied()
+            return key
         except Exception:
             raise AuthorizationDenied() from None

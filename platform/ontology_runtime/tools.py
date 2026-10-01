@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 
 from ontology_runtime import admission
-from ontology_runtime.authorization import active_job, commit_execution
+from ontology_runtime.authorization import active_job, attempt_deadline, commit_execution, key_check, key_deadline
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.identity import RESERVED
 from workbench.service import fail, fields
@@ -17,6 +17,9 @@ KEYS = "ontology-key-registry"
 STAGES = {"admitted": {"context"}, "context": {"analyzed", "generated"},
           "generated": {"compiled"}, "compiled": {"verified"}, "analyzed": {"completed"},
           "verified": {"completed"}}
+# ontology-tools/1 call limit and the workflow's fixed control calls (see
+# `admission.preflight_calls`, which submission and dispatch run).
+MAX_CALLS, CONTROL_CALLS = admission.MAX_CALLS, admission.CONTROL_CALLS
 TOOLS = {"context": "ontology.context", "source": "ontology.source", "stage": "execution.stage", "finish": "execution.finish"}
 
 
@@ -60,12 +63,12 @@ class Tools:
             raise AuthorizationDenied()
         if prior and prior["requestHash"] != fingerprint:
             fail(409, "execution-operation-changed", "같은 작업 ID의 내용이 다릅니다.")
-        if not prior and (ledger.get("calls", 0) >= 60 or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024):
+        if not prior and (ledger.get("calls", 0) >= MAX_CALLS or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024):
             fail(422, "execution-budget", "실행의 도구 조회 한도를 초과했습니다.")
-        admissions = [admission.require(ctx, reference) for reference in ledger["sourceRefs"]]
-        if admissions != ledger.get("admissions"):
+        fences, admissions = admission.consumed(ctx, ledger["sourceRefs"])
+        if fences != ledger.get("admissionFences") or admissions != ledger.get("admissions"):
             raise AuthorizationDenied()
-        checks.extend(admissions)
+        checks.extend(fences)
         sources.verify(ledger["sourceRefs"])
         manifest = Ontology(ctx).current()
         if (manifest or {}).get("generation") != ledger["graphGeneration"]:
@@ -113,7 +116,9 @@ class Tools:
                 fail(409, "execution-stage", "검증된 실행 결과가 필요합니다.")
             result = {"manifestHash": arguments["manifestHash"], "stage": "completed"}
         # Reads are never replayed without current source/admission checks.
-        checks.extend(sources.recheck())
+        final_sources = sources.recheck()
+        checks.extend(final_sources)
+        admission.preflight([*final_sources, *fences])
         _, latest = self.capabilities.verify(envelope["capability"], self.load,
             operation=operation, workload=self.workload, allow_result_ready=operation == "execution.finish")
         if latest["version"] != ledger["version"]:
@@ -121,6 +126,19 @@ class Tools:
         if prior:
             if prior["resultHash"] != schema.digest(result):
                 fail(409, "execution-result-changed", "이전 작업과 현재 결과의 근거가 다릅니다.")
+            # source-admission/1 final delivery check (AUTH-04/08): a replay
+            # writes nothing, so its linearization point is one check-only
+            # transaction, after its last read, over every fence (artifact/job,
+            # ontology, source and admission records, this execution and its
+            # capability key); every deadline -- source/intake expiry, token,
+            # the key's validity window and the execution deadline -- is
+            # compared once, with one clock read taken after the last read.
+            key_id = latest["capabilityKeyId"]
+            key = self.capabilities.active(key_id)
+            commit_execution(ctx, [], [*checks, key_check(key), {"owner": EXECUTIONS, "kind": "ac_execution",
+                             "id": latest["id"], "version": latest["version"]}],
+                             guard=lambda: [key_deadline(self.capabilities.active(key_id)),
+                                            attempt_deadline(latest["deadline"])])
             return result
         size = len(schema.canonical(result))
         if size > 300000 or ledger.get("retrievedBytes", 0) + size > 4 * 1024 * 1024:
@@ -135,8 +153,13 @@ class Tools:
         marker = {"id": marker_id, "projectId": ctx.project_id, "executionId": claims["executionId"],
             "requestHash": fingerprint, "resultHash": schema.digest(result), "operation": operation,
             "expiresAt": claims["exp"] * 1000, "ttl": claims["exp"] + 86400}
+        # AUTH-04: the capability key is fenced by version, and its validity
+        # window (which expires without a version change) joins the attempt
+        # deadline and the source/admission deadlines in the commit guard.
+        key_id = latest["capabilityKeyId"]
         commit_execution(ctx, [
             self.collaboration._write(EXECUTIONS, "ac_execution", changed, ledger["version"]),
             self.collaboration._write(EXECUTIONS, "ac_operation", marker),
-        ], checks)
+        ], [*checks, key_check(self.capabilities.active(key_id))],
+            guard=lambda: [key_deadline(self.capabilities.active(key_id)), attempt_deadline(latest["deadline"])])
         return result

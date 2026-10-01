@@ -91,11 +91,58 @@ cutover work. Changing source bytes/revision or the inspection profile requires
 another classification.
 
 `POST /ontology/sources/admission` is owner-only and accepts `requestId`,
-`sourceRef`, `classification` and `reason`. It returns `{admission}` with the
+`sourceRef`, `classification`, `reason` and `decisionId`. `decisionId` names the
+private-intake `adm_decision` (`source-admission/1`) that admitted this exact
+source revision under the current policy; it must be `admitted`, current, of the
+same data class and policy revision, and its admitted derivative must equal the
+original bytes (`originalHash == derivativeHash`), because the Runtime transfer
+reads the source itself. A missing, blocked (for example `denylist-unavailable`),
+pending-review, expired or mismatched decision fails with
+`agentcore-admission-decision-required`; a normalized derivative fails with
+`agentcore-admission-derivative`. The decision id, revision, artifact hash and
+inspection hash are pinned on the record, and every dispatch, tool call,
+completion and cached replay re-verifies that exact decision through
+`intake.admission.verify` and fences its record versions. Separately from those
+transaction fences (`admissionFences`), the consumed decisions are bound as an
+immutable `admissions` list `[{decisionId, revision, artifactHash}]`
+(`platform-execution/1`; string revision, distinct decision ids) in the accepted
+job input, the execution request, the attempt ledger record and the signed
+Runtime receipt; each later boundary requires the same list. It returns `{admission}` with the
 source, classification, inspection and record version. The same source/request
 ID and exact body replay the existing inspected result; changing the body or
 inspection profile under that ID fails with `admission-request-changed`.
 Updates use conditional record versions and current source/project fences.
+
+A `document-pages` decision admits the source text only. The manifest paths and
+the selected resolver profile also reach the analyzer, so AgentCore submission
+privately inspects every decoded path and every resolver key and string value
+(recursively, never the serialized JSON) with the intake deny-list, running
+both `intake.inspect.inspect` and `intake.derivative.residual`
+(`contiguous=False`, as the code-collection admission inspects its paths and
+resolver). A deny-listed identifier, internal URL or rule-detected PII in any
+path or in the resolver fails with `agentcore-private-inspection`; an unavailable deny-list
+fails with `agentcore-private-inspection-unavailable`. Paths are refused, not
+normalized: Unit B has no admitted derivative of caller-supplied paths. The
+binding `transferInspection` (`{profile, receiptHash, manifestHash}`) is frozen
+into the accepted job input and the execution request; dispatch requires the
+outgoing paths/resolver to match `manifestHash` (`agentcore-input-changed`).
+
+AgentCore submission preflights the `ONTOLOGY_CONTRACT.md` transaction budget
+(ONT-10) on the complete deduplicated source-check set that dispatch, every
+tool call and completion fence: the source fences plus every check `require()`
+returns (classification, policy, provenance or grant, intake decision). With at
+most 7 non-source operations per path inside the contract's reserve of 10, that
+set may hold 90 checks (`SOURCE_CHECK_BUDGET`), so at most 30 sources
+(`MAX_SOURCES`) and, for synthetic or public inputs, 22 sources fit. A larger
+request is rejected unchanged with `execution-completion-scope`; dispatch, tool
+calls and completion rerun the same check before their commits.
+Submission and dispatch also preflight the `ontology-tools/1` limit of 60 tool
+calls: the workflow retrieves each manifest file separately (distinct paths
+that reference one admitted source still cost one `ontology.source` call each)
+and adds 4 control calls (context stage, `ontology.context`, analyzed stage,
+`execution.finish`), so at most 56 files (`MAX_FILES`) are accepted; a larger
+manifest is rejected unchanged with `execution-completion-scope` before any
+source read.
 
 Code Interpreter's role reads only the pinned S3 tool-archive object version.
 The adapter verifies archive/code/lock hashes and the observed architecture/
@@ -144,6 +191,12 @@ Docker build inputs.
 `infra/bin/ontology.ts` accepts the operator-owned `ontologyConfigFile` context.
 Supply the isolated network, immutable archive descriptor and public code
 context. Omitting workspace storage selects retained synthetic test stores.
+When `workspaceTableName` reuses the main stack's table and intake is
+configured, supply `intakeDeployment` (config property or the shared
+`intakeDeployment` context) equal to the main stack's `INTAKE_DEPLOYMENT`
+(its `intakeDeployment` context, default the main stack name); synthesis fails
+otherwise rather than defaulting to this stack's own name. A disagreeing
+property and context also fail.
 Verify the target AWS account and role before deploying.
 CloudFormation provisions the fixed capability/evidence/Gateway key-registry
 records through a dedicated bootstrap Lambda. Only that IAM administrative role

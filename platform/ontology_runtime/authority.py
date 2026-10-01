@@ -6,10 +6,10 @@ import hashlib
 import secrets
 
 from ontology_runtime import admission
-from ontology_runtime.authorization import active_job, commit_execution
+from ontology_runtime.authorization import active_job, attempt_deadline, commit_execution, key_check, key_deadline
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.tools import EXECUTIONS, KEYS
-from workbench.service import fail, fields
+from workbench.service import fail, fields, reader_deadlines
 from workspace import ontology_schema as schema
 from workspace.collaboration import Collaboration
 from workspace.ontology_analysis import source_input, validate_analysis
@@ -21,6 +21,22 @@ class Authority:
         self.storage, self.runtime, self.capabilities, self.evidence = storage, runtime, capabilities, evidence
         self.config = configuration
         self.collaboration = Collaboration(storage)
+
+    def _keys(self, key_id, claims, verified):
+        """Both registry keys, revalidated now (state, KMS and exact versions)."""
+        return self.capabilities.active(key_id), self.evidence.active(claims, verified)
+
+    def _deliver(self, ctx, checks, key_id, claims, verified, deadline, collected=()):
+        """The aggregate final delivery guard of a replay: a check-only
+        transaction fencing `checks` plus both keys' exact versions, whose
+        guard collects both keys' validity windows and the attempt deadline
+        with the deadlines already collected by the caller's reads."""
+        keys = self._keys(key_id, claims, verified)
+
+        def guard():
+            current = self._keys(key_id, claims, verified)
+            return [*collected, *(key_deadline(record) for record in current), attempt_deadline(deadline)]
+        commit_execution(ctx, [], [*checks, *(key_check(record) for record in keys)], guard=guard)
 
     def dispatch(self, event):
         fields(event, {"projectId", "artifactId", "inputHash"})
@@ -34,15 +50,24 @@ class Authority:
         current, _ = Ontology(ctx).authorize_publication(pinned["name"])
         if (current or {}).get("generation") != pinned["expectedGeneration"]:
             raise AuthorizationDenied()
-        checks.extend(sources.verify(pinned["sourceRefs"]))
+        admission.preflight_calls(pinned["files"])
+        admission.preflight_sources(pinned["sourceRefs"])
+        source_checks = sources.verify(pinned["sourceRefs"])
+        checks.extend(source_checks)
         if current:
             checks.append(ctx.check("ontology", current))
-        # Each admitted source contributes its source fence and a distinct
-        # classification fence. Keep every operation within DynamoDB's limit.
-        if len(pinned["sourceRefs"]) > 40:
-            fail(422, "agentcore-source-budget", "AgentCore 분석 묶음은 원본 40개 이하로 나누세요.")
-        admissions = [admission.require(ctx, reference) for reference in pinned["sourceRefs"]]
-        checks.extend(admissions)
+        # `fences`: every `require()` check (the classification plus its exact
+        # pinned policy/provenance/grant/decision record versions;
+        # source-admission/1), flattened for the transactions and the identity
+        # comparisons below. `admissions`: the consumed decisions
+        # `[{decisionId, revision, artifactHash}]` (platform-execution/1),
+        # which must equal the list frozen into the accepted job input.
+        fences, admissions = admission.consumed(ctx, pinned["sourceRefs"])
+        if admissions != pinned.get("admissions"):
+            raise AuthorizationDenied()
+        # ONT-10: recheck the complete source-check budget before any paid work.
+        admission.preflight([*source_checks, *fences])
+        checks.extend(fences)
         payload, bindings = source_input(ctx, pinned["files"], pinned["resolver"])
         from ontology_runtime.inspection import inspect_payload
         boundary = inspect_payload(payload)
@@ -51,6 +76,12 @@ class Authority:
         for file, reference in zip(pinned["files"], pinned["sourceRefs"]):
             if bindings[file["path"]]["ref"] != reference:
                 raise AuthorizationDenied()
+        # source-admission/1: the outgoing paths and resolver are exactly the
+        # metadata privately inspected and bound at submission.
+        transfer = pinned.get("transferInspection")
+        if (not isinstance(transfer, dict) or transfer.get("manifestHash") != admission.transfer_manifest_hash(
+                [file["path"] for file in payload["files"]], payload["resolver"])):
+            fail(409, "agentcore-input-changed", "승인한 분석 입력이 변경되었습니다.")
         marker_id = schema.identity("dispatch", project_id, artifact_id)
         marker = self.storage.get(EXECUTIONS, "ac_operation", marker_id)
         if marker:
@@ -58,7 +89,7 @@ class Authority:
             if (not previous or previous.get("projectId") != project_id
                     or previous.get("actor") != ctx.actor or previous.get("artifactId") != artifact_id
                     or previous.get("authorityHash") != pinned["authorityHash"]
-                    or previous.get("admissions") != admissions
+                    or previous.get("admissions") != admissions or previous.get("admissionFences") != fences
                     or self.storage.clock() // 1000 >= previous.get("deadline", 0)):
                 raise AuthorizationDenied()
             # Runtime invocation is at most once for this admitted artifact.
@@ -71,17 +102,29 @@ class Authority:
                 if hashlib.sha256(raw_result).hexdigest() != previous["resultHash"]:
                     raise AuthorizationDenied()
                 result = json.loads(raw_result)
-                self.evidence.verify(previous["capabilityClaims"],
-                    {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"])
-                # AUTH-04: a cached replay still requires the capability key that
-                # authorized this attempt to be current; a revocation after the
-                # original dispatch must abort every later replay, not just a
-                # fresh `verify`.
-                self.capabilities.active(previous["capabilityKeyId"])
-                sources.recheck()
+                evidence_key = self.evidence.verify(previous["capabilityClaims"],
+                    {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"],
+                    previous["admissions"])
+                # source-admission/1 final delivery check (AUTH-04/08): this
+                # branch writes nothing, so its linearization point is one
+                # check-only transaction over every fence -- the artifact/job,
+                # ontology, source and admission records, both registry keys
+                # and this execution -- taken after the cached result read.
+                # Every deadline (source access, intake decision/policy/
+                # provenance/grant expiry, token, both keys' validity and the
+                # execution deadline) is collected by the reads and compared
+                # once, with a single clock read taken after the last of them.
+                fences, reader = sources.recheck_deadlines()
+                self._deliver(ctx, [*checks, *fences, {"owner": EXECUTIONS, "kind": "ac_execution",
+                              "id": previous["id"], "version": previous["version"]}],
+                              previous["capabilityKeyId"], previous["capabilityClaims"], evidence_key,
+                              previous["deadline"], reader_deadlines(reader))
                 return result
             fail(409, "agentcore-already-dispatched", "이미 실행된 작업입니다. 현재 작업 상태를 확인하세요.")
         identity = "execution-" + secrets.token_hex(24)
+        signing_key = self.capabilities.active(self.config["capabilityKeyId"])
+        if type(signing_key.get("notAfter")) is not int:
+            raise AuthorizationDenied()
         now = self.storage.clock() // 1000
         gateway_binding = self.storage.get(KEYS, "ac_key", "gateway-binding")
         if (not gateway_binding or not gateway_binding.get("workloadIdentityArn")
@@ -90,16 +133,21 @@ class Authority:
         request = {"files": [{"path": file["path"], "kind": file["kind"],
                              "sourceRef": bindings[file["path"]]["ref"]} for file in payload["files"]],
                    "resolver": payload["resolver"], "inputHash": event["inputHash"], "nodeIds": [],
-                   "toolArchiveHash": self.config["toolArchiveHash"], "admissions": admissions, "boundary": boundary}
+                   "toolArchiveHash": self.config["toolArchiveHash"], "admissions": admissions, "boundary": boundary,
+                   "transferInspection": transfer}
         ledger = {"id": identity, "executionId": identity, "projectId": project_id, "actor": pinned["actor"],
             "attemptId": "attempt-" + secrets.token_hex(24), "runtimeSessionId": "session-" + secrets.token_hex(24),
             "workloadIdentity": gateway_binding["workloadIdentityArn"], "operations": [
                 "ontology.context", "ontology.source", "execution.stage", "execution.finish"],
             "resourcesHash": schema.digest(request), "request": request, "inputHash": event["inputHash"],
-            "authorizationExpiresAt": pinned["authorizationExpiresAt"] // 1000, "deadline": min(now + 840, pinned["authorizationExpiresAt"] // 1000),
+            "authorizationExpiresAt": pinned["authorizationExpiresAt"] // 1000,
+            # AUTH-04: the attempt (and so the capability `exp`) never outlives
+            # the signing key's validity window at issue time.
+            "deadline": min(now + 840, pinned["authorizationExpiresAt"] // 1000, signing_key["notAfter"]),
             "status": "admitted", "stage": "admitted", "sourceRefs": pinned["sourceRefs"],
             "files": request["files"], "nodeIds": [], "graphGeneration": pinned["expectedGeneration"],
             "artifactId": artifact_id, "authorityHash": pinned["authorityHash"], "admissions": admissions,
+            "admissionFences": fences,
             "calls": 0, "retrievedBytes": 0, "ttl": now + 30 * 86400}
         capability, binding = self.capabilities.issue(ledger, self.config["capabilityKeyId"])
         ledger.update(binding)
@@ -107,7 +155,10 @@ class Authority:
         commit_execution(ctx, [self.collaboration._write(EXECUTIONS, "ac_execution", ledger),
                     self.collaboration._write(EXECUTIONS, "ac_operation", {
                         "id": marker_id, "projectId": project_id, "executionId": identity,
-                        "artifactId": artifact_id, "inputHash": event["inputHash"], "ttl": ledger["ttl"]})], checks)
+                        "artifactId": artifact_id, "inputHash": event["inputHash"], "ttl": ledger["ttl"]})],
+                    [*checks, key_check(signing_key)],
+                    guard=lambda: [key_deadline(self.capabilities.active(binding["capabilityKeyId"])),
+                                   attempt_deadline(ledger["deadline"])])
         try:
             response = self.runtime.invoke_agent_runtime(agentRuntimeArn=self.config["runtimeArn"],
                 qualifier=self.config["runtimeQualifier"],
@@ -130,7 +181,7 @@ class Authority:
         receipt = value.pop("runtimeReceipt")
         if value.get("execution", {}).get("toolArchiveHash") != self.config["toolArchiveHash"]:
             raise AuthorizationDenied()
-        self.evidence.verify(binding["capabilityClaims"], value, receipt)
+        evidence_key = self.evidence.verify(binding["capabilityClaims"], value, receipt, ledger["admissions"])
         # AUTH-04: a capability revoked while Runtime was executing must still
         # abort finalization; the evidence key alone does not stand in for it.
         self.capabilities.active(binding["capabilityKeyId"])
@@ -152,13 +203,31 @@ class Authority:
         if live_artifact["jobInput"] != pinned:
             raise AuthorizationDenied()
         checks.extend(sources.verify(pinned["sourceRefs"]))
-        current_admissions = [admission.require(ctx, reference) for reference in pinned["sourceRefs"]]
-        if current_admissions != admissions:
+        current_fences, current_admissions = admission.consumed(ctx, pinned["sourceRefs"])
+        if current_fences != fences or current_admissions != admissions or current["admissions"] != admissions:
             raise AuthorizationDenied()
-        checks.extend(current_admissions)
-        checks.extend(sources.recheck())
+        checks.extend(current_fences)
+        final_sources = sources.recheck()
+        checks.extend(final_sources)
+        # ONT-10: recheck the final source-check count before the commit.
+        admission.preflight([*final_sources, *current_fences])
+        # AUTH-04 / execution-capability/1: revalidate both registry keys (the
+        # capability key and the evidence key that verified the receipt)
+        # immediately before the commit attempt and carry their exact registry
+        # versions into the completion transaction itself -- a revocation
+        # racing this very commit must still abort it.
+        key_record, evidence_record = self._keys(binding["capabilityKeyId"], binding["capabilityClaims"], evidence_key)
+        checks.extend([key_check(key_record), key_check(evidence_record)])
         if self.storage.clock() // 1000 >= current["deadline"]:
             raise AuthorizationDenied()
+        # AUTH-04: key expiry changes no registry version, so the version
+        # fences above cannot see it. Before every attempt the completion guard
+        # rereads both keys and joins their validity windows and the attempt
+        # deadline with the source/admission deadlines, compared with one
+        # clock read taken after the last read.
         commit_execution(ctx, [self.collaboration._write(EXECUTIONS, "ac_execution",
-            {**current, "status": "completed", "resultKey": key, "resultHash": digest}, current["version"])], checks)
+            {**current, "status": "completed", "resultKey": key, "resultHash": digest}, current["version"])], checks,
+            guard=lambda: [*(key_deadline(record) for record in self._keys(
+                binding["capabilityKeyId"], binding["capabilityClaims"], evidence_key)),
+                attempt_deadline(current["deadline"])])
         return result

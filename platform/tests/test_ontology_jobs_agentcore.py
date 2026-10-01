@@ -22,6 +22,7 @@ from test_workbench_core import wb  # noqa: F401
 from test_agentcore_authorization import admitted
 from test_ontology_sources import context
 from workspace.collaboration import CollaborationError
+from workspace.ontology_analysis import local_analyze
 from workspace.ontology_jobs import process
 
 
@@ -33,6 +34,25 @@ def test_process_never_dispatches_or_completes_an_agentcore_backed_job(wb, monke
     with pytest.raises(CollaborationError) as error:
         process(context(wb), artifact["jobInput"], job)
     assert error.value.code == "ontology-analyzer-unavailable"
+    unchanged = wb.storage.get(wb.owner, "wb_artifact", artifact["id"])
+    assert unchanged["status"] != "completed"
+    assert "execution" not in unchanged
+
+
+def test_process_rejects_an_agentcore_pinned_job_even_under_offline_opt_in(wb, monkeypatch):
+    """PR #22 review 2, minor finding 5: round 1's fix restored `process()` to the
+    offline-only analyzer guard but dropped the backend-pinning check alongside it.
+    A job admitted/pinned for AgentCore execution must never silently fall back to
+    the legacy offline analyzer, even under explicit offline opt-in (ROLL-02)."""
+    artifact = admitted(wb, monkeypatch)
+    job = wb.storage.get(wb.owner, "job", artifact["jobId"])
+    assert artifact["jobInput"]["backend"]["name"] == "agentcore"
+    wb.api.ontology_analyzer_ready = True
+    wb.api.ontology_analyzer = local_analyze
+    wb.api.allow_offline_ontology_analysis = True
+    with pytest.raises(CollaborationError) as error:
+        process(context(wb), artifact["jobInput"], job)
+    assert error.value.code == "ontology-analysis-backend"
     unchanged = wb.storage.get(wb.owner, "wb_artifact", artifact["id"])
     assert unchanged["status"] != "completed"
     assert "execution" not in unchanged

@@ -84,3 +84,108 @@ test('ontology service roles separate source authority, sandbox tools and capabi
     assert(runtimeResource.DependsOn.some(name => name.startsWith('RuntimeRoleDefaultPolicy')));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+function _ontologyStack(appContext, extra = {}) {
+  const directory = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'ontology-iac-'));
+  fs.writeFileSync(path.join(directory, 'Dockerfile'), 'FROM scratch\n');
+  let stack;
+  try {
+    stack = new OntologyStack(new cdk.App({ context: appContext }), 'OntologyTest', {
+      ...extra, ...{
+    env: { account: '111122223333', region: 'ap-northeast-2' },
+    runtimeDirectory: directory, isolatedSubnets: ['subnet-00000000000000001'],
+    isolatedSecurityGroups: ['sg-00000000000000001'], resourcePrefix: 'ontology_intake_test',
+    toolArchive: { bucket: 'synthetic-tools', key: `tools/${'a'.repeat(64)}.tar.gz`, version: 'synthetic-v1',
+      archiveHash: 'a'.repeat(64), analyzerCodeHash: 'b'.repeat(64), dependencyLockHash: 'c'.repeat(64) },
+      } });
+  } catch (error) {
+    fs.rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+  return { directory, resources: Template.fromStack(stack).toJSON().Resources };
+}
+
+function _environment(resources, prefix) {
+  const [, resource] = Object.entries(resources).find(([key, value]) =>
+    key.startsWith(prefix) && value.Type === 'AWS::Lambda::Function');
+  return resource.Properties.Environment?.Variables ?? {};
+}
+
+test('ontology adapters carry no INTAKE_DEPLOYMENT when intake is not configured', () => {
+  const { directory, resources } = _ontologyStack({});
+  try {
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, undefined);
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, undefined);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('ontology adapters share the same INTAKE_DEPLOYMENT as the rest of the intake module (PR #22 review 2, finding 4)', () => {
+  // admission.require()'s current_policy() rejects every policy without a
+  // deployment scope; both the Authority and Tools Lambdas must receive the
+  // identical value intake.ts/workspace.ts give the intake module's own functions.
+  const { directory, resources } = _ontologyStack({ intakeDeployment: 'offline-ontology-test' });
+  try {
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, 'offline-ontology-test');
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, 'offline-ontology-test');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+// PR #34 review 1, finding 5: the main stack's intake functions default their
+// scope to the MAIN stack's name. An ontology stack reusing that workspace table
+// must resolve the identical scope, never silently its own stack name.
+const { intakeDeploymentScope } = require('../lib/intake');
+
+function _mainStackScope(appContext, name = 'BankPlatform') {
+  return intakeDeploymentScope(new cdk.App({ context: appContext }).node,
+    new cdk.Stack(new cdk.App({ context: appContext }), name));
+}
+
+const SHARED = { workspaceTableName: 'BankPlatform-WorkspaceTable', workspaceBucketName: 'bankplatform-workspace' };
+
+test('a shared workspace table with intake configured and no explicit scope is refused', () => {
+  for (const context of [{ intakeAdmin: true }, { intakeAdmin: 'true' }, { intakeDenylistParam: '/intake/denylist' }]) {
+    assert.throws(() => _ontologyStack(context, SHARED), /intakeDeployment/);
+  }
+});
+
+test('the default main-stack scope propagated through the ontology config matches on both adapters', () => {
+  const main = _mainStackScope({ intakeAdmin: true });
+  assert.equal(main, 'BankPlatform');
+  const { directory, resources } = _ontologyStack({ intakeAdmin: true }, { ...SHARED, intakeDeployment: main });
+  try {
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, main);
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, main);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('an explicit intakeDeployment context resolves the same scope in both stacks', () => {
+  const context = { intakeAdmin: true, intakeDeployment: 'bank-intake' };
+  const main = _mainStackScope(context);
+  const { directory, resources } = _ontologyStack(context, SHARED);
+  try {
+    assert.equal(main, 'bank-intake');
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, main);
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, main);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('a configured scope that disagrees with the intakeDeployment context is refused', () => {
+  assert.throws(() => _ontologyStack({ intakeDeployment: 'bank-intake' }, { ...SHARED, intakeDeployment: 'other' }),
+    /intakeDeployment/);
+});
+
+test('a configured scope alone configures intake for the adapters', () => {
+  const { directory, resources } = _ontologyStack({}, { ...SHARED, intakeDeployment: 'BankPlatform' });
+  try {
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, 'BankPlatform');
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, 'BankPlatform');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('a self-contained synthetic table keeps the stack-name default', () => {
+  const { directory, resources } = _ontologyStack({ intakeAdmin: true });
+  try {
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, 'OntologyTest');
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, 'OntologyTest');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
