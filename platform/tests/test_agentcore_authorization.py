@@ -127,6 +127,28 @@ def test_runtime_retention_is_bounded_and_preserved(wb):
                 wb.storage.put(wb.owner, kind, {"id": "invalid", "ttl": expiry})
 
 
+def test_classify_requires_authority_to_exist_now_and_pins_its_exact_revision(wb, monkeypatch):
+    """PR #22 review 2, finding 1, race (a): a classification recorded before any
+    policy/provenance/grant exists must never be grandfathered in once authority
+    appears afterward, with no fresh review. The authority check now runs inside
+    `classify()` itself (not only `require()`), so the call simply fails closed
+    while no authority exists -- a later `classify()` call, once authority is
+    registered, is the fresh review that binds and pins it."""
+    files = collection(wb)
+    source = wb.storage.get(wb.owner, "asset", files[0]["assetId"])
+    ref = asset_reference(source)
+    body = {"requestId": files[0]["assetId"], "sourceRef": ref,
+            "classification": "synthetic", "reason": "No authority yet"}
+    with pytest.raises(CollaborationError) as error:
+        classify(context(wb), body)
+    assert error.value.code == "agentcore-admission-authority-missing"
+    assert wb.storage.list_page(wb.owner, "ac_admission")["items"] == []
+    policy = authorize_admission(wb, monkeypatch, [ref], data_class="synthetic")
+    record = classify(context(wb), body)
+    assert record["binding"]["policy"] == {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]}
+    assert "provenance" in record["binding"]
+
+
 def test_classification_binds_workbench_document_identity():
     from ontology_runtime.admission import identifier
     reference = {"sourceKind": "workbench-document", "sourceId": "source", "revision": "v1",

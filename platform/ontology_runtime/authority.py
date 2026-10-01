@@ -41,7 +41,11 @@ class Authority:
         # classification fence. Keep every operation within DynamoDB's limit.
         if len(pinned["sourceRefs"]) > 40:
             fail(422, "agentcore-source-budget", "AgentCore 분석 묶음은 원본 40개 이하로 나누세요.")
-        admissions = [admission.require(ctx, reference) for reference in pinned["sourceRefs"]]
+        # Each `require()` call returns the admission check plus its exact pinned
+        # policy/provenance/grant revision checks (source-admission/1); flatten
+        # them into one fenced list, and keep that flat list as `admissions` for
+        # the identity comparisons below (a drift in any of them is a difference).
+        admissions = [check for reference in pinned["sourceRefs"] for check in admission.require(ctx, reference)]
         checks.extend(admissions)
         payload, bindings = source_input(ctx, pinned["files"], pinned["resolver"])
         from ontology_runtime.inspection import inspect_payload
@@ -152,7 +156,7 @@ class Authority:
         if live_artifact["jobInput"] != pinned:
             raise AuthorizationDenied()
         checks.extend(sources.verify(pinned["sourceRefs"]))
-        current_admissions = [admission.require(ctx, reference) for reference in pinned["sourceRefs"]]
+        current_admissions = [check for reference in pinned["sourceRefs"] for check in admission.require(ctx, reference)]
         if current_admissions != admissions:
             raise AuthorizationDenied()
         checks.extend(current_admissions)
