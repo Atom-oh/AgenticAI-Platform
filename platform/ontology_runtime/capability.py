@@ -88,6 +88,14 @@ class Capabilities:
             raise AuthorizationDenied()
         return record
 
+    def active(self, key_id):
+        """Revalidate that this capability key is still current (not revoked/expired),
+        with the same authoritative KMS/registry check `verify` makes per call.
+        Used to fence finalization and cached replay, after the token itself was
+        already verified earlier in the same attempt (AUTH-04: revocation must
+        still abort a completion or a replay reached without a fresh `verify`)."""
+        self._key(key_id)
+
     def issue(self, ledger, key_id):
         now = int(self.clock())
         if ledger.get("status") not in LIVE:

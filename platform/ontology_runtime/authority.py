@@ -73,6 +73,11 @@ class Authority:
                 result = json.loads(raw_result)
                 self.evidence.verify(previous["capabilityClaims"],
                     {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"])
+                # AUTH-04: a cached replay still requires the capability key that
+                # authorized this attempt to be current; a revocation after the
+                # original dispatch must abort every later replay, not just a
+                # fresh `verify`.
+                self.capabilities.active(previous["capabilityKeyId"])
                 sources.recheck()
                 return result
             fail(409, "agentcore-already-dispatched", "이미 실행된 작업입니다. 현재 작업 상태를 확인하세요.")
@@ -126,6 +131,9 @@ class Authority:
         if value.get("execution", {}).get("toolArchiveHash") != self.config["toolArchiveHash"]:
             raise AuthorizationDenied()
         self.evidence.verify(binding["capabilityClaims"], value, receipt)
+        # AUTH-04: a capability revoked while Runtime was executing must still
+        # abort finalization; the evidence key alone does not stand in for it.
+        self.capabilities.active(binding["capabilityKeyId"])
         validate_analysis(payload, value["analysis"])
         current = self.storage.get(EXECUTIONS, "ac_execution", identity)
         if (current.get("status") != "result-ready" or current.get("manifestHash") != schema.digest(value)

@@ -100,7 +100,7 @@ def pipeline(wb, monkeypatch):
     payload, _ = source_input(context(wb), artifact["jobInput"]["files"], artifact["jobInput"]["resolver"])
     state.dispatch = lambda: authority.dispatch({"projectId": wb.project["id"], "artifactId": artifact["id"],
                                                 "inputHash": schema.digest(payload)})
-    state.artifact, state.memory, state.tools = artifact, memory, tools
+    state.artifact, state.memory, state.tools, state.authority = artifact, memory, tools, authority
     return state
 
 
@@ -144,7 +144,7 @@ def test_protected_tools_reject_changed_authority_before_the_parser(wb, pipeline
     assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
 
 
-@pytest.mark.parametrize("change", ["receipt", "revoked-key", "deadline"])
+@pytest.mark.parametrize("change", ["receipt", "revoked-key", "revoked-capability-key", "deadline"])
 def test_authority_independently_rejects_late_or_invalid_runtime_results(wb, pipeline, change):
     def mutate(result):
         if change == "receipt":
@@ -152,12 +152,33 @@ def test_authority_independently_rejects_late_or_invalid_runtime_results(wb, pip
         elif change == "revoked-key":
             key = wb.storage.get(KEYS, "ac_key", "evidence-v1")
             wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
+        elif change == "revoked-capability-key":
+            # PR #22 review 1, finding 4: finalization checked only the evidence
+            # key; a capability (cap-v1) revoked while Runtime was executing must
+            # independently abort completion too (AUTH-04).
+            key = wb.storage.get(KEYS, "ac_key", "cap-v1")
+            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
         else:
             wb.storage.clock = lambda: wb.now + 900000
     pipeline.after_runtime = mutate
     with pytest.raises((AuthorizationDenied, CollaborationError)):
         pipeline.dispatch()
     assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
+
+
+def test_authority_rejects_a_cached_replay_once_its_capability_key_is_revoked(wb, pipeline):
+    """PR #22 review 1, finding 4: the cached-replay branch must also refuse a
+    revoked capability key, not only a fresh dispatch's finalization."""
+    result = pipeline.dispatch()
+    assert pipeline.runtime_calls == 1
+    key = wb.storage.get(KEYS, "ac_key", "cap-v1")
+    wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert pipeline.runtime_calls == 1
+    executions = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"]
+    assert executions[0]["status"] == "completed" and executions[0]["resultHash"] == hashlib.sha256(
+        schema.canonical(result)).hexdigest()
 
 
 def test_execution_writer_cannot_modify_project_sources_or_key_registry(wb, monkeypatch):
