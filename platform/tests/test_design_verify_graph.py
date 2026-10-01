@@ -434,6 +434,58 @@ def test_compose_reuses_a_judgment_only_for_the_same_review_key_and_lineage():
     assert compose_review(None, b, K, {}, "intro", "default", items, verify_lineage=CURRENT)["status"] == "needs_changes"
 
 
+def _conditional_notice_bundle(applies_when):
+    sentinel = "특별 조건부 안내문"
+    b = bundle()
+    confirm = copy.deepcopy(b["screens"][("confirm", "default")])
+    confirm["slots"]["body"].append({"id": "hidden-notice", "asset": "body-text", "props": {"children": sentinel},
+                                     "visibleWhen": {"when": "cond:autoTransfer", "negate": False}})
+    b["screens"][("confirm", "default")] = confirm
+    item = {"id": "d-rule-n", "method": "llm", "severity": "critical", "text": f"필수 고지 '{sentinel}'가 있다",
+            "targets": ["confirm"]}
+    if applies_when is not None:
+        item["appliesWhen"] = applies_when
+    b["checklist"] = [item]
+    return b, sentinel
+
+
+def _batched_judge(passes):
+    def generate(system, user, _tokens):
+        payload = json.loads(user)
+        return json.dumps({"verdicts": {i["id"]: {"verdict": "pass" if passes(payload["flowText"]) else "fail",
+                                                  "evidence": "checked"} for i in payload["items"]}})
+    return {"generate": generate, "normalize": OK, "verify_lineage": CURRENT, **PROD}
+
+
+@pytest.mark.parametrize("applies_when", ["cond:eligible", None])
+def test_compose_reuse_requires_a_current_passing_judgment_for_every_applicable_rendering(applies_when):
+    """PR #30 review 5 #3: the reviewer stores one passing judgment (notice visible) and one failing judgment
+    (notice hidden) for a conditional notice. compose_review() must recompute the same applicable rendering
+    contexts as direct review and accept reuse only if EVERY one has a matching, current, passing judgment."""
+    from design_loop.verify_graph import _reviewer
+    b, sentinel = _conditional_notice_bundle(applies_when)
+    deps = _batched_judge(lambda text: sentinel in text)
+    judgments = {}
+    findings, incomplete, _ = _reviewer(b, K, deps, "fill", judgments)
+    assert not incomplete and [f for f in findings if f.get("item") == "d-rule-n"]
+    records = list(judgments.values())
+    verdicts = sorted(r["verdicts"]["d-rule-n"]["verdict"] for r in records)
+    assert verdicts == ["fail", "pass"], verdicts
+    passing = next(r for r in records if r["verdicts"]["d-rule-n"]["verdict"] == "pass")
+    items = b["checklist"]
+    for stored in (passing, judgments):            # the passing record alone, or the whole judgment store
+        assert compose_review(stored, b, K, deps, "confirm", "default", items, verify_lineage=CURRENT) == \
+            {"status": "needs_changes", "code": "review-evidence-missing"}
+    # Control: every applicable rendering judged and passing -> reused, with each context listed.
+    good = {}
+    _reviewer(b, K, _batched_judge(lambda text: True), "fill", good)
+    reused = compose_review(good, b, K, deps, "confirm", "default", items, verify_lineage=CURRENT)
+    assert reused["status"] == "reused" and reused["verdicts"]["d-rule-n"]["verdict"] == "pass"
+    assert len(reused["contexts"]) == 2
+    one = dict(list(good.items())[:1])               # one context's judgment missing -> re-review
+    assert compose_review(one, b, K, deps, "confirm", "default", items, verify_lineage=CURRENT)["status"] == "needs_changes"
+
+
 def test_judge_budget_three_fill_variants_by_ten_pages():
     # B0's ledger intent/outcome wrappers are not in this branch; a counting stand-in enforces the same ceiling.
     budget = 120                                                                   # maxCallsByOperation["design.generate"]

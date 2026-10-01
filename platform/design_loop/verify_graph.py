@@ -224,11 +224,26 @@ def _local_lineage(stored):
     return stored.get("receiptHash") == receipt(stored.get("reviewKey"), stored.get("verdicts"), stored.get("admissions", ()))
 
 
-def page_review_key(bundle, k, deps, screen_id, state, items):
-    context = review_context(bundle, screen_id, state, k)
+def _context_key(items, context, k, deps):
     system, user = judge_payload(items, context)
     return review_key(system, user, model=(deps or {}).get("model"), prompt_version=PROMPT_VERSION,
                       profile_hash=(deps or {}).get("profileHash"), revisions=rule_revisions(k))
+
+
+def page_review_keys(bundle, k, deps, screen_id, state, items):
+    """`[(case, reviewKey)]` for every applicable rendering context of one page, computed by `review_plan` --
+    the same contexts, grouping and judge payloads that direct review judges and caches."""
+    plan, _incomplete = review_plan(bundle, k, items, pages={(screen_id, state)})
+    return [(entry["case"], _context_key(entry["items"], entry["context"], k, deps)) for entry in plan]
+
+
+def page_review_key(bundle, k, deps, screen_id, state, items):
+    """The single review key of a page with exactly one applicable rendering context; otherwise ValueError
+    (use `page_review_keys`: one cached judgment cannot stand for several renderings)."""
+    keys = page_review_keys(bundle, k, deps, screen_id, state, items)
+    if len(keys) != 1:
+        raise ValueError(f"page has {len(keys)} applicable rendering contexts")
+    return keys[0][1]
 
 
 def _current_lineage(stored, verify_lineage):
@@ -243,19 +258,48 @@ def _current_lineage(stored, verify_lineage):
         return False
 
 
-def compose_review(stored, bundle, k, deps, screen_id, state, items, *, verify_lineage=None):
-    """`design.compose` reuses a stored judgment only when the recomputed review key matches and its lineage
-    re-verifies through `verify_lineage`, injected by C (no default: without it nothing is reused)."""
+def _stored_records(stored):
+    """A single stored judgment, or a judgment store `{reviewKey: judgment}` as `_reviewer` fills it."""
     if not isinstance(stored, dict):
-        return {"status": "needs_changes", "code": "review-evidence-missing"}
+        return {}
+    if "reviewKey" in stored:
+        return {stored["reviewKey"]: stored}
+    return {key: record for key, record in stored.items() if isinstance(record, dict) and record.get("reviewKey") == key}
+
+
+def compose_review(stored, bundle, k, deps, screen_id, state, items, *, verify_lineage=None):
+    """`design.compose` reuses stored judgments only when, for EVERY applicable rendering context of the page
+    (recomputed by `review_plan`, exactly as direct review computes them: each applicable case's
+    visibility-filtered rendering, deduplicated only by identical text), there is a stored judgment with that
+    context's review key, a current lineage through `verify_lineage` (injected by C; no default, so without it
+    nothing is reused) and a `pass` verdict for every item judged in that context. Anything else -- a missing
+    context, a failing or incomplete verdict, an undecidable condition, an over-limit page, no applicable
+    context at all -- re-reviews (PR #30 review 5, #3)."""
+    missing = {"status": "needs_changes", "code": "review-evidence-missing"}
+    records = _stored_records(stored)
+    if not records:
+        return missing
     try:
-        key = page_review_key(bundle, k, deps, screen_id, state, items)
-        ok = stored.get("reviewKey") == key and _current_lineage(stored, verify_lineage)
+        plan, incomplete = review_plan(bundle, k, items, pages={(screen_id, state)})
+        if incomplete or not plan:
+            return missing
+        merged, contexts = {}, []
+        for entry in plan:
+            if len(entry["context"]["flowText"]) > MAX_FLOW_TEXT:
+                return missing
+            key = _context_key(entry["items"], entry["context"], k, deps)
+            record = records.get(key)
+            if record is None or not _current_lineage(record, verify_lineage):
+                return missing
+            for item in entry["items"]:
+                v = (record.get("verdicts") or {}).get(item["id"])
+                if not isinstance(v, dict) or v.get("verdict") != "pass":
+                    return missing
+                merged.setdefault(item["id"], copy.deepcopy(v))
+            contexts.append({"case": copy.deepcopy(entry["case"]), "reviewKey": key})
     except Exception:  # noqa: BLE001 - a lineage check that cannot run is missing evidence
-        ok = False
-    if not ok:
-        return {"status": "needs_changes", "code": "review-evidence-missing"}
-    return {"status": "reused", "verdicts": copy.deepcopy(stored["verdicts"])}
+        return missing
+    return {"status": "reused", "verdicts": merged, "contexts": contexts}
 
 
 # ---- roles ----------------------------------------------------------------------------------------------------
@@ -296,6 +340,63 @@ def _item_pages(item, bundle, k):
     return [(s, st) for s, st in pages if hit(s)]
 
 
+def review_plan(bundle, k, items, pages=None):
+    """The applicable rendering contexts to judge `items` in: `([{screen, state, case, context, items}], incomplete)`.
+
+    The ONE place both direct review (`_reviewer`) and cache reuse (`compose_review`) decide what is judged, so
+    the two cannot drift (PR #30 review 5, #3). Every item -- including one with no `appliesWhen` -- is reviewed
+    against the actual visibility-filtered rendering of every case where it applies, never the raw, all-branches
+    composition (which would let a node hidden in the applicable case still "prove" the item, or hide one that
+    never renders at all). Two cases are deduplicated into one context only when they render byte-identical text
+    for the page: projecting onto only the variables `appliesWhen` itself references is not enough, because a
+    rule's REQUIREDNESS condition can differ from its content's VISIBILITY condition (PR #30 review round 4, #1;
+    round 3, #2). `pages` restricts the plan to those `(screen, state)` pages."""
+    incomplete, by_page, case_of = [], {}, {}
+    all_cases = enumerate_cases((bundle.get("expectation") or {}).get("conditions", []))["cases"]
+    for item in items:
+        unresolved = _unresolved_targets(item, k)
+        if unresolved:                  # a required target that names nothing known cannot be reviewed: block
+            incomplete.append({"item": item["id"], "reason": "target-unresolved", "targets": unresolved})
+            continue
+        applies_when = item.get("appliesWhen")
+        if not all_cases:
+            item_cases = [None]          # nothing conditional in this flow: one case-agnostic review, as before
+        elif applies_when is None:
+            item_cases = list(all_cases)  # no stated condition: still review every case's actual rendering
+        else:
+            item_cases, undecidable = [], False
+            for case in all_cases:
+                try:
+                    applies = evaluate(applies_when, case)
+                except ValueError:
+                    undecidable = True
+                    continue
+                if applies:
+                    item_cases.append(case)
+            if undecidable:
+                incomplete.append({"item": item["id"], "reason": "condition-undecidable"})
+            if not item_cases:
+                continue     # never applicable in any decidable case: nothing to review
+        for page in _item_pages(item, bundle, k):
+            if pages is not None and page not in pages:
+                continue
+            for case in item_cases:
+                text = review_context(bundle, page[0], page[1], k, case=case)["flowText"]
+                render_key = (page[0], page[1], text)
+                case_of.setdefault(render_key, case)
+                # Keyed by item id, not appended blindly: two DIFFERENT cases can still render the identical
+                # text for this item (nothing on the page depends on whatever varies between them), and must
+                # not queue the same item twice for what is, by text, one judge call.
+                by_page.setdefault(render_key, {})[item["id"]] = item
+    plan = []
+    for (screen, state, _text), items_by_id in by_page.items():
+        case = case_of[(screen, state, _text)]
+        plan.append({"screen": screen, "state": state, "case": case,
+                     "context": review_context(bundle, screen, state, k, case=case),
+                     "items": list(items_by_id.values())})
+    return plan, incomplete
+
+
 def _reviewer(bundle, k, deps, mode, judgments):
     findings, incomplete = [], []
     flow, values = bundle["flow"], _values(bundle)
@@ -331,63 +432,16 @@ def _reviewer(bundle, k, deps, mode, judgments):
     if llm and not batched and not callable(deps.get("llm_judge")):
         return findings, incomplete + [{"item": "*", "reason": "judge-unavailable"}], {"items": len(checklist)}
     calls = 0
-    by_page = {}
-    case_of = {}
-    # Every item -- including one with no `appliesWhen` -- is reviewed against the actual visibility-filtered
-    # rendering of every case where it applies, never the raw, all-branches composition (which would let a node
-    # hidden in the applicable case still "prove" the item, or hide one that never renders at all). Two cases
-    # are deduplicated into one judge call only when they render byte-identical text for this page: projecting
-    # onto only the variables `appliesWhen` itself references is not enough, because a rule's REQUIREDNESS
-    # condition can differ from its content's VISIBILITY condition, so two cases can agree on every variable the
-    # rule mentions yet still render different text for a node gated on some OTHER variable (PR #30 review
-    # round 4, #1; this was round 3, #2's partial fix, which projected only onto appliesWhen's own variables and
-    # left items with no appliesWhen entirely unfiltered).
-    all_cases = enumerate_cases((bundle.get("expectation") or {}).get("conditions", []))["cases"]
-    for item in llm:
-        unresolved = _unresolved_targets(item, k)
-        if unresolved:                  # a required target that names nothing known cannot be reviewed: block
-            incomplete.append({"item": item["id"], "reason": "target-unresolved", "targets": unresolved})
-            continue
-        applies_when = item.get("appliesWhen")
-        if not all_cases:
-            item_cases = [None]          # nothing conditional in this flow: one case-agnostic review, as before
-        elif applies_when is None:
-            item_cases = list(all_cases)  # no stated condition: still review every case's actual rendering
-        else:
-            item_cases, undecidable = [], False
-            for case in all_cases:
-                try:
-                    applies = evaluate(applies_when, case)
-                except ValueError:
-                    undecidable = True
-                    continue
-                if applies:
-                    item_cases.append(case)
-            if undecidable:
-                incomplete.append({"item": item["id"], "reason": "condition-undecidable"})
-            if not item_cases:
-                continue     # never applicable in any decidable case: nothing to review
-        for page in _item_pages(item, bundle, k):
-            for case in item_cases:
-                text = review_context(bundle, page[0], page[1], k, case=case)["flowText"]
-                render_key = (page[0], page[1], text)
-                case_of.setdefault(render_key, case)
-                # Keyed by item id, not appended blindly: two DIFFERENT cases can still render the identical
-                # text for this item (nothing on the page depends on whatever varies between them), and must
-                # not queue the same item twice for what is, by text, one judge call.
-                by_page.setdefault(render_key, {})[item["id"]] = item
-    for render_key, items_by_id in by_page.items():
-        items = list(items_by_id.values())
-        screen, state, _text = render_key
-        case = case_of[render_key]
-        context = review_context(bundle, screen, state, k, case=case)
+    plan, plan_incomplete = review_plan(bundle, k, llm)
+    incomplete += plan_incomplete
+    for entry in plan:
+        screen, state, case, context, items = (entry["screen"], entry["state"], entry["case"], entry["context"],
+                                                entry["items"])
         if len(context["flowText"]) > MAX_FLOW_TEXT:
             incomplete += [{"item": i["id"], "screen": screen, "state": state, "reason": "page-text-limit"} for i in items]
             continue
         if batched:
-            system, user = judge_payload(items, context)
-            key = review_key(system, user, model=deps.get("model"), prompt_version=PROMPT_VERSION,
-                             profile_hash=deps.get("profileHash"), revisions=rule_revisions(k))
+            key = _context_key(items, context, k, deps)
             stored = judgments.get(key) if judgments is not None else None
             if stored is not None and _current_lineage(stored, deps.get("verify_lineage")):
                 verdicts = stored["verdicts"]
