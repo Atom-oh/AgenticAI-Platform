@@ -307,6 +307,14 @@ def test_generated_visible_text_rejects_unbound_financial_quantities():
         k.screens["amount"]["title"] = title
         with pytest.raises(ValueError, match="literal-financial-value"):
             project(flow, screens, k, bindings(GOOD), cases=cases)
+    # PR #30 review 6 #1: no context at all -- any number, Korean numeral words included, needs a binding; the
+    # engine's own case index in the case labels ("케이스 3 · ") is not a composition literal and stays allowed.
+    for title in ("추가 999 가입", "한도 구백구십구만원", "삼십만원 혜택", "가입자 수 999"):
+        k.screens["amount"]["title"] = title
+        with pytest.raises(ValueError, match="literal-financial-value"):
+            project(flow, screens, k, bindings(GOOD), cases=cases)
+    k.screens["amount"]["title"] = "2단계 이용 조건 확인"                 # allowlisted step counter + near misses
+    assert project(flow, screens, k, bindings(GOOD), cases=cases)
 
 
 def test_reserved_looking_published_page_ids_do_not_loop():

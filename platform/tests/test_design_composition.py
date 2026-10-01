@@ -164,9 +164,10 @@ def test_split_label_and_value_financial_literal_is_still_critical():
     assert codes(c) == {"literal-financial-value"}
     c = summary(items=[{"label": "추가 한도 만원", "value": "999"}])
     assert codes(c) == {"literal-financial-value"}
-    # A bare number with no sibling unit annotation, and ordinary text with no sibling number, both stay clean.
+    # PR #30 review 6 #1: a bare number needs a binding even with no unit anywhere (no context is inferred);
+    # ordinary text with no number stays clean.
     c = summary(items=[{"label": "가입자 수", "value": "999"}])
-    assert codes(c) == set()
+    assert codes(c) == {"literal-financial-value"}
     c = summary(items=[{"label": "회원 등급 안내", "value": "일반"}])
     assert codes(c) == set()
 
@@ -182,12 +183,12 @@ def test_qualified_and_range_split_financial_literals_are_still_critical():
     assert codes(c) == {"literal-financial-value"}
     c = summary(items=[{"label": "가입 한도 (만원)", "value": "500~999"}])
     assert codes(c) == {"literal-financial-value"}
-    # A qualifier-adjacent number with no sibling unit annotation, and a multi-word phrase that merely contains
-    # a number, both stay clean.
+    # PR #30 review 6 #1: these were clean controls while "financial context" was inferred; a count shown as a
+    # literal cannot be told apart from a product value, so it now needs a binding too (fail closed).
     c = summary(items=[{"label": "가입자 수", "value": "최대 999"}])
-    assert codes(c) == set()
+    assert codes(c) == {"literal-financial-value"}
     c = summary(items=[{"label": "회원 안내", "value": "이벤트 3종"}])
-    assert codes(c) == set()
+    assert codes(c) == {"literal-financial-value"}
 
 
 @pytest.mark.parametrize("item", [
@@ -220,14 +221,87 @@ def test_a_number_split_from_its_financial_context_across_props_or_nodes_needs_a
     assert codes(c) == {"literal-financial-value"}
 
 
-def test_ordinary_numbers_outside_a_financial_context_stay_clean():
-    c = base(); node(c, "n4")["props"]["children"] = "3단계 중 1단계입니다"
-    node(c, "n1")["props"]["children"] = "가입 안내"
-    assert codes(c) == set()
-    c = summary(items=[{"label": "가입자 수", "value": "999"}])
-    assert codes(c) == set()
+def test_allowlisted_step_counters_stay_clean():
+    """financial.NONFINANCIAL_FORMS: the step counter is the only literal number a composition may show."""
+    for text in ("3단계 중 1단계입니다", "2단계", "1 단계: 본인 확인"):
+        c = base(); node(c, "n4")["props"]["children"] = text
+        node(c, "n1")["props"]["children"] = "가입 안내"
+        assert codes(c) == set(), text
     c = base()                                                          # enum design tokens are not display text
     assert node(c, "n2")["props"]["gap"] == "4" and codes(c) == set()
+    # the allowlist masks only the counter itself: another number in the same text is still found
+    c = base(); node(c, "n4")["props"]["children"] = "2단계 우대 999"
+    assert codes(c) == {"literal-financial-value"}
+    c = base(); node(c, "n4")["props"]["children"] = "999단계"           # not a plausible step index
+    assert codes(c) == {"literal-financial-value"}
+
+
+def test_a_number_split_into_its_own_node_needs_a_binding():
+    """PR #30 review 6 #1 exact repro: "추가 한도" and "999" in separate Text nodes; and a bare literal next to a
+    bound unit elsewhere on the page. No financial context is inferred, so no splitting escapes the rule."""
+    c = base(); node(c, "n1")["props"]["children"] = "추가 한도"
+    node(c, "n4")["props"]["children"] = "999"
+    assert [f["path"] for f in validate(c, K, flow=FLOW, binding_paths=PATHS)] == \
+        ["slots.body[0].children[1].props.children"]
+    c = base(); node(c, "n4")["props"] = {}; node(c, "n4")["bind"] = {"children": "product.term"}   # "12개월" bound
+    node(c, "n1")["props"]["children"] = "999"
+    assert codes(c) == {"literal-financial-value"}
+    c = base(); node(c, "n1")["props"]["children"] = "999"                # no financial word anywhere on the page
+    node(c, "n3")["props"]["label"] = "이름"; node(c, "n4")["props"]["children"] = "입력하세요"
+    assert codes(c) == {"literal-financial-value"}
+
+
+def test_the_split_node_repro_is_not_approvable_through_verification():
+    """The same repro through verify_graph (it passed compile, Browser checks and verification in review 6)."""
+    from design_loop.verify_graph import verify
+    from test_design_verify_graph import JUDGE, bundle
+    b = bundle()
+    page = copy.deepcopy(b["screens"][("amount", "default")])
+    page["slots"]["body"].append({"id": "x-limit", "asset": "body-text", "props": {"children": "추가 한도"}})
+    page["slots"]["body"].append({"id": "x-value", "asset": "body-text", "props": {"children": "999"}})
+    b["screens"][("amount", "default")] = page
+    r = verify(b, K, JUDGE)
+    assert not r["approvable"] and r["verdict"] != "pass"
+    assert any(f["code"] == "literal-financial-value" and f["severity"] == "critical" for f in r["findings"])
+
+
+@pytest.mark.parametrize("text", [
+    "한도 구백구십구만원",          # review 6 #1: spelled-out amount escaped the digit-only check
+    "구백구십구만원", "삼십만원", "오천원", "만원", "백만", "천사백만원", "일조원", "이만 원",
+    "3백만원",                     # mixed digit + Korean magnitude
+    "최대 삼개월", "오 년 만기", "한 달간 무료", "열 살부터",
+    "월 최대 ９９９",                # full-width digits
+])
+def test_korean_numeral_words_and_mixed_forms_need_a_binding(text):
+    c = base(); node(c, "n4")["props"]["children"] = text
+    assert codes(c) == {"literal-financial-value"}, text
+    c = summary(items=[{"label": "추가 한도", "value": text}])
+    assert codes(c) == {"literal-financial-value"}, text
+
+
+@pytest.mark.parametrize("text", ["① 우대", "제Ⅳ항", "½ 할인", "一万"])
+def test_unclassifiable_numeral_forms_are_rejected(text):
+    c = base(); node(c, "n4")["props"]["children"] = text
+    assert codes(c) == {"unsupported-numeral-form"}, text
+
+
+@pytest.mark.parametrize("text", [
+    "이용 안내", "일반 회원", "만기 해지", "확인하십시오", "사용 가능", "오류가 발생했습니다", "구분",
+    "천천히 입력하세요", "가입 조건", "잔액 조회", "조세 특례", "사회 초년생", "이건 무엇인가요", "이번 달",
+    "자동이체 설정", "이자 지급", "만 나이 기준", "이상 이하", "만족도", "오늘", "구매", "사이", "천만에요",
+    "조만간 출시", "일조하다", "이만 마치겠습니다", "네 해지할게요", "일일 한도", "영원히", "공지",
+])
+def test_korean_words_that_merely_contain_numeral_syllables_stay_clean(text):
+    c = base(); node(c, "n4")["props"]["children"] = text
+    assert codes(c) == set(), text
+
+
+def test_screen_title_numerals_need_a_binding():
+    k = copy.deepcopy(K)
+    k.screens["amount"]["title"] = "삼십만원 혜택"
+    assert {f["code"] for f in validate(base(), k, flow=FLOW, binding_paths=PATHS)} == {"literal-financial-value"}
+    k.screens["amount"]["title"] = "2단계 납입 금액"
+    assert validate(base(), k, flow=FLOW, binding_paths=PATHS) == []
 
 
 def test_the_same_values_bound_from_the_cited_prd_pass():

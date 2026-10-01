@@ -2,8 +2,9 @@
 
 A composition tree is the engine's single intermediate representation: one composition per screen and state holds
 every node the page can show; case-dependent nodes carry `visibleWhen`, derived only from an applicable
-`uxModel.conditions` entry. Financial values reach a page only through PRD bindings: a literal quantity anywhere in
-the tree is a critical finding. Validation never repairs; it reports.
+`uxModel.conditions` entry. Financial values reach a page only through PRD bindings: any number in displayed literal
+text (digits of any script or Korean numeral words), outside the explicit non-financial forms of
+`financial.NONFINANCIAL_FORMS`, is a critical finding. Validation never repairs; it reports.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import re
 from workspace.ontology_ux import STATES, parse_when
 from workspace.ontology_ux import visible as _visible
 
-from .financial import contains_quantity, is_strong_context, needs_binding
+from .financial import contains_quantity, numerals
 
 SCHEMA_VERSION = 1
 TOP = frozenset({"schemaVersion", "screenId", "templateId", "state", "variant", "surface", "slots"})
@@ -167,14 +168,14 @@ def node_display(node, k):
     return out
 
 
-def page_financial_context(c, k):
-    """Unit-bearing literals anywhere on the page (and the generated heading): a number on this page is
-    financial when its unit is written in a different prop or node ("추가 한도 [만원]" heading, "월 최대 999" text;
-    PR #30 review 5, #2). Financial TERMS stay node-scoped so an ordinary step counter on a page that merely
-    mentions "납입 금액" is not swept in."""
-    title = (k.screens.get(c.get("screenId")) or {}).get("title")
-    strings = [title] + [s for _, node, _ in walk(c) for group in node_display(node, k).values() for s in group]
-    return [s for s in strings if is_strong_context(s)]
+def _numeral_findings(strings, path, add):
+    """One finding per numeral code in `strings` (PR #30 review 6, #1): no context is consulted -- a number is
+    displayed or it is not, however the text around it is split across props, nodes or bound units."""
+    for code in dict.fromkeys(code for s in strings for code, _ in numerals(s)):
+        if code == "unsupported-numeral-form":
+            add(code, path, "numeral form cannot be classified; financial quantities must be bound from the PRD")
+        else:
+            add(code, path, "financial quantities must be bound from the PRD")
 
 
 def text_of(c, values=None, k=None):
@@ -307,11 +308,9 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         elif node["id"] in ids:
             add("duplicate-id", path + ".id", "duplicate node id")
         ids.add(node["id"])
-    # the page heading is generated visible text (react_project renders the screen title): no literal quantity
+    # the page heading is generated visible text (react_project renders the screen title): no literal number
     screen = k.screens.get(c["screenId"]) or {}
-    page_context = page_financial_context(c, k)
-    if needs_binding([screen.get("title")], page_context):
-        add("literal-financial-value", "screen.title", "financial quantities must be bound from the PRD")
+    _numeral_findings([screen.get("title")], "screen.title", add)
     # slots
     slots = (template or {}).get("slots", {})
     for name in c["slots"]:
@@ -352,7 +351,6 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         text_child = code.get("childrenProp") == "children"
         props, bind = node.get("props", {}), node.get("bind", {})
         displayed = node_display(node, k)
-        node_context = [text for group in displayed.values() for text in group] + page_context
         for name, literal in props.items():
             ppath = f"{path}.props.{name}"
             if name == "children" and text_child:
@@ -371,8 +369,7 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
                 add("prop-type", ppath, "literal does not match the declared prop type")
             if name in bind:
                 add("prop-conflict", ppath, "prop is both literal and bound")
-            if needs_binding(displayed.get(name, ()), node_context):
-                add("literal-financial-value", ppath, "financial quantities must be bound from the PRD")
+            _numeral_findings(displayed.get(name, ()), ppath, add)
         for name, bpath in bind.items():
             ppath = f"{path}.bind.{name}"
             spec = {"type": "string"} if name == "children" and text_child else specs.get(name)

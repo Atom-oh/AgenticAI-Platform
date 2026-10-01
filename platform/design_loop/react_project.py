@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .composition import walk
 from .convention import META_KEYS, PAGE_ID, VALUE_FIELD, Registry
-from .financial import contains_quantity, needs_binding
+from .financial import needs_binding
 from .local_runner import run_node
 
 KIT = Path(__file__).resolve().parents[1] / "react-kit"
@@ -34,6 +34,7 @@ FINISHED_TEST_ID = "flow-finished"
 CASE_SELECT = "case-select"
 CASE_SELECT_LABEL = "검증용 케이스"
 FINISHED_MESSAGE = "절차를 완료했습니다."
+CASE_PREFIX = "케이스 "
 
 
 def _js(value):
@@ -200,13 +201,17 @@ def _ts_type(value):
 
 
 def _case_label(k, i, screen, state, empty):
-    return f"케이스 {i + 1} · {k.screens[screen]['title']} · {state}" + (" · 빈 입력" if empty else "")
+    return f"{CASE_PREFIX}{i + 1} · " + _case_label_tail(k, screen, state, empty)
+
+
+def _case_label_tail(k, screen, state, empty):
+    return f"{k.screens[screen]['title']} · {state}" + (" · 빈 입력" if empty else "")
 
 
 def generated_text(k, flow, screens, cases):
     """Every visible string codegen emits outside the composition trees: page headings (screen titles), the
     verifier's case-select label and entries, and the completion message. Composition literals are checked by
-    `composition.validate`; these are checked here with the same grammar (PR #30 review 1, #6)."""
+    `composition.validate`; these are checked here with the same rule (PR #30 review 1, #6; review 6, #1)."""
     texts = [CASE_SELECT_LABEL, FINISHED_MESSAGE]
     keys = [key for key in screens if key[0] in k.screens]
     texts += [k.screens[s]["title"] for s in dict.fromkeys(s for s, _ in keys)]
@@ -217,13 +222,14 @@ def generated_text(k, flow, screens, cases):
 def project(flow, screens, k, prd_bindings, *, cases, registry=None, meta=None):
     """`screens` maps `(screenId, state)` to its composition. Returns `{path: source}`.
 
-    A financial quantity in any generated visible string raises `literal-financial-value`: quantities reach a page
-    only through PRD bindings."""
-    # Headings and fixed messages: any number in a financial context (PR #30 review 5, #2). Case labels embed a
-    # case index next to an already-checked heading, so only a unit-bearing quantity counts there.
-    headings = {CASE_SELECT_LABEL, FINISHED_MESSAGE} | {k.screens[s]["title"] for s, _ in screens if s in k.screens}
-    if any(needs_binding([text]) if text in headings else contains_quantity(text)
-           for text in generated_text(k, flow, screens, cases)):
+    Any number in a generated visible string (outside the engine's own case index) raises `literal-financial-value`:
+    quantities reach a page only through PRD bindings."""
+    # Any number in generated visible text needs a binding (PR #30 review 6, #1). A case label starts with the
+    # engine's own case index ("케이스 3 · "); everything after that prefix is checked like the headings.
+    keys = [key for key in screens if key[0] in k.screens]
+    texts = [CASE_SELECT_LABEL, FINISHED_MESSAGE] + [k.screens[s]["title"] for s, _ in keys]
+    texts += [_case_label_tail(k, s, st, empty) for s, st in keys for empty in (False, True)]
+    if needs_binding(texts):
         raise ValueError("literal-financial-value: generated visible text carries an unbound financial quantity")
     registry = (registry or Registry(k)).register_flow(flow)
     for s in flow["screens"]:
