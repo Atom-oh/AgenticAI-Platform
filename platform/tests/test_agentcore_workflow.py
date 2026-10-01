@@ -385,3 +385,45 @@ def test_a_replayed_tool_operation_rechecks_admission_after_its_final_reads(wb, 
     with pytest.raises((AuthorizationDenied, CollaborationError)):
         pipeline.dispatch()
     assert outcome == {"replay": "refused"}
+
+
+@pytest.mark.parametrize("key_id", ["evidence-v1", "cap-v1"])
+def test_authority_fences_each_registry_key_into_the_completion_transaction(wb, pipeline, key_id):
+    """PR #34 review 1, finding 3: like the capability key, the evidence key
+    verified before finalization must ride into the completion transaction as
+    an exact registry-version fence; revoking it immediately before that
+    transaction must leave the execution uncompleted."""
+    client = wb.storage.table().meta.client
+    original = client.transact_write_items
+
+    def intercept(**kwargs):
+        puts = [entry["Put"]["Item"] for entry in kwargs["TransactItems"] if "Put" in entry]
+        if any(item.get("status") == "completed" for item in puts):
+            key = wb.storage.get(KEYS, "ac_key", key_id)
+            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
+        return original(**kwargs)
+
+    client.transact_write_items = intercept
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
+
+
+def test_authority_rejects_a_cached_replay_once_its_evidence_key_is_revoked_during_the_final_reads(
+        wb, pipeline, monkeypatch):
+    from workspace.ontology_sources import Sources
+    pipeline.dispatch()
+    original = Sources.recheck
+    calls = {"n": 0}
+
+    def revoke_on_the_branchs_own_recheck(self):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            key = wb.storage.get(KEYS, "ac_key", "evidence-v1")
+            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
+        return original(self)
+
+    monkeypatch.setattr(Sources, "recheck", revoke_on_the_branchs_own_recheck)
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert calls["n"] == 3 and pipeline.runtime_calls == 1

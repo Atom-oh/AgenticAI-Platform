@@ -75,7 +75,7 @@ class Authority:
                 if hashlib.sha256(raw_result).hexdigest() != previous["resultHash"]:
                     raise AuthorizationDenied()
                 result = json.loads(raw_result)
-                self.evidence.verify(previous["capabilityClaims"],
+                evidence_key = self.evidence.verify(previous["capabilityClaims"],
                     {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"])
                 # This branch commits no transaction: the admission checks
                 # collected above (before the cached result was read) are
@@ -89,6 +89,9 @@ class Authority:
                 # fresh `verify`. Checked LAST, after every other read, so a
                 # revocation reaching only after those reads still aborts the replay.
                 self.capabilities.active(previous["capabilityKeyId"])
+                # ...and so does the evidence key that verified the cached
+                # receipt, at the exact registry version that verified it.
+                self.evidence.active(previous["capabilityClaims"], evidence_key)
                 return result
             fail(409, "agentcore-already-dispatched", "이미 실행된 작업입니다. 현재 작업 상태를 확인하세요.")
         identity = "execution-" + secrets.token_hex(24)
@@ -140,7 +143,7 @@ class Authority:
         receipt = value.pop("runtimeReceipt")
         if value.get("execution", {}).get("toolArchiveHash") != self.config["toolArchiveHash"]:
             raise AuthorizationDenied()
-        self.evidence.verify(binding["capabilityClaims"], value, receipt)
+        evidence_key = self.evidence.verify(binding["capabilityClaims"], value, receipt)
         # AUTH-04: a capability revoked while Runtime was executing must still
         # abort finalization; the evidence key alone does not stand in for it.
         self.capabilities.active(binding["capabilityKeyId"])
@@ -174,6 +177,13 @@ class Authority:
         # not only a revocation observed by an earlier, now-stale read.
         key_record = self.capabilities.active(binding["capabilityKeyId"])
         checks.append({"owner": KEYS, "kind": "ac_key", "id": key_record["id"], "version": key_record["version"]})
+        # execution-capability/1: the same for the evidence key that verified the
+        # Runtime receipt above -- its exact verified registry version is
+        # revalidated here and fenced into the completion transaction, so a
+        # compromised-key revocation racing this commit aborts it.
+        evidence_record = self.evidence.active(binding["capabilityClaims"], evidence_key)
+        checks.append({"owner": KEYS, "kind": "ac_key", "id": evidence_record["id"],
+                       "version": evidence_record["version"]})
         if self.storage.clock() // 1000 >= current["deadline"]:
             raise AuthorizationDenied()
         commit_execution(ctx, [self.collaboration._write(EXECUTIONS, "ac_execution",
