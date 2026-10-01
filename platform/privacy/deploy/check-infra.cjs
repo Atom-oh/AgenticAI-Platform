@@ -2,8 +2,10 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const Module = require('node:module');
-const { assertMainPrivacyDelta } = require('./check-main-privacy-delta.cjs');
+const { execFileSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
+const { assertMainPrivacyDelta, assertReviewedMainChanges } = require('./check-main-privacy-delta.cjs');
+const { loadBaselineModule } = require('./load-baseline.cjs');
 const root = path.resolve(__dirname, '../..');
 const infra = path.join(root, 'infra');
 // Existing stack assets are relative to the CDK project working directory.
@@ -145,19 +147,44 @@ for (const resource of Object.values(json.Resources)) {
 }
 scope.synth();
 
-// Compile the supplied PR-base source in memory, using the original import directory.
-// No shared file is temporarily replaced while the parent works in this tree.
-const sourcePath = path.join(infra, 'lib/stack.ts');
-// Supply `git show "$PR_BASE_SHA":platform/infra/lib/stack.ts` on stdin. Keeping Git outside
-// Node also works in runners which prohibit nested subprocesses.
+// Verify stdin against the named revision and compile its entire relative source
+// dependency closure, including workspace.ts, without reusing HEAD modules.
+const repository = path.dirname(root);
+const git = args => execFileSync('git', args, { cwd: repository, encoding: 'utf8' });
+const baselineHead = process.env.PR_BASE_SHA || git(['rev-parse', 'HEAD']).trim();
+assert.match(baselineHead, /^[0-9a-f]{40}$/);
+const entry = 'platform/infra/lib/stack.ts';
+const tracked = new Set(git(['ls-tree', '-r', '--name-only', baselineHead]).trim().split('\n'));
+const baselineSources = new Map();
+const sourceHashes = {};
+const readSource = name => {
+  if (!tracked.has(name)) return null;
+  if (!baselineSources.has(name)) {
+    const text = git(['show', `${baselineHead}:${name}`]);
+    baselineSources.set(name, text);
+    sourceHashes[name] = createHash('sha256').update(text).digest('hex');
+  }
+  return baselineSources.get(name);
+};
 const oldSource = fs.readFileSync(0, 'utf8');
-assert.ok(oldSource.includes('export class BankPlatformStack'), 'HEAD stack source required on stdin');
-const oldModule = new Module(sourcePath, module);
-oldModule.filename = sourcePath;
-oldModule.paths = Module._nodeModulePaths(path.dirname(sourcePath));
-oldModule._compile(ts.transpileModule(oldSource, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
-}).outputText, sourcePath);
+assert.ok(oldSource.includes('export class BankPlatformStack'), 'PR-base stack source required on stdin');
+assert.equal(oldSource, readSource(entry), 'stdin does not match PR_BASE_SHA (defaults to HEAD)');
+for (const file of ['package.json', 'package-lock.json', 'tsconfig.json']) {
+  const name = `platform/infra/${file}`;
+  assert.equal(fs.readFileSync(path.join(repository, name), 'utf8'), readSource(name),
+    'Baseline package/compiler configuration changed; independent dependency installation is required');
+}
+const oldExports = loadBaselineModule(entry, {
+  root: repository, readSource,
+  exists: name => {
+    // The generated presence marker represents a tracked baseline Runtime spec.
+    if (name === 'platform/agents/_ctx/agent_specs.py') return tracked.has('platform/agentcore/agent_specs.py');
+    return tracked.has(name) || [...tracked].some(file => file.startsWith(name + '/'));
+  },
+  compile: text => ts.transpileModule(text, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+  }).outputText,
+});
 const arn = 'arn:aws:lambda:ap-northeast-2:180294183052:function:bank-platform-mydata-privacy-relay';
 function mainTemplate(Stack, name, privacyArn) {
   return Template.fromStack(new Stack(app(name), 'BankPlatform', {
@@ -166,14 +193,28 @@ function mainTemplate(Stack, name, privacyArn) {
     mydataPrivacyFunctionArn: privacyArn,
   })).toJSON();
 }
-const baseline = mainTemplate(oldModule.exports.BankPlatformStack, 'baseline');
+const baseline = mainTemplate(oldExports.BankPlatformStack, 'baseline');
+const baselineEnabled = mainTemplate(oldExports.BankPlatformStack, 'baseline-enabled', arn);
+assertMainPrivacyDelta(baseline, baselineEnabled, arn);
 const disabled = mainTemplate(BankPlatformStack, 'disabled');
-assert.deepEqual(disabled, baseline, 'default main stack changed with privacy disabled');
 const enabled = mainTemplate(BankPlatformStack, 'enabled', arn);
-const changed = assertMainPrivacyDelta(baseline, enabled, arn);
+// Compare feature-on/off at the SAME revision. Independently reviewed IAM or
+// application changes between revisions must not become privacy-toggle deltas.
+const changed = assertMainPrivacyDelta(disabled, enabled, arn);
+const mainIds = new Set([...Object.keys(baseline.Resources), ...Object.keys(disabled.Resources)]);
+const reviewedMainChanges = [...mainIds].filter(id =>
+  JSON.stringify(baseline.Resources[id]) !== JSON.stringify(disabled.Resources[id]));
+const reviewedDelta = JSON.parse(fs.readFileSync(path.join(__dirname, 'reviewed-main-delta.json'), 'utf8'));
+assertReviewedMainChanges(baselineHead, reviewedMainChanges, reviewedDelta, disabled.Resources);
+console.log('Main-stack resources changed between revisions (review separately):', reviewedMainChanges.join(', '));
 fs.writeFileSync(path.join(out, 'verified.json'), JSON.stringify({
   privacyResources: Object.keys(json.Resources).length,
-  existingMainResources: Object.keys(baseline.Resources).length,
-  defaultMainUnchanged: true, enabledMainChangedResources: changed,
+  existingMainResources: Object.keys(disabled.Resources).length,
+  baselinePrivacyDeltaVerified: true, currentPrivacyDeltaVerified: true,
+  baselineHead, baselineSourceHashes: sourceHashes,
+  reviewedDeltaManifestHash: createHash('sha256').update(JSON.stringify(reviewedDelta)).digest('hex'),
+  assetFixture: 'shared current-checkout assets; source modules loaded from their named revision',
+  separatelyReviewedMainChangedResources: reviewedMainChanges,
+  enabledMainChangedResources: changed,
 }, null, 2));
-console.log('PASS private stack assertions; default main unchanged; enabled main changes only exact WS and Workspace API privacy env/policy.');
+console.log('PASS private stack assertions; both revisions add only exact WS and Workspace API privacy env/policy when enabled.');

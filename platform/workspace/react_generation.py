@@ -75,6 +75,7 @@ def _failed(reason):
 
 def run_react(worker, owner, run, job, lambda_context=None):
     from workspace.worker import _json_bytes, _metadata_aliases, _restore_metadata
+    from workspace.ontology_sources import ProtectedCallRefused
     approved = validate_contract(run["contract"])
     if approved["unresolved"] or contract_hash(approved) != run["contractHash"]:
         raise ValueError("확정한 React 생성 기준이 바뀌었습니다.")
@@ -145,6 +146,8 @@ def run_react(worker, owner, run, job, lambda_context=None):
             if not isinstance(report, dict):
                 raise RuntimeError("Invalid React verifier response")
             report["fileChanges"] = changes
+        except ProtectedCallRefused:
+            raise  # Retained authority changed: no verifier call and no further rounds.
         except ValueError as error:
             report = _failed(str(error)[:500])
         except Exception as error:

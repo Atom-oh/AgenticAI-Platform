@@ -106,8 +106,22 @@ def test_studio_catalog_and_agents_share_allowed_models(monkeypatch):
     assert "studio_models" in studio.ROUTES
     studio.ROUTES["studio_models"](ctx, {})
     assert ASTRA in {m["id"] for m in events[-1]["models"]}
-    monkeypatch.setattr(agents, "_tool_schema", lambda: [])
+    monkeypatch.setattr(agents, "_tool_schema", lambda: [{"name": "list_regulations"}])
     monkeypatch.setattr(agents, "_skill_names", lambda: [])
     for model in (ASTRA, FABLE):
-        spec, error = agents._validate_create({"name": "design_helper", "systemPrompt": "디자인 검수 도우미", "model": model})
+        spec, error = agents._validate_create({"name": "design_helper", "systemPrompt": "디자인 검수 도우미",
+                                               "model": model, "allowedTools": ["list_regulations"]})
         assert error is None and spec["model"] == model
+
+
+
+def test_gemma_badge_describes_explanation_adapter_without_privacy_topology_claims():
+    badge = gate.route_info("gemma")["badge"]
+    assert badge["title"] == "설명 생성 경로" and badge["substituted"] is False
+    assert not any(term in str(badge) for term in ("Tier 2", "IDC", "Hybrid", "GPU"))
+
+
+def test_explanation_route_tier_matches_the_authoritative_adapter():
+    from engine import llm
+    for route, adapter in [('gemma', llm.GemmaAdapter), ('idc_vllm', llm.VllmAdapter)]:
+        assert gate.route_info(route)['tier'] == gate.tier_of(route) == adapter.tier == '0/1'

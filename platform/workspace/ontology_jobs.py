@@ -14,6 +14,10 @@ from ontology_runtime.dispatch import RuntimeAnalyzer, selected_backend
 
 def reconcile(ctx, artifact):
     """Read-triggered recovery never reruns paid work or revives old authorization."""
+    from workspace.storage import is_reserved, ReservedRecord
+    if is_reserved(artifact):
+        ctx.storage._report(ctx.owner, ReservedRecord("wb_artifact", artifact["id"], "marked-artifact"))
+        return artifact
     if artifact.get("status") not in {"queued", "processing"}:
         return artifact
     job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
@@ -126,6 +130,10 @@ def process(ctx, pinned, job=None):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
     if pinned.get("backend", {"name": "local-offline"}) != selected_backend(ctx.host):
         fail(409, "ontology-backend-changed", "요청 당시의 분석 실행 환경이 변경되었습니다. 새 작업을 시작하세요.")
+    # Unit A admits only this exact offline analyzer for local execution; a remote
+    # job must carry the separately reviewed, pinned RuntimeAnalyzer adapter. This
+    # dispatch is distinct from the new-ledger Runtime execution in
+    # AGENTCORE_CONTRACT platform-execution/1 — no arbitrary callable is injected here.
     if not remote and analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
     backend = "agentcore-code-interpreter" if remote else "local-offline"

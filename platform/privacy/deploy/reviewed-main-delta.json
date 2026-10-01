@@ -1,0 +1,42 @@
+{
+  "base": "40efc27fd9958dbd2b1aadb45dd525de3fab8d64",
+  "purpose": "Bank WP1-WP3 security and versioned independent passport verification; prior policy version retained",
+  "resources": [
+    "AdminFn81E922BC",
+    "AdminFnServiceRoleDefaultPolicyA64AB9FE",
+    "AgentsRuntime",
+    "AgentsRuntimeRole24FB92B6",
+    "AgentsRuntimeRoleDefaultPolicy0B63AE48",
+    "DesignerWorkspaceWorker8BBAA7F1",
+    "GatewayExecRole3664B310",
+    "Guardrail",
+    "GuardrailSecurityV",
+    "HarnessExecRole83FE6EE4",
+    "HarnessExecRoleDefaultPolicy5F0251AD",
+    "PlatformToolsFnE72749A7",
+    "PlatformToolsFnServiceRoleDefaultPolicy9D39F01B",
+    "StudioLoopFn4AFBBF08",
+    "ToolsGateway",
+    "WsFnFE5E930E",
+    "WsFnServiceRoleDefaultPolicyFE1904B7"
+  ],
+  "resourceSha256": {
+    "AdminFn81E922BC": "bf29577e9e6b21c14112593ab2cb45173659459963d8bfc4ec4bbaf865024f15",
+    "AdminFnServiceRoleDefaultPolicyA64AB9FE": "51bb467883a17f4ea95e90ff7e1fea4395f234820dd59081c10a67b1f4f1f751",
+    "AgentsRuntime": "c63d394d8900a5f8a4d6e8b9de15b8c94f5f449e6f908b5856e34a6910b99398",
+    "AgentsRuntimeRole24FB92B6": "7b84b8a425a710802b8c78f6b33600e47ba21b6987fbdf5f54aad58a57eede41",
+    "AgentsRuntimeRoleDefaultPolicy0B63AE48": "fd061ac43359258fd77464a4ec5276ffd42069e8a82d07a3983c4d1f17792593",
+    "DesignerWorkspaceWorker8BBAA7F1": "f37e93204997e04d96550bb94b1c51390ea1d729dd86f4878e8acddc9148d9ea",
+    "GatewayExecRole3664B310": "d0abd6a4f6578bedb1c31bdcd34a60da2da054160f00f92a355c613a20eea0e5",
+    "Guardrail": "fe7095adeeebabdde80b1d6dabf4099eac490c4f234f5d41bdc256bbd4a5c6f8",
+    "GuardrailSecurityV": "f1cf52b9bd8963aba24906490dd160367969febdb6ea2522f482627b359f4b46",
+    "HarnessExecRole83FE6EE4": "f310d1324b4b958a3cb2594f7fcf0254efdc2ab58464ca11f4f5c6b7d5f91cd7",
+    "HarnessExecRoleDefaultPolicy5F0251AD": "191157f40dde0a609115f45e0af254f7054f8873542dfd8740d6b6c9dbd9e313",
+    "PlatformToolsFnE72749A7": "e8719e5c2cb764d544c066b8e19c36f32a895ef4fb620d466bf36b66197013df",
+    "PlatformToolsFnServiceRoleDefaultPolicy9D39F01B": "2984339ce6458ec3d822bef5d91e7148babde10b2f90785abcf2bef408e2e7c8",
+    "StudioLoopFn4AFBBF08": "a61211e53ab8bcec295a34c567a86f5090c5b7e65e7775dbe75e671b39a676f3",
+    "ToolsGateway": "c6d398f60d9e97ee142911d4e3762a07fd1462c5ec2d45020f7d90df3d94d3eb",
+    "WsFnFE5E930E": "b273e4ea80dce95e97045830a94155f421af41cedf0dc5f89bb8be04e8a0e1be",
+    "WsFnServiceRoleDefaultPolicyFE1904B7": "69162a1a740c606eea1d1df9449e995a6a44f0b5b1d20d9ce4694f7d67526a7b"
+  }
+}

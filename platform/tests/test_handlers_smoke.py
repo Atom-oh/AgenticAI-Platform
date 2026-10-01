@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import json
+import base64
+import time
+from types import SimpleNamespace
+
+import pytest
 import os
 import sys
 from pathlib import Path
@@ -51,7 +56,8 @@ def test_recording_excludes_errors():
 
 def test_unknown_action_returns_400(monkeypatch):
     a = _Apigw()
-    monkeypatch.setattr(ws_handler, "_ddb", type("T", (), {"get_item": lambda self, Key: {"Item": {"connId": "c", "email": "u@x"}}})())
+    monkeypatch.setattr(ws_handler, "_ddb", type("T", (), {"get_item": lambda self, Key: {"Item": {
+        "connId": "c", "email": "u@x", "userSub": "subject", "authorizationExpiresAt": int(time.time()) + 3600}}})())
     monkeypatch.setattr(ws_handler.boto3, "client", lambda *args, **kw: a)
     ev = {"requestContext": {"routeKey": "$default", "connectionId": "c", "domainName": "d", "stage": "prod"},
           "body": json.dumps({"action": "nope", "reqId": "r1"})}
@@ -62,3 +68,28 @@ def test_unknown_action_returns_400(monkeypatch):
 def test_connect_without_token_is_401():
     ev = {"requestContext": {"routeKey": "$connect", "connectionId": "c"}, "queryStringParameters": None}
     assert ws_handler.handler(ev, None)["statusCode"] == 401
+
+
+@pytest.mark.parametrize("field", [None, "iss", "client_id", "sub", "exp"])
+def test_connect_binds_verified_cognito_subject_pool_client_and_expiry(monkeypatch, field):
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "ap-northeast-2_synthetic")
+    monkeypatch.setenv("COGNITO_CLIENT_ID", "synthetic-client")
+    claims = {"sub": "verified-subject", "token_use": "access", "client_id": "synthetic-client",
+              "iss": "https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_synthetic",
+              "exp": int(time.time()) + 3600}
+    if field:
+        claims[field] = 1 if field == "exp" else "foreign-identity"
+    token = "synthetic." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".signature"
+    saved = []
+    monkeypatch.setattr(ws_handler, "_idp", SimpleNamespace(get_user=lambda **kwargs: {
+        "Username": "synthetic-user", "UserAttributes": [{"Name": "email", "Value": "synthetic@example.invalid"},
+                                                        {"Name": "sub", "Value": "verified-subject"}]}))
+    monkeypatch.setattr(ws_handler, "_ddb", SimpleNamespace(put_item=lambda **kwargs: saved.append(kwargs["Item"])))
+    result = ws_handler._connect({"queryStringParameters": {"token": token, "userSub": "forged"}}, "connection")
+    assert result["statusCode"] == (200 if field is None else 403)
+    if field is None:
+        assert saved[0]["userSub"] == "verified-subject"
+        assert saved[0]["authorizationExpiresAt"] == claims["exp"]
+        assert token not in json.dumps(saved)
+    else:
+        assert not saved

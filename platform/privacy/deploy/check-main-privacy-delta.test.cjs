@@ -1,6 +1,66 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { assertMainPrivacyDelta } = require('./check-main-privacy-delta.cjs');
+const { assertMainPrivacyDelta, assertReviewedMainChanges, resourceHash } = require('./check-main-privacy-delta.cjs');
+const { loadBaselineModule } = require('./load-baseline.cjs');
+const Module = require('node:module');
+const path = require('node:path');
+
+test('baseline filesystem reads use committed schema and reject unsupported reads', () => {
+  const root = path.resolve(__dirname, '../../../');
+  const source = new Map([
+    ['lib/stack.js', `const fs = require('fs'); module.exports = JSON.parse(fs.readFileSync(require('path').join(__dirname, '../tool_schema.json'), 'utf8'));`],
+    ['tool_schema.json', '{"tools":["BASE_TOOL"]}'],
+  ]);
+  const options = {root, readSource: name => source.get(name) ?? null, compile: text => text};
+  assert.deepEqual(loadBaselineModule('lib/stack.js', options), {tools: ['BASE_TOOL']});
+  source.delete('tool_schema.json');
+  assert.throws(() => loadBaselineModule('lib/stack.js', options), /Missing baseline file/);
+  source.set('lib/stack.js', "require('node:fs').readFileSync('/etc/passwd', 'utf8')");
+  assert.throws(() => loadBaselineModule('lib/stack.js', options), /escaped repository/);
+  source.set('lib/stack.js', "require('node:fs').promises.readFile('tool_schema.json')");
+  assert.throws(() => loadBaselineModule('lib/stack.js', options), /Unsupported baseline filesystem/);
+});
+
+test('cross-revision drift requires the exact committed base and resource inventory', () => {
+  const manifest = {base: 'a'.repeat(40), resources: ['WsPolicy', 'Gateway']};
+  const resources = {WsPolicy: {Action: 'read-only'}, Gateway: {auth: 'IAM'}};
+  manifest.resourceSha256 = Object.fromEntries(Object.entries(resources).map(([id, value]) => [id, resourceHash(value)]));
+  assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy'], manifest, resources);
+  assertReviewedMainChanges('b'.repeat(40), [], manifest, resources);
+  assert.throws(() => assertReviewedMainChanges('b'.repeat(40), ['Gateway', 'WsPolicy'], manifest, resources));
+  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy', 'WorkspacePolicy'], manifest, resources));
+  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway'], manifest, resources));
+  resources.WsPolicy.Action = '*';
+  assert.throws(() => assertReviewedMainChanges(manifest.base, ['Gateway', 'WsPolicy'], manifest, resources));
+});
+
+test('baseline compilation cannot reuse changed HEAD workspace policy code', () => {
+  const root = path.resolve(__dirname, '../../../');
+  const workspace = path.join(root, 'lib/workspace.ts');
+  const previous = require.cache[workspace];
+  const head = new Module(workspace);
+  head.exports = { policy: 'HEAD_USER_ADMIN' };
+  require.cache[workspace] = head;
+  const sources = new Map([
+    ['lib/stack.ts', "module.exports = {policy: require('./workspace').policy};"],
+    ['lib/workspace.ts', "module.exports = {policy: require('./policy').value};"],
+    ['lib/policy.ts', "module.exports = {value: 'BASE_ADMIN_ONLY'};"],
+  ]);
+  try {
+    const result = loadBaselineModule('lib/stack.ts', {
+      root, readSource: name => sources.get(name) ?? null, compile: text => text,
+    });
+    assert.equal(result.policy, 'BASE_ADMIN_ONLY');
+    assert.equal(require.cache[workspace].exports.policy, 'HEAD_USER_ADMIN');
+    sources.delete('lib/policy.ts');
+    assert.throws(() => loadBaselineModule('lib/stack.ts', {
+      root, readSource: name => sources.get(name) ?? null, compile: text => text,
+    }), /Missing baseline dependency/);
+  } finally {
+    if (previous) require.cache[workspace] = previous;
+    else delete require.cache[workspace];
+  }
+});
 
 const arn = 'arn:aws:lambda:ap-northeast-2:000000000000:function:privacy-test';
 const functionIds = ['WsFnABCD', 'DesignerWorkspaceApiABCD'];
@@ -38,6 +98,22 @@ test('accepts exact privacy wiring for WebSocket and Workspace API consumers', (
   const { baseline, enabled } = fixture();
   assert.deepEqual(assertMainPrivacyDelta(baseline, enabled, arn).sort(),
     [...functionIds, ...policyIds].sort());
+});
+
+test('checks current privacy grants after an independent main-stack IAM change', () => {
+  const before = fixture();
+  const current = fixture();
+  for (const template of [current.baseline, current.enabled]) {
+    template.Resources[policyIds[0]].Properties.PolicyDocument.Statement.unshift({
+      Effect: 'Allow', Action: 'bedrock-agentcore:InvokeHarness',
+      Resource: 'arn:aws:bedrock-agentcore:ap-northeast-2:000000000000:harness/bank_*',
+    });
+  }
+  assertMainPrivacyDelta(before.baseline, before.enabled, arn);
+  assertMainPrivacyDelta(current.baseline, current.enabled, arn);
+  assert.throws(() => assertMainPrivacyDelta(before.baseline, current.enabled, arn));
+  current.enabled.Resources[policyIds[0]].Properties.PolicyDocument.Statement.at(-1).Resource = '*';
+  assert.throws(() => assertMainPrivacyDelta(current.baseline, current.enabled, arn));
 });
 
 const mutations = {

@@ -110,7 +110,7 @@ test('guideline page selection reaches AI proposal, exact citations survive edit
         await page.screenshot({ path: path.join(process.env.WORKSPACE_QA_DIR, name + '.png'), fullPage: true });
       };
       await page.getByRole('heading', { name: '고객 가이드 · AI UX 기준', exact: true }).waitFor();
-      await page.getByRole('button', { name: '1 업무 정의', exact: true }).click();
+      await page.getByRole('button', { name: '업무 정의', exact: true }).click();
       await page.getByLabel('사용자 목적·완료 조건').fill('입력 후 이전 화면으로 돌아와도 값을 유지하세요.');
       await page.getByLabel('오류·수정 상태 포함').check();
       await page.getByLabel('이전·재진입 상태 포함').check();
@@ -169,15 +169,15 @@ test('guideline page selection reaches AI proposal, exact citations survive edit
       await page.getByRole('button', { name: '버전 2 규칙 승인', exact: true }).click();
       await page.getByRole('button', { name: '승인 기준으로 시안·검수', exact: true }).click();
       await page.getByLabel('사용할 규칙', { exact: true }).waitFor();
-      assert.equal(await page.getByRole('button', { name: '4 시안·검수', exact: true }).getAttribute('aria-current'), 'step');
-      await page.getByRole('button', { name: '5 개발 전달', exact: true }).click();
+      assert.equal(await page.getByRole('button', { name: '화면 만들기', exact: true }).getAttribute('aria-current'), 'step');
+      await page.getByRole('button', { name: '개발 전달', exact: true }).click();
       await page.getByRole('heading', { name: '개발팀에 전달할 승인본', exact: true }).waitFor();
       await capture('workflow-handoff-empty');
-      await page.getByRole('button', { name: '1 업무 정의', exact: true }).click();
+      await page.getByRole('button', { name: '업무 정의', exact: true }).click();
       assert.equal(await page.getByLabel('사용자 목적·완료 조건').inputValue(), '입력 후 이전 화면으로 돌아와도 값을 유지하세요.');
       assert.equal(await page.getByLabel('오류·수정 상태 포함').isChecked(), true);
       await page.getByLabel('작업 공간', { exact: true }).selectOption('project-b');
-      await page.getByRole('button', { name: '2 기준·자산', exact: true }).click();
+      await page.getByRole('button', { name: '기준·자산', exact: true }).click();
       await page.getByText('아직 반입한 고객 가이드가 없습니다', { exact: true }).waitFor();
       assert.equal(await page.getByText(source.name, { exact: true }).count(), 0);
       assert.equal(await page.getByRole('button', { name: '선택한 0페이지로 규칙 만들기', exact: true }).isDisabled(), true);

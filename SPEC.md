@@ -359,6 +359,15 @@ extension. Implemented interfaces are scoped by `platform/workspace/ONTOLOGY_CON
 `platform/docs/ONTOLOGY_AGENTCORE_PLAN.md` records sequencing and historical reviews;
 edits to that plan do not amend these requirements.
 
+The cross-module implementation design is
+`platform/docs/ARCHITECTURE.md`. Keep its authority boundaries and delivery
+register aligned with the owning contracts when implementing this extension.
+Use `platform/docs/ONTOLOGY_AGENTCORE_VALIDATION.md` as the acceptance
+specification and record case-level evidence in its private dated copy;
+document-review PASS does not establish implementation or service
+readiness. Preserve full requested-model gaps when admitting a separately
+declared, verified enabled-model set under the applicable service gates.
+
 ## 8. User interface
 
 ### 8-1. Surfaces

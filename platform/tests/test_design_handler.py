@@ -84,10 +84,10 @@ def test_preview_derives_prd_and_checklist(monkeypatch):
     assert ev["counts"]["derived"] > 0 and ev["counts"]["branchSteps"] == 1
 
 
-def test_flow_local_emits_stage_token_done(monkeypatch):
-    """런타임 ARN 없음 → Lambda 내 실행 경로. Bedrock 대신 가짜 deps. 이벤트는 design.stage/token/done 만."""
+def test_flow_preserves_stage_token_done_contract(monkeypatch):
+    """The handler projects a bounded Runtime result into its existing UI contract."""
     monkeypatch.setattr(design, "_registry_assets", lambda: {"productSpecs": [], "smModels": [], "checklists": []})
-    monkeypatch.setattr(design, "RUNTIME_ARN", "")
+    monkeypatch.setattr(design, "RUNTIME_ARN", "synthetic-runtime")
     monkeypatch.setattr(design, "WEB_BUCKET", "")
     seeds = design._seed_assets()
     spec = next(s for s in seeds["productSpecs"] if s["id"] == "ps-soccer-club-savings")
@@ -109,6 +109,18 @@ def test_flow_local_emits_stage_token_done(monkeypatch):
     from engine import gate as _gate
     monkeypatch.setattr(_gate, "design_deps", lambda *a, **k: {"generate": fake_generate, "llm_judge": None,
                                                                "usage": lambda: {"inputTokens": 1, "outputTokens": 2, "calls": 1}})
+    def relay(ctx, value, model):
+        from design_loop import run
+        def emit(event):
+            if event.get("type") == "token":
+                ctx.token("design", event.get("text", ""))
+            elif event.get("type") == "stage":
+                fields = {key: item for key, item in event.items() if key not in {"type", "step"}}
+                ctx.stage("design", event.get("step", "stage"), **fields)
+        result = run(value["productSpec"], value["smModel"], value["checklists"],
+                     _gate.design_deps(), emit=emit, output_type=value.get("outputType") or "design")
+        return result, {"runtime": "agentcore-runtime/strands", "usage": {}}, []
+    monkeypatch.setattr(design, "_relay_runtime", relay)
     recorded = []
     monkeypatch.setattr(design.tracing, "record_trace", lambda rec: recorded.append(rec))
     a, c = _ctx()
@@ -118,7 +130,7 @@ def test_flow_local_emits_stage_token_done(monkeypatch):
     done = a.sent[-1]
     assert done["type"] == "design.done" and done["ok"] is False and done["attempts"] == 2
     assert done["report"]["score"]["incomplete"] > 0
-    assert done["runtime"] == "lambda-local" and "데모 대체" in done["runtimeBadge"]
+    assert done["runtime"] == "agentcore-runtime/strands" and "AgentCore Runtime" in done["runtimeBadge"]
     assert [s["id"] for s in done["steps"]] == [s["id"] for s in prd["steps"]]
     assert done["report"]["score"]["fail"] == 0
     steps = [e["step"] for e in a.sent if e["type"] == "design.stage"]
@@ -131,8 +143,8 @@ def test_runtime_tuples_pass_stage_and_design_done():
            {"type": "design_done", "result": {"ok": True}}, {"type": "meta", "usage": {"inputTokens": 1, "outputTokens": 1}}]
     out = list(runtime.to_tuples(evs, "sid"))
     kinds = [k for k, _ in out]
-    assert kinds == ["stage", "text", "design_done", "meta"]
-    assert out[0][1] == {"step": "prd", "status": "done"} and out[2][1]["result"]["ok"] is True
+    assert kinds == ["stage", "text_boundary", "text", "design_done", "meta"]
+    assert out[0][1] == {"step": "prd", "status": "done"} and out[3][1]["result"]["ok"] is True
 
 
 def test_design_seed_records_are_valid_registry_records():
@@ -146,3 +158,29 @@ def test_design_seed_records_are_valid_registry_records():
     assert len(reg.list_approved("CUSTOM", "PRODUCT_SPEC")) == 3
     assert len(reg.list_approved("SKILL", "CHECKLIST")) == 2
     assert reg.list_approved("CUSTOM", "SM_MODEL")[0]["payload"]["kind"] == "sm-model"
+
+
+def test_configured_runtime_refusal_reaches_terminal_design_response(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(design.tracing, 'record_trace', recorded.append)
+    monkeypatch.setattr(design, 'RUNTIME_ARN', 'synthetic-runtime')
+    monkeypatch.setenv('DESIGN_USE_RUNTIME', '0')
+    monkeypatch.setattr(design, '_relay_runtime', lambda *args: (
+        None, {'blocked': True, 'stopReason': 'gate_refused', 'code': 422}, ['Synthetic policy refusal']))
+    a, ctx = _ctx()
+    design.flow(ctx, {'productSpecId': 'ps-soccer-club-savings'})
+    done = a.sent[-1]
+    assert done['type'] == 'design.done' and done['blocked'] and done['code'] == 422
+    assert done['stopReason'] == 'gate_refused' and done['runtime'] == 'agentcore-runtime/strands'
+    assert recorded[-1]['blocked'] and recorded[-1]['stopReason'] == 'gate_refused'
+    assert 'query' not in recorded[-1] and 'payload' not in recorded[-1]
+
+
+
+def test_design_generation_without_runtime_is_blocked(monkeypatch):
+    monkeypatch.setattr(design, "RUNTIME_ARN", "")
+    monkeypatch.setattr(design, "_relay_runtime", lambda *args: (_ for _ in ()).throw(AssertionError("unconfigured call")))
+    a, ctx = _ctx()
+    design.flow(ctx, {"productSpecId": "ps-soccer-club-savings"})
+    assert a.sent[-1]["code"] == 503 and a.sent[-1]["runtime"] == "unconfigured"
+    assert all(event["type"] != "design.token" for event in a.sent)

@@ -55,7 +55,7 @@ export function readWorkflowRoute(hash: string) {
 }
 export function initialWorkflowStep(route: ReturnType<typeof readWorkflowRoute>, role: Role | null, legacy?: string): WorkflowStep {
   return route.step || (route.runId ? 'review' : route.assetId ? 'assets' : route.contractId ? 'design' :
-    legacy === 'files' || legacy === 'guides' ? 'assets' : role === 'developer' ? 'handoff' : 'define');
+    legacy === 'files' || legacy === 'guides' ? 'assets' : role === 'developer' ? 'handoff' : 'review');
 }
 export function workflowHash(hash: string, selection: {
   projectId: string; productId?: string; step?: WorkflowStep; runId?: string; round?: number; contractId?: string; assetId?: string;

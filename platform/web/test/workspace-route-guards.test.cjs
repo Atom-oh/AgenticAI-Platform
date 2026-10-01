@@ -76,6 +76,21 @@ test('history protects unsaved scope and product switches never reopen the previ
       await page.evaluate(() => { location.hash = '#/studio?projectId=p&productId=a&contractId=missing&step=define'; });
       await page.getByRole('button', { name: '연결된 작업 다시 조회' }).waitFor();
       assert.equal(await brief.inputValue(), '');
+      await page.evaluate(() => { location.hash = '#/studio?projectId=p&productId=a&contractId=contract-a&step=design'; });
+      await page.waitForFunction(() => [...document.querySelectorAll('textarea')].some(element => element.value === 'Original request A'));
+      await page.getByLabel('저장한 규칙', { exact: true }).selectOption('');
+      const newBrief = page.getByLabel('만들 화면 설명', { exact: true });
+      await newBrief.fill('Keep this unsaved new criteria draft');
+      const beforeShortcut = calls.filter(target => target === '/contracts/contract-a').length;
+      await page.getByRole('button', { name: '화면 만들기', exact: true }).click();
+      assert.equal(await page.getByLabel('사용할 규칙', { exact: true }).inputValue(), '');
+      await page.getByRole('button', { name: '확인 기준', exact: true }).click();
+      assert.equal(await newBrief.inputValue(), 'Keep this unsaved new criteria draft');
+      assert.equal(calls.filter(target => target === '/contracts/contract-a').length, beforeShortcut);
+      page.once('dialog', dialog => dialog.dismiss());
+      await page.getByLabel('작업 공간', { exact: true }).selectOption('q');
+      assert.equal(await page.getByLabel('작업 공간', { exact: true }).inputValue(), 'p');
+      assert.equal(await newBrief.inputValue(), 'Keep this unsaved new criteria draft');
       assert.deepEqual(errors, []);
     } finally { await browser.close(); }
   });

@@ -51,13 +51,14 @@ indexes. Missing or unavailable discovery cannot veto an otherwise authorized
 (optional existing Regulation/Document node ID), `createdBy`, `projectId`,
 `readRoles`, `aclVersion`, `status` (`active|archived`), `latestRevisionId`,
 `approvedRevisionId`, `createdAt`, `updatedAt`, `provenance`
-(`uploaded|synthetic_sample`).
+(`uploaded|synthetic_sample|intake-transcription`).
 
 `Revision` fields: `id`, `documentId`, `version` (metadata CAS), `revision`
 (file import ordinal), `name`, `size`, `sha256` (original bytes), `versionLabel`,
 `effectiveDate` (optional supplied date), `createdBy`, `status`
 (`uploading|processing|draft|in_review|approved|rejected|failed`), `parseStatus`,
-`textHash`, `paragraphCount`, `pages`, `warnings`, timestamps and review metadata.
+`textHash`, `paragraphCount`, `pages`, `warnings`, timestamps and review metadata,
+and the server-owned optional `transcriptionOf` described below.
 Private `parts`, blob keys and request fingerprints are not returned to clients.
 Approving a revision never mutates its content. New content needs a new revision.
 Approval cannot replace a newer already-approved import ordinal with an older
@@ -151,6 +152,61 @@ owner, job)` handles `document-finalize`. Its stored input contains trusted
 `documents.library.authorize_job(host, scope, job)` protects generic job reads.
 `DocumentError(status, code, message)` is a bounded, non-sensitive domain error.
 Library code never imports a model client.
+
+### Private intake derivatives (`source-admission/1`)
+
+Private intake (`intake/*`) reads approved revision projections through
+`Library.document`/`revision(..., approved=True)`/`projection` after
+`Sources.resolve` (current authority, never the historical `authorize`) to build
+identifier-normalized derivatives. The library remains the source authority:
+derivatives, inspection receipts and admission decisions are intake records
+(`adm_decision` and its private blobs), not library records, and they never
+change a document, revision, binding or approval. Unpaginated TXT/MD/HTML
+projections are grouped into deterministic logical pages of at most 4 000
+characters without splitting a paragraph; citations use those page numbers.
+
+### Transcription revisions (`source-admission/1`, I6b)
+
+`documents.library.prepare_transcription(host, scope, decision)` is a trusted
+server adapter callable only from `intake.review` (any other caller gets
+`PermissionError`). It returns the library writes that turn a reviewer-validated
+`diagram-transcription` admission decision (sealed as `admitted`, not yet
+stored) into an MD document of kind
+`guide-transcription` (`provenance: "intake-transcription"`, `readRoles` copied
+from the source audience; a project-wide image asset gives all four roles) with
+one revision in status `in_review`. That revision carries the **server-owned**
+field `transcriptionOf = {sourceRef, decisionId, decisionRevision, transcription,
+visionSha256, normalizedImageHash, region}`, where `sourceRef` is the original
+image asset reference, `decisionId` its admitted image decision and
+`transcription = {decisionId, decisionRevision, artifactHash}` the
+reviewer-validated transcription decision. Both admissions are bound. The public
+document API never accepts caller-supplied `provenance` or `transcriptionOf`.
+`intake.review` commits the decision's approval and these writes in **one**
+`Library.commit` transaction (with the review's policy/grant/source fences as
+`extra_checks`), so a failed publication writes nothing: the decision stays
+`pending-review` and the reviewer can retry.
+
+Library approval stays separate: a planner/owner approves the revision through
+the existing review route; the intake grant confers no library review.
+
+`Library.revision()` (and therefore `projection()`, paragraph reads, every
+download chunk and review approval) rechecks `transcriptionOf` lineage for any
+revision that carries it through `intake.admission.verify` of the transcription
+decision, which recursively verifies its image decision, and of the image
+decision itself. A revoked or changed upstream (either reviewer grant, either
+decision, the policy or the image source) returns `409 source-upstream-revoked`;
+a revision without the `transcription` binding fails closed. The records that
+check read (the image asset, both `adm_decision` records and their
+`adm_policy`/`adm_provenance`/`adm_grant` records) are kept in `Library._upstream` as `{owner, kind, id, version}` in
+their actual owner partitions and join `checks()`, so `commit()` and
+`assert_current()` fence upstream authority atomically with the library write. Version fences
+cannot see expiry, so `commit()` and `assert_current()` also pass a
+`before_attempt` guard that, before every transaction attempt (including
+retries), revalidates each upstream admission record's schema, version, status
+and expiry at the present clock; an admission that expired during the blob read
+returns `409 source-upstream-revoked` and nothing is written.
+`Sources.resolve` propagates the same observations with
+`Sources._remember_owned(owner, kind, record)`.
 
 `Storage.list_page` gains optional `prefix=""`; encoded cursors must match the
 owner, kind AND prefix. Revision/audit IDs start with `{documentId}--`, so

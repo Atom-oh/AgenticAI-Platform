@@ -16,7 +16,7 @@ from common.log import log_event
 
 def handler(event, context):
     op = event.get("op")
-    log_event("admin.op", op=op)
+    log_event("admin.op", getattr(context, "aws_request_id", ""), op=op)
     if op == "health":
         out = {"plane": plane.mode(), "graphBackend": os.environ.get("GRAPH_BACKEND", "local")}
         if plane.mode() == "bridge":
@@ -41,52 +41,43 @@ def handler(event, context):
     if op == "reset_demo":
         from registry.seed import reset_demo_state
         return reset_demo_state(actor="admin")
+    if op in {"inspect_registry_record", "transition_registry_record"}:
+        from registry import administration
+        try:
+            if op == "inspect_registry_record":
+                return {"ok": True, **administration.inspect(event["name"], event["version"])}
+            return {"ok": True, **administration.transition(
+                event["name"], event["version"], event["to"], event["expectedHash"],
+                str(event.get("reason", ""))[:500], actor_ref=administration.invocation_actor(context))}
+        except Exception as error:
+            log_event("admin.registry_decision_failed", errorType=type(error).__name__)
+            return {"ok": False, "error": "registry-administration-failed",
+                    "errorType": type(error).__name__, "code": getattr(error, "code", 500)}
     if op == "seed_agents":
-        # 시나리오 에이전트 4종: 실행 = AgentCore Runtime(Strands 컨테이너, AGENTS_RUNTIME_ARN) 우선, 없으면 설정형 Harness.
-        # 플랫폼 Registry + AgentCore Registry(미러)에 등록·승인한다 (멱등).
-        from agentcore import registry_mirror
         from agentcore.agent_specs import SCENARIO_AGENTS
-        runtime_arn = os.environ.get("AGENTS_RUNTIME_ARN", "")
-        out = []
-        for spec in SCENARIO_AGENTS:
-            row = {"name": spec["name"]}
-            payload = {"model": spec["model"], "allowedTools": spec["allowedTools"], "skills": spec["skills"],
-                       "memory": bool(spec.get("memory")), "title": spec.get("title"), "scenario": spec.get("scenario")}
-            if runtime_arn:
-                payload.update({"runtime": "agentcore-runtime/strands", "runtimeArn": runtime_arn, "sdk": "Strands Agents"})
-                row["runtime"] = "agentcore-runtime/strands"
-            else:
-                try:
-                    from agentcore import harness
-                    h = harness.ensure_harness(spec)
-                    payload.update({"runtime": "AgentCore Harness", "harnessArn": h.get("arn"), "harnessId": h.get("harnessId")})
-                    row["harnessArn"] = h.get("arn"); row["status"] = h.get("status")
-                except Exception as e:
-                    row["harnessError"] = f"{type(e).__name__}: {str(e)[:300]}"
-            try:
-                from registry.api import create_record, get_record, transition
-                rec = get_record(spec["name"], "v1")
-                if not rec:
-                    rec = create_record({"name": spec["name"], "recordVersion": "v1", "recordType": "AGENT",
-                                         "description": spec["description"], "owner": "AI플랫폼팀",
-                                         "tags": [spec.get("scenario", "custom"), payload.get("runtime", "")],
-                                         "payload": payload}, actor="admin")
-                    transition(spec["name"], "v1", "PENDING_APPROVAL", "admin", "시드 — 시나리오 에이전트")
-                    rec, _ev = transition(spec["name"], "v1", "APPROVED", "admin", "시드 기준선 승인")
-                elif rec.get("payload", {}).get("runtime") != payload.get("runtime"):
-                    # 런타임 정보가 바뀐 경우(Harness → Strands 런타임): 새 버전 레코드로 남긴다 (감사 무결성 — 제자리 수정 없음)
-                    ver = "v2" if rec.get("recordVersion") == "v1" else "v" + str(int(str(rec.get("recordVersion", "v1"))[1:]) + 1)
-                    if not get_record(spec["name"], ver):
-                        create_record({"name": spec["name"], "recordVersion": ver, "recordType": "AGENT",
-                                       "description": spec["description"], "owner": "AI플랫폼팀",
-                                       "tags": [spec.get("scenario", "custom"), payload.get("runtime", "")],
-                                       "payload": {**payload, "supersedes": rec.get("recordVersion")}}, actor="admin")
-                        transition(spec["name"], ver, "PENDING_APPROVAL", "admin", "런타임 전환 — 승인 대기")
-                        rec, _ev = transition(spec["name"], ver, "APPROVED", "admin", "런타임 전환 승인 (시드)")
-                row["registry"] = rec.get("status") if isinstance(rec, dict) else str(rec)
-                row["agentcoreRegistry"] = registry_mirror.mirror(rec)
-            except Exception as e:
-                row["registryError"] = f"{type(e).__name__}: {str(e)[:300]}"
-            out.append(row)
-        return {"agents": out, "runtimeArn": runtime_arn or None}
+        from agentcore.seeding import seed_agents
+        from registry.administration import invocation_actor
+        return seed_agents(SCENARIO_AGENTS, os.environ.get("AGENTS_RUNTIME_ARN", ""), invocation_actor(context))
+    if op == "inspect_agent_request":
+        from agentcore import harness
+        from agentcore.administration import harness_fingerprint
+        from registry import api
+        request = api.get_record(event["name"], event.get("version", "v1"), include_internal=True)
+        if not request or request.get("subtype") != "AGENT_ADMIN_REQUEST":
+            return {"ok": False, "error": "agent-request-not-found"}
+        existing = harness.find_harness("bank_" + request["payload"]["name"])
+        return {"ok": True, "request": request, "harnessId": (existing or {}).get("harnessId"),
+                "expectedHarnessHash": harness_fingerprint(existing) if existing else None}
+    if op in {"apply_agent_request", "reconcile_agent_request"}:
+        from agentcore.administration import apply_request
+        from registry.model import RegistryError
+        try:
+            from registry.administration import invocation_actor
+            options = {"reconcile_hash": event["expectedHarnessHash"]} if op == "reconcile_agent_request" else {}
+            return {"ok": True, **apply_request(event["name"], event.get("version", "v1"),
+                                              actor_ref=invocation_actor(context), **options)}
+        except Exception as error:
+            log_event("admin.agent_request_failed", errorType=type(error).__name__)
+            return {"ok": False, "error": str(error)[:300] if isinstance(error, RegistryError) else "agent-administration-failed",
+                    "errorType": type(error).__name__}
     return {"error": f"unknown op: {op}"}

@@ -8,6 +8,11 @@ An absent requirement remains a gap. Production admission requires the applicabl
 gates below. The dated implementation plan records sequencing and review history;
 changing that plan does not change this contract.
 
+The [cross-module architecture](../docs/ARCHITECTURE.md) assigns implementation
+ownership and delivery order for this contract. Its offline protocol unit
+precedes service activation; the capability gates and A/B/C boundaries below
+continue to govern integration and admission.
+
 ### platform-ontology/1
 
 `Foundation` is one level; `Icon` is its resource subtype. The other seven
@@ -25,11 +30,15 @@ An edge contains `id`, `type`, exact source/target node IDs and revisions,
 A source reference contains `sourceKind`, `sourceId`, `revision`, `sha256`,
 `audienceRevision` and a location when applicable: document page, source
 path/export/line, or image region. Implemented source-kind identifiers are
-`asset`, `document-revision`, `product-guideline`, `workbench-document` and
-`package`. Imported code revisions use `asset` with an exact import revision,
-byte hash and file location. `published-asset`, `ux-contract` and `run-round`
-are reserved for their separately installed authority adapters and fail closed
-until those adapters exist.
+`asset`, `document-revision`, `product-guideline`, `workbench-document`,
+`package`, `run-round`, `ux-contract` and `published-asset`. Imported code
+revisions use `asset` with an exact import revision, byte hash and file location.
+The last three have installed authority adapters (B0 sharing) in
+`workspace/ontology_sources.py` and `workspace/publications.py`; their rules are
+in `ONTOLOGY_CONTRACT.md` "Source authority". A missing and an inaccessible
+record return the same `404 not-found`. Current resolution alone admits reuse;
+historical authorization admits metadata only. Intake (`source-admission/1`)
+has no admission adapter for these kinds and still refuses them with `503`.
 IDs are stable within a scope; revision hashes identify immutable content.
 Original IDs live in namespace mappings. Ambiguity cannot silently select
 the first match.
@@ -93,21 +102,31 @@ inferred from an agent/service identity.
 Effective access intersects current membership, publication grant and upstream
 source policy. Grants cannot widen a restricted upstream audience. Organization
 publication requires a separately authorized source-policy change; ordinary
-uploads or project ownership do not create it. A new revision needs a new grant
+uploads or project ownership do not create it. It is an IAM-administered,
+versioned `adm_sharing` policy per exact origin source revision
+(`intake/admin_handler.py` `grant_sharing`/`revoke_sharing`), bound by revision
+at proposal/approval and rechecked on every access. A new revision needs a new grant
 binding or explicit renewal. Withdrawal immediately invalidates downstream reuse.
 
 Impact crosses shared boundaries only through authorized references. Return
 only authorized dependents and evidence; do not disclose hidden IDs, names or
 exact counts. Coverage says `restricted-or-unmapped`, never “no impact.”
+Every contributing destination reader (current membership, the destination grant,
+source and ontology observations) is retained and rechecked after all
+destinations were read and again by the response gate's final recheck; a
+destination whose authority changed meanwhile fails the whole answer.
 Internal routing may create work in the affected project's authorized worklist
 without exposing that project to the initiating caller.
 
 Project roles remain the authoritative owner/planner/designer/developer roles.
 Organization-level `design_publish` and `policy_publish` capabilities are
-separate grants assigned through IAM-only administration; project owners cannot
-self-grant them. Origin source authority is also required. Destination acceptance
-requires destination ownership. Explicit deny, upstream restriction, expiry and
-revocation override allows.
+separate grants assigned through IAM-only administration (`intake/admin_handler.py`
+`grant_capability`/`revoke_capability`); project owners cannot self-grant them. Origin source authority is also required. Destination acceptance
+requires destination ownership and the revision's current upstream sharing
+eligibility (every source's origin audience and bound `adm_sharing` policy), checked
+before creation or replay and fenced into the acceptance commit; an ineligible
+publication is the same `404` as a missing one. Explicit deny, upstream restriction,
+expiry and revocation override allows.
 
 Withdrawal is prospective enforcement, not recall of delivered bytes. At the
 next access/stage boundary, fence affected attempts, quarantine derivatives,
@@ -136,6 +155,7 @@ root plus an explicit file manifest and resolver configuration, not a basename.
 | Relative modules | Resolve against the collection manifest; reject path escape and ambiguous extension/case/Unicode matches. |
 | Aliases/packages | Use an approved versioned alias/workspace/package-exports map; never execute configuration or invent an unsupplied SDK. |
 | CSS/SCSS | Parse literal imports and `url()` references with locations. SCSS evaluation, interpolation and loader execution remain unresolved. |
+| HTML | Parse static structure and literal resource references with source locations. Inline scripts/styles, active behavior and unconfigured URL bases remain unresolved; do not execute or fetch them. |
 | JSON | Parse approved manifest reference fields; arbitrary strings are not assumed to be paths. |
 | Generated files | Record generator/tool version and source mapping; missing mappings stay unknown. |
 | Dynamic imports/URLs and framework transforms | Preserve unresolved references; no automatic network/package lookup. |
@@ -191,7 +211,9 @@ Report measured usage per job instead of assuming a fixed upload cost.
 The authenticated API admits a job after checking user identity, membership and
 operation scope. The dispatcher obtains a short-lived signed execution capability
 from the platform authorization service. Use a dedicated asymmetric signing key:
-the API/dispatcher can request capability signing; Runtime/Gateway/tools can
+only the IAM-only dispatcher requests capability signing for an allocated
+attempt; the user-facing API admits/cancels jobs but never requests signing.
+Runtime/Gateway/tools can
 verify but cannot mint capabilities.
 
 Required claims are issuer, audience, verified actor reference, project ID,
@@ -263,7 +285,7 @@ only to the new ontology Gateway, never the existing IAM bank Gateway.
 The capability issuer is a new IAM-only `execution-authority` backend module.
 It derives claims from an admitted job and current authorization, never arbitrary
 Runtime arguments. A managed asymmetric KMS key signs capabilities; only the
-API/dispatcher role may request signing. Runtime evidence uses a separate key
+dispatcher role may request signing after attempt allocation. Runtime evidence uses a separate key
 and cannot mint capabilities. A versioned key registry fixes algorithm, key ID,
 purpose, public-key fingerprint, validity and active/retired/revoked state.
 Verifiers obtain keys only from configured KMS/registry entries, never token URLs.
@@ -282,10 +304,10 @@ authorization envelope; the model sees only authorized read tools.
 |---|---|---|
 | `ontology.context` | Selected IDs/cursor → nodes, edges, source refs, context hash | Read; ≤50 nodes/100 edges per page |
 | `ontology.source` | Exact source ref/range → bytes or text, hash and range metadata | Read; ≤256 KiB, no arbitrary URL |
-| `ontology.impact` | Change ID/expected graph revision → witness paths, coverage, work-item refs | Authorized change-analysis operation |
-| `ontology.publish` | Candidate artifact ref/hash/expected generation → published generation | Trusted ingestion only; not model-visible |
+| `ontology.impact` | Change ID/expected graph revision → witness paths, coverage and existing authorized work-item refs | Model-visible read-only analysis; no work-item creation |
+| `ontology.publish` | Candidate artifact ref/hash/expected generation → immutable staged publication-plan ref/hash; no current manifest update | Trusted ingestion staging only; not model-visible |
 | `execution.stage` | Attempt/stage/operation ID/receipt ref → transition | Trusted Runtime control only |
-| `execution.finish` | Final manifest ref/hash/expected ledger version → terminal state | Trusted Runtime; independent receipt validation |
+| `execution.finish` | Final manifest/staged publication-plan refs and hashes/expected ledger version → one coupled completion | Trusted Runtime; independent receipt and transaction validation |
 
 Responses are ≤512 KiB. Cursors bind actor, project, resource selection, graph
 generation and audience revisions. Authority/generation changes invalidate them.
@@ -293,6 +315,30 @@ A job has at most 60 tool calls and 4 MiB retrieved text, also subject to existi
 smaller model-context limits. Errors disclose no unauthorized resource details
 or upstream response bodies. Models cannot select endpoints, credential providers,
 accounts or roles.
+
+For source-analysis executions, `ontology.publish` stages immutable objects and
+a bounded publication plan; it cannot advance current graph/artifact/job state.
+`execution.finish` is the only publication/completion operation. The ledger
+prepares conditional terminal-job and related execution writes/checks without
+committing independently. The ontology coordinator combines them with its
+manifest/request-marker and artifact writes and current source/authority checks
+in one `Storage.put_many`/`TransactWriteItems` call. This extends the existing
+trusted `_completion_writes` composition point; it does not introduce a second
+writer. The validated receipt pointer is stored in the terminal job/artifact
+records. A failed transaction advances none of those pointers or states.
+Human mapping/publication APIs retain their own existing transactions.
+Work-item creation/routing is performed only by the authorized IAM-only routing
+worker, not by a model-visible `ontology.impact` call.
+
+The trusted Lambda completion facade submits the coupled transaction once per
+attempted completion. Proven transaction contention permits at most two retries
+within the same execution deadline, with fresh actor/source/deadline/attempt
+checks before each submission and no SDK-level hidden retry. Changed predicates
+are not refreshed away. Exhausted proven contention fails completion with
+`completion-contention` through a fenced metadata failure transition; a
+cancelled/expired/superseded state is preserved. Unknown transport outcome first
+reconciles durable job/artifact/request markers and otherwise enters bounded
+`recovery_required`; it is not presumed to be a failed or successful commit.
 
 Authority-only changes increment membership/grant/audience versions even when
 graph content does not change. Cursors bind those versions independently from
@@ -437,10 +483,58 @@ never read from model/user arguments. Runtime has no direct ledger write IAM
 permission. Backend roles retain only their reviewed datastore/control rights.
 Transport acceptance is not success.
 
+New execution jobs use the immutable discriminator
+`task="agentcore-execution", executionSchemaVersion=1`. A reserved task or any
+presence of `executionSchemaVersion`, including unknown/malformed values, must
+never be treated as a legacy job. New dispatch/reconciliation accepts only its
+exact supported discriminator and otherwise rejects without mutation.
+B0 implements both sides of this exclusion in actual legacy claim/expiry paths
+and new-ledger paths, with conditional version/discriminator fences. Its offline
+tests must import the real legacy code. Before any probe creates new records
+in a shared table, verify that the deployed legacy guard is installed.
+B0's review inventories every legacy job-status writer, including failure,
+cancellation, repair and helper paths, and applies the same conditional
+exclusion wherever a new job could otherwise be mutated.
+The inventory also covers every linked artifact/receipt completion writer,
+including `_mark_failed` and analysis-read reconciliation. New artifacts carry
+the immutable execution discriminator and exact execution/job linkage.
+Legacy code must refuse mutation if the artifact is marked for new execution
+or its linked job has a reserved/new discriminator. A missing job never makes
+a marked artifact legacy, and a missing `exec-` job is reserved linkage.
+Mismatched or malformed linkage is refused and reported for the IAM-only new
+reconciler; legacy code does not fail or complete that artifact. An unmarked
+record whose legacy-format job is missing (for example after the job retention
+TTL) is legacy linkage: authorized human review and legacy repair continue, and
+the reconciler never mutates unmarked legacy records.
+
+One platform-runtime deployment owner installs the reviewed guard change and
+records worker/API revision or image hashes and RUN-01 live guard/legacy-control
+results in the B1/G0-RUNTIME stop/go record. Before that, probes use an isolated
+disposable table or do not create new-schema jobs. Guard rollback first stops
+new-schema admission/probes and drains or quarantines those jobs; it must not
+expose them to an older unguarded writer.
+After matching deployed revisions to the reviewed guard, the deployment owner
+may create one inert synthetic control record for the live refusal/legacy
+control check, quarantine if needed and clean it up. General shared-table probes
+remain blocked until that narrowly scoped installation check passes.
+
+Source analysis using AgentCore is a new-ledger Runtime execution, not a cloud
+analyzer injected into legacy `ontology_jobs.process`. B0 retires the obsolete
+cloud-factory comment as documentation-only cleanup. Existing legacy jobs drain
+unchanged; C wires the already guarded dispatch/read/reconciliation paths into
+the application and verifies them live.
+
 Invocation fields are schema version, execution/attempt IDs, Runtime session ID,
 signed capability, immutable input-manifest ref/hash, selected model, absolute
 deadline and backend-config revision. Queue messages contain no raw source
 documents or reusable credentials.
+The backend configuration references a versioned execution profile containing
+the deadline, heartbeat, lease and recovery limits. Invocation/ledger/evidence
+records retain that profile's revision/hash. Initial values below remain the
+defaults until a reviewed profile revision passes the capability probes.
+Attempts and transfer/completion receipts bind the exact consumed
+source-admission decision IDs/revisions and artifact hashes; revalidation
+cannot rely only on broker logs.
 
 | State | Transition owner / condition |
 |---|---|
@@ -457,6 +551,8 @@ evidence or alter terminal results. Initial deadline is 14 minutes, heartbeat
 30 seconds and lease 90 seconds, subject to Phase 0 proving service compatibility.
 Each stage reserves remaining budget; do not start a round that cannot finish.
 Earlier authorization expiry shortens the deadline.
+The immutable input manifest enumerates the exact admission-decision
+IDs/revisions and admitted artifact hashes consumed by the attempt.
 
 Retry idempotent reads/transfer chunks at most twice within budget. Record model
 call intent and budget reservation before invocation. Unknown model outcomes
@@ -469,6 +565,17 @@ stops Interpreter/Browser sessions. Late receipts are non-current diagnostics.
 A crash retains verified partial evidence and last stage; the watchdog cannot
 fabricate success. Correlate execution, attempt, capability digest, model call
 and service sessions using allowlisted metadata logs, never source text/tokens.
+
+The Runtime and model-boundary maintainers verify this exclusion in application
+instrumentation, Runtime/service spans, exporters and configured destinations.
+Synthetic source/prompt/tool-content and capability canaries must be absent from
+those sinks. Missing capture controls or unverified destinations block activation.
+SPEC §11-4's Tier 2 exclusion also applies to optional insights/Evaluations/Policy;
+these checks do not require enabling optional observability products.
+The same exclusion covers Interpreter/Browser service-session logs and
+exporters, while authorized private compiler/browser evidence artifacts retain
+their separately governed access. Verify the configured sinks in those service
+gates as well as the Runtime gate.
 
 All recovery transitions use the same ledger writer. The watchdog may request
 `recovery_required`, failed, expired or cancelled, but cannot request generation
@@ -485,6 +592,574 @@ It creates a new fenced attempt, not an automatic model replay. Changed inputs
 or criteria require a new approved request. Late results from superseded attempts
 are quarantined diagnostics and cannot update current graph, Memory decisions,
 approval or release. Retain metadata/evidence under the stated retention policy.
+
+An injected test-key verifier requires explicit offline test opt-in. Production
+construction rejects test verifiers, unregistered adapters and unregistered
+keys; it requires the reviewed KMS/key-registry verifier. A callable's label or
+caller-supplied test flag is not a trust basis.
+
+#### Record fields (v1)
+
+Status: the offline protocol is implemented in `workspace/execution_ledger.py`
+(B0). It is not deployed. No API route, dispatcher, Lambda facade or IAM role
+calls it yet; those transports are planned (C, B2). Offline tests are the only
+callers.
+
+Job record (`kind="job"`, id `exec-` + 128 random bits, written only with the
+module-private ledger writer token):
+
+| Field | Meaning |
+|---|---|
+| `task`, `executionSchemaVersion` | Immutable discriminator `agentcore-execution` / exact `int` 1 |
+| `requestKey`, `inputHash` | Actor-scoped idempotency key; digest of actor, operation, model, manifest, admissions, backend revision, profile hash, authority, completion scope, `supersedes` |
+| `actor`, `actorRole`, `projectId`, `authority` | Verified requester, role at admission and `{authorityRevision, membershipDigest}` from the current project record |
+| `operation`, `model`, `backend`, `backendConfigRevision` | Closed operation map (`OPERATIONS`), selected model, `agentcore`, backend revision |
+| `profile`, `profileBody` | `{id, revision, hash}` and the bounded profile body (`PROFILE_DEFAULT`) |
+| `manifest`, `admissions` | Immutable input manifest `{ref, hash}`; consumed decisions `[{decisionId, revision, artifactHash}]` |
+| `status`, `fence`, `attempt`, `attempts` | State, fencing number, current attempt, archived attempts (with `stages` receipt hashes and `late` diagnostics) |
+| `calls`, `budget` | Per-call intents; `{calls, maxCalls, tokensReserved, tokensUsed, tokenBudget}` |
+| `stages`, `nonces` | Verified receipts of the current attempt; nonces seen on the job |
+| `handles`, `transfers`, `transferUsage`, `cleanup` | Transfer handles, closed outputs, `{chunks, bytes}`, fenced handles awaiting cleanup |
+| `deadlineAt`, `authorizationExpiresAt`, `recoveryAt` | `min(now + deadlineMs, authorization expiry)`; JWT expiry; recovery start |
+| `completionScope` | Frozen `{nonSourceOperations, sourceChecks, sourceBindings}` accepted at admission |
+| `obligations` | Frozen `{sourceChecks: [{owner, kind, id, version}], sourceBindings: [...]}` taken from the validated input manifest |
+| `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate` |
+| `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
+| `deliverables` | Set at completion: the result manifest's bundle and sources bound to their compile, Browser and generate receipt hashes |
+| `accounting` | Pending daily-usage obligations `[{id: "chg-"+40 hex, tokens, callId}]`, committed in the same write as the outcome that charges them |
+| `verifiedKeyRevision` | The verifier key-registry revision the completed chain was verified and submitted under |
+| `releaseBaseline` | `design.release` only: the approved screenshot `{key, sha256}` frozen at admission from the input manifest's `approved.screenshot` (verified owned object and hash, else `manifest-invalid`), or `null` when absent |
+| `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
+
+Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
+heartbeatAt, startedAt, completionSubmissions?}`. A `heartbeat` extends the
+lease only while the attempt's ORIGINAL lease, the deadline and the
+authorization expiry still hold; its `before_attempt` guard rechecks them
+immediately before submission (`stale-attempt`/`deadline`), so an expired
+lease is never renewed. Call: `{callId, stage, kind, status: intent|completed|
+failed|unknown, at, attemptId, reserved, usage?, serviceSessionId?,
+usageEstimated?, settledBy?}`; usage holds only `{inputTokens, outputTokens}`.
+A model call recorded without usage is charged its full reservation as used
+tokens and daily cost-gate usage and marked `usageEstimated: true`; the
+reservation is never released to zero. Every daily charge (measured, estimated
+or `unknown`) is first persisted as an `accounting` obligation in the same
+conditional write as the outcome, settlement or `unknown` marking. The ledger
+then records it through the cost gate keyed by the obligation id (the
+production gate writes a `usage-charge#{id}` marker and the day's usage in one
+transaction, so a retried charge counts once) and removes it with a CAS. A
+failed usage write is never swallowed: the call returns `accounting-pending`
+with the outcome committed and the obligation retained. Repeating the identical
+`outcome`, or the reconciler's `sweep` (a terminal job keeps a due entry while
+`accounting` is pending), settles it. `intent` first settles the job's pending
+obligations so they reach the enforced daily counter before the cost gate is
+consulted; while any remain unsettled no further call is authorized
+(`accounting-pending`). Every added or settled obligation, and every still-
+outstanding (`intent`) model call's own token reservation (keyed
+`resv-{callId}`; review 8), is also mirrored, in the same transaction, into
+the global pending-charge registry (`exec_quota` record `pending-charges` in
+partition `execution:quota`, `{charges: {id: {tokens, owner, jobId}}}`), so an
+unrecorded charge or a still-unresolved reservation of any job, including a
+cancelled, failed or superseded one, counts as used until it is idempotently
+settled: a model `intent` passes the registry total to the cost gate, which
+requires `usage_today + pending < DAILY_TOKEN_CAP` (`daily-budget`); the
+reservation's own write to that same registry record is itself the
+transactional fence for the reservation (no separate version predicate is
+added, to avoid a same-record write/check collision). Cancelling a job, or its
+concurrency slot being released, never drops its calls' reservations; only a
+recorded outcome, or the reconciler's expire-to-`unknown` sweep, removes them.
+An unreadable or oversized (more than 1000 entries) registry is
+`daily-budget-unavailable`. `outcome` for an `interpreter` or
+`browser` call requires `service_session_id`, the observed service session,
+stored as `serviceSessionId`; a model call takes none. Stage: `{stage,
+receiptHash, receiptRef, nonce, attemptId, status, service, result, inputs,
+outputs}`; `inputs` keeps the consumed `{key, sha256}` pairs.
+`receiptRef` is the immutable object
+`job/{id}/receipts/{attemptId}/{receiptHash}.json` holding the signed receipt's
+canonical bytes (they hash to `receiptHash`), written once at `stage` (and at
+`reconcile` for the receipts it supplies). Transfer output: `{handleId, key, sha256, size,
+stage, attemptId}` under `out/{attemptId}/{stage}/{name}` of the job. An input
+handle (`source="input"`) is opened only when the resolved artifact hash equals
+the frozen `admissions[*].artifactHash`; it records that `decisionId`,
+`revision` and hash, and the server re-hashes the stored bytes against it.
+Every read handle (input, prior, manifest) also pins the validated object
+identity: `etag` (with `total` and `sha256`), taken from `Storage.blob_identity`
+after the re-hash. Each `read_chunk` requires the current identity to match and
+reads with `get_blob(..., if_match=etag)` (S3 `IfMatch`); a replaced object,
+size drift or short read is `transfer-invalid` and returns no bytes. Every
+`intent`, `open_*`, `read_chunk` (including a retried chunk index), `write_chunk`
+and `close_output` rechecks the requester's current project authority (a
+mismatch fails the job with `authority-changed`) and fences its mutation with
+the project version check. Through the protected-operation guard below it also
+revalidates every consumed admission, every opened prior and every listed prior
+that a recorded receipt consumed as an input, independently of any handle (a
+withdrawn one fails the job with `authority-changed`); `stage` and completion
+also revalidate the priors consumed by the receipts they add, and each grant
+predicate is part of the protected transaction. Each stage entry freezes the
+full descriptor of every prior it consumed (`consumedPriors`) at staging time,
+while the manifest (or an open handle) is necessarily still readable (review
+8): later revalidation always reads this durable binding, never re-fetching
+the manifest, so a manifest deleted or corrupted afterward cannot erase it.
+Input authorization and this binding are derived from exactly ONE manifest
+read (review 9, #1), keyed into exactly ONE validated key -> descriptor
+mapping (`_keyed_priors`; review 10, #1): a manifest naming the same key
+twice with a CONFLICTING descriptor (a different hash, source or revision)
+is rejected outright (`manifest-invalid`), never resolved by authorizing the
+input against one descriptor while the binding silently used, or omitted, a
+different one. `open_prior` uses the same mapping and fences its new
+handle's creation with that specific prior's own grant predicate and expiry
+(review 10, #2), since the handle does not exist yet for the shared
+protected-operation guard's own handle scan to find. The job itself also
+keeps a durable,
+job-level accumulator of every consumed prior's descriptor (`consumedPriors`
+on the job record, distinct from a stage entry's own field of the same name;
+review 9, #2), merged in the same transaction whenever a stage or completion
+adds one; unlike `stages`, `retry` never clears it, so a prior consumed by a
+superseded attempt is still revalidated by every protected operation of the
+retried attempt. A
+resolver-returned admission or prior grant may also carry an `expiresAt`; a
+version predicate alone cannot catch a grant that simply runs out the clock
+(review 8), so every collected `expiresAt` is rechecked, against a fresh clock
+read, by the same final guard immediately before delivery or submission
+(`authority-changed`). `read_chunk` additionally requires that an
+input handle's admission still resolves to the same key and hash, otherwise
+`transfer-invalid`. Chunk indexes are non-negative integers below the handle's
+chunk count; a negative index is `transfer-invalid` (never a retry of a written
+part). `read_chunk` and `write_chunk` are not `ops` entries; a supplied
+`operation_id` (mandatory in production) is bound on the handle
+(`chunkOps: {operationId: "index:chunkSha256"}`, at most `2 × chunks + 8`), and
+reusing it for another index or chunk hash is `operation-changed`. Every returned
+chunk is fenced after its bytes are read: a first read commits its usage with
+the guard's predicates, and a retry of an already-read index commits only its
+durable retry count (`handle.retries: {"index": n}`) with the same job version,
+guard predicates and `before_attempt` checks, charging no usage; a failure
+returns no bytes. A `write_chunk` retry of an already-written index (same hash)
+runs the same guard and commits its retry count. Each index allows at most
+`readRetries` (2) retries; a further one is refused with `retry-exhausted`
+before any bytes are served or written.
+
+Receipts use schema v1. Required fields are `schemaVersion`, `executionId`,
+`attemptId`, `fence`, `sessionId`, `stage`, `nonce`, `profileHash`,
+`admissions`, `service`, `keyId` and `signature`. The optional fields
+`operationId`, `inputs`, `outputs`, `objects`, `iat`/`exp`, `status`, `result`
+and `previous` are validated when present. Any other field is rejected.
+
+Every hash, size, key and identifier the ledger compares is first checked by one
+strict validator layer (`_is_sha`: 64 lowercase hex; `_is_size`: non-negative
+`int`, never `bool`; `_is_key`/`_is_ident`: non-empty bounded strings;
+`_object_ref`: required fields present, no unknown field, every value valid).
+Each receipt input must be exactly `{key, sha256, size}` and an authorized input
+of the job (the input manifest, the frozen release baseline, a listed prior, a
+recorded stage output, or an input handle of the attempt) with the same
+`sha256` and `size`; where the ledger has no recorded size, the stored object's
+server metadata must match. Otherwise `receipt-invalid`. Admission requires each
+admission to be exactly `{decisionId, revision, artifactHash}` with string ids,
+a valid `artifactHash` and distinct decision ids (`admission-invalid`).
+
+`service` is bound per stage (`STAGE_SERVICES`): `context` and `verify` →
+`runtime`, `generate` → `model`, `compile` → `interpreter`, `browser` →
+`browser`, `analyze` → `runtime` or `interpreter`. A `runtime` service carries
+the attempt's `sessionId` and no `taskId`. Any other kind carries `taskId`, the
+`callId` of a recorded call of the same attempt, stage and kind that no other
+receipt of the attempt used. A `model` service carries the attempt's
+`sessionId` and no `exitCode`; an `interpreter`/`browser` service carries the
+call's recorded `serviceSessionId`, an integer `exitCode` and `profile`, which
+must equal the pinned tool profile (`TOOL_PROFILES`, frozen in
+`profileBody.toolProfiles`; admission refuses any other with `profile-invalid`). A receipt with
+`status: ok` requires `exitCode` 0 (when present) and a `completed` call. The
+`profileHash` must equal the job's profile hash. Any mismatch is
+`receipt-invalid`.
+
+`design.release` succeeds only against its frozen `releaseBaseline`: the
+current Browser receipt must consume that screenshot as an input (it is an
+allowed input of the job) and its `result.comparison` must equal
+`{key, sha256}` of it. The input manifest's `approved.sourceHash` and
+`approved.bundleHash` and the current compile receipt's observed
+`result.sourceHash`/`result.bundleHash` must all be valid SHA-256 values; the
+observed `bundleHash` must be the current compile bundle output's `sha256`, and
+both observed hashes must equal the approved ones (a missing hash never
+compares equal); `visualDiff` must be a number in `[0, 0.02]`. The Browser
+result must also carry successful required behavior and accessibility
+evidence: `passed: true`, `functionalStatus: "pass"`, `accessibility.status:
+"pass"` with no `violations`, and no `blockingFindings`; the final `verify`
+result must have `passed: true`, `verdict: "pass"` and no `issues`. A missing
+baseline, another comparison input, or missing, incomplete or contradictory
+behavior/accessibility evidence makes the requested `succeeded` status
+`status-inconsistent`.
+
+Receipts follow the operation's evidence graph (`STAGE_INPUTS`): each stage's
+`inputs` must include an output of the latest receipt of its predecessor stage
+(`generate` ← `context`, `compile` ← `generate` or `context`, `browser` ←
+`compile`, `verify` ← `browser` or `generate`, `analyze` ← `context`), so stages
+are staged in order. A `compile` receipt produces exactly one output with role
+`bundle`, and a `browser` receipt must consume exactly that bundle. Output roles
+are a closed per-stage set (`STAGE_OUTPUT_ROLES`): every stage may emit
+`artifact` (the default when `role` is absent), only `compile` emits `bundle`,
+and only `generate` of an operation that compiles emits `source`; any other
+role is `receipt-invalid`.
+Completion validates one complete, current chain: for every required stage its
+latest receipt must be recorded after the latest receipt of its predecessor and
+consume that receipt's outputs (for `browser`, exactly the latest compile's
+bundle). A newer predecessor receipt, such as a recompilation, makes the
+downstream receipts stale until they are re-staged (`evidence-stale`). The
+result manifest and every object it lists must be outputs of that current
+chain. The
+receipt hash is SHA-256 over sorted-key JSON.
+
+Completion (`finish`, and `reconcile` through the same path) re-reads every
+retained signed receipt of the attempt and re-verifies it with the current
+verifier (signature and key), its hash, bindings and `previous` linkage; any
+failure is `receipt-invalid`. The re-verification is bound to the verifier's
+key-registry revision (`verifier.revision()`, read before re-verifying), and
+the completion transaction's `before_attempt` guard re-verifies every retained
+receipt, then rechecks that this revision is unchanged, and only then runs the
+temporal checks (lease, deadline, authorization expiry, recovery bound) as its
+last step immediately before submission. A rotation or revocation at any point
+up to that recheck is `receipt-invalid`; time expiring during verification is
+refused by the final temporal checks; nothing commits. The terminal job records `verifiedKeyRevision`. It also re-reads every chain output of the current attempt, including the result manifest and every
+object it lists, and requires the stored hash and size to match before any
+terminal pointer is prepared; a missing or changed object is `receipt-invalid`.
+Every `files`/`objects` entry of the result manifest must be an object with a
+string `key` and a 64-hex `sha256` (and, if given, the recorded `size`) that
+names a chain output of the attempt; a malformed or non-member entry is
+`receipt-invalid`. A manifest entry's optional `role` must equal the recorded
+output role. Deliverables are bound to their evidence: a listed `bundle` must
+be the current compile receipt's bundle consumed by the current Browser
+receipt, a listed `source` an output of the current generate receipt consumed
+by the current compile receipt, and an operation that compiles must list
+exactly that one bundle (otherwise `receipt-invalid`). The terminal job records
+`deliverables: {bundle: {key, sha256, compileReceipt, browserReceipt} | null,
+sources: [{key, sha256, generateReceipt, compileReceipt}]}`.
+Every terminal transition (cancel, fail, revocation, expiry, contention
+failure) that leaves `intent` calls sets `unknownOutcome: true` and
+`settlementDueAt`, and keeps a due entry for it. The execution is not revived:
+until the bound, only the reconciler's `settle` may record those outcomes; at the
+bound the watchdog marks them `unknown`, charges their reservations as used
+(and to the daily cost gate) and clears the due entry.
+
+`reconciler().settle(owner, job_id, call_id, observation, *, operation_id)`
+records the outcome of an `intent` call from a recovered signed adapter
+observation, after the Runtime lost the attempt: the job must be
+`recovery_required` within its recovery bound, or terminal before
+`settlementDueAt` (otherwise `recovery-window`, checked on entry and again by
+the write's `before_attempt` guard immediately before submission); a live attempt uses `outcome`
+(`stale-attempt`). The observation is `{schemaVersion: 1, type: "call-outcome",
+executionId, attemptId, fence, callId, stage, kind, status: completed|failed,
+service: {kind, sessionId, profile?}, usage?, nonce, iat?/exp?, keyId,
+signature}`, verified by the same receipt verifier. It must match the call's
+attempt (id and fence), stage and kind; a model service carries the attempt's
+`sessionId`, an Interpreter/Browser one its service session and the pinned
+`profile`; the nonce joins the job's nonces. Any mismatch is `receipt-invalid`
+(an unknown or already settled call is `call-invalid`). It records the outcome,
+`serviceSessionId`, usage (missing model usage charges the reservation) and
+`settledBy: "reconciler"` in one conditional write, never changing the job
+status; a later `reconcile` can then use the settled call.
+
+Completion is refused with `calls-unresolved` while any call of the attempt is
+still `intent` (no recorded outcome): the attempt stays open, the watchdog moves
+it to `recovery_required` with `unknownOutcome`, and `retry` marks such calls
+`unknown` and, in the same write, charges each one's reservation as used (and
+as a daily `accounting` obligation, `usageEstimated` for model calls),
+independently of the replacement attempt; it also clears `settlementDueAt`.
+Admission validates the immutable input manifest: the object at
+`manifest.ref` (owned by the project) must hash to `manifest.hash` and be a JSON
+object whose `admissions` equals the admitted decisions exactly, whose
+`sourceChecks` are distinct `{owner, kind, id, version}` predicates that hold now
+(otherwise `authority-changed`), and whose distinct `sourceBindings`
+(`{sourceKind, sourceId, revision, audience, documentId?}`) match
+`completionScope` one for one; otherwise `manifest-invalid`. The source
+predicates are also checks of the admission transaction and are frozen as
+`obligations`. At completion the ledger rechecks and itself submits every frozen
+source predicate (a changed source fails the job with `authority-changed`).
+`stage_completion` returns `{writes, checks, sourceBindings, sourceChecks?}`:
+`sourceBindings` must equal the frozen bindings exactly, a declared
+`sourceChecks` must equal the frozen predicates exactly, and a staged check of
+a frozen record at another version is refused, all with
+`completion-obligations`. Non-source operations above
+`completionScope.nonSourceOperations` return `execution-completion-scope`.
+`source.analyze` completion (`finish` and `reconcile`) returns
+`completion-unavailable` (`reason: source-staging-adapter`) until the ontology
+staging adapter supplies its manifest, request-marker and artifact publication.
+Protected operations (`intent`, `stage`, `open_*`, `read_chunk`,
+`write_chunk`, `close_output`, `finish`, `reconcile`) share one guard. It
+revalidates the requester's membership, every consumed admission (the
+`input_resolver` must still return `{key, sha256, check}` with `sha256` equal to
+the frozen `artifactHash`) and every opened prior (`prior_authority` must still
+return a `check`), where `check` is the `{owner, kind, id, version}` predicate of
+the granting record. A withdrawn source fails the job with `authority-changed`.
+These authority predicates are part of the transaction, and its `before_attempt`
+callable runs immediately before each wire submission: it rechecks the
+deadline and authorization expiry (`deadline`), the attempt lease
+(`stale-attempt`), for `intent` the remaining-time reservation
+(`deadline-budget`) and, for a model call, the daily cost gate. A repeated
+`intent` operation ID never reserves again: it requires the same current running
+attempt, lease and deadline (`stale-attempt`), rechecks authority and sources,
+and submits a check-only transaction with the same guard; it returns the
+recorded `callId` with `replayed: true` and `callStatus`. A replay never
+authorizes invoking the call again; an `intent` call stays uncertain until an
+outcome, settlement or `unknown` marking records it. For completion
+the final temporal checks run after `stage_completion` returns: `now < deadlineAt` and the
+authorization expiry (`deadline`), the attempt lease for `finish`
+(`stale-attempt`), and for `reconcile` the recovery bound
+`now < recoveryAt + recoveryWindowMs` (`recovery-window`), which `reconcile`
+also checks on entry independently of the watchdog.
+Proven transaction contention is retried at most `completionRetries` (2)
+times with fresh checks. Each completion submission is first counted durably
+in `attempt.completionSubmissions` (a ledger-only conditional write after all
+local checks pass), so at most `completionRetries + 1` submissions exist per
+attempt even when the failure settlement itself contends; once the count is
+spent, `finish`/`reconcile` retries only the settlement and returns
+`completion-contention`. On exhaustion the ledger persists a fenced
+`failed` transition with error `completion-contention` (fence bumped, quota
+released) for the still-current attempt, and returns `completion-contention`;
+later submissions for that attempt get `stale-attempt`/`terminal`. A job that
+concurrently became cancelled, expired or superseded keeps that state.
+An unknown transport outcome re-reads the job and compares it with the
+submitting attempt: a terminal record with the same attempt, result and
+operation entry is the committed result. Otherwise, while the same attempt and
+fence are still active, the ledger conditionally enters `recovery_required`
+with `unknownOutcome=true` from the latest version (a concurrent heartbeat is
+re-read, not treated as a lost race), and returns `unknown-outcome`.
+
+| Facade (caller role) | Methods |
+|---|---|
+| `api()` (authenticated API) | `admit`, `cancel`, `retry`, `read` |
+| `dispatcher()` (IAM-only dispatcher) | `allocate` |
+| `tool()` (ontology Lambda facade) | `claim`, `heartbeat`, `intent`, `outcome`, `stage`, `finish`, `fail`, `open_manifest`, `open_prior`, `open_input`, `read_chunk`, `open_output`, `write_chunk`, `close_output` |
+| `reconciler()` (IAM-only watchdog/reconciler) | `sweep`, `reconcile`, `settle`, `resolve_orphan`, `run_due` |
+
+`Ledger.production` requires a registered verifier type that exposes
+`revision()` (its key-registry revision) and single-attempt
+storage (`Storage(single_attempt=True)`). It uses the fail-closed
+`common.costguard` gate. `register_verifier` accepts only a class defined by,
+and registered from, the reviewed verifier module `workspace.execution_verifier`
+(B1). Independently of registry membership, production rejects offline verifier
+types: any `execution_fakes` class, any class exposing `sign`, or one marked
+`offline`. `Ledger.offline` requires pytest and the `execution_fakes` verifier,
+and `TestKeyVerifier` is constructible only under pytest. The production operation IDs are mandatory. Offline
+tests may omit them.
+
+Error codes: `request-changed`, `admission-required`, `admission-invalid`, `authority-changed`,
+`concurrency-actor`, `concurrency-project`, `execution-completion-scope`,
+`unknown-operation`, `not-an-execution`, `not-queued`, `already-claimed`,
+`attempts-exhausted`, `stale-attempt`, `receipt-invalid`, `budget-exhausted`,
+`deadline-budget`, `token-budget`, `model-not-allowed`, `call-invalid`,
+`daily-budget`, `daily-budget-unavailable`, `transfer-invalid`,
+`transfers-incomplete`, `stages-incomplete`, `status-inconsistent`,
+`operation-changed`, `operation-budget`, `operation-id-required`, `conflict`,
+`completion-contention`, `completion-obligations`, `completion-unavailable`,
+`completion-invalid`, `calls-unresolved`, `accounting-pending`, `retry-exhausted`, `profile-invalid`, `manifest-invalid`,
+`evidence-stale`,
+`unknown-outcome`, `terminal`, `deadline`, `recovery-window`, `retry-expired`,
+`acknowledge-required`, `not-retryable`, `forbidden`.
+
+Supporting storage kinds:
+
+- `exec_request`: the actor-scoped request marker `{jobId, inputHash}`.
+- `exec_quota`: `active` job lists. The per-actor list lives in partition
+  `execution:quota` (at most 1 active job). The per-project list lives in the
+  project partition (at most 2 active jobs).
+- `exec_due`: due-time-ordered entries in partition `execution:due`, with fields
+  `{type: job|report, dueAt, status: pending|done, targetOwner, ref}`. Entries
+  are tombstoned, not deleted.
+- `exec_report`: the metadata-only legacy refusal report
+  `{kind, recordId, reason, count, firstAt, lastAt, dueId}`. It has no payload
+  and no source text.
+
+Legacy guard: `Storage._prepare` refuses any non-ledger write in these cases:
+
+- The item or the stored record is reserved: its `task` is reserved, or
+  `executionSchemaVersion` or `executionId` is present.
+- A linked artifact's stored job is reserved or has an `exec-` id.
+- A linkage is moved to or from such a job, or a linkage id is malformed
+  (`linkage-mismatch`/`unknown-linkage`).
+
+A missing legacy-format job is not refused: the write proceeds with the job's
+absence fenced (PR #27 review 4).
+
+Non-ledger updates also carry
+`attribute_not_exists(executionSchemaVersion) AND attribute_not_exists(executionId)`.
+Every stored linked job the guard reads is also fenced in the same
+transaction: a `ConditionCheck` that its version is unchanged (or that it is
+still absent). A single `put` with such a fence is submitted as a one-put
+transaction, so a job that becomes reserved after the guard's read aborts the
+artifact write.
+Human approval, release creation and Git export use a separate module-checked
+token. That token applies only to kinds `run`, `release`, `gitexport` and
+`design`, and never moves a status into `failed`, `needs_changes` or
+`completed`. The IAM-only reconciler (`resolve_orphan`, `run_due`) closes
+refusal reports by tombstoning their due entries; it never mutates the reported
+record, so an unmarked legacy record keeps its lifecycle state.
+
+Not yet implemented in B0:
+
+- the staging mode of `publish_candidate`. `ontology_store.py` is owned by
+  Unit A. `finish` accepts a `stage_completion` callable whose writes and
+  checks commit with the terminal job. Until the staging adapter exists,
+  `source.analyze` completion is refused with `completion-unavailable`.
+- the admitted-input resolver and the run-round prior-authority adapter. They
+  come from the B0 intake and sharing units. Because every protected operation
+  revalidates the consumed admissions through the resolver, production refuses
+  protected operations (and input/prior transfers) until they are wired.
+- the 4 MiB model-visible text budget.
+
+### source-admission/1
+
+Private intake owns the following closed, versioned record schemas. Unknown
+fields/versions fail closed. Records have immutable revision/hash, status and
+expiry; policy/grant changes invalidate affected decisions before transfer.
+Their administration belongs to an IAM-only private administrative entry point.
+Project/workspace APIs, model tools and workload identities cannot create,
+edit or activate policies, provenance registrations or reviewer grants.
+The in-app `platform-operators`/`admin` group alone is not IAM authorization.
+The same IAM-only write/current-actor record-verification pattern applies to
+the `design_publish`/`policy_publish` capabilities used by shared publications.
+
+| Record | Required bindings and authority |
+|---|---|
+| Admission policy | Policy ID/revision/hash, deployment/project scope, eligible data classes, inspection/normalization profiles, expiry and trusted provenance rules. Cannot override mandatory privacy/source-access checks. IAM-only administration. |
+| Provenance registration | Policy revision, server-owned fixture registry entry or policy-approved public source reference, exact revision/byte hash and scope. Filenames, project labels and uploader claims are not registrations. IAM-only administration. |
+| Reviewer grant | Grant ID/revision, verified actor reference, policy/scope, allowed review operation and expiry/revocation. Does not grant source-read access. IAM-only administration; private APIs verify current grants on review. |
+| Admission decision | Project/source reference and audience revision, exact admitted artifact/hash, original-to-derivative linkage, policy/provenance refs, inspection receipt/hash, applicable human actor/grant revision, status and expiry. Produced only by private intake after current checks; no raw originals or credentials in the record. |
+
+These are administrative/internal contracts, not newly public workspace routes.
+The implementation must record the concrete private module/storage/entry-point
+bindings before installation. Source admission reads revalidate current policy,
+grant where required, source audience and the exact artifact/inspection hashes.
+
+#### Concrete bindings (B0 intake; offline code, not deployed)
+
+These bindings are implemented and tested offline. `IntakeAdminFn` is
+synthesized only with `-c intakeAdmin=true` and is deployed with B1; G0-ADMISSION
+live evidence and the privacy redaction adapter remain outstanding.
+
+- **Module.** `platform/intake/*`: `records` (closed schemas, `seal`,
+  `validate`, `is_current`), `admin_handler` (IAM-only administration),
+  `inspect` (current-authority resolution and metadata-only receipts),
+  `derivative` (`identifier-normalization-1`), `images` (v1 image profile),
+  `imaging` (image and vision derivatives), `admission` (`request`, `decide`,
+  `verify`, `pages_for`, `admission_ref`), `review` (reviewer decisions),
+  `collection` (code collections), `prompts` (prompt text), `transcription`
+  (diagram/table transcription), `audit` (metadata-only export), `worker`
+  (Worker task `intake-image`).
+- **Storage kinds and partitions.** `adm_policy`, `adm_provenance`, `adm_grant`,
+  `adm_resolver` (code-collection resolver profiles; IAM-administered, packages
+  verified against the platform package registry) and `adm_audit` (one metadata
+  event per administration operation) in the owner partition `intake:deployment`;
+  `adm_decision` in the project partition `project:<id>`. Derivatives,
+  inspection receipts and private mappings are blobs under
+  `Storage.key_for(owner, "adm_decision", <id>, ...)`. Every record has an
+  immutable `revision`, `hash` (canonical digest of the record without `hash`
+  and storage fields), `status` and `expiresAt`; unknown fields, kinds, statuses
+  and values fail closed.
+- **IAM-only entry point.** `IntakeAdminFn` (`infra/lib/intake.ts`, handler
+  `intake.admin_handler.handler`) with operations `put_policy`,
+  `activate_policy`, `retire_policy`, `register_provenance`,
+  `revoke_provenance`, `grant_reviewer`, `revoke_grant`,
+  `put_resolver_profile` and `retire_resolver_profile`. Events shaped like API
+  Gateway or a Function URL, or a context without `invoked_function_arn`, are
+  refused (`forbidden-transport`) with no write; `operator` is an audit label
+  only. It has no API route, Function URL or `apigateway.amazonaws.com`
+  permission, no `lambda:InvokeFunction` on other functions, and table access is
+  limited by `dynamodb:LeadingKeys` to the `intake:deployment` partition
+  (asserted by `workspace/check_infra.py`). Whenever intake is configured
+  (`intakeAdmin`, `intakeDenylistParam` or `intakeDeployment` context), the
+  Workspace API and Worker roles carry an explicit Deny of `PutItem`,
+  `UpdateItem`, `DeleteItem`, `BatchWriteItem` and PartiQL writes on that
+  partition (`ForAnyValue:StringEquals dynamodb:LeadingKeys`); reads and
+  `ConditionCheckItem` fences remain. `check_infra.py` fails any other policy
+  that can write the workspace table without that Deny. Without intake context
+  the admission path has no deployment scope (`policy-unavailable`) and the
+  main-stack template is unchanged. With intake configured, the Workspace API
+  (reviewer routes and document admission), the Worker and IntakeAdminFn all
+  receive the same `INTAKE_DEPLOYMENT` (`intakeDeployment` context, default the
+  stack name); `check_infra.py` checks each function's environment on its own.
+- **Reviewer routes.** `GET /studio-api/intake/reviews` and
+  `POST /studio-api/intake/reviews/{decisionId}` require the workspace JWT, a
+  current `adm_grant` covering the project with `review-internal`, **and**
+  current source access through `Sources.resolve`. The grant never confers
+  source access; project ownership and in-app groups confer nothing. Previews
+  show derivative text only.
+- **Profile `identifier-normalization-1`.** The private deny-list is read only
+  from the SSM SecureString named by `INTAKE_DENYLIST_PARAM` or the private S3
+  key named by `INTAKE_DENYLIST_KEY`; a missing, unreadable or invalid list
+  blocks (`denylist-unavailable`). Replacement is longest-term-first,
+  NFC-normalized and ASCII case-insensitive (default aliases `고객사 A` for names
+  and `[내부 링크]` for internal URLs and deny-listed hosts); numbers are
+  untouched. Spans are found and applied on one NFC buffer of the joined pages
+  (a composition across a page boundary belongs to the following page), and a
+  hard invariant requires the output to equal that buffer with only the spans
+  substituted and every numeric token outside them unchanged; any violation
+  blocks (`normalization-invariant`). Admission requires a clean residual scan (no deny-list term,
+  internal URL or `pii.scan_rules` hit). Code collections use one neutral
+  identifier-safe alias per matched term (`neutral_<n>`) consistently across
+  file text, path segments, package scopes and the derived resolver.
+- **Decisions.** Synthetic/public inputs require a current, in-scope
+  `adm_provenance` matching the exact source revision and byte hash;
+  internal-non-sensitive inputs, prompt text and transcriptions are
+  `pending-review` until a reviewer admits them. A `diagram-transcription`
+  decision binds its admitted image decision (`lineage`); verifying it
+  recursively verifies that image decision and fences its records, so revoking
+  either reviewer grant invalidates the transcription and its library revision. Expiry is
+  `min(policy, provenance/grant, now + 30 days)`. A repeated request returns its recorded
+  decision; `request(..., generation=n)` (1..1000) is an explicit fresh
+  evaluation under a new decision id (for example after provenance
+  registration), and earlier decisions remain as history. `verify` raises
+  `decision-not-current`, `policy-changed`, `grant-revoked`, `source-changed`,
+  `artifact-changed` or `inspection-changed`. `pages_for` is the only text read
+  for model use, in bounded batches (≤ 400 000 bytes by default, never above
+  512 KiB) with a 5-minute cursor bound to decision, revision, derivative hash
+  and actor, and reruns `verify` for every batch. Every verification ends with
+  a final recheck after all reads (every record expiry and the authorization
+  deadline are collected during the reads and compared with one clock read
+  taken after the last read, as in each commit attempt's deadline guard), and every delivery path repeats it through
+  one shared `admission.Authority.recheck()` after its last read, immediately
+  before returning anything: `pages_for`, `imaging.read_vision_chunk`,
+  `imaging.vision_input`, `imaging.descriptor` (OCR text),
+  `collection.analyzer_request` (which also fences the `adm_resolver` profile
+  and uses only the verified index), each `GET /intake/reviews` item and the
+  whole response after all reads (pending decision, policy, the actor's grants,
+  transcription image lineage and source fences). Model calls and commits use
+  the same recheck: `transcription.transcribe` (which sends the region in the
+  delivered vision image's coordinates, checking that image's PNG dimensions
+  against the recorded `downscale-WxH` transform, while the decision's
+  lineage keeps the canonical normalized-image region) immediately before `generate`
+  and again before its commit, keeping the original `Sources` reader so the
+  pre-generation source observations fence the commit,
+  `admission.decide` (every admission path) before and on each commit attempt,
+  `request_image` before queueing (the job freezes the project
+  `authorityRevision` and the earliest known authorization deadline, the
+  verified scope's `authorizationExpiresAt` or the token `exp`, never extended
+  by the five-minute fallback used only when neither is known; its id and
+  request hash exclude the token deadline, so a refreshed token replays it
+  while the job keeps its deadline; a repeated request requeues a job whose
+  dispatch failed before it started, with that request's own earliest deadline,
+  and every response reports the actual outcome: `queued`, `processing`,
+  `failed` with its `errorCode`, or the decision's status; the job also persists every observed
+  source record version, part of its id, so a revoked and restored asset is a
+  new request), the Worker's `intake-image` processing and commit (the scope
+  keeps the job's authorization deadline; the frozen epoch and the observed
+  source versions are required before processing and on every attempt), and review
+  approval/publication on each attempt: the source fences (`Sources.recheck`) and the exact decision,
+  policy, provenance and grant versions must still be current, schema-valid and
+  unexpired. Grants and provenance pass `records.validate` on every use; a
+  grant must name `review-internal` for the reviewing actor and provenance must
+  be a `fixture` for synthetic data or a `public-reference` for public data.
+- **Code-collection ZIPs.** The ZIP asset is at most 8 MiB. Before any member
+  is decompressed, the central directory must show at most 100 selected files,
+  100 KiB per text file, 2 MiB of text and 8 MiB expanded in total including
+  assets; reads are then bounded by each member's declared size and the
+  remaining budget (`collection-too-large` / `collection-format`).
+- **Image normalization evidence.** Every image decision binds
+  `artifact.normalization.sha256`, the hash of a closed
+  `image-normalization-1` receipt blob (`normalization.json`:
+  original/normalized hashes, dimensions, mode, EXIF orientation and
+  transposition, ICC handling and conversion, metadata stripping, vision
+  transform), validated by `records.validate_normalization` on every `verify`.
+- **Redaction.** PII redaction is `unavailable`: an input whose inspection or
+  residual scan finds PII is `blocked: redaction-required` until the privacy
+  adapter for source documents is reviewed. Sanitized SVG is blocked
+  (`svg-sanitizer-unavailable`) until a reviewed sanitizer lands, so SRC-05 is
+  partial.
 
 ## Phase 0: mandatory capability gates
 
@@ -527,6 +1202,18 @@ and produces a separately hashed derivative. Original mappings remain private.
 The model boundary independently checks the final outgoing model payload.
 Source permission and non-sensitive classification are separate requirements.
 
+Private intake owns inspection, image normalization and admission records.
+A platform security operator administers the versioned policy and names its
+eligible source-admission reviewers. For required human decisions, including
+internal-non-sensitive review, a reviewer needs that policy grant and current
+source access; project ownership or workload identity alone
+does not grant admission-review authority or a source-read bypass. Bind each
+decision to policy revision, applicable reviewer revision and exact
+source/derivative hashes. Synthetic/public inputs may use policy-approved
+trusted provenance checks; caller-supplied class labels are not such evidence.
+Missing policy, inspection, required reviewer authority or privacy-service
+redaction blocks admission and transfer.
+
 Canonical source bytes reach Runtime only through scoped artifact handles issued
 by the new source-broker Lambda after current access/admission checks.
 Transfers use 256 KiB chunks with offset, total size, chunk hash and whole-object
@@ -557,7 +1244,13 @@ stop with explicit budget-exhausted/needs-changes evidence. Never weaken checks
 or claim all requested rounds ran. These timing assumptions are measured in
 Phase 0 rather than treated as a service guarantee.
 
-These bounded spikes are the first implementation work. Use synthetic inputs
+Minimal offline protocol/admission code and bounded spikes are the first
+implementation work. Disposable probes transfer only server-registered synthetic
+fixtures with exact hashes under a versioned probe-scope policy and private
+format/PII inspection. They do not require complete customer-intake/sharing APIs,
+but cannot bypass `source-admission/1` or its administration/access rules.
+The private-intake owner validates this prerequisite before each transfer probe.
+Use synthetic inputs
 and disposable resources in an explicitly verified deployment account/region.
 Plan statements are not passing receipts. Feature integration and production
 cutover wait for every applicable gate.
@@ -565,10 +1258,11 @@ cutover wait for every applicable gate.
 | Gate | Measurable pass evidence | Failure decision |
 |---|---|---|
 | Offline ontology/analyzer | Fixed expected eight-level mappings, code/image references, witness paths and blocked/revoked/ambiguous/truncated cases all pass | Correct schema or implementation before enabling canonical projection |
-| Code Interpreter | Fetch exact-version S3 archive ≤64 MiB compressed/256 MiB expanded and verify hash within 120s; record OS/architecture/Node; compile with matching native dependencies in ≤60s without package install; deny source-bucket access; two rebuilds have identical hashes | Stop; revise archive/runtime strategy and repeat. No relabelled local compiler. |
-| Browser | Authenticated automation, exact-bundle fulfillment in no-egress VPC, blocked external HTTP/WebSocket, behavior/a11y/Korean fonts verified in ≤120s, actual profile/screenshots | Stop; resolve service/network/profile constraints. No public-network fallback. |
-| Identity/Gateway | Identity-brokered credential accepted by dedicated audience/scope; valid capability invokes Lambda; swapped execution/project, expired token and revoked membership rejected | Stop until chosen topology is proven. No decorative Identity or anonymous Gateway. |
-| Runtime/ledger | Duplicate dispatch has one current attempt; crash after evidence enters recovery-required; cancellation fences late publication | Fix protocol before real job integration. |
+| Private source admission | Current policy/provenance/reviewer/source bindings; private image normalization and inspection; required redaction derivative; source-readable but inadmissible inputs and unauthorized policy/grant writes denied | Stop transfers until the private-intake gate passes. Probe-scope synthetic approval cannot admit unreviewed source material. |
+| Code Interpreter | Fetch exact-version S3 archive ≤64 MiB compressed/256 MiB expanded and verify hash within 120s; record OS/architecture/Node; compile with matching native dependencies in ≤60s without package install; deny source-bucket access; identical rebuilds; source/token canaries absent from session logs/exporters | Stop; revise archive/runtime/logging strategy and repeat. No relabelled local compiler. |
+| Browser | Authenticated exact-bundle automation in no-egress VPC; blocked external HTTP/WebSocket; behavior/a11y/Korean fonts in ≤120s; actual profile/screenshots; source/token canaries absent from session logs/exporters | Stop; resolve service/network/profile/logging constraints. No public-network fallback. |
+| Identity/Gateway | Brokered credential accepted by dedicated audience/scope; allocated-attempt capability invokes Lambda; swapped/expired/revoked requests deny; capability canaries absent from Gateway/Identity logs/spans/exporters | Stop until topology and credential exclusion are proven. No decorative Identity or anonymous Gateway. |
+| Runtime/ledger | Legacy/new writers reject incompatible job discriminators before mutation; duplicates have one attempt; crash recovery/cancellation fence late publication; execution-profile timing and metadata-only telemetry verified | Fix protocol, deployed guards and telemetry before real job integration. |
 | Memory | Structured scoped event storage/retrieval without extraction; another actor/project denied; stale references excluded; deletion recorded | Block selected-backend admission until isolation/retention pass. |
 | Models/region/quotas | Resolve enabled provider IDs, boundary-routed synthetic calls, region/network compatibility and measured quotas/budgets | Mark requested model unavailable; no silent substitution. |
 
@@ -584,14 +1278,29 @@ Runtime region alone is not a data-residency guarantee.
 
 Gate owners are the platform-runtime maintainer (Runtime/Interpreter), verifier
 maintainer (Browser), platform-identity maintainer (Identity/Gateway), ontology
-maintainer (Memory/source bindings), and model-boundary maintainer (models).
+maintainer (offline ontology/analyzer and Memory/source bindings), and
+model-boundary maintainer (models).
+The private-intake maintainer owns the source-admission gate; the platform
+security operator owns its IAM-administered policy/provenance/grant approval.
+The privacy/infra maintainer owns any source-document redaction adapter, caller
+authorization and private network route. Existing MyData relay/gateway support
+does not imply that source-document intake is covered by its current contract.
+Until that separate integration is reviewed, only inputs with complete required
+inspection, a clean residual scan and no redaction dependency can pass: eligible
+synthetic/public inputs through registered provenance, and internal non-sensitive
+inputs only through local identifier normalization plus approval by a reviewer
+holding a current IAM-administered grant and current source access (SRC-06).
+Inputs requiring unavailable redaction, sensitive or unclassified inputs stay
+blocked.
 The implementation record names the responsible reviewer before a gate runs.
 Each gate saves its configured limits, fixture hashes, observed measurements,
 negative-case outcomes and stop/go decision. Production integration cannot
 proceed with an unowned or unmeasured gate.
 Interpreter/Browser gates govern generation and handoff rows; Identity/Runtime
 govern every protected execution; Memory governs reuse; ontology/code fixtures
-govern classification and impact; all gates govern deployment admission.
+govern classification and impact; private admission governs data transfers;
+all gates govern deployment admission. The ontology owner coordinates the
+SRC-05/06 offline portions with the private-intake owner.
 
 ## Vertical acceptance case and rollout
 
@@ -628,6 +1337,9 @@ attempt. Display actual backend/service evidence. Rollback pauses AgentCore
 admission and deliberately selects a compatible previous backend for new work,
 labelled legacy execution. Existing AgentCore jobs fail or reconcile explicitly;
 no per-call automatic fallback.
+For source analysis there is no production legacy analyzer: rollback blocks
+new analyses until a verified backend is restored, never enabling the offline
+test adapter.
 
 Deliver at least three independently reviewed PRs: **A**, canonical ontology,
 vocabulary mappings, analyzer and reverse-impact contracts with offline tests;
@@ -635,3 +1347,11 @@ vocabulary mappings, analyzer and reverse-impact contracts with offline tests;
 infrastructure and Phase 0 receipts; **C**, cohort cutover, actual job/UI wiring
 and end-to-end acceptance. PR A does not claim AgentCore execution, PR B does not
 enable the production default, and PR C does not bypass A/B reviews or gates.
+
+The B chain contains independently reviewed offline execution protocol,
+private admission/normalization, publication/source-authority adapters, durable
+execution authority/key registry, disposable capability probes and service
+adapter/IaC units. B0/B1/B2 in the architecture register subdivide these units;
+they do not change A/B/C gate or review obligations. C cannot complete sharing,
+source-analysis or handoff acceptance without the corresponding B authority
+adapters and private-admission evidence.

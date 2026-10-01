@@ -11,6 +11,10 @@ and [SPEC.md](../SPEC.md), then the applicable module contract:
 Guidebooks explain usage; dated plans and deployment reports are evidence for
 their stated scope, not blanket requirements for every module.
 
+For implementation, start with [the platform architecture](docs/ARCHITECTURE.md).
+It connects existing modules to the ontology execution design, current gaps,
+delivery ownership and required acceptance evidence.
+
 ## Current architecture
 
 | Path | Current implementation |
@@ -69,9 +73,9 @@ implemented. `modelRevision="unverified"` is an explicit unknown. See
 | Path | Runtime and limits |
 | --- | --- |
 | Scenario agents | `AdminFn seed_agents` prefers AgentCore Runtime/Strands when `AGENTS_RUNTIME_ARN` exists; otherwise it provisions Harness records. There are five specs, including `design_flow_agent`. |
-| Custom agent builder | `api/handlers/agents.py` creates Harness agents. `agentcore/invoke.py` dispatches by record payload; `APPROVED` is required by the platform invocation handler. |
+| Custom agent builder | `api/handlers/agents.py` records specifications and administration requests; IAM AdminFn provisions approved Harness configurations. `agentcore/invoke.py` dispatches only approved records. |
 | Legacy F5 screen generation | `screengen/agent.py` reads approved Registry component schemas and three skills. At most one regeneration. Node gates use synthetic `@atom/ui` declarations and semantic stubs; visual evidence is an HTML structure snapshot. |
-| Process generation | `design_loop/` derives a PRD and checklist, generates step HTML, then reviews it. At most one regeneration, plus one parse retry within each attempt. `api/handlers/design.py` runs locally through the gate unless `DESIGN_USE_RUNTIME=1` and a runtime ARN are set. |
+| Process generation | `design_loop/` derives a PRD and checklist, generates step HTML, then reviews it. At most one regeneration, plus one parse retry within each attempt. `api/handlers/design.py` uses the approved Runtime whenever its ARN is configured; generation is unavailable until that Runtime is configured and approved. |
 | Legacy HTML Studio | `studio/loop.py` uses `studio-*.md` skills, DesignSpec checks and up to 20 rounds. This is a separate workflow from F5 and the React workspace. |
 | React workspace | `workspace/` uses an approved rule contract and pinned `react-kit/`, with one to five rounds (default three). HTML verification remains available as a prototype path. |
 
@@ -114,8 +118,9 @@ The Studio and asset portal also share a private, page-searchable
 creates a text-only JSON pack; the original documents stay local. Selected page
 hashes and citations are fixed in the rule contract and reused by generation.
 Guideline names do not imply that a customer's React package is installed.
-The [UX workflow](workspace/WORKFLOW.md) makes definition, criteria/assets,
-stateful design, verification and developer handoff explicit stages. Required
+The [UX workflow](workspace/WORKFLOW.md) opens a canvas with request/history on
+the left and the preview/revision composer beside it. Definition, criteria/assets,
+stateful design, verification and developer handoff remain accessible. Required
 states must have required assertions before criteria approval; the existing
 source, browser, release and permission checks remain authoritative.
 
@@ -130,6 +135,14 @@ workbench projection against the workspace authority; the initial default remain
 the offline test adapter. Read the [ontology contract](workspace/ONTOLOGY_CONTRACT.md)
 and [AgentCore implementation plan](docs/ONTOLOGY_AGENTCORE_PLAN.md).
 This data foundation does not establish the later AgentCore service/cutover gates.
+
+The next execution work begins with the offline ledger/attempt protocol described
+in the [delivery register](docs/ARCHITECTURE.md#implementation-ownership-and-delivery-sequence),
+with separately reviewed private admission/publication units, then dedicated
+service probes and adapters, and finally application cutover.
+Use the [acceptance specification](docs/ONTOLOGY_AGENTCORE_VALIDATION.md)
+throughout that implementation. The ledger, probes and new service adapters are
+required work at the design baseline, not existing operating integrations.
 
 The 2026-09-21 UX change workflow adds saved change requests, screen/overlay/slot
 scope, source ID mappings and guarded transitions. An approved React baseline
@@ -170,6 +183,7 @@ this documentation audit:
 ```bash
 python3 seed/generate.py
 python3 seed/corpus.py
+bash agents/prepare_context.sh
 python3 -m pytest tests/ -q
 (cd gates && npm ci && npm test)
 (cd react-kit && npm ci --ignore-scripts && npm test)

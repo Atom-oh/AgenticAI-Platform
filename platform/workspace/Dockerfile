@@ -22,6 +22,7 @@ COPY react-kit ./react-kit
 COPY workspace ./workspace
 COPY workbench ./workbench
 COPY documents ./documents
+COPY intake ./intake
 COPY engine ./engine
 COPY studio ./studio
 COPY api/common ./common

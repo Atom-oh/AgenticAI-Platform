@@ -28,7 +28,9 @@ ACTOR = "demo@atomai.click"
 
 
 @pytest.fixture(autouse=True)
-def fresh_store():
+def fresh_store(monkeypatch):
+    from agentcore import registry_mirror
+    monkeypatch.setattr(registry_mirror, "mirror", lambda record: {"status": record["status"], "recordId": "synthetic"})
     yield api.reset_for_tests()
 
 
@@ -119,6 +121,93 @@ def test_uniqueness_name_plus_version():
     api.create_record(_rec(version="v2"), ACTOR)  # 다른 버전은 허용
     assert {r["recordVersion"] for r in api.list_records({"q": "widget_x"})} == {"v1", "v2"}
     assert api.get_record("widget_x", "v1")["status"] == "DRAFT"
+
+
+@pytest.mark.parametrize("operation", ["create", "transition", "force"])
+def test_record_and_audit_commit_atomically_on_audit_failure(monkeypatch, operation):
+    store = api.get_store()
+    if operation != "create":
+        api.create_record(_rec(), ACTOR, embed=False)
+    before = store.table().dump()
+    put = store.table().put_item
+
+    def fail_audit(**kwargs):
+        if kwargs["Item"]["pk"].startswith("audit#"):
+            raise RuntimeError("synthetic audit write failure")
+        return put(**kwargs)
+
+    monkeypatch.setattr(store.table(), "put_item", fail_audit)
+    with pytest.raises(RuntimeError, match="synthetic audit write failure"):
+        if operation == "create":
+            api.create_record(_rec(), ACTOR, embed=False)
+        elif operation == "transition":
+            api.transition("widget_x", "v1", "PENDING_APPROVAL", ACTOR)
+        else:
+            store.force_status("widget_x", "v1", "APPROVED", ACTOR, "Synthetic reset")
+    assert store.table().dump() == before
+
+
+def test_registry_transaction_uses_valid_dynamodb_wire_values():
+    from types import SimpleNamespace
+    import botocore.session
+    from botocore.validate import validate_parameters
+    from registry.model import validate_record
+    shape = botocore.session.get_session().get_service_model("dynamodb").operation_model("TransactWriteItems").input_shape
+    recorded = []
+
+    def transact(**parameters):
+        validate_parameters(parameters, shape)
+        recorded.append(parameters)
+
+    store = RegistryStore(table=SimpleNamespace(name="synthetic-registry"), table_name="synthetic-registry")
+    store._transaction_client = SimpleNamespace(transact_write_items=transact)
+    record = validate_record(_rec(payload={"rate": "3.250", "limit": 123456789, "ratio": 0.5}))
+    saved = store.put_new(record, ACTOR)
+    writes = recorded[0]["TransactItems"]
+    assert len(writes) == 2
+    assert all(write["Put"]["TableName"] == "synthetic-registry" for write in writes)
+    payload = writes[0]["Put"]["Item"]["payload"]["M"]
+    assert payload == {"rate": {"S": "3.250"}, "limit": {"N": "123456789"}, "ratio": {"N": "0.5"}}
+    assert writes[1]["Put"]["Item"]["pk"]["S"].startswith("audit#")
+    assert saved["stateRevision"] == 1
+    assert writes[0]["Put"]["ConditionExpression"] == "attribute_not_exists(pk)"
+
+
+@pytest.mark.parametrize("operation", ["create", "transition"])
+def test_registry_maps_real_transaction_cancellation_to_conflict(operation):
+    from types import SimpleNamespace
+    from botocore.exceptions import ClientError
+    from botocore.validate import validate_parameters
+    import botocore.session
+
+    model = botocore.session.get_session().get_service_model("dynamodb")
+    shape = model.operation_model("TransactWriteItems").input_shape
+    record = {**validate_record(_rec()), "pk": "rec#widget_x", "sk": "v1", "stateRevision": 1}
+    recorded = []
+
+    def transact(**request):
+        validate_parameters(request, shape)
+        recorded.append(request)
+        raise ClientError({"Error": {"Code": "TransactionCanceledException"},
+                           "CancellationReasons": [{"Code": "ConditionalCheckFailed"}, {"Code": "None"}]},
+                          "TransactWriteItems")
+
+    store = RegistryStore(table=SimpleNamespace(
+        name="synthetic-registry", get_item=lambda **kwargs: {"Item": record}))
+    store._transaction_client = SimpleNamespace(transact_write_items=transact)
+    with pytest.raises(ConflictError):
+        if operation == "create":
+            store.put_new(record, ACTOR)
+        else:
+            store.transition("widget_x", "v1", "PENDING_APPROVAL", ACTOR, expected_record=record)
+    assert len(recorded) == 1
+    if operation == "transition":
+        update = recorded[0]["TransactItems"][0]["Update"]
+        assert "#revision = :previousRevision" in update["ConditionExpression"]
+        for field in ("recordType", "subtype", "payload", "stateRevision"):
+            alias = next(key for key, value in update["ExpressionAttributeNames"].items()
+                         if value == field and key.startswith("#expected"))
+            assert alias in update["ConditionExpression"]
 
 
 @pytest.mark.parametrize("bad", [
@@ -347,6 +436,46 @@ def _ctx():
     return Ctx(apigw=gw, conn_id="c1", email=ACTOR, rid="r1"), gw
 
 
+@pytest.mark.parametrize("timing", ["missing", "after_authorization", "before_commit"])
+def test_generic_transition_cannot_transition_a_concurrently_created_or_retyped_agent(monkeypatch, timing):
+    store = api.get_store()
+    handler = _handler_module()
+    if timing != "missing":
+        api.create_record(_rec(rtype="CUSTOM", subtype="COMPONENT"), ACTOR, embed=False)
+    before_audits = store.audit("widget_x", "v1")
+    original_get = api.get_record
+    original_write = store._write_with_audit
+
+    def retype():
+        store.rewrite("widget_x", "v1", {"recordType": "AGENT", "subtype": "HARNESS"}, "iam-admin")
+
+    def get_record(*args, **kwargs):
+        record = original_get(*args, **kwargs)
+        if timing == "missing":
+            api.create_record(_rec(subtype="HARNESS"), "iam-admin", status="DRAFT", embed=False)
+        elif timing == "after_authorization":
+            retype()
+        return record
+
+    def write(*args, **kwargs):
+        retype()
+        return original_write(*args, **kwargs)
+
+    if timing == "before_commit":
+        monkeypatch.setattr(store, "_write_with_audit", write)
+    else:
+        monkeypatch.setattr(api, "get_record", get_record)
+    ctx, gw = _ctx()
+    handler.registry_transition(ctx, {"name": "widget_x", "version": "v1", "to": "PENDING_APPROVAL"})
+    assert gw.posted[-1]["ok"] is False
+    assert gw.posted[-1]["code"] == (404 if timing == "missing" else 409)
+    assert store.get("widget_x", "v1")["status"] == "DRAFT"
+    audits = store.audit("widget_x", "v1")
+    assert not any(event["to"] == "APPROVED" for event in audits)
+    if timing != "missing":
+        assert audits == before_audits
+
+
 def test_handler_routes_end_to_end():
     h = _handler_module()
     assert set(h.ROUTES) == {"registry_list", "registry_get", "registry_transition", "registry_search",
@@ -368,7 +497,8 @@ def test_handler_routes_end_to_end():
     # get: record + audit + versionChain
     h.registry_get(ctx, {"name": "Button", "version": "v2"})
     ev = gw.posted[-1]
-    assert ev["ok"] and ev["record"]["status"] == "APPROVED" and ev["record"]["allowedTargets"] == ["DEPRECATED"]
+    assert ev["ok"] and ev["record"]["status"] == "APPROVED" and ev["record"]["allowedTargets"] == []
+    assert ev["record"]["adminRequiredTargets"] == ["DEPRECATED"]
     assert [c["recordVersion"] for c in ev["versionChain"]] == ["v1", "v2", "v3"] and ev["audit"]
     h.registry_get(ctx, {"name": "Nope", "version": "v1"})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 404
@@ -377,18 +507,15 @@ def test_handler_routes_end_to_end():
     ev = gw.posted[-1]
     assert ev["count"] == len(ev["records"]) > 0 and all(r["status"] == "APPROVED" for r in ev["records"])
     assert ("Button", "v3") not in {(r["name"], r["recordVersion"]) for r in ev["records"]}
-    # transition: 잘못된 전이는 400 계열 이벤트(예외 아님)
-    h.registry_transition(ctx, {"name": "Button", "version": "v3", "to": "DEPRECATED", "reason": "x"})
-    ev = gw.posted[-1]
-    assert ev["type"] == "registry_transition" and ev["ok"] is False and ev["code"] == 400 and "허용되지 않은 전이" in ev["error"]
-    h.registry_transition(ctx, {"name": "Button", "version": "v2", "to": "DEPRECATED", "reason": ""})
-    assert gw.posted[-1]["ok"] is False and gw.posted[-1]["errorType"] == "ValidationError"
-    h.registry_transition(ctx, {"name": "Button", "version": "v2", "to": "DEPRECATED", "reason": "v3 승인"})
-    ev = gw.posted[-1]
-    assert ev["ok"] and ev["record"]["status"] == "DEPRECATED" and ev["audit"]["actor"] == ACTOR and ev["transition"] == "deprecate"
-    assert ev["auditTrail"][0]["reason"] == "v3 승인"
-    h.registry_transition(ctx, {"name": "Button", "version": "v3", "to": "APPROVED"})
-    assert gw.posted[-1]["ok"] and gw.posted[-1]["record"]["status"] == "APPROVED"
+    # User routes can submit drafts; privileged decisions require IAM administration.
+    from registry import administration
+    for version, target in [("v2", "DEPRECATED"), ("v3", "APPROVED")]:
+        h.registry_transition(ctx, {"name": "Button", "version": version, "to": target, "reason": "S3 review"})
+        assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 403
+        reviewed = administration.inspect("Button", version)
+        result = administration.transition("Button", version, target, reviewed["expectedHash"], "S3 review",
+                                             actor_ref="iam-invoke:11111111-1111-4111-8111-111111111111")
+        assert result["record"]["status"] == target and result["audit"]["actor"].startswith("iam-invoke:")
     h.registry_consumer(ctx, {"subtype": "COMPONENT"})
     keys = {(r["name"], r["recordVersion"]) for r in gw.posted[-1]["records"]}
     assert ("Button", "v3") in keys and ("Button", "v2") not in keys
@@ -397,12 +524,12 @@ def test_handler_routes_end_to_end():
     ev = gw.posted[-1]
     assert ev["type"] == "registry_search" and ev["hits"] and ev["dense"] is False
     # create: 검증 실패 → 400, 성공 → DRAFT
-    h.registry_create(ctx, {"record": {"name": "bad name!", "recordVersion": "v1", "recordType": "AGENT"}})
+    h.registry_create(ctx, {"record": {"name": "bad name!", "recordVersion": "v1", "recordType": "CUSTOM", "subtype": "COMPONENT"}})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 400
-    h.registry_create(ctx, {"record": _rec("new_agent")})
+    h.registry_create(ctx, {"record": _rec("new_component", rtype="CUSTOM", subtype="COMPONENT")})
     ev = gw.posted[-1]
     assert ev["ok"] and ev["record"]["status"] == "DRAFT" and ev["record"]["updatedBy"] == ACTOR
-    h.registry_create(ctx, {"record": _rec("new_agent")})
+    h.registry_create(ctx, {"record": _rec("new_component", rtype="CUSTOM", subtype="COMPONENT")})
     assert gw.posted[-1]["ok"] is False and gw.posted[-1]["code"] == 409
     # Even the removed legacy handler cannot seed from a user context.
     h.registry_seed(ctx, {})
@@ -413,13 +540,14 @@ def test_handler_does_not_log_reason_or_description_text(capsys):
     """로그에는 사유·설명 원문이 남지 않는다 (§12.3) — 길이/해시만."""
     h = _handler_module()
     ctx, gw = _ctx()
-    seedmod.seed(ACTOR)
+    api.create_record(_rec("log_probe", rtype="CUSTOM", subtype="COMPONENT"), ACTOR, embed=False)
     secret_reason = "고객 홍길동 관련 사유 XYZ123"
-    h.registry_transition(ctx, {"name": "Button", "version": "v2", "to": "DEPRECATED", "reason": secret_reason})
+    h.registry_transition(ctx, {"name": "log_probe", "version": "v1", "to": "PENDING_APPROVAL", "reason": secret_reason})
     out = capsys.readouterr().out
-    assert "registry.transition" in out and secret_reason not in out and "XYZ123" not in out
+    assert "registry.transition" in out
+    assert secret_reason not in out and "XYZ123" not in out
     assert ACTOR not in out  # 이메일은 해시로만
-    assert gw.posted[-1]["ok"]
+    assert gw.posted[-1]["ok"] is True
 
 
 def test_store_write_sanitizes_floats_for_dynamodb():

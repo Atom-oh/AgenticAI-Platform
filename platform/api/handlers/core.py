@@ -47,11 +47,40 @@ def _control_room(method: str, path: str, id_token: str, body: dict | None = Non
         data=json.dumps(body).encode() if body else None,
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + id_token}, method=method)
     try:
-        return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read(262145)
+        if len(raw) > 262144:
+            raise ValueError("Control-room response exceeds the admitted size")
+        value = json.loads(raw.decode())
+        if (not isinstance(value, dict) or value.get("error")
+                or any(key in value for key in ("errorMessage", "stackTrace", "traceback"))
+                or type(value.get("statusCode")) is int and value["statusCode"] >= 400):
+            return {"error": "Control-room request failed", "code": 502}
+        if path == "/api/agents":
+            if not isinstance(value.get("agents"), list):
+                raise ValueError("Invalid agent catalog")
+            rows = []
+            for row in value["agents"][:40]:
+                if not isinstance(row, dict):
+                    raise ValueError("Invalid agent catalog row")
+                selected = {key: row.get(key) for key in ("id", "name", "description", "status", "riskTier", "team")}
+                if any(item is not None and (type(item) not in {str, int}
+                       or isinstance(item, str) and len(item) > 2000) for item in selected.values()):
+                    raise ValueError("Invalid agent catalog field")
+                rows.append(selected)
+            return {"agents": rows}
+        if path == "/api/chat":
+            if not isinstance(value.get("reply"), str) or len(value["reply"]) > 20000:
+                raise ValueError("Invalid chat response")
+            if value.get("sessionId") is not None and (not isinstance(value["sessionId"], str)
+                                                       or len(value["sessionId"]) > 256):
+                raise ValueError("Invalid chat session")
+            return {"reply": value["reply"], "sessionId": value.get("sessionId")}
+        raise ValueError("Unsupported Control-room response schema")
     except urllib.error.HTTPError as e:
-        return {"error": f"{e.code}: {e.read().decode()[:200]}"}
+        return {"error": "Control-room request failed", "code": e.code}
     except Exception as e:
-        return {"error": str(e)[:200]}
+        return {"error": "Control-room request failed", "errorType": type(e).__name__}
 
 
 def _agentcore_records() -> list[dict]:
@@ -159,9 +188,25 @@ def agents(ctx: Ctx, body: dict) -> None:
 
 
 def chat(ctx: Ctx, body: dict) -> None:
-    r = _control_room("POST", "/api/chat", body.get("idToken", ""),
-                      {"agentId": body.get("agentId"), "message": body.get("message", "")[:2000],
-                       "sessionId": body.get("sessionId")})
+    from agentcore.harness import _inspect
+    from common.pii import PiiVerificationUnavailable
+    from engine.gate import GateRefused
+    message = body.get("message", "")
+    if not isinstance(message, str) or not message.strip() or len(message) > 2000:
+        ctx.post({"type": "chat", "error": "메시지 길이 또는 형식이 올바르지 않습니다.", "code": 400})
+        return
+    payload = {"agentId": body.get("agentId"), "message": message, "sessionId": body.get("sessionId")}
+    try:
+        _inspect(json.dumps(payload, ensure_ascii=False), "control-room.input")
+        r = _control_room("POST", "/api/chat", body.get("idToken", ""), payload)
+        if not r.get("error"):
+            _inspect(json.dumps({"reply": r.get("reply")}, ensure_ascii=False), "control-room.output")
+    except GateRefused:
+        ctx.post({"type": "chat", "error": "안전 정책에 따라 요청이 차단됐습니다.", "code": 422})
+        return
+    except PiiVerificationUnavailable:
+        ctx.post({"type": "chat", "error": "독립 경계 검사를 완료하지 못했습니다.", "code": 503})
+        return
     ctx.post({"type": "chat", "reply": r.get("reply"), "sessionId": r.get("sessionId"), "error": r.get("error")})
 
 
@@ -213,16 +258,9 @@ def explore(ctx: Ctx, body: dict) -> None:
 
 
 def reset(ctx: Ctx, body: dict) -> None:
-    """시연 리셋 (SPEC §6.3): Registry 시연 상태를 기준선으로 되돌린다. 대화 이력은 클라이언트가 비운다.
-    인프라·데이터를 파괴하지 않는다 (Neptune 재적재 등 관리 작업은 admin_handler 전용)."""
-    out = {"registry": None}
-    try:
-        from registry.seed import reset_demo_state
-        out["registry"] = reset_demo_state(actor=ctx.email)
-    except Exception as e:
-        out["registry"] = {"error": str(e)[:200]}
-    log_event("demo.reset", ctx.trace_id, actor=ctx.email)
-    ctx.post({"type": "reset", **out})
+    """Keep the retired helper fail-closed as well as removing its route."""
+    ctx.post({"type": "reset", "ok": False, "code": 403,
+              "error": "Shared resets require IAM administration."})
 
 
 ROUTES = {

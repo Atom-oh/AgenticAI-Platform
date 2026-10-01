@@ -16,7 +16,7 @@ from __future__ import annotations
 from common.ctx import Ctx
 from common.log import log_event
 from registry import api
-from registry.model import RegistryError
+from registry.model import NotFoundError, RegistryError, STATUSES
 
 
 def _fail(ctx: Ctx, kind: str, e: RegistryError, **extra) -> None:
@@ -27,7 +27,7 @@ def _fail(ctx: Ctx, kind: str, e: RegistryError, **extra) -> None:
 def registry_list(ctx: Ctx, body: dict) -> None:
     filters = {"type": body.get("type"), "status": body.get("status"), "subtype": body.get("subtype"), "q": body.get("q")}
     c = api.counts()
-    ctx.post({"type": "registry_list", "records": api.list_records(filters), "counts": c,
+    ctx.post({"type": "registry_list", "records": [api.public_record(r) for r in api.list_records(filters)], "counts": c,
               "filters": filters, "backend": api.backend(), "embeddingsEnabled": api.embeddings_enabled(),
               "bootstrapped": None})
 
@@ -38,7 +38,10 @@ def registry_get(ctx: Ctx, body: dict) -> None:
     if rec is None:
         ctx.post({"type": "registry_get", "ok": False, "code": 404, "error": f"레코드 없음: {name} {version}"})
         return
-    ctx.post({"type": "registry_get", "ok": True, "record": rec, "audit": api.audit_trail(name, version),
+    audit = api.audit_trail(name, version)
+    if rec.get("recordType") == "AGENT":
+        audit = api.public_agent_audit(audit)
+    ctx.post({"type": "registry_get", "ok": True, "record": api.public_record(rec), "audit": audit,
               "versionChain": api.version_chain(name, version)})
 
 
@@ -48,36 +51,60 @@ def registry_transition(ctx: Ctx, body: dict) -> None:
     to = str(body.get("to", "")).strip().upper()
     reason = str(body.get("reason", "") or "").strip()[:500]
     try:
-        rec, ev = api.transition(name, version, to, actor=ctx.email, reason=reason)
+        record = api.get_record(name, version, include_internal=True)
+        if record is None:
+            raise NotFoundError("Registry record not found")
+        if record and record.get("subtype") == "AGENT_ADMIN_REQUEST":
+            ctx.post({"type": "registry_transition", "ok": False, "code": 403,
+                      "error": "관리자 요청의 처리 상태는 IAM 관리자만 변경할 수 있습니다."})
+            return
+        if record and record.get("recordType") == "AGENT":
+            from agentcore.administration import request_transition
+            ctx.post({"type": "registry_transition", "ok": True,
+                      **request_transition(name, version, to, ctx.email, reason)})
+            return
+        from registry.administration import DECISIONS
+        if to in DECISIONS:
+            ctx.post({"type": "registry_transition", "ok": False, "code": 403,
+                      "error": "승인·반려·폐기는 관리자 검토 후 처리됩니다."})
+            return
+        rec, ev = api.transition(name, version, to, actor=ctx.email, reason=reason, expected_record=record)
     except RegistryError as e:
-        log_event("registry.transition_rejected", ctx.trace_id, name=name, version=version, to=to,
+        log_event("registry.transition_rejected", ctx.trace_id, name=name, version=version, to=to if to in STATUSES else "invalid",
                   code=e.code, errorType=type(e).__name__)
         _fail(ctx, "registry_transition", e, name=name, version=version, to=to)
         return
     log_event("registry.transition", ctx.trace_id, name=name, version=version, transition=ev.get("transition"),
               fromStatus=ev["from"], toStatus=ev["to"], reasonLen=len(reason), email=ctx.email,
               recordType=rec.get("recordType"), subtype=rec.get("subtype"))
-    ctx.post({"type": "registry_transition", "ok": True, "record": rec, "audit": ev,
+    ctx.post({"type": "registry_transition", "ok": True, "record": api.public_record(rec), "audit": ev,
               "transition": ev.get("transition"), "auditTrail": api.audit_trail(name, version)})
 
 
 def registry_search(ctx: Ctx, body: dict) -> None:
     q = str(body.get("q", "") or body.get("query", "")).strip()[:200]
     res = api.search_detailed(q, body.get("type"))
-    log_event("registry.search", ctx.trace_id, query=q, hits=len(res["hits"]), dense=res["dense"])
+    res["hits"] = [{**hit, "record": api.public_record(hit["record"])} for hit in res["hits"]]
+    log_event("registry.search", ctx.trace_id, queryLen=len(q), hits=len(res["hits"]), dense=res["dense"])
     ctx.post({"type": "registry_search", "q": q, "recordType": body.get("type"), **res})
 
 
 def registry_consumer(ctx: Ctx, body: dict) -> None:
     """화면 생성 에이전트 등 Consumer 가 실제로 받는 목록 — APPROVED 만. 필터 인자만 받고 상태 인자는 받지 않는다."""
-    recs = api.list_approved(body.get("type"), body.get("subtype"))
+    recs = [api.public_record(r) for r in api.list_approved(body.get("type"), body.get("subtype"))]
     ctx.post({"type": "registry_consumer", "records": recs, "count": len(recs),
               "subtype": body.get("subtype"), "recordType": body.get("type"),
-              "note": "Consumer API(registry.api.list_approved) — GSI byStatus 를 APPROVED 로만 질의. 다른 상태는 읽는 경로가 없다."})
+              "note": "Consumer API(registry.api.list_approved) — 승인 색인의 후보를 원본 레코드와 재확인합니다."})
 
 
 def registry_create(ctx: Ctx, body: dict) -> None:
     record = body.get("record") or {}
+    if isinstance(record, dict) and (str(record.get("recordType", "")).strip().upper() == "AGENT"
+                                   or str(record.get("subtype", "")).strip().upper() == "AGENT_ADMIN_REQUEST"
+                                   or str(record.get("name", "")).strip().startswith("agent-request-")):
+        ctx.post({"type": "registry_create", "ok": False, "code": 403,
+                  "error": "에이전트 명세와 관리 요청은 에이전트 전용 요청 경로를 사용하세요."})
+        return
     try:
         rec = api.create_record(record, actor=ctx.email)
     except RegistryError as e:
@@ -85,7 +112,7 @@ def registry_create(ctx: Ctx, body: dict) -> None:
         return
     log_event("registry.create", ctx.trace_id, name=rec["name"], version=rec["recordVersion"],
               recordType=rec["recordType"], email=ctx.email)
-    ctx.post({"type": "registry_create", "ok": True, "record": rec,
+    ctx.post({"type": "registry_create", "ok": True, "record": api.public_record(rec),
               "auditTrail": api.audit_trail(rec["name"], rec["recordVersion"])})
 
 

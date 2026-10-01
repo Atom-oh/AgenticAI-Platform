@@ -42,7 +42,7 @@ const promptTemplate = (title: string, rules: string) =>
   + `① 한 줄 요약 ② 근거(도구 결과·노드 ID 병기) ③ 권고 조치 2~3개 순서로 답한다. 도구 결과에 없는 항목을 만들지 않는다. ${rules}`;
 
 const STATUS_KO: Record<string, string> = {
-  DRAFT: '초안', PENDING_APPROVAL: '승인 대기', APPROVED: '승인', REJECTED: '반려', DEPRECATED: '폐기',
+  DRAFT: '초안', PENDING_APPROVAL: '승인 대기', APPROVED: '승인', REJECTED: '반려', DEPRECATED: '폐기', PENDING_ADMIN: '관리자 처리 대기',
 };
 const statusColor = (s: string) =>
   s === 'APPROVED' ? 'text-emerald-600' : s === 'PENDING_APPROVAL' ? 'text-amber-700'
@@ -108,7 +108,7 @@ function CatalogList({ cat, sel, onSelect, onRefresh, loading }: {
               <div className="flex items-center gap-2">
                 <b className="text-sm truncate">{a.title}</b>
                 <ScenarioTag s={a.scenario} />
-                {a.memory && <span className="chip text-[10px] text-slate-400" title="AgentCore managed memory (SEMANTIC)">메모리</span>}
+                {a.memory && <span className="chip text-[10px] text-slate-400" title="명세의 메모리 요청이며 관리형 메모리 연결 증거는 아닙니다.">메모리 요청</span>}
               </div>
               <div className="font-mono text-[11px] text-slate-500 mt-0.5">{a.name}@{a.version} · {shortModel(a.model)}</div>
               <div className="flex flex-wrap gap-1 mt-1.5">
@@ -139,7 +139,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
   const [promptDirty, setPromptDirty] = useState(false);
   const [tools, setTools] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
-  const [memory, setMemory] = useState(false);
+  const memory = false;
   const [busy, setBusy] = useState(false);
   const [approving, setApproving] = useState(false);
   const [res, setRes] = useState<CreateResult | null>(null);
@@ -181,7 +181,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
       <button className="w-full flex items-center gap-2 text-left" onClick={() => setOpen(o => !o)}>
         <span className="text-slate-500">{open ? '▾' : '▸'}</span>
         <b className="text-sm">에이전트 만들기</b>
-        <span className="text-xs text-slate-500">모델 · 시스템 프롬프트 · Skills · Gateway 도구 · 메모리 → Harness 생성 → Registry 승인 대기</span>
+        <span className="text-xs text-slate-500">모델 · 시스템 프롬프트 · Skills · Gateway 도구 → 명세 저장 → 관리자 승인 요청</span>
       </button>
       {open && (
         <div className="mt-3">
@@ -204,11 +204,11 @@ function CreateForm({ cat, onCreated, onApprove }: {
                 {(cat?.models || [model]).filter(Boolean).map(m => <option key={m} value={m}>{cat?.modelOptions?.find(option => option.id === m)?.label || m}</option>)}
               </select>
             </label>
-            <label className="text-xs text-slate-400 flex flex-col">메모리 <span className="text-slate-400">(AgentCore managed memory · SEMANTIC · 30일)</span>
-              <button type="button" onClick={() => setMemory(m => !m)}
+            <label className="text-xs text-slate-400 flex flex-col">관리형 메모리 <span className="text-slate-400">(현재 신규 요청 미지원)</span>
+              <button type="button" disabled
                 className={`mt-1 self-start chip text-xs ${memory ? 'text-teal-700' : 'text-slate-400'}`}
                 style={{ borderColor: memory ? 'var(--bedrock)' : undefined }}>
-                <span className={`inline-block w-2 h-2 rounded-full ${memory ? 'bg-[#008485]' : 'bg-slate-600'}`} />{memory ? '켬 — 세션 간 기억' : '끔 — 세션 안에서만'}
+                <span className="inline-block w-2 h-2 rounded-full bg-slate-600" />현재 사용할 수 없음
               </button>
             </label>
           </div>
@@ -222,7 +222,7 @@ function CreateForm({ cat, onCreated, onApprove }: {
 
           <div className="grid grid-cols-2 gap-3 mt-2">
             <div>
-              <div className="text-xs text-slate-400 mb-1">Skills <span className="text-slate-400">(Registry SKILL → S3 SKILL.md 로 Harness 에 연결)</span></div>
+              <div className="text-xs text-slate-400 mb-1">Skills <span className="text-slate-400">(승인된 버전·파일 해시를 고정해 시스템 지침에 포함)</span></div>
               <div className="flex flex-wrap gap-1">
                 {(cat?.skills || []).map(s => {
                   const on = skills.includes(s.name);
@@ -259,11 +259,11 @@ function CreateForm({ cat, onCreated, onApprove }: {
           </div>
 
           <div className="flex items-center gap-3 mt-3">
-            <button onClick={submit} disabled={busy || !nameOk || !prompt.trim() || !cat}
+            <button onClick={submit} disabled={busy || !nameOk || !prompt.trim() || !tools.length || !cat}
               className="px-5 py-2 rounded-lg bg-[#008485] hover:bg-[#0a6b6c] text-white font-semibold text-sm disabled:opacity-40">
-              {busy ? 'Harness 생성 중… (READY 대기 최대 90초)' : '만들기 → 승인 대기'}
+              {busy ? '명세 저장 중…' : '명세 저장 → 승인 대기'}
             </button>
-            <span className="text-[11px] text-slate-500">생성 순서: Harness(ensure, 멱등) → Registry 레코드 DRAFT → PENDING_APPROVAL → AgentCore Registry 미러</span>
+            <span className="text-[11px] text-slate-500">명세와 승인 요청을 저장하면 IAM 관리자가 실행 환경과 승인 상태를 반영합니다.</span>
           </div>
 
           {res && !res.ok && (
@@ -278,27 +278,30 @@ function CreateForm({ cat, onCreated, onApprove }: {
                 <b className="text-sm">{rec.payload?.title || rec.name}</b>
                 <span className="font-mono text-slate-500">{rec.name}@{rec.recordVersion}</span>
                 {nowStatus && <RegChip s={nowStatus} />}
-                <HarnessChip s={res.harness?.status || 'unknown'} />
-                <AcChip s={approved?.ok ? approved.agentcoreRegistry?.status : (res.agentcoreRegistry?.error ? null : res.agentcoreRegistry?.status)} />
+                {res.harness?.arn && <HarnessChip s={res.harness.status || 'unknown'} />}
+                {res.agentcoreRegistry?.recordId && <AcChip s={res.agentcoreRegistry.status} />}
               </div>
-              <div className="text-slate-400 mt-1.5 font-mono break-all">Harness ARN: {res.harness?.arn || '—'}</div>
+              {!res.harness?.arn && <div className="text-amber-700 mt-1.5">관리자 처리 대기 — 실행 환경과 Registry 미러가 아직 준비되지 않았습니다.</div>}
+              {res.harness?.arn && <div className="text-slate-400 mt-1.5 font-mono break-all">Harness ARN: {res.harness.arn}</div>}
               {res.harness?.note && <div className="text-amber-700 mt-1">{res.harness.note}</div>}
               {res.agentcoreRegistry?.error && <div className="text-amber-700 mt-1">AgentCore Registry 미러 실패 — {res.agentcoreRegistry.error} (플랫폼 Registry 에는 등록됨)</div>}
-              {!res.agentcoreRegistry?.error && res.agentcoreRegistry && (
+              {!res.agentcoreRegistry?.error && res.agentcoreRegistry?.recordId && (
                 <div className="text-slate-500 mt-1">AgentCore Registry: {res.agentcoreRegistry.action} · {res.agentcoreRegistry.status} · {res.agentcoreRegistry.recordId}</div>
               )}
               {nowStatus === 'PENDING_APPROVAL' && (
                 <div className="flex items-center gap-2 mt-2">
                   <span className="text-amber-700">승인 대기 — Consumer 게이트가 호출을 거부한다.</span>
-                  <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">#/registry 에서 승인 →</a>
+                  <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">Registry에서 상태 보기 →</a>
                   <button onClick={approve} disabled={approving}
-                    className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" title="관리자 편의 — 감사 이벤트에 actor·사유가 남는다">
-                    {approving ? '승인 중…' : '데모: 즉시 승인'}
+                    className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" title="IAM 관리자가 처리할 승인 요청을 기록합니다">
+                    {approving ? '요청 중…' : '관리자 승인 요청'}
                   </button>
                 </div>
               )}
               {approved && !approved.ok && <div className="text-[#E90061] mt-1">승인 실패: {errOf(approved)}</div>}
-              {approved?.ok && <div className="text-emerald-600 mt-2">승인됨 — 아래 채팅에서 호출할 수 있다 (감사: {approved.audit?.actor} · {approved.audit?.reason})</div>}
+              {approved?.request && <div className="text-amber-700 mt-1">관리자 승인 요청을 접수했습니다.</div>}
+              {approved?.ok && !approved.request && approved.record?.status === 'APPROVED' &&
+                <div className="text-emerald-600 mt-2">승인됨 — 아래 채팅에서 호출할 수 있습니다.</div>}
             </div>
           )}
         </div>
@@ -314,7 +317,7 @@ function ToolCard({ t }: { t: ToolCall }) {
   return (
     <div className="rounded-lg p-2 text-[11px]" style={{ border: '1px solid var(--vpc)', background: 'rgba(251,191,36,.08)' }}>
       <div className="font-semibold text-amber-700">🔧 도구 호출: <span className="font-mono">{t.name}</span>
-        <span className="text-slate-500 font-normal"> · Gateway → Lambda · VPC 내부에서 마스킹 후 반환</span></div>
+        <span className="text-slate-500 font-normal"> · Gateway 도구 실행 이벤트</span></div>
       {t.input != null
         ? <pre className="font-mono whitespace-pre-wrap break-words text-amber-100/80 mt-1 max-h-40 overflow-y-auto">{pretty}</pre>
         : <span className="text-slate-500">입력 수신 중…</span>}
@@ -328,6 +331,8 @@ function Bubble({ m }: { m: Msg }) {
   }
   const u = m.done?.usage || {};
   const isGate = m.gate === 'consumer' || m.done?.gate === 'consumer';
+  const failure = m.error || (m.done?.code >= 400 || m.done?.toolsMissing?.length
+    ? '에이전트 요청을 완료하지 못했습니다.' : '');
   return (
     <div className="flex justify-start">
       <div className="max-w-[88%] rounded-2xl rounded-bl-md px-3 py-2 text-sm" style={{ background: 'rgba(56,189,248,.06)', borderLeft: '3px solid var(--bedrock)' }}>
@@ -336,14 +341,16 @@ function Bubble({ m }: { m: Msg }) {
           <div className="text-slate-800"><Md text={m.text} />{m.running && <span className="blink">▌</span>}</div>
         )}
         {(m.stageErrors || []).map((s, i) => <div key={i} className="text-[11px] text-[#E90061] mt-1 font-mono break-all">스트림 오류: {s}</div>)}
-        {m.error && (
+        {Array.isArray(m.done?.toolsMissing) && m.done.toolsMissing.length > 0 &&
+          <div className="chip text-amber-700 border-amber-400 mt-1">도구 연결 미완료 · {m.done.toolsMissing.join(', ')}</div>}
+        {failure && (
           <div className={`rounded-lg p-2 mt-1 text-xs border ${isGate ? 'border-rose-300 bg-rose-950/40 text-[#E90061]' : 'border-rose-800 bg-rose-950/20 text-[#E90061]'}`}>
-            {isGate ? '⛔ 거버넌스 게이트 (Consumer): ' : '⚠ 호출 실패: '}{m.error}
+            {isGate ? '⛔ 거버넌스 게이트 (Consumer): ' : '⚠ 호출 실패: '}{failure}
             {m.status && <span className="ml-2"><RegChip s={m.status} /></span>}
             {isGate && <div className="text-[11px] text-rose-200/70 mt-1">APPROVED 가 아닌 레코드는 Harness 를 호출하는 코드 경로에 들어가지 않는다 — Registry 에서 승인한 뒤 다시 보낸다.</div>}
           </div>
         )}
-        {m.done && !m.error && (
+        {m.done && !failure && (
           <div className="text-[10px] text-slate-500 mt-1.5 flex gap-2 flex-wrap">
             <span>입력 {u.inputTokens ?? 0} · 출력 {u.outputTokens ?? 0} 토큰</span>
             <span>· <span className="font-mono">{m.done.modelId || '—'}</span></span>
@@ -369,12 +376,13 @@ function Chat({ sel, onApprove, onRefresh }: {
   const [sessionId, setSessionId] = useState<string | null>(null);   // React 상태에만 — 브라우저 스토리지 저장 금지 (§12.12)
   const [approving, setApproving] = useState(false);
   const [approveErr, setApproveErr] = useState('');
+  const [approveNotice, setApproveNotice] = useState('');
   const [cfg, setCfg] = useState<WsEvent | null>(null);
   const [cfgOpen, setCfgOpen] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const key = sel ? `${sel.name}@${sel.version}` : '';
 
-  useEffect(() => { setMsgs([]); setSessionId(null); setInput(''); setCfg(null); setCfgOpen(false); setApproveErr(''); }, [key]);
+  useEffect(() => { setMsgs([]); setSessionId(null); setInput(''); setCfg(null); setCfgOpen(false); setApproveErr(''); setApproveNotice(''); }, [key]);
   useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; }, [msgs]);
   useEffect(() => {
     if (!cfgOpen || cfg || !sel) return;
@@ -405,7 +413,8 @@ function Chat({ sel, onApprove, onRefresh }: {
           });
           else if (e.step === 'error') patchLast(m => ({ ...m, stageErrors: [...(m.stageErrors || []), e.message] }));
         } else if (e.type === 'agent.done') {
-          if (e.sessionId) setSessionId(e.sessionId);
+          if (e.newSessionRequired) setSessionId(null);
+          else if (e.sessionId) setSessionId(e.sessionId);
           patchLast(m => ({ ...m, done: e, error: e.error, status: e.status, gate: e.gate, running: false }));
         }
       });
@@ -415,8 +424,9 @@ function Chat({ sel, onApprove, onRefresh }: {
 
   const approve = async () => {
     if (!sel || approving) return;
-    setApproving(true); setApproveErr('');
-    try { const e = await onApprove(sel.name, sel.version); const er = errOf(e); if (er) setApproveErr(er); else onRefresh(); }
+    setApproving(true); setApproveErr(''); setApproveNotice('');
+    try { const e = await onApprove(sel.name, sel.version); const er = errOf(e); if (er) setApproveErr(er);
+      else { if (e.request) setApproveNotice('관리자 승인 요청을 접수했습니다.'); onRefresh(); } }
     catch (e: any) { setApproveErr(e.message); }
     setApproving(false);
   };
@@ -430,14 +440,14 @@ function Chat({ sel, onApprove, onRefresh }: {
         <b className="text-sm">{sel ? sel.title : '채팅'}</b>
         {sel && <span className="font-mono text-[11px] text-slate-500">{sel.name}@{sel.version}</span>}
         {sel && <RegChip s={sel.status} />}
-        <span className="chip text-[10px] text-amber-700 border-amber-400" title="SPEC §11-4 — AgentCore 는 global 교차 리전 추론이 강제되므로 Tier 2 경로에는 쓰지 않는다">
-          AgentCore Harness · Tier 0/1 전용
+        <span className="chip text-[10px] text-amber-700 border-amber-400" title="Tier 0/1 시나리오 전용입니다. 추론 경로는 선택한 모델 프로필 설정에 따릅니다.">
+          {sel?.runtime || 'AgentCore'} · Tier 0/1 전용
         </span>
         <span className="ml-auto text-[10px] text-slate-500">세션 <span className="font-mono">{shortSid(sessionId)}</span></span>
         {sessionId && <button className="chip text-[10px] hover:border-slate-400" onClick={() => { setSessionId(null); setMsgs([]); }}>새 세션</button>}
       </div>
       <div className="text-[11px] text-slate-500 mt-1">
-        에이전트는 Bedrock을 직접 호출한다 — 개인데이터는 도구가 VPC 내부에서 마스킹한 뒤에만 반환된다(도구 출력 = 경계).
+        Tier 0/1 데이터만 입력하세요. Runtime은 모델 호출 직전, Harness는 입력·시스템 지침에서 식별자 규칙을 검사합니다. 도구의 처리·배치 정보는 개별 실행 증거로 확인하세요.
       </div>
 
       {!sel && <div className="flex-1 flex items-center justify-center text-sm text-slate-500 py-16">카탈로그에서 에이전트를 선택한다</div>}
@@ -463,8 +473,7 @@ function Chat({ sel, onApprove, onRefresh }: {
                   <div className="col-span-2 break-all">허용 도구 <span className="font-mono">{(hz.allowedTools || []).join(', ') || '—'}</span></div>
                   <div className="col-span-2 break-all">스킬 <span className="font-mono">{(hz.skills || []).map((s: any) => s?.s3?.uri || JSON.stringify(s)).join(', ') || '없음'}</span></div>
                   <div className="col-span-2 break-all font-mono text-slate-500">{hz.arn}</div>
-                  <details className="col-span-2 mt-1"><summary className="cursor-pointer">시스템 프롬프트</summary>
-                    <div className="md text-slate-700 mt-1 text-[11px]">{hz.systemPrompt}</div></details>
+                  <div className="col-span-2 mt-1 text-slate-500">시스템 지침 원문은 관리자 검토 자료에서 확인합니다.</div>
                 </div>
               )}
             </div>
@@ -473,14 +482,15 @@ function Chat({ sel, onApprove, onRefresh }: {
             <div className="mt-2 rounded-lg border border-amber-300 bg-amber-950/20 p-2 text-[11px] text-amber-700 flex items-center gap-2 flex-wrap">
               <span>{STATUS_KO[sel.status] || sel.status} 상태 — 전송하면 Consumer 게이트가 거부한다 (거부 자체가 시연 포인트).</span>
               {sel.status === 'PENDING_APPROVAL' && <>
-                <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">#/registry 에서 승인 →</a>
-                <button className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" onClick={approve} disabled={approving}>{approving ? '승인 중…' : '데모: 즉시 승인'}</button>
+                <a href="#/registry" className="chip hover:border-teal-500 text-teal-700">Registry에서 상태 보기 →</a>
+                <button className="chip hover:border-emerald-500 text-emerald-700 disabled:opacity-40" onClick={approve} disabled={approving}>{approving ? '요청 중…' : '관리자 승인 요청'}</button>
               </>}
               {approveErr && <span className="text-[#E90061]">{approveErr}</span>}
+              {approveNotice && <span>{approveNotice}</span>}
             </div>
           )}
           {sel.harnessStatus === 'none' && !sel.harnessArn && (
-            <div className="mt-2 text-[11px] text-slate-400">이 레코드는 파이프라인형({sel.runtime})이라 연결된 Harness 가 없다 — 전송하면 서버가 그 사실을 그대로 돌려준다. 실행은 각 시나리오 화면에서 한다.</div>
+            <div className="mt-2 text-[11px] text-slate-400">연결된 Harness가 없습니다. 등록된 실행 방식: {sel.runtime}</div>
           )}
 
           <div ref={listRef} className="flex-1 overflow-y-auto space-y-3 mt-3 pr-1" style={{ minHeight: 220, maxHeight: 'calc(100vh - 560px)' }}>
@@ -522,7 +532,7 @@ export default function AgentBuilder() {
 
   const sel = cat?.agents.find(a => `${a.name}@${a.version}` === selKey) || null;
   const approve = async (name: string, version: string) => {
-    const e = await sock.request('agent_transition', { name, version, to: 'APPROVED', reason: '데모 — 빌더 즉시 승인' });
+    const e = await sock.request('agent_transition', { name, version, to: 'APPROVED', reason: '에이전트 사용 승인 요청' });
     if (!errOf(e)) load();
     return e;
   };
@@ -536,8 +546,8 @@ export default function AgentBuilder() {
       <div className="panel p-3 mb-3 text-xs flex items-center gap-3" style={{ borderColor: 'var(--bedrock)' }}>
         <span className="text-lg">🧩</span>
         <div className="flex-1">
-          <b>에이전트 빌더</b> — 모델·시스템 프롬프트·Skills·Gateway 도구·메모리를 골라 <b className="text-teal-700">AgentCore Harness</b>를 만들면
-          Registry 에 <b className="text-amber-700">승인 대기</b>로 들어간다. 승인된 에이전트만 호출된다(Consumer 게이트) — 미승인 호출은 Harness 에 닿기 전에 거부된다.
+          <b>에이전트 빌더</b> — 명세를 <b className="text-amber-700">승인 대기</b>로 저장하고 관리자 처리를 요청합니다.
+          실행 환경 생성과 승인 반영은 IAM 관리자 작업입니다. 승인된 에이전트만 호출됩니다.
           {cat?.registryBackend && <span className="text-slate-500"> · Registry 백엔드 {cat.registryBackend}</span>}
         </div>
         <a href="#/registry" className="chip hover:border-teal-500 text-teal-700 whitespace-nowrap">Registry 열기 →</a>

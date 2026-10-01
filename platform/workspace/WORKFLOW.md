@@ -58,8 +58,8 @@ mobile-app guide prescribes this desktop platform's complete operating model.
 | 개발 전달 | Select the exact React round, rebuild it, download source/report/bundle or export to a registered feature branch | Existing release/export gates; no implied API integration, PR/MR, merge or customer deployment |
 
 Legacy static galleries and generators remain secondary tools. They do not
-authorize React releases. The collaboration rail keeps the current project,
-role, product revision, selected round, discussion and member management visible.
+authorize React releases. The collaboration disclosure keeps the current project,
+role, product revision, selected round, discussion and member management accessible.
 Planning and source delivery are primary stages rather than hidden sidebar tabs.
 
 ## State requirements
@@ -104,7 +104,13 @@ storage. Hard reloads retain only saved records; the definition screen says
 when its unsaved intent will be saved.
 
 Developer roles start at handoff unless an explicit link selects another stage.
-Other roles start at definition. Stages remain inspectable; server authorization,
+Other roles start at the canvas (`review`). Requests and history occupy the left
+rail; the preview and revision input remain together. A new request proposes
+criteria and opens their editor for explicit approval before generation. The
+canvas offers source/criteria navigation without requiring the numbered stages
+to be traversed in order. Verification/approval and team discussion use separate
+disclosures; neither collapsible UI nor element selection alters authorization.
+Stages remain inspectable; server authorization,
 criteria freshness and exact approval still govern every mutation.
 
 ## Handoff

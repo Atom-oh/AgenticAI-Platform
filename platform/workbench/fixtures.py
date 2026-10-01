@@ -51,9 +51,27 @@ def create_example(ctx, body):
     }, {}, ctx.actor, ctx.project_id, authorization_expires_at=ctx.scope.get("authorizationExpiresAt"))
     batch = knowledge.start_batch(ctx, source["id"], {"requestId": request, "documents": DOCUMENTS}, dispatch=False)
     from workbench.worker import process
-    process(ctx.host, ctx.owner, batch["job"])
+    # The inline example keeps a durable job record: legacy code never completes an artifact
+    # whose linked job is unknown (platform-execution/1 linked-job fence).
+    job_id = batch["batch"]["jobId"]
+    job = ctx.host._new_job(ctx.owner, job_id, "workbench", batch["batch"]["jobInput"], batch["batch"]["requestHash"])
+    job = ctx.storage.claim_job(ctx.owner, job_id) or job
+    try:
+        process(ctx.host, ctx.owner, job)
+    except Exception:
+        _settle_job(ctx, job_id, "failed")
+        raise
+    _settle_job(ctx, job_id, "completed")
     ctx.fresh({"owner", "planner"})
     result = {"productId": product_result[1]["product"]["id"], "sourceId": source["id"], "description": DESCRIPTION}
     ctx.commit([ctx.write("wb_artifact", {"id": identifier, "projectId": ctx.project_id, "createdBy": ctx.actor,
         "requestHash": _hash(body), "type": "synthetic-example", "status": "ready", "result": result})])
     return result
+
+
+def _settle_job(ctx, job_id, status):
+    current = ctx.storage.get(ctx.owner, "job", job_id)
+    if current and current.get("status") in {"queued", "running"}:
+        ctx.storage.put(ctx.owner, "job", {**current, "status": status,
+                                           **({"progress": 100} if status == "completed" else {})},
+                        current["version"])

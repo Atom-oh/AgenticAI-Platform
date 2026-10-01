@@ -16,6 +16,13 @@ guidebook. Read only the documents relevant to the changed paths.
 5. Dated plans and design records explain history. Guidebook chapters explain
    options. Neither creates a requirement for every product or future PR.
 
+For bank-platform implementation, [the architecture design](platform/docs/ARCHITECTURE.md)
+connects SPEC and module contracts to the staged delivery units. Read it before
+changing ontology execution, shared authority or cross-module workflow.
+It is subordinate to SPEC and owning contracts. Report a disagreement as a
+documentation conflict and reconcile the owning authority rather than silently
+using design prose to add or waive a requirement.
+
 Do not infer deployment, service availability, or compliance from checked-in code,
 old test counts, screenshots, or a successful merge.
 
@@ -23,7 +30,8 @@ old test counts, screenshots, or a successful merge.
 
 | Changed area | Read next |
 |---|---|
-| `platform/` architecture, deployment, shared services | `SPEC.md`, `platform/README.md` |
+| `platform/` architecture, deployment, shared services | `SPEC.md`, `platform/docs/ARCHITECTURE.md`, `platform/README.md` |
+| Canonical ontology and AgentCore execution | `platform/docs/ARCHITECTURE.md`, `platform/workspace/ONTOLOGY_CONTRACT.md`, `platform/workspace/AGENTCORE_CONTRACT.md`, `platform/docs/ONTOLOGY_AGENTCORE_VALIDATION.md` |
 | API events and module integration | `platform/docs/CONTRACTS.md` |
 | React workspace and releases | `platform/workspace/REACT_CONTRACT.md` |
 | Internal document library and source-bound S1 | `platform/documents/CONTRACT.md` |
@@ -54,10 +62,19 @@ old test counts, screenshots, or a successful merge.
   resets must use IAM-only administrative entry points. Explicit WebSocket `reset`
   and `registry_seed` routes are removed; inspect other legacy bootstrap paths separately.
   Do not add credentials to source, docs, logs, or review artifacts.
+- Keep source-admission policy/provenance/reviewer grants and organization
+  `design_publish`/`policy_publish` capabilities behind IAM-only administrative
+  writes. Project ownership and in-app operator groups do not grant that authority.
 - Display actual backends and demo substitutions. Do not describe a local graph,
   platform component package, or optional integration as a verified customer service.
 
 ## Validation
+
+For implementation work, name the owning contract, affected callers, acceptance
+case IDs and applicable service gates before editing. Keep requirements, current
+implementation, offline tests and live evidence distinct. A completed document
+review is not implementation completion. Update the design register and owning
+contract when interfaces, authority or delivery status change.
 
 Use the commands and prerequisites in each module README. Existing CI is defined
 in `.github/workflows/platform-ci.yml`; do not treat absent or skipped jobs as

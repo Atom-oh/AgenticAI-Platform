@@ -66,8 +66,11 @@ def stream(record: dict, text: str, session_id: Optional[str] = None, model: Opt
         if not arn:
             raise ValueError("AgentCore Runtime ARN 없음 — AGENTS_RUNTIME_ARN 또는 payload.runtimeArn 필요")
         from agentcore import runtime
-
-        return runtime.invoke_stream(arn, agent_name(record), text, session_id=session_id, model=model)
+        source_hash = _payload(record).get("runtimeSourceHash")
+        if not isinstance(source_hash, str) or len(source_hash) != 64:
+            raise ValueError("Runtime source approval is missing; IAM reseeding is required")
+        return runtime.invoke_stream(arn, agent_name(record), text, session_id=session_id, model=model,
+                                     extra={"approvedSourceHash": source_hash})
     if k == "harness":
         arn = str(_payload(record).get("harnessArn") or "").strip()
         if not arn:

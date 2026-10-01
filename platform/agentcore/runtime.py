@@ -102,10 +102,19 @@ def to_tuples(events: Iterable[dict], session_id: str) -> Iterator[Tuple[str, An
         if t == "text":
             s = ev.get("t", "")
             if s:
+                yield ("text_boundary", {"seq": ev.get("modelCallSeq")})
                 yield ("text", str(s))
         elif t in ("tool_start", "tool_input", "tool_result", "boundary", "stage", "design_done"):
             yield (t, {k: v for k, v in ev.items() if k != "type"})
         elif t == "error":
+            code = ev.get("code")
+            blocked = ev.get("gate") == "refused"
+            types = ev.get("types")
+            types = types if isinstance(types, list) else []
+            yield ("failure", {"code": code if type(code) is int and 400 <= code <= 599 else 500,
+                               "blocked": blocked, "stopReason": "gate_refused" if blocked else "error",
+                               "types": [value for value in types[:20] if isinstance(value, str)
+                                         and re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", value)]})
             msg = str(ev.get("message", ""))
             if ev.get("gate") == "refused":
                 yield ("error", msg)
@@ -115,7 +124,7 @@ def to_tuples(events: Iterable[dict], session_id: str) -> Iterator[Tuple[str, An
             meta = {k: v for k, v in ev.items() if k != "type"}
         elif "error" in ev and t is None:
             # bedrock_agentcore 런타임이 스트리밍 예외를 감싸 내는 형태: {"error":..., "error_type":..., "message":...}
-            yield ("error", f"{ev.get('error_type', 'Error')}: {str(ev.get('error', ''))[:300]}")
+            yield ("error", "Runtime transport failed; upstream details are withheld")
     if meta is None:
         meta = {"usage": {}, "stopReason": "", "sessionId": session_id, "runtime": RUNTIME_LABEL, "incomplete": True}
     meta.setdefault("usage", {})
@@ -133,13 +142,17 @@ def invoke_stream(runtime_arn: str, agent_name: str, text: str, session_id: Opti
     if not runtime_arn:
         raise ValueError("runtime_arn is required (AGENTS_RUNTIME_ARN)")
     sid = normalize_session_id(session_id)
-    body: Dict[str, Any] = {"agent": agent_name, "prompt": text, "sessionId": sid}
+    body: Dict[str, Any] = {"agent": agent_name, "prompt": text}
     if model:
         body["model"] = model
     if extra:
         body.update(extra)
+    body.pop("sessionId", None)
+    encoded = json.dumps(body, ensure_ascii=False)
+    if len(encoded) > 100_000:
+        raise ValueError("Runtime request exceeds the admitted length")
     kw: Dict[str, Any] = {"agentRuntimeArn": runtime_arn, "runtimeSessionId": sid,
-                          "payload": json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                          "payload": encoded.encode("utf-8"),
                           "contentType": "application/json", "accept": "text/event-stream"}
     if qualifier:
         kw["qualifier"] = qualifier

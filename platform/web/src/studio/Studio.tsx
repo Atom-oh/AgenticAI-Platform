@@ -107,7 +107,7 @@ export default function Studio() {
         {TOOLS.map(([id, label]) => <button key={id} type="button" aria-pressed={tab === id}
           onClick={() => chooseTool(id)}>{label}</button>)}
       </nav>
-      <p className="text-sm text-slate-600 mb-4">UX 설계 작업실에서는 React 화면을 생성·검증합니다. 만들어보기와 프로세스 생성에서는 기존 정적 시안을 실험하고 흐름을 구성합니다.</p>
+      {!workspaceActive && <p className="text-sm text-slate-600 mb-4">UX 설계 작업실에서는 React 화면을 생성·검증합니다. 만들어보기와 프로세스 생성에서는 기존 정적 시안을 실험하고 흐름을 구성합니다.</p>}
       {opened.has('workspace') && <div hidden={tab !== 'workspace'}><Workspace /></div>}
       {opened.has('gallery') && <div hidden={tab !== 'gallery'}><Gallery drafts={drafts} canWrite={canWrite} reload={load} onEdit={openInPlayground} /></div>}
       {opened.has('play') && <div hidden={tab !== 'play'}><Playground key={draftSelection} assets={assets} products={products} models={models} defaultModel={defaultModel} canWrite={canWrite} initialDraft={editDraft} onDone={load} /></div>}

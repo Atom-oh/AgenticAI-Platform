@@ -108,14 +108,40 @@ def strip(rec: dict) -> dict:
     return out
 
 
+def public_record(rec: dict) -> dict:
+    """Discovery metadata excludes operational prompts and inline Skill sources."""
+    out = dict(rec)
+    out["payload"] = {key: value for key, value in (out.get("payload") or {}).items()
+                      if key not in {"systemPrompt", "skillMd"}}
+    if out.get("recordType") != "AGENT":
+        from registry.administration import DECISIONS
+        targets = allowed_targets(out.get("status", ""))
+        out["allowedTargets"] = [target for target in targets if target not in DECISIONS]
+        out["adminRequiredTargets"] = [target for target in targets if target in DECISIONS]
+    return out
+
+
+def public_agent_audit(events: List[dict]) -> List[dict]:
+    """Keep approval evidence while withholding private request reasons/identities."""
+    from common.log import hash8
+    return [{**{key: value for key, value in event.items() if key not in {"actor", "reason"}},
+             "actorHash": hash8(str(event.get("actor", ""))),
+             "reasonHash": hash8(str(event.get("reason", ""))),
+             "reasonLen": len(str(event.get("reason", "")))} for event in events]
+
+
 def _sort_key(r: dict) -> Tuple[str, int, str]:
     m = re.match(r"^v(\d+)$", str(r.get("recordVersion", "")))
     return (str(r.get("name", "")).lower(), int(m.group(1)) if m else 0, str(r.get("recordVersion", "")))
 
 
 # ---------- 조회 ----------
+def is_internal(record: dict) -> bool:
+    return record.get("subtype") == "AGENT_ADMIN_REQUEST"
+
+
 def counts() -> dict:
-    recs = get_store().all_records()
+    recs = [r for r in get_store().all_records() if not is_internal(r)]
     by_type = {t: 0 for t in RECORD_TYPES}
     by_status = {s: 0 for s in STATUSES}
     for r in recs:
@@ -126,19 +152,21 @@ def counts() -> dict:
 
 
 def list_approved(record_type: Optional[str] = None, subtype: Optional[str] = None) -> List[dict]:
-    """★ Consumer API. GSI byStatus 를 APPROVED 로만 질의한다 — 다른 상태를 읽는 코드 경로 자체가 없다."""
-    recs = get_store().by_status("APPROVED")
+    """Revalidate GSI candidates with strongly consistent authoritative reads."""
+    store = get_store()
+    keys = {(r["name"], r["recordVersion"]) for r in store.by_status("APPROVED")}
+    recs = [record for name, version in keys if (record := store.get(name, version)) is not None]
     if record_type:
         recs = [r for r in recs if r.get("recordType") == record_type.upper()]
     if subtype:
         recs = [r for r in recs if (r.get("subtype") or "").upper() == subtype.upper()]
-    recs = [r for r in recs if r.get("status") == "APPROVED"]  # 방어적 재확인
+    recs = [r for r in recs if r.get("status") == "APPROVED" and not is_internal(r)]  # 방어적 재확인
     return [strip(r) for r in sorted(recs, key=_sort_key)]
 
 
-def get_record(name: str, version: str) -> Optional[dict]:
+def get_record(name: str, version: str, *, include_internal: bool = False) -> Optional[dict]:
     r = get_store().get(name, version)
-    return strip(r) if r else None
+    return strip(r) if r and (include_internal or not is_internal(r)) else None
 
 
 def list_records(filters: Optional[dict] = None) -> List[dict]:
@@ -146,6 +174,7 @@ def list_records(filters: Optional[dict] = None) -> List[dict]:
     f = filters or {}
     st = (f.get("status") or "").upper()
     recs = get_store().by_status(st) if st in STATUSES else get_store().all_records()
+    recs = [r for r in recs if not is_internal(r)]
     t = (f.get("type") or f.get("recordType") or "").upper()
     if t and t != "ALL":
         recs = [r for r in recs if r.get("recordType") == t]
@@ -161,7 +190,7 @@ def list_records(filters: Optional[dict] = None) -> List[dict]:
 
 def version_chain(name: str, version: str) -> List[dict]:
     """supersededBy 를 양방향으로 따라 v1→v2→v3 사슬을 만든다 (끊긴 버전은 버전 번호순으로 뒤에 붙인다)."""
-    vers = {r["recordVersion"]: r for r in get_store().versions(name)}
+    vers = {r["recordVersion"]: r for r in get_store().versions(name) if not is_internal(r)}
     if version not in vers:
         return []
     nxt = {v: (r.get("payload") or {}).get("supersededBy") for v, r in vers.items()}
@@ -188,14 +217,22 @@ def version_chain(name: str, version: str) -> List[dict]:
 
 
 def audit_trail(name: str, version: str) -> List[dict]:
+    record = get_store().get(name, version)
+    if record and is_internal(record):
+        return []
     return get_store().audit(name, version)
 
 
 # ---------- 변경 ----------
 def create_record(record: dict, actor: str, status: Optional[str] = None, reason: str = "",
-                  embed: bool = True) -> dict:
+                  embed: bool = True, *, system_seed: bool = False) -> dict:
     """신규 레코드 — 기본 DRAFT 로 시작. status 는 시드 전용 (기준선 상태로 직접 생성)."""
     rec = validate_record(record)
+    from agentcore.agent_specs import SCENARIO_AGENTS
+    reserved = {row["name"] for row in SCENARIO_AGENTS}
+    reserved |= {"bank_" + name for name in reserved}
+    if rec["name"] in reserved and not (system_seed is True and rec["recordType"] == "AGENT" and not rec["subtype"]):
+        raise ValidationError("Built-in Agent names are reserved for IAM seeding")
     rec["status"] = (status or "DRAFT").upper()
     if rec["status"] not in STATUSES:
         raise ValidationError(f"알 수 없는 상태: {rec['status']}")
@@ -205,8 +242,10 @@ def create_record(record: dict, actor: str, status: Optional[str] = None, reason
     return strip(saved)
 
 
-def transition(name: str, version: str, to_status: str, actor: str, reason: str = "") -> Tuple[dict, dict]:
-    rec, ev = get_store().transition(name, version, str(to_status).upper(), actor, reason)
+def transition(name: str, version: str, to_status: str, actor: str, reason: str = "",
+               *, expected_record: Optional[dict] = None) -> Tuple[dict, dict]:
+    options = {"expected_record": expected_record} if expected_record is not None else {}
+    rec, ev = get_store().transition(name, version, str(to_status).upper(), actor, reason, **options)
     return strip(rec), ev
 
 
@@ -295,7 +334,7 @@ def _cosine(a: List[float], b: List[float]) -> float:
 def search_detailed(query: str, record_type: Optional[str] = None, limit: int = 25) -> dict:
     """키워드 랭킹 + 임베딩 랭킹 → RRF(k=60). 반환 {hits, dense(bool), keyword(bool), note}."""
     q = str(query or "").strip()
-    recs = get_store().all_records()
+    recs = [r for r in get_store().all_records() if not is_internal(r)]
     if record_type and record_type.upper() != "ALL":
         recs = [r for r in recs if r.get("recordType") == record_type.upper()]
     if not q:

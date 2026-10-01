@@ -26,6 +26,14 @@ def _no_live_dependency(*args, **kwargs):
     raise AssertionError("Live runtime dependencies must not be used")
 
 
+def approved_run(app, payload, runtime_session_id=None):
+    """Existing execution fixtures explicitly carry approval for their synthetic source."""
+    spec = app.agent_specs.spec_by_name(payload.get("agent"))
+    if spec:
+        payload.setdefault("approvedSourceHash", app.agent_specs.source_hash(spec, app.SKILLS_DIR))
+    return app.run(payload, runtime_session_id)
+
+
 @pytest.fixture
 def runtime_app(monkeypatch):
     # app.py can add its generated _ctx directory to sys.path.
@@ -43,6 +51,7 @@ def runtime_app(monkeypatch):
     boundary.scan_rules = _no_live_dependency
     gateway = ModuleType("mcp_gateway")
     gateway.open_tools = _no_live_dependency
+    gateway.GatewayCleanupFailed = type("GatewayCleanupFailed", (RuntimeError,), {})
 
     class StubApp:
         def entrypoint(self, function):
@@ -74,7 +83,7 @@ def runtime_app(monkeypatch):
 
 def _events(app, payload):
     async def collect():
-        return [event async for event in app.run(payload)]
+        return [event async for event in approved_run(app, payload, "verified-runtime-session-" + "a" * 32)]
 
     return asyncio.run(collect())
 
@@ -125,3 +134,36 @@ def test_uncataloged_spec_model_is_not_an_allowlist_exception(runtime_app, monke
     assert events[0]["message"] == "model not allowed: unapproved-spec-model"
     assert events[-1]["stopReason"] == "error"
     assert not calls
+
+
+def test_model_construction_requires_bank_guardrail_configuration(runtime_app, monkeypatch):
+    app, _ = runtime_app
+    monkeypatch.setattr(app, "GUARDRAIL_ID", "")
+    with pytest.raises(RuntimeError, match="Guardrail"):
+        app.build_model("global.anthropic.claude-sonnet-5")
+    deps = _load("_design_guardrail_configuration", ROOT / "agents/design_deps.py")
+    monkeypatch.setattr(deps, "GUARDRAIL_ID", "")
+    with pytest.raises(RuntimeError, match="Guardrail"):
+        deps._model("global.anthropic.claude-sonnet-5", 10)
+
+
+
+def test_runtime_design_rejects_oversized_nested_request_before_worker(runtime_app):
+    app, calls = runtime_app
+    events = _events(app, {"agent": "design_flow_agent", "design": {"productSpec": {"text": "x" * 100001}}})
+    assert events[0]["code"] == 413 and not calls and not app._active_sessions
+
+
+def test_runtime_rejects_approval_from_different_source(runtime_app):
+    app, calls = runtime_app
+    events = _events(app, {"agent": "design_flow_agent", "approvedSourceHash": "0" * 64})
+    assert events[0]["code"] == 409 and not calls and not app._active_sessions
+
+
+
+def test_runtime_requires_explicit_source_approval(runtime_app):
+    app, calls = runtime_app
+    async def collect():
+        return [event async for event in app.run({"agent": "design_flow_agent"}, "s" * 64)]
+    events = asyncio.run(collect())
+    assert events[0]["code"] == 409 and not calls

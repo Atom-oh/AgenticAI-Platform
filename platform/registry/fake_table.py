@@ -163,6 +163,24 @@ class InMemoryTable:
         return self.indexes[index_name]
 
     # -- API --
+    def transact_write_items(self, TransactItems: list, **_: Any) -> dict:
+        """Atomic fake for Registry's record+audit Put/Update transaction."""
+        self.calls.append("transact_write_items")
+        before = copy.deepcopy(self._items)
+        try:
+            for operation in TransactItems:
+                kind, parameters = next(iter(operation.items()))
+                if kind == "Put":
+                    self.put_item(**parameters)
+                elif kind == "Update":
+                    self.update_item(**parameters)
+                else:
+                    raise ValueError("Unsupported test transaction operation")
+        except Exception:
+            self._items = before
+            raise
+        return {}
+
     def put_item(self, Item: dict, ConditionExpression: Optional[str] = None,
                  ExpressionAttributeNames: Optional[dict] = None,
                  ExpressionAttributeValues: Optional[dict] = None, **_: Any) -> dict:
@@ -195,8 +213,12 @@ class InMemoryTable:
         self._items[key] = item
         return {"Attributes": copy.deepcopy(item)} if ReturnValues in ("ALL_NEW", "UPDATED_NEW") else {}
 
-    def delete_item(self, Key: dict, **_: Any) -> dict:
+    def delete_item(self, Key: dict, ConditionExpression=None, ExpressionAttributeNames=None,
+                    ExpressionAttributeValues=None, **_: Any) -> dict:
         self.calls.append("delete_item")
+        pred = compile_condition(ConditionExpression, ExpressionAttributeNames or {}, ExpressionAttributeValues or {})
+        if not pred(self._items.get(self._key_of(Key))):
+            raise ConditionalCheckFailedException()
         self._items.pop(self._key_of(Key), None)
         return {}
 

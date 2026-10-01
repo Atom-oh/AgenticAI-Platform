@@ -71,8 +71,8 @@ def test_canonical_product_publication_retains_the_callers_authorization_deadlin
     value = product(wb)
     original = wb.storage._prepare
 
-    def expire(owner, kind, item, version, now):
-        prepared = original(owner, kind, item, version, now)
+    def expire(owner, kind, item, version, now, **guard):
+        prepared = original(owner, kind, item, version, now, **guard)
         if kind == "product" and item.get("publishedGuidelineId"):
             wb.now += 2000
         return prepared

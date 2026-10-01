@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { aborted, messageOf, pollJob, readPrivateBlob } from './client';
 import { useWorkspaceClient } from './WorkspaceScope';
 import { stateLabel } from './rules';
 import type { Job } from './types';
+import { readPreviewSelection, selectionRelayScript, selectionScript, type PreviewSelection } from './previewSelection';
 
 export function Notice({ children, error = false }: { children: React.ReactNode; error?: boolean }) {
   return <div className={`ws-notice ${error ? 'ws-error' : ''}`} role={error ? 'alert' : 'status'}>{children}</div>;
@@ -43,14 +44,14 @@ export function previewDocument(html: string, executable: boolean): string {
   const policy = `default-src 'none'; script-src ${executable ? "'unsafe-inline'" : "'none'"}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
   return `<meta http-equiv="Content-Security-Policy" content="${policy}">${html}`;
 }
-export function previewFrameDocument(html: string, executable: boolean): string {
+export function previewFrameDocument(html: string, executable: boolean, channel?: string): string {
   // A document's own CSP does not prevent it from navigating its own frame.
   // This trusted parent controls navigation of the opaque content frame instead.
   // srcdoc remains usable with frame-src 'none'; no URL navigation is needed.
   const shell = document.implementation.createHTMLDocument('비공개 미리보기');
   const policy = shell.createElement('meta');
   policy.httpEquiv = 'Content-Security-Policy';
-  policy.content = "frame-src 'none'";
+  policy.content = "default-src 'none'; frame-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:";
   shell.head.prepend(policy);
   const style = shell.createElement('style');
   style.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}';
@@ -62,17 +63,40 @@ export function previewFrameDocument(html: string, executable: boolean): string 
   content.referrerPolicy = 'no-referrer';
   // DOM serialization escapes the entire untrusted attribute value, including
   // quotes and closing iframe tags; imported HTML never becomes wrapper markup.
-  content.srcdoc = previewDocument(html, executable);
+  content.srcdoc = previewDocument(executable && channel ? `<script>${selectionScript(channel)}</script>${html}` : html, executable);
   shell.body.append(content);
+  if (executable && channel) {
+    const relay = shell.createElement('script');
+    relay.textContent = selectionRelayScript(channel);
+    shell.body.append(relay);
+  }
   return '<!doctype html>' + shell.documentElement.outerHTML;
 }
-export function PrivatePreview({ path, title, executable = false, height = 560, width, format }: {
+export function PrivatePreview({ path, title, executable = false, height = 560, width, format, selectMode = false, onSelect }: {
   path: string | null; title: string; executable?: boolean; height?: number; width?: number; format?: string;
+  selectMode?: boolean; onSelect?: (selection: PreviewSelection) => void;
 }) {
   const workspaceClient = useWorkspaceClient();
   const [result, setResult] = useState<{ path: string; url?: string; html?: string; mime: string } | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const channel = useMemo(() => crypto.randomUUID(), [path, result]);
+  const selectionEnabled = executable && !!onSelect;
+  const sourceDocument = useMemo(() => result?.html === undefined ? undefined :
+    previewFrameDocument(result.html, executable, selectionEnabled ? channel : undefined), [result, executable, selectionEnabled, channel]);
+  const syncSelection = () => frame.current?.contentWindow?.postMessage({ type: 'studio-select-mode', channel, enabled: selectMode }, '*');
+  useEffect(() => {
+    syncSelection();
+    if (!selectionEnabled || !selectMode) return;
+    const receive = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow || event.data?.channel !== channel || event.data?.type !== 'studio-element') return;
+      const selected = readPreviewSelection(event.data.selection);
+      if (selected) onSelect?.(selected);
+    };
+    window.addEventListener('message', receive);
+    return () => window.removeEventListener('message', receive);
+  }, [selectionEnabled, selectMode, channel, onSelect]);
   useEffect(() => {
     const controller = new AbortController();
     let url = '';
@@ -98,8 +122,8 @@ export function PrivatePreview({ path, title, executable = false, height = 560, 
   if (!result || result.path !== path) return <div className="ws-empty" role="status">비공개 미리보기를 불러오고 있습니다…</div>;
   return <div className="ws-preview" style={{ minHeight: Math.min(height, 240) }}>
     {result.html !== undefined
-      ? <iframe title={title} sandbox={executable ? 'allow-scripts' : ''} referrerPolicy="no-referrer"
-          srcDoc={previewFrameDocument(result.html, executable)} style={{ height, ...(width ? { width } : {}) }} />
+      ? <iframe ref={frame} title={title} sandbox={executable ? 'allow-scripts' : ''} referrerPolicy="no-referrer"
+          srcDoc={sourceDocument} onLoad={syncSelection} style={{ height, ...(width ? { width } : {}) }} />
       : <img src={result.url} alt={title} />}
   </div>;
 }

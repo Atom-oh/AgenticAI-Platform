@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from collections import Counter
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 import httpx
@@ -23,6 +24,9 @@ SERVICE_NAME = "bedrock-agentcore"
 # 서명에 포함할 헤더 — 전송 중 바뀔 수 있는 헤더(connection, user-agent, accept-encoding 등)는 제외한다.
 SIGNED_HEADERS = {"content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id"}
 TOOL_NAME_SEP = "___"
+
+class GatewayCleanupFailed(RuntimeError):
+    pass
 
 
 def bare_name(name: str) -> str:
@@ -109,14 +113,24 @@ def make_client(url: Optional[str] = None, region: Optional[str] = None, startup
 
 
 def filter_tool_names(discovered: Iterable[str], allowed: Optional[Sequence[str]]) -> List[str]:
-    """allowedTools(bare 또는 prefixed) 기준으로 서버 도구 이름을 고른다. allowed 가 비면 전부."""
+    """Select explicitly allowed tools; an empty list grants no tools."""
     allowed_set = {a for a in (allowed or [])}
-    allowed_bare = {bare_name(a) for a in allowed_set}
+    allowed_bare = {a for a in allowed_set if TOOL_NAME_SEP not in a}
+    names = list(dict.fromkeys(discovered))
+    counts = Counter(map(bare_name, names))
     out = []
-    for name in discovered:
-        if not allowed_set or name in allowed_set or bare_name(name) in allowed_bare:
+    for name in names:
+        if name in allowed_set or (bare_name(name) in allowed_bare and counts[bare_name(name)] == 1):
             out.append(name)
     return out
+
+
+def missing_tool_names(discovered: Iterable[str], allowed: Optional[Sequence[str]]) -> List[str]:
+    names = set(discovered)
+    counts = Counter(map(bare_name, names))
+    bare = {name for name, count in counts.items() if count == 1}
+    return sorted(name for name in (allowed or []) if
+                  (name not in names if TOOL_NAME_SEP in name else name not in bare))
 
 
 def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any], List[str]]:
@@ -137,9 +151,16 @@ def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any]
         token = getattr(page, "pagination_token", None)
         if not token:
             break
+    if token:
+        raise RuntimeError("Gateway tool discovery exceeded the complete catalog limit")
     keep = set(filter_tool_names(discovered, allowed))
-    tools = [MCPAgentTool(t.mcp_tool, client, name_override=bare_name(t.tool_name)) for t in raw if t.tool_name in keep]
-    missing = sorted({bare_name(a) for a in (allowed or [])} - {bare_name(n) for n in keep})
+    counts = {}
+    for name in keep:
+        counts[bare_name(name)] = counts.get(bare_name(name), 0) + 1
+    tools = [MCPAgentTool(t.mcp_tool, client,
+             name_override=t.tool_name if counts[bare_name(t.tool_name)] > 1 else bare_name(t.tool_name))
+             for t in raw if t.tool_name in keep]
+    missing = missing_tool_names(discovered, allowed)
     if missing:
         log.warning("gateway tools missing for spec: %s (discovered=%d)", missing, len(discovered))
     return tools, discovered
@@ -147,11 +168,16 @@ def load_tools(client: Any, allowed: Optional[Sequence[str]]) -> Tuple[List[Any]
 
 def open_tools(allowed: Optional[Sequence[str]], url: Optional[str] = None, region: Optional[str] = None):
     """편의 함수: 클라이언트 생성 + start + 도구 로드. 반환 (client, tools, discovered). 호출자가 client.stop(None, None, None)."""
+    if not allowed or any(not isinstance(name, str) or not name.strip() or "*" in name for name in allowed):
+        raise ValueError("An explicit nonempty tool allowlist is required")
     client = make_client(url, region)
-    client.start()
     try:
+        client.start()
         tools, discovered = load_tools(client, allowed)
     except Exception:
-        client.stop(None, None, None)
+        try:
+            client.stop(None, None, None)
+        except Exception:
+            raise GatewayCleanupFailed("Gateway setup cleanup failed") from None
         raise
     return client, tools, discovered

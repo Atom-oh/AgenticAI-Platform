@@ -2,6 +2,7 @@
 
 Current code audit: 2026-09-13. See the [platform overview](../README.md) and
 [module contracts](../docs/CONTRACTS.md) for authority and shared interfaces.
+Security implementation amendment: 2026-09-23; live acceptance remains separate.
 
 `app.py` runs the five specs in `agentcore/agent_specs.py` using Strands on
 AgentCore Runtime. `design_flow_agent` instead runs the shared `design_loop`.
@@ -16,7 +17,7 @@ AgentCore chat does not implement the authenticated S2 privacy pipeline.
 ## Runtime contract
 
 `BedrockAgentCoreApp` serves port 8080: `GET /ping` and `POST /invocations`.
-Normal input is `{agent, prompt, sessionId?, model?}`. Design-flow input adds
+Normal input is `{agent, prompt, model?}`. Design-flow input adds
 `design: {productSpec, smModel, checklists[], outputType?}`.
 
 | File | Responsibility |
@@ -25,7 +26,7 @@ Normal input is `{agent, prompt, sessionId?, model?}`. Design-flow input adds
 | `mcp_gateway.py` | Load Gateway tools over SigV4-signed MCP HTTP; filter `allowedTools` by bare or `<target>___<tool>` name |
 | `boundary_gate.py` | Scan outgoing message content before model calls; refuse identifier-rule hits and measure boundary size |
 | `design_deps.py` | Model and boundary adapter for the shared process-generation loop |
-| `prepare_context.sh` | Copy canonical specs, `engine/model_catalog.py`, all six skills, and `design_loop/` into `_ctx/` |
+| `prepare_context.sh` | Copy canonical specs, model catalog, Skills, design loop, and independent `common/pii.py`/logger into `_ctx/` |
 | `Dockerfile` | Python 3.12, ARM64 build, UID 10001, port 8080, `python app.py`; dependencies pinned in `requirements.txt` |
 
 SSE event types for chat are `text`, `tool_start`, `tool_input`, `tool_result`,
@@ -39,22 +40,56 @@ model token usage. `GateRefused` blocks the affected model call and removes the
 session history; earlier successful calls in the same run can already have usage.
 An initial gate refusal can report zero usage and `stopReason="gate_refused"`.
 
+The container packages the common PII verifier and logger; admitted model calls
+require full independent Guardrail coverage of collected system/message/tool text.
+
 Environment: `AWS_REGION` (default `ap-northeast-2`), `GATEWAY_URL`, `GATEWAY_ARN`,
-`GUARDRAIL_ID`, `GUARDRAIL_VERSION`, and optional `LOG_LEVEL`, `MAX_TOKENS`,
+`GUARDRAIL_ID` (required), `GUARDRAIL_VERSION`, and optional `LOG_LEVEL`, `MAX_TOKENS`,
 `MAX_PROMPT_CHARS`, `SKILLS_DIR`, `TEMPERATURE`. Model selection uses the exact
 allowlist copied from `engine/model_catalog.py`; it is not limited to the two
 original Claude specs. A default spec supplies its model; arbitrary `GEN_MODEL`
 values do not extend the allowlist. `TEMPERATURE` is omitted unless explicitly set.
 
-The process retains at most 20 session histories in memory. Payload `sessionId`
-takes precedence over the runtime session ID; callers must keep session identity
-consistent. This is not durable managed memory. The image does not install the
-ADOT auto-instrumentation package.
+The process retains at most 20 session histories in memory, keyed only by the
+SDK Runtime context session ID. A payload `sessionId` is ignored and reported
+only as `meta.ignoredPayloadSessionId=true`. Missing Runtime context fails.
+Every scenario request also requires `approvedSourceHash` from its IAM-approved
+Registry version. Missing or different hashes fail before execution, including
+the design compatibility entry point.
+The WebSocket handler derives the Runtime ID from the verified Cognito subject,
+agent/version and client conversation ID. It returns the original client ID
+for subsequent turns. Pool, client and connection expiry are checked.
+Overlapping turns for the same Runtime session return `409/session_busy` before
+another agent is built. Completion and cancellation release the claim after
+successful cleanup; the client can then retry the same conversation ID. Failed
+cleanup quarantines that ID and requires a new conversation. Quarantine retains
+at most 20 IDs; overflow refuses work until the Runtime process is recycled.
+This is not durable managed memory. ADOT is not yet installed; WP5/WP6 in
+[the bank work packages](../docs/BANK_AGENTCORE_WORK_PACKAGES.md) track these gaps.
+
+The user Lambda records agent specifications and administration requests.
+Only the IAM Admin Lambda may provision Harnesses or mirror approval changes.
+An administrator processes a recorded request using
+`{"op":"apply_agent_request","name":"agent-request-…","version":"v1"}`.
+User routes cannot invoke AdminFn or call AgentCore administrative mutations.
+All Harness creation, including IAM seeding, requires explicit Skill bindings.
+An empty Skill selection uses an empty binding list. Custom bindings fix approved Registry versions and local file
+hashes; approval embeds their inspected content into the system prompt and
+invocation rechecks the bindings. Missing Runtime Skills block model execution.
+All Harness versions also require the service configuration to match the
+approved specification. Legacy custom versions without bindings are blocked
+pending IAM review. New Harnesses explicitly disable managed Memory.
+Administrative request payloads are hidden from normal Registry discovery.
+After local approval, a mirror failure reports `applied=true, completed=false`;
+retry the same request to finish synchronization. IAM `inspect_agent_request`
+returns the current Harness fingerprint needed for explicit reconciliation.
 
 ## Local container commands
 
 Run from `platform/` with Docker, temporary AWS credentials, and configured
 Gateway/Guardrail values. These commands build and call real services:
+Set `APPROVED_SOURCE_HASH` to the IAM-approved Registry record's
+`payload.runtimeSourceHash`; local image contents must match that approval.
 
 ```bash
 bash agents/prepare_context.sh
@@ -68,7 +103,8 @@ docker run --rm -d --name bank-agents -p 127.0.0.1:8080:8080 \
 
 curl -s localhost:8080/ping
 curl -sN -X POST localhost:8080/invocations -H 'Content-Type: application/json' \
-  -d '{"agent":"regulation_impact_agent","prompt":"REG-LN-001 규정 개정 영향은?"}'
+  -H 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: local-synthetic-session-00000000000000000000' \
+  -d "{\"agent\":\"regulation_impact_agent\",\"prompt\":\"REG-LN-001 규정 개정 영향은?\",\"approvedSourceHash\":\"${APPROVED_SOURCE_HASH:?Set the approved Registry source hash}\"}"
 docker logs bank-agents
 docker stop bank-agents
 ```
@@ -76,12 +112,13 @@ docker stop bank-agents
 For a role-backed shell, `aws configure export-credentials --format env` can
 provide temporary credentials; do not bake them into the image or print them in
 shared logs. If port 8080 is occupied, change only the host port, for example
-`127.0.0.1:18080:8080`. Reuse payload `sessionId` for local multi-turn testing.
+`127.0.0.1:18080:8080`. Reuse the Runtime session header for local multi-turn testing.
 
-Setup/handshake failures emit an error such as `code=502`; unavailable tools are
-not fabricated. Missing skills are reported. Log safety is a requirement:
-normal events log sizes/names/counts, while exception paths use bounded `_err`
-strings and must not be treated as a general raw-error sanitization guarantee.
+Setup/handshake failures emit a bounded error such as `code=502`. In this Strands Runtime, a missing
+configured tool is recorded in `meta.toolsMissing`, blocks model execution and
+appears in the UI. Empty allowlists grant no tools. Application exception paths
+return type/category text without upstream bodies; verify SDK logs separately
+in the live gate.
 
 ## Historical smoke evidence
 

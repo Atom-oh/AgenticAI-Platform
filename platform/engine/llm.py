@@ -1,7 +1,7 @@
 """LLMClient 인터페이스 + 어댑터 (SPEC v2 §4). **직접 호출 금지** — 모든 호출은 engine.gate(익명화 게이트)를 지난다 (§12.1).
 
   ClaudeAdapter : Tier 0/1 — bedrock-runtime Converse/ConverseStream, 소스 리전 ap-northeast-2, global 프로파일(IAM SigV4)
-  GemmaAdapter  : Tier 2 데모 대체 — bedrock-mantle OpenAI 호환 Chat Completions, us-west-2 직접 호출, Bearer 키
+  GemmaAdapter  : Tier 0/1 설명 어댑터 — bedrock-mantle OpenAI 호환 Chat Completions, us-west-2 직접 호출, Bearer 키
                   (Converse·InvokeModel 미지원 → 표준 라이브러리 urllib 로 직접 POST, SSE 스트리밍)
   VllmAdapter   : 운영 전환용 idc_vllm(EKS Hybrid Nodes + vLLM, OpenAI 호환) 자리 — 데모 미구성(NotImplementedError)
 
@@ -308,7 +308,7 @@ def _log(event: str, **fields) -> None:
 
 class GemmaAdapter:
     route = "gemma"
-    tier = "2"
+    tier = "0/1"
     endpoint = "bedrock-mantle"
 
     def __init__(self, model_id: Optional[str] = None, base_url: Optional[str] = None,
@@ -446,7 +446,7 @@ class GemmaAdapter:
 class VllmAdapter:
     """EKS Hybrid Nodes(IDC GPU) 의 vLLM OpenAI 호환 서버용 자리. 데모에는 GPU 가 없어 구성하지 않는다 (§11-1)."""
     route = "idc_vllm"
-    tier = "2"
+    tier = "0/1"
     endpoint = "vllm (EKS Hybrid Nodes)"
     _MSG = "idc_vllm 어댑터는 운영 전환용(EKS Hybrid Nodes + vLLM, OpenAI 호환) — 데모 미구성"
 
