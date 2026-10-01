@@ -91,7 +91,18 @@ cutover work. Changing source bytes/revision or the inspection profile requires
 another classification.
 
 `POST /ontology/sources/admission` is owner-only and accepts `requestId`,
-`sourceRef`, `classification` and `reason`. It returns `{admission}` with the
+`sourceRef`, `classification`, `reason` and `decisionId`. `decisionId` names the
+private-intake `adm_decision` (`source-admission/1`) that admitted this exact
+source revision under the current policy; it must be `admitted`, current, of the
+same data class and policy revision, and its admitted derivative must equal the
+original bytes (`originalHash == derivativeHash`), because the Runtime transfer
+reads the source itself. A missing, blocked (for example `denylist-unavailable`),
+pending-review, expired or mismatched decision fails with
+`agentcore-admission-decision-required`; a normalized derivative fails with
+`agentcore-admission-derivative`. The decision id, revision, artifact hash and
+inspection hash are pinned on the record, and every dispatch, tool call,
+completion and cached replay re-verifies that exact decision through
+`intake.admission.verify` and fences its record versions. It returns `{admission}` with the
 source, classification, inspection and record version. The same source/request
 ID and exact body replay the existing inspected result; changing the body or
 inspection profile under that ID fails with `admission-request-changed`.

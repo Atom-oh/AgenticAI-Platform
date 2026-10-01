@@ -60,7 +60,63 @@ def _bind_authority(ctx, data_class, reference, actor):
         binding["grant"] = {"id": grant["id"], "revision": grant["revision"]}
         checks.append({"owner": intake_admission.INTAKE_OWNER, "kind": "adm_grant",
                        "id": grant["id"], "version": grant["version"]})
-    return binding, checks
+    return binding, checks, policy
+
+
+_DECISION_SOURCE_FIELDS = ("sourceKind", "sourceId", "revision", "sha256", "audienceRevision")
+_ADMISSION_KINDS = ("adm_decision", "adm_policy", "adm_provenance", "adm_grant")
+
+
+def _decision_missing(message="비공개 반입 심사에서 승인된 결정이 필요합니다."):
+    fail(403, "agentcore-admission-decision-required", message)
+
+
+def _verified_decision(ctx, decision_id, reference, data_class, policy):
+    """The current, admitting private-intake `adm_decision` for this exact source
+    revision (source-admission/1, SRC-06/RUN-04/G0-ADMISSION), verified through
+    `intake.admission.verify` -- decision status/expiry, its pinned policy and
+    provenance/reviewer-grant revisions, current source access and the stored
+    derivative/inspection hashes -- plus the exact intake record versions it
+    observed, for the caller's transaction fences.
+
+    The Runtime transfer reads the source through the ordinary source reader,
+    so this decision must have admitted those very bytes: its admitted
+    derivative must equal the original (`originalHash == derivativeHash`, i.e.
+    identifier normalization substituted nothing). A source whose admitted
+    derivative differs never reaches AgentCore through this path."""
+    if not isinstance(decision_id, str):
+        _decision_missing()
+    observed = []
+    try:
+        decision = intake_admission.verify(ctx.host, ctx.scope, schema._identifier(decision_id), claims=ctx.claims,
+                                           sources=Sources(ctx), observe=observed)
+    except (intake_admission.AdmissionError, ValueError):
+        _decision_missing("비공개 반입 결정이 현재 승인 상태가 아니거나 원본과 맞지 않습니다.")
+    except CollaborationError as error:
+        if error.status == 401:
+            raise
+        _decision_missing("비공개 반입 결정이 현재 승인 상태가 아니거나 원본과 맞지 않습니다.")
+    derivation = decision["derivation"]
+    if (decision["status"] != "admitted" or decision["projectId"] != ctx.project_id
+            or decision["source"] != {key: reference[key] for key in _DECISION_SOURCE_FIELDS}
+            or decision["dataClass"] != data_class or decision["artifact"]["kind"] != "document-pages"
+            or decision["policy"] != {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]}):
+        _decision_missing("비공개 반입 결정이 현재 원본·분류·정책과 맞지 않습니다.")
+    if derivation["originalHash"] != derivation["derivativeHash"]:
+        fail(403, "agentcore-admission-derivative",
+             "반입 승인본이 원본과 달라 원본 전송으로 AgentCore에 사용할 수 없습니다.")
+    pinned = {"id": decision["id"], "revision": decision["revision"], "artifactHash": derivation["derivativeHash"],
+              "inspectionHash": decision["inspection"]["hash"]}
+    checks = [{key: check[key] for key in ("owner", "kind", "id", "version")}
+              for check in observed if check["kind"] in _ADMISSION_KINDS]
+    return pinned, checks
+
+
+def _unique(checks):
+    unique = {}
+    for check in checks:
+        unique.setdefault((check["owner"], check["kind"], check["id"]), check)
+    return list(unique.values())
 
 
 def _recheck_authority(ctx, row):
@@ -94,11 +150,19 @@ def _recheck_authority(ctx, row):
             fail(403, "agentcore-admission-authority-missing", "검토자 권한이 변경되었습니다.")
         checks.append({"owner": intake_admission.INTAKE_OWNER, "kind": "adm_grant",
                        "id": grant["id"], "version": grant["version"]})
-    return checks
+    # The exact private-intake decision pinned at classification: same id,
+    # revision, admitted derivative and inspection hash, still admitted/current.
+    pinned = binding.get("decision")
+    if not isinstance(pinned, dict):
+        _decision_missing()
+    decision, decision_checks = _verified_decision(ctx, pinned.get("id"), row["sourceRef"], data_class, policy)
+    if decision != pinned:
+        _decision_missing("비공개 반입 결정의 리비전 또는 승인본이 변경되었습니다.")
+    return _unique([*checks, *decision_checks])
 
 
 def classify(ctx, body):
-    fields(body, {"requestId", "sourceRef", "classification", "reason"})
+    fields(body, {"requestId", "sourceRef", "classification", "reason", "decisionId"})
     ctx.fresh({"owner"})
     request_id = schema._identifier(body.get("requestId"))
     reference = schema.source_ref(body.get("sourceRef"))
@@ -120,7 +184,16 @@ def classify(ctx, body):
     # recorded with no authority behind it must never later be grandfathered in
     # by authority that only appears afterward; a fresh call (this one) is the
     # review that binds it.
-    binding, authority_checks = _bind_authority(ctx, body["classification"], reference, ctx.actor)
+    binding, authority_checks, policy = _bind_authority(ctx, body["classification"], reference, ctx.actor)
+    # ...and the private-intake decision that admitted these exact source bytes
+    # under that same policy revision is consumed and pinned (decision id,
+    # revision, admitted artifact hash, inspection hash); no decision -- missing,
+    # blocked (e.g. `denylist-unavailable`), pending review, expired or for
+    # another revision -- means no classification.
+    decision, decision_checks = _verified_decision(ctx, body.get("decisionId"), reference, body["classification"],
+                                                   policy)
+    binding["decision"] = decision
+    authority_checks = _unique([*authority_checks, *decision_checks])
     record = {"id": identity, "projectId": ctx.project_id, "sourceRef": reference,
         "classification": body["classification"], "policy": POLICY, "status": "approved",
         "reviewedBy": ctx.actor, "reviewedAt": ctx.storage.clock(), "reason": reason, "inspection": inspected,

@@ -10,6 +10,7 @@ from test_workbench_core import wb
 from test_ontology_analysis import collection
 from test_ontology_sources import context
 from intake import admin_handler
+from intake import admission as intake_admission
 from ontology_runtime.authorization import active_job
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.dispatch import RuntimeAnalyzer
@@ -62,16 +63,40 @@ def authorize_admission(wb, monkeypatch, refs, *, data_class="synthetic"):
     return policy
 
 
-def admitted(wb, monkeypatch, *, data_class="synthetic"):
+# A private deny-list term that no synthetic fixture contains: identifier
+# normalization substitutes nothing, so each admitted derivative equals its source.
+DENYLIST = [{"term": "SyntheticTenantNeverInFixtures", "kind": "org"}]
+
+
+def intake_decision(wb, ref, *, data_class="synthetic", actor="alice"):
+    """A real private-intake `adm_decision` for `ref`, created through
+    `intake.admission.request` (and `intake.review.decide` for reviewed data
+    classes) -- never written directly."""
+    from intake import review
+    wb.api.intake_denylist_loader = lambda: DENYLIST
+    scope = wb.collab.resolve_scope(actor, wb.project["id"])
+    decision = intake_admission.request(wb.api, scope, ref, data_class=data_class)
+    if decision.get("status") == "pending-review":
+        decision = review.decide(wb.api, scope, decision["id"], approve=True, reason="Synthetic review")
+    assert decision.get("status") == "admitted", decision
+    return decision
+
+
+def classify_admitted(wb, ref, *, request_id, data_class="synthetic", reason="Synthetic test fixture"):
+    decision = intake_decision(wb, ref, data_class=data_class)
+    return classify(context(wb), {"requestId": request_id, "sourceRef": ref, "classification": data_class,
+                                  "reason": reason, "decisionId": decision["id"]})
+
+
+def admitted(wb, monkeypatch, *, data_class="synthetic", files=None):
     wb.api.ontology_analyzer_ready = True
     wb.api.ontology_analyzer = RuntimeAnalyzer(
         "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
-    files = collection(wb)
+    files = files or collection(wb)
     refs = [asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files]
     authorize_admission(wb, monkeypatch, refs, data_class=data_class)
     for file, ref in zip(files, refs):
-        classify(context(wb), {"requestId": file["assetId"], "sourceRef": ref,
-            "classification": data_class, "reason": "Synthetic test fixture"})
+        classify_admitted(wb, ref, request_id=file["assetId"], data_class=data_class)
     queued = submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files})
     wb.storage.claim_job(wb.owner, queued["job"]["id"])
     return queued["artifact"]
@@ -144,6 +169,7 @@ def test_classify_requires_authority_to_exist_now_and_pins_its_exact_revision(wb
     assert error.value.code == "agentcore-admission-authority-missing"
     assert wb.storage.list_page(wb.owner, "ac_admission")["items"] == []
     policy = authorize_admission(wb, monkeypatch, [ref], data_class="synthetic")
+    body["decisionId"] = intake_decision(wb, ref)["id"]
     record = classify(context(wb), body)
     assert record["binding"]["policy"] == {"id": policy["id"], "revision": policy["revision"], "hash": policy["hash"]}
     assert "provenance" in record["binding"]
@@ -157,3 +183,74 @@ def test_classification_binds_workbench_document_identity():
     other = {**reference, "location": {"documentId": "second"}}
     assert identifier(reference) != identifier(other)
     assert identifier(reference) == identifier({**reference, "location": {**reference["location"], "page": 1}})
+
+
+def test_classify_requires_a_current_admitted_private_intake_decision(wb, monkeypatch):
+    """PR #34 review 1, finding 1: AgentCore admission consumes the private-intake
+    `adm_decision` for the exact source revision. A blocked intake request
+    (`denylist-unavailable`) writes no decision, and neither a missing nor a
+    still-pending decision can back a classification."""
+    from intake import derivative
+    files = collection(wb)
+    ref, other = (asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files[:2])
+    authorize_admission(wb, monkeypatch, [ref, other], data_class="synthetic")
+    body = {"requestId": files[0]["assetId"], "sourceRef": ref, "classification": "synthetic",
+            "reason": "No intake decision"}
+
+    def unavailable():
+        raise derivative.DenylistUnavailable()
+
+    wb.api.intake_denylist_loader = unavailable
+    scope = wb.collab.resolve_scope("alice", wb.project["id"])
+    assert intake_admission.request(wb.api, scope, ref, data_class="synthetic") == {
+        "status": "blocked", "blocking": ["denylist-unavailable"]}
+    assert wb.storage.list_page(wb.owner, "adm_decision")["items"] == []
+    with pytest.raises(CollaborationError) as error:
+        classify(context(wb), body)
+    assert error.value.code == "agentcore-admission-decision-required"
+    with pytest.raises(CollaborationError) as error:
+        classify(context(wb), {**body, "decisionId": "adm-" + "0" * 40})
+    assert error.value.code == "agentcore-admission-decision-required"
+    assert wb.storage.list_page(wb.owner, "ac_admission")["items"] == []
+    # A decision for another source cannot be reused for this one.
+    with pytest.raises(CollaborationError) as error:
+        classify(context(wb), {**body, "decisionId": intake_decision(wb, ref)["id"],
+                               "sourceRef": other, "requestId": files[1]["assetId"]})
+    assert error.value.code == "agentcore-admission-decision-required"
+    record = classify(context(wb), {**body, "decisionId": intake_decision(wb, ref)["id"]})
+    decision = wb.storage.get(wb.owner, "adm_decision", record["binding"]["decision"]["id"])
+    assert record["binding"]["decision"] == {
+        "id": decision["id"], "revision": decision["revision"],
+        "artifactHash": decision["derivation"]["derivativeHash"], "inspectionHash": decision["inspection"]["hash"]}
+
+
+def test_classify_refuses_a_pending_review_intake_decision(wb, monkeypatch):
+    files = collection(wb)
+    ref = asset_reference(wb.storage.get(wb.owner, "asset", files[0]["assetId"]))
+    authorize_admission(wb, monkeypatch, [ref], data_class="internal-non-sensitive")
+    wb.api.intake_denylist_loader = lambda: DENYLIST
+    scope = wb.collab.resolve_scope("alice", wb.project["id"])
+    pending = intake_admission.request(wb.api, scope, ref, data_class="internal-non-sensitive")
+    assert pending["status"] == "pending-review"
+    with pytest.raises(CollaborationError) as error:
+        classify(context(wb), {"requestId": files[0]["assetId"], "sourceRef": ref,
+                               "classification": "internal-non-sensitive", "reason": "Unreviewed",
+                               "decisionId": pending["id"]})
+    assert error.value.code == "agentcore-admission-decision-required"
+    assert wb.storage.list_page(wb.owner, "ac_admission")["items"] == []
+
+
+def test_classify_refuses_a_decision_whose_admitted_derivative_differs_from_the_source(wb, monkeypatch):
+    """The Runtime transfer reads the source itself, so only a decision whose
+    admitted derivative equals the original bytes can back it."""
+    from test_ontology_sources import asset
+    source = asset(wb, "tenant", b"export const label = 'SyntheticTenantNeverInFixtures';")
+    ref = asset_reference(source)
+    authorize_admission(wb, monkeypatch, [ref], data_class="synthetic")
+    decision = intake_decision(wb, ref)
+    assert decision["derivation"]["originalHash"] != decision["derivation"]["derivativeHash"]
+    with pytest.raises(CollaborationError) as error:
+        classify(context(wb), {"requestId": "tenant", "sourceRef": ref, "classification": "synthetic",
+                               "reason": "Normalized derivative", "decisionId": decision["id"]})
+    assert error.value.code == "agentcore-admission-derivative"
+    assert wb.storage.list_page(wb.owner, "ac_admission")["items"] == []

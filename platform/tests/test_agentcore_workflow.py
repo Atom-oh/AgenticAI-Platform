@@ -268,3 +268,56 @@ def test_memory_namespace_and_attempt_filtering(pipeline):
     assert memory.read({**claims, "attemptId": "second"})["events"] == []
     other = Memory(memory.client, memory.identifier, memory.kms, memory.key, "other-organization")
     assert other.scope(claims)["actorId"] != memory.scope(claims)["actorId"]
+
+
+def _replace_decision(wb, decision_id):
+    """Replace the stored `adm_decision` with a new storage version (same sealed
+    content): every fence pinned to the observed version must now fail."""
+    decision = wb.storage.get(wb.owner, "adm_decision", decision_id)
+    wb.storage.put(wb.owner, "adm_decision", decision, decision["version"])
+
+
+def test_dispatch_consumes_and_fences_the_private_intake_decisions(wb, pipeline):
+    """PR #34 review 1, finding 1: every attempt binds the exact consumed
+    private-intake decisions, not only the policy/provenance/grant revisions."""
+    pipeline.dispatch()
+    decisions = {row["id"]: row for row in wb.storage.list_page(wb.owner, "adm_decision")["items"]}
+    assert len(decisions) == len(pipeline.artifact["sourceRefs"])
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    fenced = {(check["id"], check["version"]) for check in execution["admissions"] if check["kind"] == "adm_decision"}
+    assert fenced == {(row["id"], row["version"]) for row in decisions.values()}
+    for ref in pipeline.artifact["sourceRefs"]:
+        binding = wb.storage.get(wb.owner, "ac_admission", identifier(ref))["binding"]["decision"]
+        assert decisions[binding["id"]]["source"] == {key: ref[key] for key in (
+            "sourceKind", "sourceId", "revision", "sha256", "audienceRevision")}
+
+
+def test_a_replaced_intake_decision_blocks_the_next_protected_tool(wb, pipeline):
+    def replace(name, arguments, metadata):
+        if name == "ontology___source":
+            binding = wb.storage.get(wb.owner, "ac_admission", identifier(arguments["sourceRef"]))["binding"]
+            _replace_decision(wb, binding["decision"]["id"])
+    pipeline.before_tool = replace
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert pipeline.parser_calls == 0
+    assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
+
+
+def test_a_decision_replaced_during_the_completion_transaction_aborts_it(wb, pipeline):
+    table = wb.storage.table()
+    client = table.meta.client
+    original = client.transact_write_items
+    ref = pipeline.artifact["sourceRefs"][0]
+    decision_id = wb.storage.get(wb.owner, "ac_admission", identifier(ref))["binding"]["decision"]["id"]
+
+    def intercept(**kwargs):
+        puts = [entry["Put"]["Item"] for entry in kwargs["TransactItems"] if "Put" in entry]
+        if any(item.get("status") == "completed" for item in puts):
+            _replace_decision(wb, decision_id)
+        return original(**kwargs)
+
+    client.transact_write_items = intercept
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
