@@ -132,6 +132,12 @@ def process(ctx, pinned, job=None):
     # analyzer injected here.
     if analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
+    # ROLL-02: a job admitted/pinned for AgentCore execution must never silently
+    # fall back to the legacy offline analyzer, even under explicit offline opt-in
+    # (PR #22 review 2, minor finding 5) -- only a job pinned to local-offline may
+    # reach this path at all.
+    if pinned.get("backend", {}).get("name") != "local-offline":
+        fail(503, "ontology-analysis-backend", "AgentCore로 승인된 작업은 로컬 실행으로 대체할 수 없습니다.")
     backend = "local-offline"
     if not getattr(ctx.host, "allow_offline_ontology_analysis", False):
         fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")
