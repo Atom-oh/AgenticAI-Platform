@@ -43,7 +43,7 @@ assemble_api() {
   # api/handlers/design.py 는 이 아티팩트 안에 있고 이 코어를 가져오므로, --assemble-only 출력도 예외가 아니다.
   cp ../scripts/check_public_identifiers.py "$dist/common/public_scan_core.py"
   cp ../scripts/public-assets.sha256 "$dist/common/public-assets.sha256"
-  for m in registry screengen report agentcore design_loop studio workspace workbench documents intake; do [ -d "$m" ] && cp -r "$m" "$dist/"; done
+  for m in registry screengen report agentcore design_loop studio workspace workbench documents intake ontology_runtime; do [ -d "$m" ] && cp -r "$m" "$dist/"; done
   mkdir -p "$dist/react-kit"
   cp react-kit/catalog.json "$dist/react-kit/"
   cp -r react-kit/ui "$dist/react-kit/"

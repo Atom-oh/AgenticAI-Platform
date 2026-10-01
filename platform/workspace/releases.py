@@ -16,7 +16,7 @@ def approval_hash(approval):
     return hashlib.sha256(json.dumps(approval, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def approved_artifacts(storage, owner, run, number, expected_approval=None):
+def approved_artifacts(storage, owner, run, number, expected_approval=None, gate=None):
     row = next((item for item in run.get("rounds", []) if item.get("number") == number), None)
     approval = run.get("approval") or {}
     contract = storage.get(owner, "contract", run.get("contractId"))
@@ -46,7 +46,7 @@ def approved_artifacts(storage, owner, run, number, expected_approval=None):
     if run["contract"].get("changeRequest"):
         from workspace.change_requests import baseline_project, enforce_scope
         request = run["contract"]["changeRequest"]
-        baseline = baseline_project(storage, owner, request)
+        baseline = baseline_project(storage, owner, request, gate=gate)
         enforce_scope(request, generated_files(baseline) if baseline else {}, generated_files(source))
     read_archive(contents["dist"], row["bundleHash"])
     report = json.loads(contents["report"])
@@ -60,13 +60,13 @@ def approved_artifacts(storage, owner, run, number, expected_approval=None):
     return row, source, contents
 
 
-def create_release(api, owner, body, scope):
+def create_release(api, owner, body, scope, gate=None):
     from workspace.http import HTTPError, _integer, _json
     number = _integer(body.get("round"), "Round", 1, 5)
     run = api._get(owner, "run", body.get("runId"))
     api._criteria(owner, {}, scope, api._get(owner, "contract", run["contractId"]))
     try:
-        row, _, _ = approved_artifacts(api.storage, owner, run, number)
+        row, _, _ = approved_artifacts(api.storage, owner, run, number, gate=gate)
     except ValueError as error:
         raise HTTPError(409, "release-approval-required", str(error)) from error
     identifier = api._request_id(body, "release")
@@ -79,7 +79,25 @@ def create_release(api, owner, body, scope):
             data[key] = run[key]
     fingerprint = api._fingerprint(data)
     release = api.storage.get(owner, "release", identifier)
+    if release is not None and gate is not None:
+        # Authorize the SAME release (its own round-delivery lineage) before
+        # ever comparing the private requestHash fingerprint against it -- an
+        # inaccessible release must 404 identically to a missing one, not
+        # disclose through this 409 that a DIFFERENT-content release with
+        # this exact requestId still exists.
+        authorized = gate.authorize("release", release)
+        if authorized is None:
+            raise HTTPError(404, "not-found", "Resource not found")
+        release = authorized
     if release and release.get("requestHash") != fingerprint:
+        # A revocation racing in between the authorize() above and this
+        # comparison must still 404 identically to an already-inaccessible
+        # release, not disclose this content-dependent mismatch (review 10):
+        # recheck through the gate's own normalized final recheck (it
+        # converts a caught authorization change to the canonical 404,
+        # exactly like `authorize()` itself does).
+        if gate is not None:
+            gate.recheck()
         raise HTTPError(409, "request-changed", "이 릴리스 요청의 승인본이 변경되었습니다.")
     if release is None:
         api._worker_ready()
@@ -90,11 +108,18 @@ def create_release(api, owner, body, scope):
                                       _writer=storage_module._human_writer())
         except Conflict:
             release = api._get(owner, "release", identifier)
+            if gate is not None:
+                authorized = gate.authorize("release", release)
+                if authorized is None:
+                    raise HTTPError(404, "not-found", "Resource not found")
+                release = authorized
             if release.get("requestHash") != fingerprint:
+                if gate is not None:
+                    gate.recheck()
                 raise HTTPError(409, "request-changed", "릴리스 요청이 변경되었습니다.")
-    job = api._existing_job(owner, identifier, fingerprint)
+    job = api._existing_job(owner, identifier, fingerprint, gate=gate)
     if not job:
-        job = api._new_job(owner, identifier, "release", {"releaseId": identifier}, fingerprint)
+        job = api._new_job(owner, identifier, "release", {"releaseId": identifier}, fingerprint, gate=gate)
     job = api._retry_dispatch(owner, job)
     api._invoke(owner, job)
     return _json(202, {"release": api._get(owner, "release", identifier), "job": job})

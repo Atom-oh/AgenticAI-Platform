@@ -393,6 +393,16 @@ def _origin_readable(ctx, record, aggregate=None):
     return _passes(check)
 
 
+def _origin_impact_recheck(ctx, record):
+    """Retained for `impact()`'s response gate: re-verifies origin source access
+    fresh, right before the complete response is released, exactly like every
+    contributing destination reader already does."""
+    def check():
+        if not _origin_readable(ctx, record):
+            _not_found()
+    return check
+
+
 def _grant_reference(row):
     return {"sourceKind": "published-asset", "sourceId": row["publicationId"],
             "revision": str(row["publicationRevision"]), "sha256": row["publicationHash"],
@@ -497,6 +507,13 @@ def impact(ctx, publication_id, retain=None):
     """
     from workspace.ontology_store import CURRENT, Ontology
     record = _origin_publication(ctx, publication_id)
+    # `_origin_publication` only checks project membership; a publication whose
+    # origin sources have since been restricted must be indistinguishable from a
+    # missing one here too, exactly like its own detail route already requires.
+    if not _origin_readable(ctx, record):
+        _not_found()
+    if retain is not None:
+        retain(ctx.project_id, _origin_impact_recheck(ctx, record))
     dependents, contributing = [], []
     for row in sorted(record.get("grants", []), key=lambda item: item["destinationProject"]):
         try:
@@ -515,7 +532,10 @@ def impact(ctx, publication_id, retain=None):
         try:
             ontology = Ontology(Service(ctx.host, scope, ctx.claims))
             nodes = ontology.source_nodes(reference)
-            manifest = ontology.current()
+            # The exact generation `source_nodes` itself read (and re-confirmed via its
+            # own final `_recheck` before returning) -- never a second, later `current()`
+            # call, which would reopen a gap for an intervening republish between the two.
+            generation = ontology._last_generation
             # The destination grant is part of that scope's authority for this answer.
             ontology.sources._remember("pub_grant", grant_row)
         except CollaborationError as error:
@@ -523,8 +543,7 @@ def impact(ctx, publication_id, retain=None):
                 raise
             continue
         if nodes:
-            contributing.append((row["destinationProject"], scope["owner"], ontology.sources,
-                                 manifest.get("generation") if manifest else None))
+            contributing.append((row["destinationProject"], scope["owner"], ontology.sources, generation))
             dependents.append({"projectId": row["destinationProject"], "nodeIds": nodes})
     ctx.fresh()
 

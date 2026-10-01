@@ -9,6 +9,7 @@ from workspace import ontology_schema as schema
 from workspace.ontology_analysis import source_input, project_analysis, validate_analysis, validate_execution, local_analyze, ANALYZER_ROOT
 from workspace.ontology_sources import Sources, asset_reference
 from workspace.ontology_store import Ontology
+from ontology_runtime.dispatch import selected_backend
 
 
 def reconcile(ctx, artifact):
@@ -89,6 +90,11 @@ def submit(ctx, body):
         fail(400, "ontology-resolver-unavailable", "승인된 경로 해석 프로필을 선택하세요.")
     reader = Sources(ctx)
     checks = reader.verify(refs)
+    if selected_backend(ctx.host)["name"] == "agentcore":
+        if len(refs) > 40:
+            fail(422, "agentcore-source-budget", "AgentCore 분석 묶음은 원본 40개 이하로 나누세요.")
+        from ontology_runtime.admission import require
+        checks.extend(require(ctx, ref) for ref in refs)
     current = Ontology(ctx).current()
     generation = (current or {}).get("generation")
     if "expectedGeneration" in body and generation != body["expectedGeneration"]:
@@ -97,7 +103,8 @@ def submit(ctx, body):
     pinned = {**ctx.authorization(), "operation": "ontology-analyze", "artifactId": identifier,
               "name": name, "files": copy.deepcopy(files), "sourceRefs": refs,
               "resolver": copy.deepcopy(profile), "resolverHash": schema.digest(profile),
-              "expectedGeneration": generation, "authorityHash": schema.digest(list(reader.authority))}
+              "expectedGeneration": generation, "backend": selected_backend(ctx.host),
+              "authorityHash": schema.digest(list(reader.authority))}
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
                 "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}

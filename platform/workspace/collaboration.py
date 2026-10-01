@@ -642,14 +642,26 @@ class Collaboration:
                 _invalid("Round and page comments require a stored run")
             rounds = run.get("rounds", [])
             if "round" in anchor:
-                rounds = [row for row in rounds if row.get("number") == anchor["round"]]
-                if len(rounds) != 1:
+                matched = [row for row in rounds if row.get("number") == anchor["round"]]
+                if len(matched) != 1:
                     _invalid("The discussion round is unavailable")
-            if "pageId" in anchor:
-                pages = [page.get("pageId") for row in rounds for page in row.get("pageSources", [])]
-                if "round" not in anchor:
-                    pages.extend(page.get("pageId") for page in run.get("pageSources", []))
-                if anchor["pageId"] not in pages:
+                if "pageId" in anchor:
+                    pages = [page.get("pageId") for row in matched for page in row.get("pageSources", [])]
+                    if anchor["pageId"] not in pages:
+                        _invalid("The discussion page is unavailable")
+            elif "pageId" in anchor:
+                # No explicit round: bind to whichever single round actually produced
+                # this page, persisting it so a later read never has to re-derive (and
+                # possibly mis-bind) it. A page produced by more than one round is
+                # ambiguous and must be pinned explicitly rather than silently guessed.
+                producing = sorted({row["number"] for row in rounds
+                                    if any(page.get("pageId") == anchor["pageId"]
+                                          for page in row.get("pageSources", []))})
+                if len(producing) > 1:
+                    _invalid("This page was produced by more than one round; select the exact round")
+                if producing:
+                    anchor["round"] = producing[0]
+                elif anchor["pageId"] not in (page.get("pageId") for page in run.get("pageSources", [])):
                     _invalid("The discussion page is unavailable")
         return anchor
 

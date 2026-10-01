@@ -252,7 +252,8 @@ def _action(page, step: dict, bindings=None) -> tuple[bool, object]:
 
 
 def evaluate_bundle(files: dict[str, bytes], contract: dict, reference_png: bytes | None = None,
-                    visual_tolerance: float = 0.15, expected_hash: str | None = None, text_scale: float = 1.0) -> dict:
+                    visual_tolerance: float = 0.15, expected_hash: str | None = None, text_scale: float = 1.0,
+                    *, _context_factory=None) -> dict:
     """Render exact local build bytes; never fetch missing files or outside URLs."""
     if not isinstance(files, dict) or not files or len(files) > 100 or "index.html" not in files:
         raise ValueError("React 빌드의 index.html과 로컬 파일이 필요합니다.")
@@ -269,7 +270,7 @@ def evaluate_bundle(files: dict[str, bytes], contract: dict, reference_png: byte
     if expected_hash is not None and expected_hash != digest:
         raise ValueError("빌드 파일 해시가 검증 대상과 일치하지 않습니다.")
     result = evaluate_html(files["index.html"].decode("utf-8"), contract, reference_png,
-                           visual_tolerance, _bundle=files, text_scale=text_scale)
+                           visual_tolerance, _bundle=files, text_scale=text_scale, _context_factory=_context_factory)
     result["bundleHash"] = digest
     result["renderer"] = "react-bundle"
     return result
@@ -277,7 +278,7 @@ def evaluate_bundle(files: dict[str, bytes], contract: dict, reference_png: byte
 
 def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                   visual_tolerance: float = 0.15, *, _bundle: dict[str, bytes] | None = None,
-                  text_scale: float = 1.0) -> dict:
+                  text_scale: float = 1.0, _context_factory=None) -> dict:
     from playwright.sync_api import sync_playwright
     from studio.artifacts import secure_html
 
@@ -326,7 +327,7 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                 # incognito context. An empty profile path creates a fresh
                 # temporary default context and browser for every rule.
                 _phase("launch")
-                context = playwright.chromium.launch_persistent_context(
+                context = _context_factory(playwright, contract["viewport"]) if _context_factory else playwright.chromium.launch_persistent_context(
                     "",
                     headless=True, executable_path=executable or None, env=environment,
                     viewport=contract["viewport"], device_scale_factor=1,
