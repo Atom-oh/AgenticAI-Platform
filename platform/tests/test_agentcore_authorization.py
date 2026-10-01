@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_workbench_core import wb
 from test_ontology_analysis import collection
 from test_ontology_sources import context
+from intake import admin_handler
 from ontology_runtime.authorization import active_job
 from ontology_runtime.capability import AuthorizationDenied
 from ontology_runtime.dispatch import RuntimeAnalyzer
@@ -16,24 +18,68 @@ from workspace.collaboration import CollaborationError
 from workspace.ontology_jobs import submit
 from workspace.ontology_sources import asset_reference
 
+INTAKE_DEPLOYMENT = "offline-test"
+_ADMIN_LAMBDA = SimpleNamespace(
+    invoked_function_arn="arn:aws:lambda:ap-northeast-2:180294183052:function:IntakeAdminFn")
 
-def admitted(wb):
+
+def _admin(storage, monkeypatch, event):
+    monkeypatch.setattr(admin_handler, "storage_factory", lambda: storage)
+    result = admin_handler.handler({"operator": "security-operator", **event}, _ADMIN_LAMBDA)
+    assert result.get("ok"), result
+    return result["record"]
+
+
+def authorize_admission(wb, monkeypatch, refs, *, data_class="synthetic"):
+    """Register the real IAM-administered policy/provenance a `require()` call now demands.
+
+    Mirrors `Env.policy`/`Env.provenance` in test_intake_admission.py (B0 intake):
+    no ontology_runtime fixture may dispatch on a bare self-asserted label alone.
+    """
+    monkeypatch.setenv("INTAKE_DEPLOYMENT", INTAKE_DEPLOYMENT)
+    draft = _admin(wb.storage, monkeypatch, {"op": "put_policy", "record": {
+        "id": "ontology-admission-policy", "scope": {"deployment": INTAKE_DEPLOYMENT, "projectIds": [wb.project["id"]]},
+        "dataClasses": ["synthetic", "public", "internal-non-sensitive"],
+        "profiles": {"inspection": "inspect-1", "normalization": "identifier-normalization-1"},
+        "requiresReviewer": {"internal-non-sensitive": True},
+        "trustedProvenance": {"public": True, "synthetic": True},
+        "promptText": "review", "expiresAt": wb.storage.clock() + 60 * 86_400_000}})
+    policy = _admin(wb.storage, monkeypatch,
+                     {"op": "activate_policy", "id": draft["id"], "expectedRevision": draft["revision"]})
+    if data_class in ("synthetic", "public"):
+        for index, ref in enumerate(refs):
+            _admin(wb.storage, monkeypatch, {"op": "register_provenance", "record": {
+                "id": f"ontology-admission-provenance-{index}", "policyId": policy["id"],
+                "policyRevision": policy["revision"], "kind": "fixture" if data_class == "synthetic" else "public-reference",
+                "reference": {key: ref[key] for key in ("sourceKind", "sourceId", "revision", "sha256")},
+                "scope": {"deployment": INTAKE_DEPLOYMENT, "projectIds": [wb.project["id"]]},
+                "expiresAt": wb.storage.clock() + 30 * 86_400_000}})
+    else:
+        _admin(wb.storage, monkeypatch, {"op": "grant_reviewer", "record": {
+            "id": "ontology-admission-grant", "actor": "alice", "policyId": policy["id"],
+            "scope": {"projectIds": [wb.project["id"]]}, "operations": ["review-internal"],
+            "expiresAt": wb.storage.clock() + 30 * 86_400_000}})
+    return policy
+
+
+def admitted(wb, monkeypatch, *, data_class="synthetic"):
     wb.api.ontology_analyzer_ready = True
     wb.api.ontology_analyzer = RuntimeAnalyzer(
         "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
     files = collection(wb)
-    for file in files:
-        source = wb.storage.get(wb.owner, "asset", file["assetId"])
-        classify(context(wb), {"requestId": file["assetId"], "sourceRef": asset_reference(source),
-            "classification": "synthetic", "reason": "Synthetic test fixture"})
+    refs = [asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files]
+    authorize_admission(wb, monkeypatch, refs, data_class=data_class)
+    for file, ref in zip(files, refs):
+        classify(context(wb), {"requestId": file["assetId"], "sourceRef": ref,
+            "classification": data_class, "reason": "Synthetic test fixture"})
     queued = submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files})
     wb.storage.claim_job(wb.owner, queued["job"]["id"])
     return queued["artifact"]
 
 
 @pytest.mark.parametrize("mutation", ["cancel", "artifact", "membership", "actor", "expired", "title"])
-def test_runtime_boundary_checks_the_original_job_and_audience(wb, mutation):
-    artifact = admitted(wb)
+def test_runtime_boundary_checks_the_original_job_and_audience(wb, monkeypatch, mutation):
+    artifact = admitted(wb, monkeypatch)
     if mutation == "cancel":
         job = wb.storage.get(wb.owner, "job", artifact["jobId"])
         wb.storage.put(wb.owner, "job", {**job, "status": "cancelled"}, job["version"])
@@ -58,8 +104,8 @@ def test_runtime_boundary_checks_the_original_job_and_audience(wb, mutation):
             active_job(wb.storage, wb.collab, wb.project["id"], artifact["id"], deadline=deadline)
 
 
-def test_runtime_job_cancellation_during_a_tool_transaction_cannot_commit(wb):
-    artifact = admitted(wb)
+def test_runtime_job_cancellation_during_a_tool_transaction_cannot_commit(wb, monkeypatch):
+    artifact = admitted(wb, monkeypatch)
     ctx, _, job, sources, checks = active_job(wb.storage, wb.collab, wb.project["id"], artifact["id"])
     checks.extend(sources.verify(artifact["sourceRefs"]))
     def cancel():

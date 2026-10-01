@@ -45,8 +45,8 @@ class Events:
 
 
 @pytest.fixture
-def pipeline(wb):
-    artifact = admitted(wb)
+def pipeline(wb, monkeypatch):
+    artifact = admitted(wb, monkeypatch)
     kms = PhysicalKms()
     for key, purpose in [("cap-v1", "execution-capability"), ("evidence-v1", "runtime-evidence")]:
         wb.storage.put(KEYS, "ac_key", {"id": key, "keyArn": key, "purpose": purpose,
@@ -160,8 +160,8 @@ def test_authority_independently_rejects_late_or_invalid_runtime_results(wb, pip
     assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
 
 
-def test_execution_writer_cannot_modify_project_sources_or_key_registry(wb):
-    artifact = admitted(wb)
+def test_execution_writer_cannot_modify_project_sources_or_key_registry(wb, monkeypatch):
+    artifact = admitted(wb, monkeypatch)
     ctx, _, _, _, checks = active_job(wb.storage, wb.collab, wb.project["id"], artifact["id"])
     for owner, kind in [(wb.owner, "project"), (KEYS, "ac_key"), (wb.owner, "asset")]:
         write = wb.collab._write(owner, kind, {"id": "forbidden", "ttl": wb.now // 1000 + 60})

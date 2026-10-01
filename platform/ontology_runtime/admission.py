@@ -1,6 +1,7 @@
 """Exact source classification is independent of project read permission."""
 from __future__ import annotations
 
+from intake import admission as intake_admission
 from workbench.service import fail, fields
 from workspace import ontology_schema as schema
 from workspace.ontology_sources import Sources, authority_identity
@@ -60,4 +61,29 @@ def require(ctx, reference):
             or row.get("classification") not in CLASSES
             or identifier(row["sourceRef"]) != identifier(reference)):
         fail(403, "agentcore-input-unclassified", "AgentCore에 사용할 원본의 비민감 분류 검토가 필요합니다.")
+    # The owner's self-reported classification is not authority by itself
+    # (source-admission/1, AUTH-08): every transfer must still be backed by a
+    # currently active, IAM-administered policy and, per data class, a
+    # registered provenance (synthetic/public) or a current reviewer grant
+    # (internal-non-sensitive) for the actor who recorded the classification.
+    # Missing or revoked authority fails closed on every call, not only once.
+    data_class = row["classification"]
+    try:
+        policy = intake_admission.current_policy(ctx.storage, ctx.project_id)
+    except intake_admission.AdmissionError:
+        fail(403, "agentcore-admission-authority-missing",
+             "AgentCore 전송을 승인하는 관리형 정책이 없습니다.")
+    if data_class not in policy["dataClasses"]:
+        fail(403, "agentcore-admission-authority-missing",
+             "현재 정책이 이 분류의 AgentCore 전송을 허용하지 않습니다.")
+    if data_class in ("synthetic", "public"):
+        provenance = intake_admission.find_provenance(ctx.storage, policy, reference, ctx.project_id, data_class)
+        if provenance is None:
+            fail(403, "agentcore-admission-authority-missing",
+                 "등록된 출처 증명이 없어 AgentCore 전송을 승인할 수 없습니다.")
+    else:
+        grant = intake_admission.find_grant(ctx.storage, row["reviewedBy"], policy, ctx.project_id)
+        if grant is None:
+            fail(403, "agentcore-admission-authority-missing",
+                 "검토자 권한이 없어 AgentCore 전송을 승인할 수 없습니다.")
     return ctx.check("ac_admission", row)
