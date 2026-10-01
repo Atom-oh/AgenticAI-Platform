@@ -40,18 +40,28 @@ def _prompt(pages):
                        f"\n{_norm(p['text'])}" for p in pages)
 
 
+# Number-continuing characters around a value span. The grammar's `\d` is Unicode, so the boundary must be too:
+# any numeric character of any script, plus ASCII/full-width/Arabic separators and full-width unit suffixes
+# (PR #30 review 7, #2).
+_SEPARATORS = ".,．，٫٬"
+_SUFFIXES = ",，%％pｐ"
+_ANY_SIGN = SIGNS + "＋－﹢﹣"     # full-width/small signs the grammar rejects still must not be cut off
+
+
 def _boundary(text, start, end, value):
     """Whole-token span of a financial `value` at text[start:end] (review rounds 2-4, #8)."""
-    if re.match(r"[0-9,%p]|\.\d", text[end:]):
+    after = text[end:end + 2]
+    if after and (after[0].isnumeric() or after[0] in _SUFFIXES
+                  or (after[0] in _SEPARATORS and len(after) > 1 and after[1].isnumeric())):
         return False
-    if start > 0 and text[start - 1] in "0123456789.,":
+    if start > 0 and (text[start - 1].isnumeric() or text[start - 1] in _SEPARATORS):
         return False
     lead = re.match(r"(?:연\s?)?", value).end()
     signed = value[lead:lead + 1] in SIGNS
     j = start + lead - 1
     while j >= 0 and text[j] == " ":
         j -= 1
-    return signed or j < 0 or text[j] not in SIGNS
+    return signed or j < 0 or text[j] not in _ANY_SIGN
 
 
 def _located(page_text, quote):

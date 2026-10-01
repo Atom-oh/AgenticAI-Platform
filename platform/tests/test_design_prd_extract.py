@@ -168,3 +168,40 @@ def test_malformed_admission_blocks_before_any_model_call():
         out = extract_prd(pages, deps, model="m")
         assert out["blocked"] == "admission-invalid" and out["prd"] is None, pages
         assert calls == [], pages
+
+
+# ---- Unicode digits share the grammar's boundaries (PR #30 review 7, #2) ------------------------------------
+
+def _page(text):
+    return [{**PAGES[0], "text": text}] + PAGES[1:]
+
+
+@pytest.mark.parametrize("text,value,quote", [
+    ("가입기간 １２개월", "２개월", "２개월"),                 # full-width digits
+    ("가입기간 1２개월", "２개월", "２개월"),                  # mixed script: ASCII then full-width
+    ("가입기간 １2개월", "2개월", "2개월"),                    # mixed script: full-width then ASCII
+    ("가입기간 ١٢개월", "٢개월", "٢개월"),                     # Arabic-Indic digits
+    ("한도 １,２００만원", "２００만원", "２００만원"),         # ASCII thousands comma inside full-width number
+    ("한도 １，２００만원", "２００만원", "２００만원"),        # full-width thousands comma
+    ("기본금리 연 ２．５%", "５%", "５%"),                     # full-width decimal point
+    ("기본금리 연 ２.５%", "５%", "５%"),                      # ASCII decimal point inside full-width number
+    ("가입기간 １２개월３", "１２개월", "１２개월"),            # trailing full-width digit after the unit
+    ("기본금리 연 ２%％", "연 ２%", "연 ２%"),                  # trailing full-width percent
+    ("변동 －２.０%", "２.０%", "２.０%"),                       # full-width minus sign
+])
+def test_shortened_unicode_number_is_rejected(text, value, quote):
+    out = _with(_page(text), "term", value, quote)
+    assert {"field": "term", "code": "value-not-verbatim"} in out["issues"], out["issues"]
+
+
+@pytest.mark.parametrize("text,value,quote", [
+    ("가입기간 １２개월", "１２개월", "가입기간 １２개월"),
+    ("가입기간 1２개월", "1２개월", "1２개월"),
+    ("가입기간 １2개월", "１2개월", "가입기간 １2개월"),
+    ("한도 １,２００만원", "１,２００만원", "한도 １,２００만원"),
+    ("기본금리 연 ２.５%", "연 ２.５%", "기본금리 연 ２.５%"),
+])
+def test_full_unicode_token_is_accepted(text, value, quote):
+    out = _with(_page(text), "term", value, quote)
+    assert not [i for i in out["issues"] if i["field"] == "term"], out["issues"]
+    assert bindings(out["prd"])["product.term"] == value
