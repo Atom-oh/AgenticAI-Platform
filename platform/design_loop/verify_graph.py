@@ -232,8 +232,12 @@ def _context_key(items, context, k, deps):
 
 def page_review_keys(bundle, k, deps, screen_id, state, items):
     """`[(case, reviewKey)]` for every applicable rendering context of one page, computed by `review_plan` --
-    the same contexts, grouping and judge payloads that direct review judges and caches."""
-    plan, _incomplete = review_plan(bundle, k, items, pages={(screen_id, state)})
+    the same contexts, grouping and judge payloads that direct review judges and caches. ValueError when the
+    plan is incomplete (a truncated case enumeration, an unresolved target, an undecidable condition): keys of a
+    partial plan cannot stand for every rendering (PR #30 review 6, #2)."""
+    plan, incomplete = review_plan(bundle, k, items, pages={(screen_id, state)})
+    if incomplete:
+        raise ValueError("review plan is incomplete: " + ", ".join(sorted({i["reason"] for i in incomplete})))
     return [(entry["case"], _context_key(entry["items"], entry["context"], k, deps)) for entry in plan]
 
 
@@ -274,7 +278,7 @@ def compose_review(stored, bundle, k, deps, screen_id, state, items, *, verify_l
     context's review key, a current lineage through `verify_lineage` (injected by C; no default, so without it
     nothing is reused) and a `pass` verdict for every item judged in that context. Anything else -- a missing
     context, a failing or incomplete verdict, an undecidable condition, an over-limit page, no applicable
-    context at all -- re-reviews (PR #30 review 5, #3)."""
+    context at all, a truncated case enumeration -- re-reviews (PR #30 review 5, #3; review 6, #2)."""
     missing = {"status": "needs_changes", "code": "review-evidence-missing"}
     records = _stored_records(stored)
     if not records:
@@ -350,9 +354,16 @@ def review_plan(bundle, k, items, pages=None):
     never renders at all). Two cases are deduplicated into one context only when they render byte-identical text
     for the page: projecting onto only the variables `appliesWhen` itself references is not enough, because a
     rule's REQUIREDNESS condition can differ from its content's VISIBILITY condition (PR #30 review round 4, #1;
-    round 3, #2). `pages` restricts the plan to those `(screen, state)` pages."""
+    round 3, #2). `pages` restricts the plan to those `(screen, state)` pages.
+
+    A truncated case enumeration (more conditions than `enumerate_cases` expands) leaves applicable renderings
+    uninspected, so it is reported as `case-enumeration-truncated`: the plan is never complete coverage then, and
+    neither reuse nor direct review can succeed on it (PR #30 review 6, #2)."""
     incomplete, by_page, case_of = [], {}, {}
-    all_cases = enumerate_cases((bundle.get("expectation") or {}).get("conditions", []))["cases"]
+    enumeration = enumerate_cases((bundle.get("expectation") or {}).get("conditions", []))
+    all_cases = enumeration["cases"]
+    if enumeration["truncated"] and items:
+        incomplete.append({"item": "*", "reason": "case-enumeration-truncated"})
     for item in items:
         unresolved = _unresolved_targets(item, k)
         if unresolved:                  # a required target that names nothing known cannot be reviewed: block

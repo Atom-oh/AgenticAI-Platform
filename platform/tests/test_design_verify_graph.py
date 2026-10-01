@@ -486,6 +486,33 @@ def test_compose_reuse_requires_a_current_passing_judgment_for_every_applicable_
     assert compose_review(one, b, K, deps, "confirm", "default", items, verify_lineage=CURRENT)["status"] == "needs_changes"
 
 
+def test_truncated_case_enumeration_blocks_reuse_and_direct_review():
+    """PR #30 review 6 #2: with seven conditions enumerate_cases() stops at 64 of 128 assignments. Every inspected
+    case has autoTransfer=True, so a notice that disappears when autoTransfer is false "passes" in all of them.
+    review_plan() must report the truncation as incomplete; compose_review() and page_review_keys() must refuse
+    reuse, and direct review must not be approvable."""
+    from design_loop.verify_graph import _reviewer, page_review_keys, review_plan
+    b, sentinel = _conditional_notice_bundle(None)
+    extra = [f"extra{i}" for i in range(1, 6)]
+    b["expectation"] = {**b["expectation"], "conditions": ["autoTransfer", "eligible", *extra]}
+    assert enumerate_cases(b["expectation"]["conditions"])["truncated"] is True
+    deps = _batched_judge(lambda text: sentinel in text)
+    items = b["checklist"]
+    _plan, incomplete = review_plan(b, K, items)
+    assert {"item": "*", "reason": "case-enumeration-truncated"} in incomplete
+    judgments = {}
+    findings, incomplete, _ = _reviewer(b, K, deps, "fill", judgments)
+    assert not [f for f in findings if f.get("item") == "d-rule-n"]        # the 64 inspected cases all "pass"
+    assert any(i.get("reason") == "case-enumeration-truncated" for i in incomplete)
+    assert judgments                                                          # passing judgments were stored...
+    assert compose_review(judgments, b, K, deps, "confirm", "default", items, verify_lineage=CURRENT) == \
+        {"status": "needs_changes", "code": "review-evidence-missing"}       # ...but cannot stand for 128 cases
+    with pytest.raises(ValueError, match="incomplete"):
+        page_review_keys(b, K, deps, "confirm", "default", items)
+    r = verify(b, K, deps)
+    assert r["verdict"] == "blocked" and not r["approvable"]
+
+
 def test_judge_budget_three_fill_variants_by_ten_pages():
     # B0's ledger intent/outcome wrappers are not in this branch; a counting stand-in enforces the same ceiling.
     budget = 120                                                                   # maxCallsByOperation["design.generate"]
