@@ -23,6 +23,7 @@ from test_workbench_core import wb  # noqa: F401  (fixture)
 from workspace import ontology_schema as schema
 from workspace.criteria import notice_coverage_issues
 from workspace.rules import contract_hash, validate_contract
+from browser_retry import evaluate_bundle, once_more_on_engine_abort
 
 K = knowledge()
 FLOW = build_flow(K, "savings-signup")
@@ -349,22 +350,6 @@ def test_a_flow_without_the_published_screen_is_published_page_missing():
 def local_browser(monkeypatch):
     if not os.environ.get("WORKSPACE_CHROMIUM_PATH") and os.path.isfile(CHROMIUM):
         monkeypatch.setenv("WORKSPACE_CHROMIUM_PATH", CHROMIUM)
-
-
-def once_more_on_engine_abort(verify):
-    """Retry a verifier call once only when Chromium itself aborted (engineError); never on a functional result."""
-    def call(*args, **kwargs):
-        report = verify(*args, **kwargs)
-        if report.get("engineError"):
-            report = verify(*args, **kwargs)
-        assert not report.get("engineError"), ("verifier engine aborted twice", report.get("blockingFindings"))
-        return report
-    return call
-
-
-def evaluate_bundle(*args, **kwargs):
-    from workspace.browser import evaluate_bundle as verify
-    return once_more_on_engine_abort(verify)(*args, **kwargs)
 
 
 def test_engine_abort_retry_never_retries_a_functional_result():

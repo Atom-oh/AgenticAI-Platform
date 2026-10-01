@@ -202,7 +202,7 @@ def local_browser(monkeypatch):
 @needs
 def test_compiled_page_shows_and_hides_the_conditional_node_through_the_browser(local_browser):
     from test_design_contract import compiled, only, seed
-    from workspace.browser import evaluate_bundle
+    from browser_retry import evaluate_bundle
     out, registry, flow = seed()
     contract = only(out["contract"], "visible-")
     assert contract["rules"]

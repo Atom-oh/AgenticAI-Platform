@@ -86,7 +86,7 @@ def test_offline_engine_chain_from_ontology_to_handoff(local_browser):
     build = compile_local(compile_request(files, catalog_hash=catalog, contract=contract))
     assert build["ok"], build.get("diagnostics")
     # 8. the real Browser verifier on the compiled bundle
-    from workspace.browser import evaluate_bundle
+    from browser_retry import evaluate_bundle
     dist = {name: base64.b64decode(value) for name, value in build["files"].items()}
     browser = evaluate_bundle(dist, contract, expected_hash=build["bundleHash"])
     assert browser["passed"], ([c for c in browser["checks"] if c["status"] != "pass"], browser["blockingFindings"])

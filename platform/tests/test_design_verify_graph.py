@@ -551,7 +551,7 @@ def test_real_run_approval_accepts_a_round_whose_report_came_from_assemble(local
     from design_loop.convention import Registry
     from design_loop.evidence import assemble
     from design_loop.react_project import compile_local, compile_request, kit_catalog_hash, project
-    from workspace.browser import evaluate_bundle
+    from browser_retry import evaluate_bundle
     from workspace.http import WorkspaceAPI
     from workspace.react_artifacts import preview_html
     from workspace.storage import Storage

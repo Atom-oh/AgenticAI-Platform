@@ -210,7 +210,7 @@ def journey_contract(registry, flow, first, second, *, state_page=None):
 @needs
 def test_canonical_published_project_with_a_state_page_compiles_and_renders(wb, local_browser):  # noqa: F811
     from design_loop.react_project import kit_catalog_hash
-    from workspace.browser import evaluate_bundle
+    from browser_retry import evaluate_bundle
     k, ids = published_knowledge(wb, raw=error_state_seed())
     flow = build_flow(k, ids["savings-signup"])
     values = bindings(GOOD)
@@ -237,7 +237,7 @@ def test_canonical_published_project_with_a_state_page_compiles_and_renders(wb, 
 @pytest.mark.parametrize("length", [40, 41, 64])
 def test_long_published_page_ids_compile_and_verify(length, local_browser):
     from design_loop.react_project import kit_catalog_hash
-    from workspace.browser import evaluate_bundle
+    from browser_retry import evaluate_bundle
     k = copy.deepcopy(K)
     page_id = "notice-" + "x" * (length - len("notice-"))
     k.screens["eligibility"]["pageId"] = page_id
@@ -255,7 +255,7 @@ def test_long_published_page_ids_compile_and_verify(length, local_browser):
 @needs
 def test_single_case_multi_screen_project_passes_browser_and_exported_npm_test(local_browser):
     from design_loop.react_project import kit_catalog_hash
-    from workspace.browser import evaluate_bundle
+    from browser_retry import evaluate_bundle
     flow = build_flow(K, "savings-signup")
     screens = {(s, "default"): fill(K, flow, s, bindings(GOOD)) for s in flow["screens"]}
     registry = Registry(K)
