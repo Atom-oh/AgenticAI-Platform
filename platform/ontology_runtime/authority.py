@@ -55,14 +55,18 @@ class Authority:
         checks.extend(source_checks)
         if current:
             checks.append(ctx.check("ontology", current))
-        # Each `require()` call returns the admission check plus its exact pinned
-        # policy/provenance/grant revision checks (source-admission/1); flatten
-        # them into one fenced list, and keep that flat list as `admissions` for
-        # the identity comparisons below (a drift in any of them is a difference).
-        admissions = [check for reference in pinned["sourceRefs"] for check in admission.require(ctx, reference)]
+        # `fences`: every `require()` check (the classification plus its exact
+        # pinned policy/provenance/grant/decision record versions;
+        # source-admission/1), flattened for the transactions and the identity
+        # comparisons below. `admissions`: the consumed decisions
+        # `[{decisionId, revision, artifactHash}]` (platform-execution/1),
+        # which must equal the list frozen into the accepted job input.
+        fences, admissions = admission.consumed(ctx, pinned["sourceRefs"])
+        if admissions != pinned.get("admissions"):
+            raise AuthorizationDenied()
         # ONT-10: recheck the complete source-check budget before any paid work.
-        admission.preflight([*source_checks, *admissions])
-        checks.extend(admissions)
+        admission.preflight([*source_checks, *fences])
+        checks.extend(fences)
         payload, bindings = source_input(ctx, pinned["files"], pinned["resolver"])
         from ontology_runtime.inspection import inspect_payload
         boundary = inspect_payload(payload)
@@ -78,7 +82,7 @@ class Authority:
             if (not previous or previous.get("projectId") != project_id
                     or previous.get("actor") != ctx.actor or previous.get("artifactId") != artifact_id
                     or previous.get("authorityHash") != pinned["authorityHash"]
-                    or previous.get("admissions") != admissions
+                    or previous.get("admissions") != admissions or previous.get("admissionFences") != fences
                     or self.storage.clock() // 1000 >= previous.get("deadline", 0)):
                 raise AuthorizationDenied()
             # Runtime invocation is at most once for this admitted artifact.
@@ -92,7 +96,8 @@ class Authority:
                     raise AuthorizationDenied()
                 result = json.loads(raw_result)
                 evidence_key = self.evidence.verify(previous["capabilityClaims"],
-                    {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"])
+                    {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"],
+                    previous["admissions"])
                 # source-admission/1 final delivery check (AUTH-04/08): this
                 # branch writes nothing, so its linearization point is one
                 # check-only transaction over every fence -- the artifact/job,
@@ -134,6 +139,7 @@ class Authority:
             "status": "admitted", "stage": "admitted", "sourceRefs": pinned["sourceRefs"],
             "files": request["files"], "nodeIds": [], "graphGeneration": pinned["expectedGeneration"],
             "artifactId": artifact_id, "authorityHash": pinned["authorityHash"], "admissions": admissions,
+            "admissionFences": fences,
             "calls": 0, "retrievedBytes": 0, "ttl": now + 30 * 86400}
         capability, binding = self.capabilities.issue(ledger, self.config["capabilityKeyId"])
         ledger.update(binding)
@@ -167,7 +173,7 @@ class Authority:
         receipt = value.pop("runtimeReceipt")
         if value.get("execution", {}).get("toolArchiveHash") != self.config["toolArchiveHash"]:
             raise AuthorizationDenied()
-        evidence_key = self.evidence.verify(binding["capabilityClaims"], value, receipt)
+        evidence_key = self.evidence.verify(binding["capabilityClaims"], value, receipt, ledger["admissions"])
         # AUTH-04: a capability revoked while Runtime was executing must still
         # abort finalization; the evidence key alone does not stand in for it.
         self.capabilities.active(binding["capabilityKeyId"])
@@ -189,14 +195,14 @@ class Authority:
         if live_artifact["jobInput"] != pinned:
             raise AuthorizationDenied()
         checks.extend(sources.verify(pinned["sourceRefs"]))
-        current_admissions = [check for reference in pinned["sourceRefs"] for check in admission.require(ctx, reference)]
-        if current_admissions != admissions:
+        current_fences, current_admissions = admission.consumed(ctx, pinned["sourceRefs"])
+        if current_fences != fences or current_admissions != admissions or current["admissions"] != admissions:
             raise AuthorizationDenied()
-        checks.extend(current_admissions)
+        checks.extend(current_fences)
         final_sources = sources.recheck()
         checks.extend(final_sources)
         # ONT-10: recheck the final source-check count before the commit.
-        admission.preflight([*final_sources, *current_admissions])
+        admission.preflight([*final_sources, *current_fences])
         # AUTH-04 / execution-capability/1: revalidate both registry keys (the
         # capability key and the evidence key that verified the receipt)
         # immediately before the commit attempt and carry their exact registry

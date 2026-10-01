@@ -156,10 +156,21 @@ class Evidence:
     def __init__(self, kms, key_arn, state_provider=None):
         self.kms, self.key, self.state = kms, key_arn, state_provider
 
-    def sign(self, claims, result):
+    @staticmethod
+    def _body(claims, result, admissions):
+        """The signed receipt body. `admissions` -- the consumed private-intake
+        decisions `[{decisionId, revision, artifactHash}]` of the execution
+        request -- is part of it, so the signed evidence binds them
+        (platform-execution/1, RUN-04/05)."""
+        if not isinstance(admissions, list) or not admissions:
+            raise AuthorizationDenied()
         body = {key: claims[key] for key in ("executionId", "attemptId", "runtimeSessionId", "projectId", "iat")}
         body.update(resultHash=schema.digest(result), inputHash=result["execution"]["inputHash"],
-                    purpose="runtime-evidence-v1")
+                    admissions=admissions, purpose="runtime-evidence-v1")
+        return body
+
+    def sign(self, claims, result, admissions):
+        body = self._body(claims, result, admissions)
         signature = self.kms.sign(KeyId=self.key, Message=hashlib.sha256(schema.canonical(body)).digest(),
             MessageType="DIGEST", SigningAlgorithm=ALGORITHM)["Signature"]
         return {"claims": body, "signature": _encode(signature)}
@@ -191,13 +202,12 @@ class Evidence:
         except Exception:
             raise AuthorizationDenied() from None
 
-    def verify(self, claims, result, receipt):
-        """Verify a Runtime receipt; returns the evidence-key registry record used."""
+    def verify(self, claims, result, receipt, admissions):
+        """Verify a Runtime receipt signed over `admissions`; returns the
+        evidence-key registry record used."""
         try:
             key = self._registry(claims)
-            expected = {key: claims[key] for key in ("executionId", "attemptId", "runtimeSessionId", "projectId", "iat")}
-            expected.update(resultHash=schema.digest(result), inputHash=result["execution"]["inputHash"],
-                            purpose="runtime-evidence-v1")
+            expected = self._body(claims, result, admissions)
             if receipt["claims"] != expected:
                 raise AuthorizationDenied()
             if self.kms.describe_key(KeyId=self.key)["KeyMetadata"]["KeyState"] != "Enabled":

@@ -205,7 +205,7 @@ def _recheck_authority(ctx, row):
     decision, decision_checks = _verified_decision(ctx, pinned.get("id"), row["sourceRef"], data_class, policy)
     if decision != pinned:
         _decision_missing("비공개 반입 결정의 리비전 또는 승인본이 변경되었습니다.")
-    return _unique([*checks, *decision_checks])
+    return _unique([*checks, *decision_checks]), decision
 
 
 def classify(ctx, body):
@@ -251,6 +251,33 @@ def classify(ctx, body):
 
 
 def require(ctx, reference):
+    """The transaction fences for one admitted source (see `_require`)."""
+    return _require(ctx, reference)[0]
+
+
+def consumed(ctx, references):
+    """`(fences, decisions)` for an AgentCore transfer of `references`.
+
+    `fences` are the flat record-version checks every `require()` returns, for
+    the caller's transaction (and its identity comparisons). `decisions` are
+    the consumed private-intake decisions, kept separate from those fences, in
+    the platform-execution/1 shape `[{decisionId, revision, artifactHash}]`
+    (string revision, distinct decision ids, in first-reference order) that the
+    canonical ledger's admission validator accepts; callers bind this list
+    into the immutable job input, execution request, attempt and signed
+    Runtime receipt (RUN-04/05)."""
+    fences, decisions = [], {}
+    for reference in references:
+        checks, decision = _require(ctx, reference)
+        fences.extend(checks)
+        entry = {"decisionId": decision["id"], "revision": str(decision["revision"]),
+                 "artifactHash": decision["artifactHash"]}
+        if decisions.setdefault(entry["decisionId"], entry) != entry:
+            _decision_missing("비공개 반입 결정의 리비전 또는 승인본이 변경되었습니다.")
+    return fences, list(decisions.values())
+
+
+def _require(ctx, reference):
     try:
         row = ctx.get("ac_admission", identifier(reference))
     except CollaborationError as error:
@@ -272,4 +299,5 @@ def require(ctx, reference):
     # grant revisions pinned when this classification was admitted (not merely
     # "any current" authority), and fence their observed versions into the
     # caller's commit so a revocation racing the final write aborts it too.
-    return [ctx.check("ac_admission", row), *_recheck_authority(ctx, row)]
+    checks, decision = _recheck_authority(ctx, row)
+    return [ctx.check("ac_admission", row), *checks], decision

@@ -102,7 +102,12 @@ pending-review, expired or mismatched decision fails with
 `agentcore-admission-derivative`. The decision id, revision, artifact hash and
 inspection hash are pinned on the record, and every dispatch, tool call,
 completion and cached replay re-verifies that exact decision through
-`intake.admission.verify` and fences its record versions. It returns `{admission}` with the
+`intake.admission.verify` and fences its record versions. Separately from those
+transaction fences (`admissionFences`), the consumed decisions are bound as an
+immutable `admissions` list `[{decisionId, revision, artifactHash}]`
+(`platform-execution/1`; string revision, distinct decision ids) in the accepted
+job input, the execution request, the attempt ledger record and the signed
+Runtime receipt; each later boundary requires the same list. It returns `{admission}` with the
 source, classification, inspection and record version. The same source/request
 ID and exact body replay the existing inspected result; changing the body or
 inspection profile under that ID fails with `admission-request-changed`.
@@ -112,7 +117,7 @@ AgentCore submission preflights the `ONTOLOGY_CONTRACT.md` transaction budget
 (ONT-10) on the complete deduplicated source-check set that dispatch, every
 tool call and completion fence: the source fences plus every check `require()`
 returns (classification, policy, provenance or grant, intake decision). With at
-most 6 non-source operations per path inside the contract's reserve of 10, that
+most 7 non-source operations per path inside the contract's reserve of 10, that
 set may hold 90 checks (`SOURCE_CHECK_BUDGET`), so at most 30 sources
 (`MAX_SOURCES`) and, for synthetic or public inputs, 22 sources fit. A larger
 request is rejected unchanged with `execution-completion-scope`; dispatch, tool

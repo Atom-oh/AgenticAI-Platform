@@ -276,7 +276,8 @@ def test_dispatch_consumes_and_fences_the_private_intake_decisions(wb, pipeline)
     decisions = {row["id"]: row for row in wb.storage.list_page(wb.owner, "adm_decision")["items"]}
     assert len(decisions) == len(pipeline.artifact["sourceRefs"])
     execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
-    fenced = {(check["id"], check["version"]) for check in execution["admissions"] if check["kind"] == "adm_decision"}
+    fenced = {(check["id"], check["version"]) for check in execution["admissionFences"]
+              if check["kind"] == "adm_decision"}
     assert fenced == {(row["id"], row["version"]) for row in decisions.values()}
     for ref in pipeline.artifact["sourceRefs"]:
         binding = wb.storage.get(wb.owner, "ac_admission", identifier(ref))["binding"]["decision"]
@@ -637,3 +638,40 @@ def test_the_attempt_and_capability_expiry_are_bounded_by_the_key_validity_at_is
     execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
     assert execution["deadline"] <= key["notAfter"]
     assert execution["capabilityClaims"]["exp"] <= key["notAfter"]
+
+
+def test_execution_records_bind_the_consumed_decisions_in_the_canonical_shape(wb, pipeline):
+    """PR #34 review 2, finding 5 (platform-execution/1, RUN-04/05): the
+    consumed private-intake decisions are bound as an immutable
+    `[{decisionId, revision, artifactHash}]` list -- separate from the
+    transaction fences -- in the accepted job input, the execution request, the
+    attempt record and the signed Runtime receipt, and the canonical ledger's
+    admission validator accepts every entry."""
+    from workspace.execution_ledger import _admission_ref
+    result = pipeline.dispatch()
+    decisions = {row["id"]: row for row in wb.storage.list_page(wb.owner, "adm_decision")["items"]}
+    expected = [{"decisionId": row["id"], "revision": str(row["revision"]),
+                 "artifactHash": row["derivation"]["derivativeHash"]} for row in (
+        decisions[wb.storage.get(wb.owner, "ac_admission", identifier(ref))["binding"]["decision"]["id"]]
+        for ref in pipeline.artifact["sourceRefs"])]
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    for admissions in (pipeline.artifact["jobInput"]["admissions"], execution["request"]["admissions"],
+                       execution["admissions"], result["runtimeReceipt"]["claims"]["admissions"]):
+        assert admissions == expected
+        assert None not in [_admission_ref(row) for row in admissions]
+        assert len({row["decisionId"] for row in admissions}) == len(admissions)
+    assert all(check.keys() == {"owner", "kind", "id", "version"} for check in execution["admissionFences"])
+
+
+def test_a_receipt_verifies_only_against_the_consumed_decisions_it_was_signed_over(wb, pipeline):
+    """The Runtime receipt's signature covers the consumed decisions: the same
+    receipt never verifies against a different decision list."""
+    result = pipeline.dispatch()
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    evidence, receipt = pipeline.authority.evidence, result["runtimeReceipt"]
+    value = {key: item for key, item in result.items() if key != "runtimeReceipt"}
+    assert evidence.verify(execution["capabilityClaims"], value, receipt, execution["admissions"])
+    changed = [{**execution["admissions"][0], "revision": "2"}, *execution["admissions"][1:]]
+    for admissions in (changed, execution["admissions"][1:], []):
+        with pytest.raises(AuthorizationDenied):
+            evidence.verify(execution["capabilityClaims"], value, receipt, admissions)

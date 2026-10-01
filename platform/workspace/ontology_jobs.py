@@ -90,15 +90,17 @@ def submit(ctx, body):
         fail(400, "ontology-resolver-unavailable", "승인된 경로 해석 프로필을 선택하세요.")
     agentcore = selected_backend(ctx.host)["name"] == "agentcore"
     if agentcore:
-        from ontology_runtime.admission import preflight, preflight_sources, require
+        from ontology_runtime.admission import consumed, preflight, preflight_sources
         preflight_sources(refs)
     reader = Sources(ctx)
     checks = reader.verify(refs)
+    admissions = None
     if agentcore:
         # ONT-10: the exact deduplicated source-check set dispatch, every tool
         # call and completion will fence (the same source fences and `require()`
         # checks) must fit their transaction budget before the job is accepted.
-        checks.extend(check for ref in refs for check in require(ctx, ref))
+        fences, admissions = consumed(ctx, refs)
+        checks.extend(fences)
         preflight(checks)
     current = Ontology(ctx).current()
     generation = (current or {}).get("generation")
@@ -110,6 +112,10 @@ def submit(ctx, body):
               "resolver": copy.deepcopy(profile), "resolverHash": schema.digest(profile),
               "expectedGeneration": generation, "backend": selected_backend(ctx.host),
               "authorityHash": schema.digest(list(reader.authority))}
+    if admissions is not None:
+        # platform-execution/1: the consumed decisions are frozen into the
+        # accepted, immutable job input; dispatch requires the same list.
+        pinned["admissions"] = admissions
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
                 "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}

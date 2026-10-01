@@ -62,10 +62,10 @@ class Tools:
             fail(409, "execution-operation-changed", "같은 작업 ID의 내용이 다릅니다.")
         if not prior and (ledger.get("calls", 0) >= 60 or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024):
             fail(422, "execution-budget", "실행의 도구 조회 한도를 초과했습니다.")
-        admissions = [check for reference in ledger["sourceRefs"] for check in admission.require(ctx, reference)]
-        if admissions != ledger.get("admissions"):
+        fences, admissions = admission.consumed(ctx, ledger["sourceRefs"])
+        if fences != ledger.get("admissionFences") or admissions != ledger.get("admissions"):
             raise AuthorizationDenied()
-        checks.extend(admissions)
+        checks.extend(fences)
         sources.verify(ledger["sourceRefs"])
         manifest = Ontology(ctx).current()
         if (manifest or {}).get("generation") != ledger["graphGeneration"]:
@@ -115,7 +115,7 @@ class Tools:
         # Reads are never replayed without current source/admission checks.
         final_sources = sources.recheck()
         checks.extend(final_sources)
-        admission.preflight([*final_sources, *admissions])
+        admission.preflight([*final_sources, *fences])
         _, latest = self.capabilities.verify(envelope["capability"], self.load,
             operation=operation, workload=self.workload, allow_result_ready=operation == "execution.finish")
         if latest["version"] != ledger["version"]:
