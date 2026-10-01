@@ -11,6 +11,50 @@ from ontology_runtime import inspection
 POLICY = "design-nonsensitive-v1"
 CLASSES = frozenset({"synthetic", "public", "internal-non-sensitive"})
 
+# ONTOLOGY_CONTRACT transaction-budget preflight (ONT-10). Each protected
+# AgentCore transaction (dispatch, every tool call, completion) is one
+# DynamoDB `TransactWriteItems` of at most 100 operations. Its non-source
+# operations are at most 6 on every path (dispatch: two ledger writes, the
+# artifact/job fences, the ontology fence, the project fence; a tool call: the
+# same; completion: one ledger write, the artifact/job fences, the capability
+# and evidence key fences, the project fence), within the contract's reserve
+# of 10. Every remaining operation is a source check: the deduplicated source
+# fences plus every check `require()` returns for each source.
+TRANSACTION_OPERATIONS = 100
+NON_SOURCE_OPERATIONS = 10
+SOURCE_CHECK_BUDGET = min(90, TRANSACTION_OPERATIONS - max(10, NON_SOURCE_OPERATIONS))
+# A source contributes at least three distinct checks: its own source fence,
+# its classification (`ac_admission`) and its private-intake decision.
+MIN_CHECKS_PER_SOURCE = 3
+MAX_SOURCES = SOURCE_CHECK_BUDGET // MIN_CHECKS_PER_SOURCE
+
+
+def _scope_error(count, limit):
+    fail(422, "execution-completion-scope",
+         f"AgentCore 분석 묶음의 원본 검증 항목({count}개)이 실행 트랜잭션 한도({limit}개)를 넘습니다. "
+         f"원본 {MAX_SOURCES}개 이하의 새 요청으로 나누세요.")
+
+
+def preflight_sources(references):
+    """Cheap upper bound before any read: more than `MAX_SOURCES` distinct
+    sources can never fit the source-check budget."""
+    distinct = {identifier(reference) for reference in references}
+    if len(distinct) > MAX_SOURCES:
+        _scope_error(len(distinct) * MIN_CHECKS_PER_SOURCE, SOURCE_CHECK_BUDGET)
+
+
+def preflight(source_checks):
+    """The complete deduplicated source-check set a protected AgentCore
+    transaction includes -- source fences plus every `require()` check -- must
+    fit `SOURCE_CHECK_BUDGET`. Submission runs this on the same set dispatch,
+    each tool call and completion fence, so an accepted job is always
+    executable; those paths rerun it before their own commit. The request is
+    rejected unchanged, never trimmed."""
+    unique = {(check["owner"], check["kind"], check["id"]) for check in source_checks}
+    if len(unique) > SOURCE_CHECK_BUDGET:
+        _scope_error(len(unique), SOURCE_CHECK_BUDGET)
+    return list(source_checks)
+
 
 def identifier(reference):
     ref = schema.source_ref(reference)

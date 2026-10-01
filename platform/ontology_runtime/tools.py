@@ -113,7 +113,9 @@ class Tools:
                 fail(409, "execution-stage", "검증된 실행 결과가 필요합니다.")
             result = {"manifestHash": arguments["manifestHash"], "stage": "completed"}
         # Reads are never replayed without current source/admission checks.
-        checks.extend(sources.recheck())
+        final_sources = sources.recheck()
+        checks.extend(final_sources)
+        admission.preflight([*final_sources, *admissions])
         _, latest = self.capabilities.verify(envelope["capability"], self.load,
             operation=operation, workload=self.workload, allow_result_ready=operation == "execution.finish")
         if latest["version"] != ledger["version"]:

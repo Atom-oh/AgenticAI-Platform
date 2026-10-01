@@ -34,18 +34,18 @@ class Authority:
         current, _ = Ontology(ctx).authorize_publication(pinned["name"])
         if (current or {}).get("generation") != pinned["expectedGeneration"]:
             raise AuthorizationDenied()
-        checks.extend(sources.verify(pinned["sourceRefs"]))
+        admission.preflight_sources(pinned["sourceRefs"])
+        source_checks = sources.verify(pinned["sourceRefs"])
+        checks.extend(source_checks)
         if current:
             checks.append(ctx.check("ontology", current))
-        # Each admitted source contributes its source fence and a distinct
-        # classification fence. Keep every operation within DynamoDB's limit.
-        if len(pinned["sourceRefs"]) > 40:
-            fail(422, "agentcore-source-budget", "AgentCore 분석 묶음은 원본 40개 이하로 나누세요.")
         # Each `require()` call returns the admission check plus its exact pinned
         # policy/provenance/grant revision checks (source-admission/1); flatten
         # them into one fenced list, and keep that flat list as `admissions` for
         # the identity comparisons below (a drift in any of them is a difference).
         admissions = [check for reference in pinned["sourceRefs"] for check in admission.require(ctx, reference)]
+        # ONT-10: recheck the complete source-check budget before any paid work.
+        admission.preflight([*source_checks, *admissions])
         checks.extend(admissions)
         payload, bindings = source_input(ctx, pinned["files"], pinned["resolver"])
         from ontology_runtime.inspection import inspect_payload
@@ -169,7 +169,10 @@ class Authority:
         if current_admissions != admissions:
             raise AuthorizationDenied()
         checks.extend(current_admissions)
-        checks.extend(sources.recheck())
+        final_sources = sources.recheck()
+        checks.extend(final_sources)
+        # ONT-10: recheck the final source-check count before the commit.
+        admission.preflight([*final_sources, *current_admissions])
         # AUTH-04: revalidate the capability key in this final guard, immediately
         # before the commit attempt, and carry its exact registry version into the
         # completion transaction itself -- a revocation racing this very commit

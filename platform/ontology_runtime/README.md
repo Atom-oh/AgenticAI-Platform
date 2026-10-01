@@ -108,6 +108,16 @@ ID and exact body replay the existing inspected result; changing the body or
 inspection profile under that ID fails with `admission-request-changed`.
 Updates use conditional record versions and current source/project fences.
 
+AgentCore submission preflights the `ONTOLOGY_CONTRACT.md` transaction budget
+(ONT-10) on the complete deduplicated source-check set that dispatch, every
+tool call and completion fence: the source fences plus every check `require()`
+returns (classification, policy, provenance or grant, intake decision). With at
+most 6 non-source operations per path inside the contract's reserve of 10, that
+set may hold 90 checks (`SOURCE_CHECK_BUDGET`), so at most 30 sources
+(`MAX_SOURCES`) and, for synthetic or public inputs, 22 sources fit. A larger
+request is rejected unchanged with `execution-completion-scope`; dispatch, tool
+calls and completion rerun the same check before their commits.
+
 Code Interpreter's role reads only the pinned S3 tool-archive object version.
 The adapter verifies archive/code/lock hashes and the observed architecture/
 Node major before using the trusted tool commands. Source modules, package

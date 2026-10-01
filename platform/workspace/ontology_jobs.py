@@ -88,13 +88,18 @@ def submit(ctx, body):
     profile = {"aliases": {}, "packages": {}, "jsonAssetFields": []} if profile_id == "default" else profiles.get(profile_id)
     if not isinstance(profile, dict):
         fail(400, "ontology-resolver-unavailable", "승인된 경로 해석 프로필을 선택하세요.")
+    agentcore = selected_backend(ctx.host)["name"] == "agentcore"
+    if agentcore:
+        from ontology_runtime.admission import preflight, preflight_sources, require
+        preflight_sources(refs)
     reader = Sources(ctx)
     checks = reader.verify(refs)
-    if selected_backend(ctx.host)["name"] == "agentcore":
-        if len(refs) > 40:
-            fail(422, "agentcore-source-budget", "AgentCore 분석 묶음은 원본 40개 이하로 나누세요.")
-        from ontology_runtime.admission import require
+    if agentcore:
+        # ONT-10: the exact deduplicated source-check set dispatch, every tool
+        # call and completion will fence (the same source fences and `require()`
+        # checks) must fit their transaction budget before the job is accepted.
         checks.extend(check for ref in refs for check in require(ctx, ref))
+        preflight(checks)
     current = Ontology(ctx).current()
     generation = (current or {}).get("generation")
     if "expectedGeneration" in body and generation != body["expectedGeneration"]:

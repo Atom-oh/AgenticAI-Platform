@@ -46,7 +46,11 @@ class Events:
 
 @pytest.fixture
 def pipeline(wb, monkeypatch):
-    artifact = admitted(wb, monkeypatch)
+    return build_pipeline(wb, monkeypatch)
+
+
+def build_pipeline(wb, monkeypatch, files=None):
+    artifact = admitted(wb, monkeypatch, files=files)
     kms = PhysicalKms()
     for key, purpose in [("cap-v1", "execution-capability"), ("evidence-v1", "runtime-evidence")]:
         wb.storage.put(KEYS, "ac_key", {"id": key, "keyArn": key, "purpose": purpose,
@@ -427,3 +431,66 @@ def test_authority_rejects_a_cached_replay_once_its_evidence_key_is_revoked_duri
     with pytest.raises((AuthorizationDenied, CollaborationError)):
         pipeline.dispatch()
     assert calls["n"] == 3 and pipeline.runtime_calls == 1
+
+
+def _text_sources(wb, count):
+    files = []
+    for index in range(count):
+        # Letters only: digits can resemble identifiers to the private inspection.
+        name = "".join("abcdefghij"[int(digit)] for digit in f"{index:03d}")
+        source = asset(wb, f"budget-{name}", f"export const {name} = '{name}';".encode())
+        files.append({"assetId": source["id"], "path": f"src/budget{index:03d}.ts"})
+    return files
+
+
+def _submit_sources(wb, monkeypatch, files):
+    from test_agentcore_authorization import authorize_admission, classify_admitted
+    from workspace.ontology_jobs import submit
+    from ontology_runtime.dispatch import RuntimeAnalyzer
+    wb.api.ontology_analyzer_ready = True
+    wb.api.ontology_analyzer = RuntimeAnalyzer(
+        "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
+    refs = [asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files]
+    authorize_admission(wb, monkeypatch, refs)
+    for file, ref in zip(files, refs):
+        classify_admitted(wb, ref, request_id=file["assetId"])
+    return submit(context(wb), {"requestId": "budget", "name": "budget", "files": files})
+
+
+# Synthetic sources: a source fence, a classification, a provenance
+# registration and an intake decision each (4n), plus the shared policy.
+BUDGET_SOURCES = (90 - 1) // 4
+
+
+def test_the_source_budget_is_derived_from_the_complete_transaction_budget():
+    from ontology_runtime import admission
+    assert admission.SOURCE_CHECK_BUDGET == min(90, 100 - max(10, admission.NON_SOURCE_OPERATIONS)) == 90
+    assert admission.MAX_SOURCES == admission.SOURCE_CHECK_BUDGET // admission.MIN_CHECKS_PER_SOURCE == 30
+
+
+def test_an_accepted_source_set_at_the_budget_boundary_is_executable(wb, monkeypatch):
+    """PR #34 review 1, finding 4: every job submission accepts is executable --
+    dispatch, every tool call and completion stay within one transaction each."""
+    files = _text_sources(wb, BUDGET_SOURCES)
+    client = wb.storage.table().meta.client
+    original, sizes = client.transact_write_items, []
+
+    def measure(**kwargs):
+        sizes.append(len(kwargs["TransactItems"]))
+        return original(**kwargs)
+
+    state = build_pipeline(wb, monkeypatch, files=files)
+    client.transact_write_items = measure
+    result = state.dispatch()
+    assert result["execution"]["backend"] == "agentcore-code-interpreter"
+    assert wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]["status"] == "completed"
+    assert sizes and max(sizes) <= 100
+
+
+@pytest.mark.parametrize("count", [BUDGET_SOURCES + 1, 32, 40])
+def test_a_source_set_over_the_budget_is_rejected_unchanged_at_submission(wb, monkeypatch, count):
+    with pytest.raises(CollaborationError) as error:
+        _submit_sources(wb, monkeypatch, _text_sources(wb, count))
+    assert error.value.code == "execution-completion-scope"
+    assert wb.storage.list_page(wb.owner, "wb_artifact")["items"] == []
+    assert wb.storage.list_page(wb.owner, "job")["items"] == []
