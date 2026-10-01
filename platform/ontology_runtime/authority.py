@@ -110,6 +110,9 @@ class Authority:
                 return result
             fail(409, "agentcore-already-dispatched", "이미 실행된 작업입니다. 현재 작업 상태를 확인하세요.")
         identity = "execution-" + secrets.token_hex(24)
+        signing_key = self.capabilities.active(self.config["capabilityKeyId"])
+        if type(signing_key.get("notAfter")) is not int:
+            raise AuthorizationDenied()
         now = self.storage.clock() // 1000
         gateway_binding = self.storage.get(KEYS, "ac_key", "gateway-binding")
         if (not gateway_binding or not gateway_binding.get("workloadIdentityArn")
@@ -124,7 +127,10 @@ class Authority:
             "workloadIdentity": gateway_binding["workloadIdentityArn"], "operations": [
                 "ontology.context", "ontology.source", "execution.stage", "execution.finish"],
             "resourcesHash": schema.digest(request), "request": request, "inputHash": event["inputHash"],
-            "authorizationExpiresAt": pinned["authorizationExpiresAt"] // 1000, "deadline": min(now + 840, pinned["authorizationExpiresAt"] // 1000),
+            "authorizationExpiresAt": pinned["authorizationExpiresAt"] // 1000,
+            # AUTH-04: the attempt (and so the capability `exp`) never outlives
+            # the signing key's validity window at issue time.
+            "deadline": min(now + 840, pinned["authorizationExpiresAt"] // 1000, signing_key["notAfter"]),
             "status": "admitted", "stage": "admitted", "sourceRefs": pinned["sourceRefs"],
             "files": request["files"], "nodeIds": [], "graphGeneration": pinned["expectedGeneration"],
             "artifactId": artifact_id, "authorityHash": pinned["authorityHash"], "admissions": admissions,
@@ -135,7 +141,10 @@ class Authority:
         commit_execution(ctx, [self.collaboration._write(EXECUTIONS, "ac_execution", ledger),
                     self.collaboration._write(EXECUTIONS, "ac_operation", {
                         "id": marker_id, "projectId": project_id, "executionId": identity,
-                        "artifactId": artifact_id, "inputHash": event["inputHash"], "ttl": ledger["ttl"]})], checks)
+                        "artifactId": artifact_id, "inputHash": event["inputHash"], "ttl": ledger["ttl"]})],
+                    [*checks, key_check(signing_key)],
+                    guard=lambda: [key_deadline(self.capabilities.active(binding["capabilityKeyId"])),
+                                   attempt_deadline(ledger["deadline"])])
         try:
             response = self.runtime.invoke_agent_runtime(agentRuntimeArn=self.config["runtimeArn"],
                 qualifier=self.config["runtimeQualifier"],
@@ -188,22 +197,23 @@ class Authority:
         checks.extend(final_sources)
         # ONT-10: recheck the final source-check count before the commit.
         admission.preflight([*final_sources, *current_admissions])
-        # AUTH-04: revalidate the capability key in this final guard, immediately
-        # before the commit attempt, and carry its exact registry version into the
-        # completion transaction itself -- a revocation racing this very commit
-        # (after the earlier check above already passed) must still abort it,
-        # not only a revocation observed by an earlier, now-stale read.
-        key_record = self.capabilities.active(binding["capabilityKeyId"])
-        checks.append({"owner": KEYS, "kind": "ac_key", "id": key_record["id"], "version": key_record["version"]})
-        # execution-capability/1: the same for the evidence key that verified the
-        # Runtime receipt above -- its exact verified registry version is
-        # revalidated here and fenced into the completion transaction, so a
-        # compromised-key revocation racing this commit aborts it.
-        evidence_record = self.evidence.active(binding["capabilityClaims"], evidence_key)
-        checks.append({"owner": KEYS, "kind": "ac_key", "id": evidence_record["id"],
-                       "version": evidence_record["version"]})
+        # AUTH-04 / execution-capability/1: revalidate both registry keys (the
+        # capability key and the evidence key that verified the receipt)
+        # immediately before the commit attempt and carry their exact registry
+        # versions into the completion transaction itself -- a revocation
+        # racing this very commit must still abort it.
+        key_record, evidence_record = self._keys(binding["capabilityKeyId"], binding["capabilityClaims"], evidence_key)
+        checks.extend([key_check(key_record), key_check(evidence_record)])
         if self.storage.clock() // 1000 >= current["deadline"]:
             raise AuthorizationDenied()
+        # AUTH-04: key expiry changes no registry version, so the version
+        # fences above cannot see it. Before every attempt the completion guard
+        # rereads both keys and joins their validity windows and the attempt
+        # deadline with the source/admission deadlines, compared with one
+        # clock read taken after the last read.
         commit_execution(ctx, [self.collaboration._write(EXECUTIONS, "ac_execution",
-            {**current, "status": "completed", "resultKey": key, "resultHash": digest}, current["version"])], checks)
+            {**current, "status": "completed", "resultKey": key, "resultHash": digest}, current["version"])], checks,
+            guard=lambda: [*(key_deadline(record) for record in self._keys(
+                binding["capabilityKeyId"], binding["capabilityClaims"], evidence_key)),
+                attempt_deadline(current["deadline"])])
         return result

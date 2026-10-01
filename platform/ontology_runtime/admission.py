@@ -14,12 +14,15 @@ CLASSES = frozenset({"synthetic", "public", "internal-non-sensitive"})
 # ONTOLOGY_CONTRACT transaction-budget preflight (ONT-10). Each protected
 # AgentCore transaction (dispatch, every tool call, completion) is one
 # DynamoDB `TransactWriteItems` of at most 100 operations. Its non-source
-# operations are at most 6 on every path (dispatch: two ledger writes, the
-# artifact/job fences, the ontology fence, the project fence; a tool call: the
-# same; completion: one ledger write, the artifact/job fences, the capability
-# and evidence key fences, the project fence), within the contract's reserve
-# of 10. Every remaining operation is a source check: the deduplicated source
-# fences plus every check `require()` returns for each source.
+# operations are at most 7 on every path (dispatch: two ledger writes, the
+# artifact/job fences, the ontology, project and capability-key fences; a tool
+# call: the same; a tool replay: the artifact/job, ontology, project,
+# capability-key and execution fences; completion: one ledger write, the
+# artifact/job fences, the capability and evidence key fences, the project
+# fence; a cached dispatch replay: the artifact/job, ontology, project, both
+# key and execution fences), within the contract's reserve of 10. Every
+# remaining operation is a source check: the deduplicated source fences plus
+# every check `require()` returns for each source.
 TRANSACTION_OPERATIONS = 100
 NON_SOURCE_OPERATIONS = 10
 SOURCE_CHECK_BUDGET = min(90, TRANSACTION_OPERATIONS - max(10, NON_SOURCE_OPERATIONS))

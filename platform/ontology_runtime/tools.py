@@ -150,8 +150,13 @@ class Tools:
         marker = {"id": marker_id, "projectId": ctx.project_id, "executionId": claims["executionId"],
             "requestHash": fingerprint, "resultHash": schema.digest(result), "operation": operation,
             "expiresAt": claims["exp"] * 1000, "ttl": claims["exp"] + 86400}
+        # AUTH-04: the capability key is fenced by version, and its validity
+        # window (which expires without a version change) joins the attempt
+        # deadline and the source/admission deadlines in the commit guard.
+        key_id = latest["capabilityKeyId"]
         commit_execution(ctx, [
             self.collaboration._write(EXECUTIONS, "ac_execution", changed, ledger["version"]),
             self.collaboration._write(EXECUTIONS, "ac_operation", marker),
-        ], checks)
+        ], [*checks, key_check(self.capabilities.active(key_id))],
+            guard=lambda: [key_deadline(self.capabilities.active(key_id)), attempt_deadline(latest["deadline"])])
         return result

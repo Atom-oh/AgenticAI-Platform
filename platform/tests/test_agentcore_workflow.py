@@ -583,3 +583,57 @@ def test_a_replayed_tool_operation_refuses_a_capability_key_revoked_during_its_f
     with pytest.raises((AuthorizationDenied, CollaborationError)):
         pipeline.dispatch()
     assert outcome == {"replay": "refused"}
+
+
+def _short_lived_capability_key(wb, seconds):
+    key = wb.storage.get(KEYS, "ac_key", "cap-v1")
+    return wb.storage.put(KEYS, "ac_key", {**key, "notAfter": wb.now // 1000 + seconds}, key["version"])
+
+
+@pytest.mark.parametrize("transaction", ["completion", "tool"])
+def test_capability_key_expiry_inside_the_commit_guard_aborts_it(wb, pipeline, monkeypatch, transaction):
+    """PR #34 review 2, finding 3: key expiry changes no registry version, so a
+    version fence alone never sees it. Advancing the clock through
+    `cap-v1.notAfter` inside the commit's own `before_attempt` guard (before
+    the execution and authorization deadlines) must abort the commit."""
+    key = _short_lived_capability_key(wb, 300)
+    original = type(wb.storage).put_many
+    fired = {"n": 0}
+
+    def selected(writes):
+        items = [write["item"] for write in writes]
+        if transaction == "completion":
+            return any(item.get("status") == "completed" for item in items)
+        return any(item.get("operation") == "execution.stage" for item in items)
+
+    def put_many(self, writes, checks=None, *, before_attempt=None, **kwargs):
+        if before_attempt is not None and selected(writes) and not fired["n"]:
+            guard = before_attempt
+
+            def advanced():
+                fired["n"] += 1
+                wb.storage.clock = lambda: key["notAfter"] * 1000
+                return guard()
+            before_attempt = advanced
+            try:
+                result = original(self, writes, checks, before_attempt=before_attempt, **kwargs)
+            except BaseException:
+                fired["aborted"] = True
+                raise
+            fired["aborted"] = False
+            return result
+        return original(self, writes, checks, before_attempt=before_attempt, **kwargs)
+
+    monkeypatch.setattr(type(wb.storage), "put_many", put_many)
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert fired == {"n": 1, "aborted": True}
+    assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
+
+
+def test_the_attempt_and_capability_expiry_are_bounded_by_the_key_validity_at_issue(wb, pipeline):
+    key = _short_lived_capability_key(wb, 300)
+    pipeline.dispatch()
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    assert execution["deadline"] <= key["notAfter"]
+    assert execution["capabilityClaims"]["exp"] <= key["notAfter"]
