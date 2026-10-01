@@ -32,7 +32,7 @@ from pathlib import Path
 
 from workspace.ontology_schema import digest, seal, validate_edge, validate_node
 from workspace.ontology_schema import source_ref as _source_ref
-from workspace.ontology_ux import evaluate, parse_when
+from workspace.ontology_ux import evaluate
 
 from . import coverage as coverage_mod
 from . import rules_v2
@@ -333,10 +333,15 @@ def _reviewer(bundle, k, deps, mode, judgments):
     calls = 0
     by_page = {}
     case_of = {}
-    # Items with `appliesWhen` (policy rules only; PR #30 review round 3, #2) are reviewed once per case where
-    # the condition actually holds, against that case's visibility-filtered text -- never the raw, all-branches
-    # composition, which would let a node hidden in the applicable case still "prove" the item. An item with no
-    # `appliesWhen` keeps today's single, case-agnostic review (case=None), so existing behavior is unchanged.
+    # Every item -- including one with no `appliesWhen` -- is reviewed against the actual visibility-filtered
+    # rendering of every case where it applies, never the raw, all-branches composition (which would let a node
+    # hidden in the applicable case still "prove" the item, or hide one that never renders at all). Two cases
+    # are deduplicated into one judge call only when they render byte-identical text for this page: projecting
+    # onto only the variables `appliesWhen` itself references is not enough, because a rule's REQUIREDNESS
+    # condition can differ from its content's VISIBILITY condition, so two cases can agree on every variable the
+    # rule mentions yet still render different text for a node gated on some OTHER variable (PR #30 review
+    # round 4, #1; this was round 3, #2's partial fix, which projected only onto appliesWhen's own variables and
+    # left items with no appliesWhen entirely unfiltered).
     all_cases = enumerate_cases((bundle.get("expectation") or {}).get("conditions", []))["cases"]
     for item in llm:
         unresolved = _unresolved_targets(item, k)
@@ -344,39 +349,37 @@ def _reviewer(bundle, k, deps, mode, judgments):
             incomplete.append({"item": item["id"], "reason": "target-unresolved", "targets": unresolved})
             continue
         applies_when = item.get("appliesWhen")
-        if applies_when is None:
-            item_cases = [None]
+        if not all_cases:
+            item_cases = [None]          # nothing conditional in this flow: one case-agnostic review, as before
+        elif applies_when is None:
+            item_cases = list(all_cases)  # no stated condition: still review every case's actual rendering
         else:
-            # Group applicable cases by their projection onto only the variables appliesWhen itself references:
-            # a condition the item never mentions cannot change whether it applies, and reviewing the same
-            # rendering twice under two full cases that differ only in an irrelevant variable would both waste
-            # judge calls and (without this) report the same failure twice.
-            referenced = {cid for _, cid in parse_when(applies_when)}
-            item_cases, undecidable, seen_projections = [], False, set()
+            item_cases, undecidable = [], False
             for case in all_cases:
                 try:
                     applies = evaluate(applies_when, case)
                 except ValueError:
                     undecidable = True
                     continue
-                if not applies:
-                    continue
-                projection = tuple(sorted((cid, case[cid]) for cid in referenced))
-                if projection in seen_projections:
-                    continue
-                seen_projections.add(projection)
-                item_cases.append(case)
+                if applies:
+                    item_cases.append(case)
             if undecidable:
                 incomplete.append({"item": item["id"], "reason": "condition-undecidable"})
             if not item_cases:
                 continue     # never applicable in any decidable case: nothing to review
         for page in _item_pages(item, bundle, k):
             for case in item_cases:
-                case_key = tuple(sorted(case.items())) if case is not None else None
-                case_of[case_key] = case
-                by_page.setdefault((page[0], page[1], case_key), []).append(item)
-    for (screen, state, case_key), items in by_page.items():
-        case = case_of[case_key]
+                text = review_context(bundle, page[0], page[1], k, case=case)["flowText"]
+                render_key = (page[0], page[1], text)
+                case_of.setdefault(render_key, case)
+                # Keyed by item id, not appended blindly: two DIFFERENT cases can still render the identical
+                # text for this item (nothing on the page depends on whatever varies between them), and must
+                # not queue the same item twice for what is, by text, one judge call.
+                by_page.setdefault(render_key, {})[item["id"]] = item
+    for render_key, items_by_id in by_page.items():
+        items = list(items_by_id.values())
+        screen, state, _text = render_key
+        case = case_of[render_key]
         context = review_context(bundle, screen, state, k, case=case)
         if len(context["flowText"]) > MAX_FLOW_TEXT:
             incomplete += [{"item": i["id"], "screen": screen, "state": state, "reason": "page-text-limit"} for i in items]

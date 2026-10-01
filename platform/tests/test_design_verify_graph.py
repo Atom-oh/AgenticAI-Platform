@@ -173,6 +173,60 @@ def test_reviewer_ignores_text_hidden_in_the_applicable_case():
     assert fails[0]["case"]["autoTransfer"] is False
 
 
+def test_reviewer_catches_a_rule_whose_requiredness_and_visibility_conditions_differ():
+    """PR #30 review round 4, #1: round 3's fix deduplicated applicable cases by projecting onto only the
+    variables `appliesWhen` itself references. A rule required when eligible=True but whose node is visible
+    only when autoTransfer=True differs: both (eligible=True, autoTransfer=True) and (eligible=True,
+    autoTransfer=False) project onto the SAME {eligible: True}, so only one of them was ever reviewed -- by
+    enumeration order, always the one where the node happens to be visible -- and its absence in the other
+    case went uncaught. Every applicable case's actual rendering must be reviewed; cases dedupe only when they
+    render identical text."""
+    from design_loop.verify_graph import _reviewer
+    SENTINEL = "특별 조건부 안내문 999"
+    b = bundle()
+    confirm = copy.deepcopy(b["screens"][("confirm", "default")])
+    confirm["slots"]["body"].append({"id": "hidden-notice", "asset": "body-text",
+                                     "props": {"children": SENTINEL},
+                                     "visibleWhen": {"when": "cond:autoTransfer", "negate": False}})
+    b["screens"][("confirm", "default")] = confirm
+    b["checklist"] = [{"id": "d-rule-y", "method": "llm", "severity": "critical",
+                       "text": f"필수 고지 '{SENTINEL}'가 confirm 화면에 있다", "targets": ["confirm"],
+                       "appliesWhen": "cond:eligible"}]
+    content_aware_judge = {"llm_judge": lambda item, ctx: {"verdict": "pass" if SENTINEL in ctx["flowText"]
+                                                            else "fail", "evidence": "checked"},
+                           "normalize": OK, **PROD}
+    findings, incomplete, meta = _reviewer(b, K, content_aware_judge, "fill", {})
+    assert not incomplete, incomplete
+    fails = [f for f in findings if f["code"] == "checklist-fail" and f["item"] == "d-rule-y"]
+    assert len(fails) == 1, findings
+    assert fails[0]["case"] == {"eligible": True, "autoTransfer": False}
+
+
+def test_reviewer_filters_text_by_case_even_without_applies_when():
+    """PR #30 review round 4, #1: an item with no appliesWhen kept the old case=None review, which never
+    applied case visibility at all -- a node hidden in some applicable cases still "proved" the item against
+    the unfiltered, all-branches composition. Items with no appliesWhen need the same per-case visibility
+    filtering as items that carry one."""
+    from design_loop.verify_graph import _reviewer
+    SENTINEL = "특별 조건부 안내문 999"
+    b = bundle()
+    confirm = copy.deepcopy(b["screens"][("confirm", "default")])
+    confirm["slots"]["body"].append({"id": "hidden-notice", "asset": "body-text",
+                                     "props": {"children": SENTINEL},
+                                     "visibleWhen": {"when": "cond:autoTransfer", "negate": False}})
+    b["screens"][("confirm", "default")] = confirm
+    b["checklist"] = [{"id": "d-rule-z", "method": "llm", "severity": "critical",
+                       "text": f"필수 고지 '{SENTINEL}'가 confirm 화면에 있다", "targets": ["confirm"]}]
+    content_aware_judge = {"llm_judge": lambda item, ctx: {"verdict": "pass" if SENTINEL in ctx["flowText"]
+                                                            else "fail", "evidence": "checked"},
+                           "normalize": OK, **PROD}
+    findings, incomplete, meta = _reviewer(b, K, content_aware_judge, "fill", {})
+    assert not incomplete, incomplete
+    fails = [f for f in findings if f["code"] == "checklist-fail" and f["item"] == "d-rule-z"]
+    assert len(fails) == 1, findings
+    assert fails[0]["case"]["autoTransfer"] is False
+
+
 def test_design_checklist_carries_applies_when_from_policy_rules():
     """PR #30 review round 3, #2: a policy rule's appliesWhen must reach its checklist item, or the reviewer
     has no way to know which case(s) the item applies to."""
