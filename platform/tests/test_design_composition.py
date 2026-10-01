@@ -186,8 +186,48 @@ def test_qualified_and_range_split_financial_literals_are_still_critical():
     # a number, both stay clean.
     c = summary(items=[{"label": "가입자 수", "value": "최대 999"}])
     assert codes(c) == set()
-    c = summary(items=[{"label": "회원 안내", "value": "할인 999"}])
+    c = summary(items=[{"label": "회원 안내", "value": "이벤트 3종"}])
     assert codes(c) == set()
+
+
+@pytest.mark.parametrize("item", [
+    {"label": "추가 한도 [만원]", "value": "월 최대 999"},            # review 5 #2 exact repro
+    {"label": "추가 한도 [만원]", "value": "월 최대 약 999"},
+    {"label": "추가 한도 [만원]", "value": "최대 999까지"},
+    {"label": "추가 한도 [만원]", "value": "월 최대 500 ~ 999 사이"},
+    {"label": "가입 한도 (만원)", "value": "최소 100에서 최대 999까지 가능"},
+    {"label": "추가 한도", "value": "월 최대 999"},                  # financial label, no unit annotation
+    {"label": "우대 금리", "value": "최대 0.5"},
+    {"label": "회원 안내", "value": "할인 999"},                     # a discount amount: fail closed
+    {"label": "추가 한도 [만원]", "value": "월 최대 ９９９"},          # full-width digits
+])
+def test_any_number_in_a_financial_context_needs_a_binding(item):
+    """PR #30 review 5 #2: no qualifier grammar -- ANY number shown in a financial context (a unit annotation or a
+    financial label anywhere in the same node, or a unit annotation anywhere on the page) must be PRD-bound."""
+    assert codes(summary(items=[item])) == {"literal-financial-value"}
+
+
+def test_a_number_split_from_its_financial_context_across_props_or_nodes_needs_a_binding():
+    c = summary(items=[{"label": "추가 한도", "value": "월 최대 999"}])
+    c["slots"]["body"][0]["props"]["title"] = "추가 한도 [만원]"         # unit in the parent's title prop
+    assert codes(c) == {"literal-financial-value"}
+    c = base(); node(c, "n4")["props"]["children"] = "월 최대 999"      # unit annotation in a different node
+    node(c, "n1")["props"]["children"] = "추가 한도 [만원]"
+    assert codes(c) == {"literal-financial-value"}
+    c = base(); node(c, "n4")["props"]["children"] = "추가 한도 [만원]: 월 최대 999"   # one string, number not adjacent
+    assert codes(c) == {"literal-financial-value"}
+    c = base(); node(c, "n3")["props"]["label"] = "월 납입 금액 (최대 999)"            # financial label + number
+    assert codes(c) == {"literal-financial-value"}
+
+
+def test_ordinary_numbers_outside_a_financial_context_stay_clean():
+    c = base(); node(c, "n4")["props"]["children"] = "3단계 중 1단계입니다"
+    node(c, "n1")["props"]["children"] = "가입 안내"
+    assert codes(c) == set()
+    c = summary(items=[{"label": "가입자 수", "value": "999"}])
+    assert codes(c) == set()
+    c = base()                                                          # enum design tokens are not display text
+    assert node(c, "n2")["props"]["gap"] == "4" and codes(c) == set()
 
 
 def test_the_same_values_bound_from_the_cited_prd_pass():

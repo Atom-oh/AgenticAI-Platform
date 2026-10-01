@@ -15,7 +15,7 @@ import re
 from workspace.ontology_ux import STATES, parse_when
 from workspace.ontology_ux import visible as _visible
 
-from .financial import contains_quantity, contains_split_quantity
+from .financial import contains_quantity, is_strong_context, needs_binding
 
 SCHEMA_VERSION = 1
 TOP = frozenset({"schemaVersion", "screenId", "templateId", "state", "variant", "surface", "slots"})
@@ -136,16 +136,45 @@ def _strings(value):
             yield from _strings(item)
 
 
-def _records(value):
-    """Yield each dict's own immediate string fields as one sibling group, for split-quantity detection
-    (PR #30 review round 2, #4): a Summary item's {label, value} pair, but not unrelated items in a list."""
-    if isinstance(value, dict):
-        yield [v for v in value.values() if isinstance(v, str)]
-        for item in value.values():
-            yield from _records(item)
+def _display_strings(value):
+    """Every value a literal can put on screen, numbers included (a numeric list field renders as text too)."""
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        yield str(value)
+    elif isinstance(value, str):
+        yield value
     elif isinstance(value, list):
         for item in value:
-            yield from _records(item)
+            yield from _display_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _display_strings(item)
+
+
+def node_display(node, k):
+    """`{prop: [displayed strings]}` for one node's literal props. Enum props are reviewed design tokens chosen
+    from a closed set (gap "4", as "h1"), not free display text, so only a unit-bearing quantity in one counts;
+    every other literal -- including undeclared
+    props, which are findings of their own -- counts as displayed (fail closed)."""
+    code = ((k.assets.get(node.get("asset")) or {}).get("code") or {}) if isinstance(node, dict) else {}
+    specs = code.get("props", {}) if isinstance(code.get("props"), dict) else {}
+    out = {}
+    for name, literal in (node.get("props") or {}).items() if isinstance(node, dict) else ():
+        spec = specs.get(name) if isinstance(specs.get(name), dict) else {}
+        shown = list(_display_strings(literal))
+        out[name] = [text for text in shown if contains_quantity(text)] if spec.get("type") == "enum" else shown
+    return out
+
+
+def page_financial_context(c, k):
+    """Unit-bearing literals anywhere on the page (and the generated heading): a number on this page is
+    financial when its unit is written in a different prop or node ("추가 한도 [만원]" heading, "월 최대 999" text;
+    PR #30 review 5, #2). Financial TERMS stay node-scoped so an ordinary step counter on a page that merely
+    mentions "납입 금액" is not swept in."""
+    title = (k.screens.get(c.get("screenId")) or {}).get("title")
+    strings = [title] + [s for _, node, _ in walk(c) for group in node_display(node, k).values() for s in group]
+    return [s for s in strings if is_strong_context(s)]
 
 
 def text_of(c, values=None, k=None):
@@ -280,7 +309,8 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         ids.add(node["id"])
     # the page heading is generated visible text (react_project renders the screen title): no literal quantity
     screen = k.screens.get(c["screenId"]) or {}
-    if contains_quantity(screen.get("title")):
+    page_context = page_financial_context(c, k)
+    if needs_binding([screen.get("title")], page_context):
         add("literal-financial-value", "screen.title", "financial quantities must be bound from the PRD")
     # slots
     slots = (template or {}).get("slots", {})
@@ -321,6 +351,8 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         specs, managed = code.get("props", {}), ADAPTER_PROPS.get(code.get("adapter"), set())
         text_child = code.get("childrenProp") == "children"
         props, bind = node.get("props", {}), node.get("bind", {})
+        displayed = node_display(node, k)
+        node_context = [text for group in displayed.values() for text in group] + page_context
         for name, literal in props.items():
             ppath = f"{path}.props.{name}"
             if name == "children" and text_child:
@@ -339,8 +371,7 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
                 add("prop-type", ppath, "literal does not match the declared prop type")
             if name in bind:
                 add("prop-conflict", ppath, "prop is both literal and bound")
-            if (any(contains_quantity(s) for s in _strings(literal))
-                    or any(contains_split_quantity(group) for group in _records(literal))):
+            if needs_binding(displayed.get(name, ()), node_context):
                 add("literal-financial-value", ppath, "financial quantities must be bound from the PRD")
         for name, bpath in bind.items():
             ppath = f"{path}.bind.{name}"

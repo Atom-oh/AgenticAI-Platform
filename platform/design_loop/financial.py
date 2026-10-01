@@ -14,22 +14,15 @@ _UNIT = r"(?:%p|%|bp|원|개월|년|일|세|회|배)"
 QUANTITY = re.compile(_NUMBER + r"\s?(?:" + _MAGNITUDE + r"\s?)?" + _UNIT)
 # A PRD financial value: the quantity in full, optionally prefixed by "연" (per annum).
 VALUE = re.compile(r"(?:연\s?)?" + QUANTITY.pattern)
-# A record split across sibling fields (e.g. a Summary item's {label, value}) can carry the same quantity with
-# neither field alone matching QUANTITY: a bare number in one field, a standalone unit annotation such as
-# "(만원)", "[만원]" or "만원" in another (PR #30 review round 2, #4; review round 3, #1: any punctuation, not
-# only parentheses, must count — the unit is set apart by NOT touching another Hangul syllable on either side,
-# which is what distinguishes a genuine unit annotation from an ordinary word that happens to contain "원").
-#
-# review round 4, #2: a "bare" number is still financial even with a qualifier WORD directly next to it --
-# "최대 999" (max 999), "999 이상" (999 or more) -- not just when it is the ENTIRE field; and a range such as
-# "500~999" is one quantity split across a number field and a unit-annotation field just as a single number is.
-# One qualifier word (never a multi-word phrase, to avoid matching an ordinary sentence that happens to hold a
-# number) is allowed directly before and/or after the number/range, separated by at most one space.
-_QUALIFIER = r"[가-힣]+"
-_RANGE_SEP = r"\s?[~\-–—]\s?"
-_NUMBER_OR_RANGE = _NUMBER + r"(?:" + _RANGE_SEP + _NUMBER + r")?"
-_BARE_NUMBER = re.compile(r"(?:" + _QUALIFIER + r"\s?)?" + _NUMBER_OR_RANGE + r"(?:\s?" + _QUALIFIER + r")?")
+# A unit annotation set apart from any number: "(만원)", "[만원]", "만원", "%" -- a unit that does NOT touch another
+# Hangul syllable on either side, which distinguishes it from an ordinary word that happens to contain "원".
 _UNIT_ANNOTATION = re.compile(r"(?<![가-힣])(?:" + _MAGNITUDE + r"\s?)?" + _UNIT + r"(?![가-힣])")
+# Any decimal digit (Unicode \d: ASCII and full-width alike) -- the presence of a numeric quantity, wherever it sits.
+_DIGIT = re.compile(r"\d")
+# Field/label vocabulary that marks a value as financial even when no unit is written next to it.
+FINANCIAL_TERMS = ("금리", "이율", "이자", "수익", "한도", "금액", "잔액", "잔고", "원금", "수수료", "납입", "적립",
+                   "예치", "저축", "만기", "기간", "상환", "대출", "연체", "보험료", "세율", "세금", "우대", "할인",
+                   "환율", "캐시백", "보너스", "가입액", "월액", "연액")
 
 
 def is_value(text):
@@ -40,16 +33,38 @@ def contains_quantity(text):
     return isinstance(text, str) and QUANTITY.search(text) is not None
 
 
-def is_bare_number(text):
-    return isinstance(text, str) and _BARE_NUMBER.fullmatch(text.strip()) is not None
-
-
 def has_unit_annotation(text):
     return isinstance(text, str) and _UNIT_ANNOTATION.search(text) is not None
 
 
-def contains_split_quantity(strings):
-    """True if a bare number and a standalone unit annotation both appear among sibling `strings` of the
-    same record, so together they express a financial quantity that no single field reveals alone."""
-    strings = list(strings)
-    return any(is_bare_number(s) for s in strings) and any(has_unit_annotation(s) for s in strings)
+def has_number(text):
+    return isinstance(text, str) and _DIGIT.search(text) is not None
+
+
+def has_financial_term(text):
+    return isinstance(text, str) and any(term in text for term in FINANCIAL_TERMS)
+
+
+def is_strong_context(text):
+    """A unit written in the text (with or without its number): financial wherever it appears on a page."""
+    return contains_quantity(text) or has_unit_annotation(text)
+
+
+def is_financial_context(text):
+    return is_strong_context(text) or has_financial_term(text)
+
+
+def needs_binding(strings, context=()):
+    """True if displaying `strings` literally would show a financial value (PR #30 review 5, #2).
+
+    The decision is "contains a number in a financial context", never "matches a value grammar": any digit in
+    `strings`, whatever words or punctuation surround it ("월 최대 약 999", "최소 100에서 최대 999까지"), needs a PRD
+    binding when `strings` themselves or the supplied `context` strings carry a unit (annotation or quantity) or
+    a financial term. A unit-bearing quantity ("999만원") needs a binding on its own. Callers choose the context
+    scope; ambiguity resolves to requiring a binding (SPEC 12.4: deterministic financial values)."""
+    strings = [s for s in strings if isinstance(s, str)]
+    if any(contains_quantity(s) for s in strings):
+        return True
+    if not any(has_number(s) for s in strings):
+        return False
+    return any(is_financial_context(s) for s in [*strings, *context])

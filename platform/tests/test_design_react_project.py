@@ -302,6 +302,11 @@ def test_generated_visible_text_rejects_unbound_financial_quantities():
     k.screens["amount"]["title"] = "연 9.9% 특판 가입"
     with pytest.raises(ValueError, match="literal-financial-value"):
         project(flow, screens, k, bindings(GOOD), cases=cases)
+    # PR #30 review 5 #2: any number in a financial heading, whatever surrounds it, needs a binding
+    for title in ("추가 한도 [만원] 월 최대 999", "우대 금리 최대 0.5"):
+        k.screens["amount"]["title"] = title
+        with pytest.raises(ValueError, match="literal-financial-value"):
+            project(flow, screens, k, bindings(GOOD), cases=cases)
 
 
 def test_reserved_looking_published_page_ids_do_not_loop():

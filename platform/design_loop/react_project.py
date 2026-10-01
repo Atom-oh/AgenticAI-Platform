@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .composition import walk
 from .convention import META_KEYS, PAGE_ID, VALUE_FIELD, Registry
-from .financial import contains_quantity
+from .financial import contains_quantity, needs_binding
 from .local_runner import run_node
 
 KIT = Path(__file__).resolve().parents[1] / "react-kit"
@@ -219,7 +219,11 @@ def project(flow, screens, k, prd_bindings, *, cases, registry=None, meta=None):
 
     A financial quantity in any generated visible string raises `literal-financial-value`: quantities reach a page
     only through PRD bindings."""
-    if any(contains_quantity(text) for text in generated_text(k, flow, screens, cases)):
+    # Headings and fixed messages: any number in a financial context (PR #30 review 5, #2). Case labels embed a
+    # case index next to an already-checked heading, so only a unit-bearing quantity counts there.
+    headings = {CASE_SELECT_LABEL, FINISHED_MESSAGE} | {k.screens[s]["title"] for s, _ in screens if s in k.screens}
+    if any(needs_binding([text]) if text in headings else contains_quantity(text)
+           for text in generated_text(k, flow, screens, cases)):
         raise ValueError("literal-financial-value: generated visible text carries an unbound financial quantity")
     registry = (registry or Registry(k)).register_flow(flow)
     for s in flow["screens"]:
