@@ -165,6 +165,12 @@ Docker build inputs.
 `infra/bin/ontology.ts` accepts the operator-owned `ontologyConfigFile` context.
 Supply the isolated network, immutable archive descriptor and public code
 context. Omitting workspace storage selects retained synthetic test stores.
+When `workspaceTableName` reuses the main stack's table and intake is
+configured, supply `intakeDeployment` (config property or the shared
+`intakeDeployment` context) equal to the main stack's `INTAKE_DEPLOYMENT`
+(its `intakeDeployment` context, default the main stack name); synthesis fails
+otherwise rather than defaulting to this stack's own name. A disagreeing
+property and context also fail.
 Verify the target AWS account and role before deploying.
 CloudFormation provisions the fixed capability/evidence/Gateway key-registry
 records through a dedicated bootstrap Lambda. Only that IAM administrative role

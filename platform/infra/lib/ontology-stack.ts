@@ -23,6 +23,13 @@ export interface OntologyStackProps extends cdk.StackProps {
   workspaceTableName?: string;
   workspaceBucketName?: string;
   resourcePrefix?: string;
+  /**
+   * source-admission/1 deployment scope: the `INTAKE_DEPLOYMENT` of the main
+   * stack whose workspace table this stack reuses (its `intakeDeployment`
+   * context, default the main stack's name). Required with `workspaceTableName`
+   * whenever intake is configured and no `intakeDeployment` context is given.
+   */
+  intakeDeployment?: string;
 }
 
 /** Separate JWT Gateway and execution roles; the bank IAM Gateway is untouched. */
@@ -41,7 +48,9 @@ export class OntologyStack extends cdk.Stack {
     // identities cannot issue tokens through the manual Identity APIs.
     const gatewayIdentity = new agentcore.CfnWorkloadIdentity(this, 'GatewayWorkloadIdentity', { name: workload });
     const table = props.workspaceTableName ?
-      dynamodb.Table.fromTableName(this, 'WorkspaceTable', props.workspaceTableName) :
+      // The id must differ from the `WorkspaceTable` stack output below; an
+      // imported table creates no resource, so the id carries no state.
+      dynamodb.Table.fromTableName(this, 'SharedWorkspaceTable', props.workspaceTableName) :
       new dynamodb.Table(this, 'SyntheticWorkspaceTable', {
         partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
         sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
@@ -288,8 +297,8 @@ export class OntologyStack extends cdk.Stack {
     // policy without a deployment scope. Share the same INTAKE_DEPLOYMENT the
     // intake module's own functions use (intake.ts/workspace.ts), so a policy
     // registered for that deployment is recognized by both adapter Lambdas.
-    if (intakeConfigured(this.node)) {
-      const intakeDeployment = intakeDeploymentScope(this.node, this);
+    const intakeDeployment = this.intakeDeployment(props);
+    if (intakeDeployment !== undefined) {
       tools.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
       authority.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
     }
@@ -339,5 +348,35 @@ export class OntologyStack extends cdk.Stack {
       GatewayWorkloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
     };
     for (const [name, value] of Object.entries(outputs)) new cdk.CfnOutput(this, name, { value });
+  }
+
+  /**
+   * The intake scope both adapter Lambdas use. `intakeDeploymentScope` falls back
+   * to the CURRENT stack's name, which is this stack's own name, not the main
+   * stack whose intake functions write policies to a reused workspace table.
+   * A reused table therefore needs the main stack's scope explicitly, from the
+   * shared `intakeDeployment` context or the `intakeDeployment` property, and
+   * never silently diverges from it.
+   */
+  private intakeDeployment(props: OntologyStackProps): string | undefined {
+    const context = this.node.tryGetContext('intakeDeployment');
+    const configured = props.intakeDeployment;
+    for (const value of [context, configured]) {
+      if (value !== undefined && (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(value))) {
+        throw new Error('intakeDeployment must be a non-empty deployment scope name');
+      }
+    }
+    if (context !== undefined && configured !== undefined && context !== configured) {
+      throw new Error('The intakeDeployment property and context disagree; both must name the main stack scope');
+    }
+    const explicit: string | undefined = context ?? configured;
+    if (explicit !== undefined) return explicit;
+    if (!intakeConfigured(this.node)) return undefined;
+    if (props.workspaceTableName !== undefined) {
+      throw new Error('A reused workspace table with intake configured requires intakeDeployment: the main ' +
+        "stack's INTAKE_DEPLOYMENT (its intakeDeployment context, default the main stack name)");
+    }
+    // Self-contained synthetic table: this stack is its own intake deployment.
+    return intakeDeploymentScope(this.node, this);
   }
 }
