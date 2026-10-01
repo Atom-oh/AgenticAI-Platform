@@ -8,8 +8,12 @@ production backend or complete the generation/release cutover.
 
 The authenticated workspace API creates a durable analysis artifact/job with
 the actor, project, source revisions, resolver, authorization expiry and selected
-backend. The ordinary Worker claims the job before invoking `RuntimeAnalyzer`.
-The adapter calls a dedicated IAM execution-authority Lambda.
+backend. Source analysis using AgentCore is a new-ledger Runtime execution, not
+a cloud analyzer injected into the legacy `ontology_jobs.process` Worker path
+(AGENTCORE_CONTRACT platform-execution/1): `workspace/ontology_jobs.py`'s
+`process()` stays offline-only, and an AgentCore-backed job is dispatched
+separately, through `RuntimeAnalyzer`, to a dedicated IAM execution-authority
+Lambda.
 
 `Authority` rechecks project membership, source access, the selected tool archive
 and exact source classification. It creates a bounded execution ledger and a
