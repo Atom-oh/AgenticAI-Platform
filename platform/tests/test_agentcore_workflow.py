@@ -321,3 +321,67 @@ def test_a_decision_replaced_during_the_completion_transaction_aborts_it(wb, pip
     with pytest.raises((AuthorizationDenied, CollaborationError)):
         pipeline.dispatch()
     assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
+
+
+def _retire_policy(wb, monkeypatch):
+    from test_agentcore_authorization import _admin
+    from intake.records import INTAKE_OWNER
+    policy = wb.storage.get(INTAKE_OWNER, "adm_policy", "ontology-admission-policy")
+    _admin(wb.storage, monkeypatch, {"op": "retire_policy", "id": policy["id"], "expectedRevision": policy["revision"]})
+
+
+def test_a_cached_replay_rechecks_admission_after_its_final_result_read(wb, pipeline, monkeypatch):
+    """PR #34 review 1, finding 2: the cached-replay branch commits no
+    transaction, so its admission checks (collected before the cached result is
+    read) must be rechecked after that read. Retiring the policy during the
+    cached result's `get_blob()` must make the replay fail."""
+    pipeline.dispatch()
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    original = type(wb.storage).get_blob
+    seen = {"result": 0}
+
+    def get_blob(self, key, *args, **kwargs):
+        data = original(self, key, *args, **kwargs)
+        if key == execution["resultKey"]:
+            seen["result"] += 1
+            _retire_policy(wb, monkeypatch)
+        return data
+
+    monkeypatch.setattr(type(wb.storage), "get_blob", get_blob)
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert seen["result"] == 1 and pipeline.runtime_calls == 1
+
+
+def test_a_replayed_tool_operation_rechecks_admission_after_its_final_reads(wb, pipeline, monkeypatch):
+    """The prior-marker replay in `Tools.invoke` returns without a transaction:
+    admission retired during its reads (after `require()` ran) must refuse it."""
+    from workspace.ontology_store import Ontology
+    tools, outcome = pipeline.tools, {}
+    invoke = tools.invoke
+    current = Ontology.current
+    armed = {"on": False}
+
+    def retiring_current(self, *args, **kwargs):
+        value = current(self, *args, **kwargs)
+        if armed["on"]:
+            armed["on"] = False
+            _retire_policy(wb, monkeypatch)
+        return value
+
+    def replaying(event, context):
+        result = invoke(event, context)
+        if context.client_context.custom["bedrockAgentCoreToolName"] == "ontology___finish" and not outcome:
+            armed["on"] = True
+            try:
+                invoke(event, context)
+                outcome["replay"] = "returned"
+            except (AuthorizationDenied, CollaborationError):
+                outcome["replay"] = "refused"
+        return result
+
+    monkeypatch.setattr(Ontology, "current", retiring_current)
+    tools.invoke = replaying
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert outcome == {"replay": "refused"}

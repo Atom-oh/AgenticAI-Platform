@@ -121,6 +121,9 @@ class Tools:
         if prior:
             if prior["resultHash"] != schema.digest(result):
                 fail(409, "execution-result-changed", "이전 작업과 현재 결과의 근거가 다릅니다.")
+            # A replay returns without a transaction: recheck the admissions
+            # (collected before this call's reads) after its last read.
+            admission.recheck(ctx, admissions)
             return result
         size = len(schema.canonical(result))
         if size > 300000 or ledger.get("retrievedBytes", 0) + size > 4 * 1024 * 1024:

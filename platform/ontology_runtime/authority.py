@@ -77,6 +77,11 @@ class Authority:
                 result = json.loads(raw_result)
                 self.evidence.verify(previous["capabilityClaims"],
                     {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"])
+                # This branch commits no transaction: the admission checks
+                # collected above (before the cached result was read) are
+                # rechecked now, after that read, at their exact versions and
+                # deadlines -- a retirement during the read must abort the replay.
+                admission.recheck(ctx, admissions)
                 sources.recheck()
                 # AUTH-04: a cached replay still requires the capability key that
                 # authorized this attempt to be current; a revocation after the
