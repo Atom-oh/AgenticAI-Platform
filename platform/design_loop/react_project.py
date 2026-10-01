@@ -357,13 +357,16 @@ export function visible(spec: VisibleSpec, caseState: CaseState): boolean {
 }
 
 // `next` selects the single forward transition whose `when` holds; an explicit id must leave this screen.
+// An explicit action (a secondary button, not just the primary 'next') still names one transition's id, and
+// that transition's own `when` must hold for the CURRENT case too -- not only the primary action's -- or a
+// valid secondary Button could navigate under a condition its NEXT edge forbids (PR #30 review round 4, #3).
 export function next(screen: string, action: string, caseState: CaseState): string | null {
   if (action === 'next') {
     const enabled = transitions.filter(t => t.navigation === 'forward' && t.src === screen && holds(t.when, caseState));
     return enabled.length === 1 ? enabled[0].dst : null;
   }
   const chosen = transitions.find(t => t.id === action && t.src === screen);
-  return chosen ? chosen.dst : null;
+  return chosen && holds(chosen.when, caseState) ? chosen.dst : null;
 }
 
 export function fieldText(form: Form, name: string): string {

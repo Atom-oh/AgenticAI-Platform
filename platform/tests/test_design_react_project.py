@@ -111,6 +111,38 @@ def test_pages_emit_literal_page_id_expression_attributes_and_trusted_adapters()
         == dict(sorted(bindings(GOOD).items()))
 
 
+@needs
+def test_explicit_action_navigation_checks_its_own_transitions_condition():
+    """PR #30 review round 4, #3: the generated `next()` resolved an explicit action id's destination
+    (a secondary Button, not the primary 'next') without checking that transition's own `when`. Only the
+    'next' branch checked `holds`; a valid secondary Button could navigate under a condition its NEXT edge
+    forbids. Bundle the real FLOW_TS template with esbuild and exercise `next()` directly: a case that
+    fails the transition's condition must get `null` (no navigation), one that satisfies it must get `dst`."""
+    from design_loop.react_project import FLOW_TS
+    ts = (FLOW_TS.replace("__START__", json.dumps("a")).replace("__TERMINALS__", json.dumps(["z"]))
+          .replace("__TRANSITIONS__", json.dumps([{"id": "go-secondary", "src": "a", "dst": "ineligible",
+                                                   "when": "cond:eligible", "navigation": "forward"}])))
+    esbuild = ROOT / "react-kit" / "node_modules" / ".bin" / "esbuild"
+    with tempfile.TemporaryDirectory() as directory:
+        src, out = Path(directory, "flow.ts"), Path(directory, "flow.cjs")
+        src.write_text(ts, encoding="utf-8")
+        built = subprocess.run([str(esbuild), str(src), "--bundle", "--format=cjs", "--platform=node",
+                                f"--outfile={out}"], capture_output=True, text=True, timeout=30)
+        assert built.returncode == 0, built.stderr
+        harness = Path(directory, "run.cjs")
+        harness.write_text(
+            "const { next } = require(process.argv[2]);\n"
+            "console.log(JSON.stringify({\n"
+            "  blocked: next('a', 'go-secondary', { eligible: false }),\n"
+            "  allowed: next('a', 'go-secondary', { eligible: true }),\n"
+            "}));\n", encoding="utf-8")
+        run = subprocess.run(["node", str(harness), str(out)], capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0, run.stderr
+        result = json.loads(run.stdout)
+    assert result["blocked"] is None          # the transition's cond:eligible does not hold: no navigation
+    assert result["allowed"] == "ineligible"   # the condition holds: the explicit action still navigates
+
+
 def test_registry_page_ids_keys_and_bounded_test_ids():
     k = copy.deepcopy(K)
     long_id = "notice-" + "a" * 57                               # 64 characters, a published notice page id
