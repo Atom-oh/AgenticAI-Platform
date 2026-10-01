@@ -9,7 +9,7 @@ from workspace import ontology_schema as schema
 from workspace.ontology_analysis import source_input, project_analysis, validate_analysis, validate_execution, local_analyze, ANALYZER_ROOT
 from workspace.ontology_sources import Sources, asset_reference
 from workspace.ontology_store import Ontology
-from ontology_runtime.dispatch import RuntimeAnalyzer, selected_backend
+from ontology_runtime.dispatch import selected_backend
 
 
 def reconcile(ctx, artifact):
@@ -125,23 +125,18 @@ def process(ctx, pinned, job=None):
             or job.get("task") != "workbench" or job.get("status") not in {"queued", "running"}):
         fail(409, "ontology-job-state", "현재 실행 작업과 승인 입력이 다릅니다.")
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
-    remote = type(analyzer) is RuntimeAnalyzer
-    if not remote and not callable(analyzer):
+    if not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
-    if pinned.get("backend", {"name": "local-offline"}) != selected_backend(ctx.host):
-        fail(409, "ontology-backend-changed", "요청 당시의 분석 실행 환경이 변경되었습니다. 새 작업을 시작하세요.")
-    # Unit A admits only this exact offline analyzer for local execution; a remote
-    # job must carry the separately reviewed, pinned RuntimeAnalyzer adapter. This
-    # dispatch is distinct from the new-ledger Runtime execution in
-    # AGENTCORE_CONTRACT platform-execution/1 — no arbitrary callable is injected here.
-    if not remote and analyzer is not local_analyze:
+    # Unit A admits only this exact offline analyzer. AgentCore source analysis is a
+    # new-ledger Runtime execution (AGENTCORE_CONTRACT platform-execution/1), never an
+    # analyzer injected here.
+    if analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
-    backend = "agentcore-code-interpreter" if remote else "local-offline"
-    if not remote and not getattr(ctx.host, "allow_offline_ontology_analysis", False):
+    backend = "local-offline"
+    if not getattr(ctx.host, "allow_offline_ontology_analysis", False):
         fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")
-    expected = ({"toolArchiveHash": analyzer.archive} if remote else {
-        "analyzerCodeHash": hashlib.sha256((ANALYZER_ROOT / "analyze.cjs").read_bytes()).hexdigest(),
-        "dependencyLockHash": hashlib.sha256((ANALYZER_ROOT / "package-lock.json").read_bytes()).hexdigest()})
+    expected = {"analyzerCodeHash": hashlib.sha256((ANALYZER_ROOT / "analyze.cjs").read_bytes()).hexdigest(),
+                "dependencyLockHash": hashlib.sha256((ANALYZER_ROOT / "package-lock.json").read_bytes()).hexdigest()}
     store = Ontology(ctx)
     current, _ = store.authorize_publication(pinned["name"])
     if (current or {}).get("generation") != pinned["expectedGeneration"]:
@@ -157,7 +152,7 @@ def process(ctx, pinned, job=None):
             bindings[file["path"]]["ref"] != ref for file, ref in zip(pinned["files"], pinned["sourceRefs"]))):
         fail(409, "ontology-source-changed", "분석 요청의 원본 버전이 변경되었습니다.")
     refs.recheck()
-    result = analyzer.analyze(ctx, pinned, payload) if remote else analyzer(payload)
+    result = analyzer(payload)
     if not isinstance(result, dict) or not isinstance(result.get("execution"), dict) or "analysis" not in result:
         fail(503, "ontology-analysis-incomplete", "분석 실행 근거를 확인하지 못했습니다.")
     validate_execution(result["execution"])
