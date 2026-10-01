@@ -256,3 +256,70 @@ def test_classify_refuses_a_decision_whose_admitted_derivative_differs_from_the_
                                "reason": "Normalized derivative", "decisionId": decision["id"]})
     assert error.value.code == "agentcore-admission-derivative"
     assert wb.storage.list_page(wb.owner, "ac_admission")["items"] == []
+
+
+def _prepared(wb, monkeypatch, files):
+    """Admitted sources (text admitted by private intake) ready for submission."""
+    wb.api.ontology_analyzer_ready = True
+    wb.api.ontology_analyzer = RuntimeAnalyzer(
+        "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
+    refs = [asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files]
+    authorize_admission(wb, monkeypatch, refs)
+    for file, ref in zip(files, refs):
+        classify_admitted(wb, ref, request_id=file["assetId"])
+
+
+def _nothing_queued(wb):
+    assert wb.storage.list_page(wb.owner, "wb_artifact")["items"] == []
+    assert wb.storage.list_page(wb.owner, "job")["items"] == []
+
+
+@pytest.mark.parametrize("segment", ["SyntheticTenantNeverInFixtures", "synthetictenantneverinfixtures"])
+def test_a_deny_listed_identifier_in_a_supplied_path_is_refused_before_transfer(wb, monkeypatch, segment):
+    """PR #34 review 2, finding 2 (source-admission/1, SRC-06/G0-ADMISSION):
+    a `document-pages` decision covers the source text only; the separately
+    supplied manifest paths reach the analyzer too, so they are privately
+    inspected with the intake deny-list before the job is accepted."""
+    files = collection(wb)
+    _prepared(wb, monkeypatch, files)
+    files[1] = {**files[1], "path": f"src/{segment}/Button.tsx"}
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files})
+    assert error.value.code == "agentcore-private-inspection"
+    _nothing_queued(wb)
+
+
+def test_a_deny_listed_identifier_in_the_resolver_profile_is_refused_before_transfer(wb, monkeypatch):
+    files = collection(wb)
+    _prepared(wb, monkeypatch, files)
+    wb.api.ontology_resolver_profiles = {"tenant": {
+        "aliases": {"@SyntheticTenantNeverInFixtures/ui": "src"}, "packages": {}, "jsonAssetFields": []}}
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files,
+                             "resolverProfileId": "tenant"})
+    assert error.value.code == "agentcore-private-inspection"
+    _nothing_queued(wb)
+
+
+def test_path_inspection_fails_closed_without_the_private_deny_list(wb, monkeypatch):
+    files = collection(wb)
+    _prepared(wb, monkeypatch, files)
+
+    def unavailable():
+        from intake import derivative
+        raise derivative.DenylistUnavailable()
+    wb.api.intake_denylist_loader = unavailable
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files})
+    assert error.value.code == "agentcore-private-inspection-unavailable"
+    _nothing_queued(wb)
+
+
+def test_the_path_inspection_is_bound_into_the_accepted_job_and_execution_request(wb, monkeypatch):
+    from ontology_runtime.admission import transfer_manifest_hash
+    artifact = admitted(wb, monkeypatch)
+    pinned = artifact["jobInput"]
+    binding = pinned["transferInspection"]
+    assert set(binding) == {"profile", "receiptHash", "manifestHash"}
+    assert binding["manifestHash"] == transfer_manifest_hash(
+        [file["path"] for file in pinned["files"]], pinned["resolver"])

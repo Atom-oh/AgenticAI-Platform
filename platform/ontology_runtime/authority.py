@@ -76,6 +76,12 @@ class Authority:
         for file, reference in zip(pinned["files"], pinned["sourceRefs"]):
             if bindings[file["path"]]["ref"] != reference:
                 raise AuthorizationDenied()
+        # source-admission/1: the outgoing paths and resolver are exactly the
+        # metadata privately inspected and bound at submission.
+        transfer = pinned.get("transferInspection")
+        if (not isinstance(transfer, dict) or transfer.get("manifestHash") != admission.transfer_manifest_hash(
+                [file["path"] for file in payload["files"]], payload["resolver"])):
+            fail(409, "agentcore-input-changed", "승인한 분석 입력이 변경되었습니다.")
         marker_id = schema.identity("dispatch", project_id, artifact_id)
         marker = self.storage.get(EXECUTIONS, "ac_operation", marker_id)
         if marker:
@@ -127,7 +133,8 @@ class Authority:
         request = {"files": [{"path": file["path"], "kind": file["kind"],
                              "sourceRef": bindings[file["path"]]["ref"]} for file in payload["files"]],
                    "resolver": payload["resolver"], "inputHash": event["inputHash"], "nodeIds": [],
-                   "toolArchiveHash": self.config["toolArchiveHash"], "admissions": admissions, "boundary": boundary}
+                   "toolArchiveHash": self.config["toolArchiveHash"], "admissions": admissions, "boundary": boundary,
+                   "transferInspection": transfer}
         ledger = {"id": identity, "executionId": identity, "projectId": project_id, "actor": pinned["actor"],
             "attemptId": "attempt-" + secrets.token_hex(24), "runtimeSessionId": "session-" + secrets.token_hex(24),
             "workloadIdentity": gateway_binding["workloadIdentityArn"], "operations": [

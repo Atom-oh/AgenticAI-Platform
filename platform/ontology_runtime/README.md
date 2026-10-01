@@ -113,6 +113,18 @@ ID and exact body replay the existing inspected result; changing the body or
 inspection profile under that ID fails with `admission-request-changed`.
 Updates use conditional record versions and current source/project fences.
 
+A `document-pages` decision admits the source text only. The manifest paths and
+the selected resolver profile also reach the analyzer, so AgentCore submission
+privately inspects them with the intake deny-list (`intake.inspect.inspect`,
+`contiguous=False`, as the code-collection admission inspects its paths and
+resolver). A deny-listed identifier or rule-detected PII in any path or in the
+resolver fails with `agentcore-private-inspection`; an unavailable deny-list
+fails with `agentcore-private-inspection-unavailable`. Paths are refused, not
+normalized: Unit B has no admitted derivative of caller-supplied paths. The
+binding `transferInspection` (`{profile, receiptHash, manifestHash}`) is frozen
+into the accepted job input and the execution request; dispatch requires the
+outgoing paths/resolver to match `manifestHash` (`agentcore-input-changed`).
+
 AgentCore submission preflights the `ONTOLOGY_CONTRACT.md` transaction budget
 (ONT-10) on the complete deduplicated source-check set that dispatch, every
 tool call and completion fence: the source fences plus every check `require()`

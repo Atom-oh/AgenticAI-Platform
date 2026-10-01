@@ -90,11 +90,14 @@ def submit(ctx, body):
         fail(400, "ontology-resolver-unavailable", "승인된 경로 해석 프로필을 선택하세요.")
     agentcore = selected_backend(ctx.host)["name"] == "agentcore"
     if agentcore:
-        from ontology_runtime.admission import consumed, preflight, preflight_calls, preflight_sources
+        from ontology_runtime.admission import (consumed, inspect_transfer, preflight, preflight_calls,
+                                                preflight_sources)
         # ontology-tools/1: one retrieval per file plus the control calls must
         # fit the tool-call limit, before any source read.
         preflight_calls(files)
         preflight_sources(refs)
+        # source-admission/1: the paths and resolver reach the analyzer too.
+        transfer_inspection = inspect_transfer(ctx, [file["path"] for file in files], profile)
     reader = Sources(ctx)
     checks = reader.verify(refs)
     admissions = None
@@ -119,6 +122,7 @@ def submit(ctx, body):
         # platform-execution/1: the consumed decisions are frozen into the
         # accepted, immutable job input; dispatch requires the same list.
         pinned["admissions"] = admissions
+        pinned["transferInspection"] = transfer_inspection
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
                 "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}

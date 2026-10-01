@@ -714,3 +714,22 @@ def test_a_request_over_the_tool_call_budget_is_rejected_unchanged_at_submission
     assert error.value.code == "execution-completion-scope"
     assert wb.storage.list_page(wb.owner, "wb_artifact")["items"] == []
     assert wb.storage.list_page(wb.owner, "job")["items"] == []
+
+
+@pytest.mark.parametrize("change", ["missing", "other-metadata"])
+def test_dispatch_requires_the_outgoing_paths_to_match_the_bound_inspection(wb, pipeline, change):
+    """PR #34 review 2, finding 2: the outgoing paths/resolver must be exactly
+    the metadata privately inspected and bound at submission."""
+    artifact = wb.storage.get(wb.owner, "wb_artifact", pipeline.artifact["id"])
+    job = wb.storage.get(wb.owner, "job", artifact["jobId"])
+    pinned = {**artifact["jobInput"]}
+    if change == "missing":
+        pinned.pop("transferInspection")
+    else:
+        pinned["transferInspection"] = {**pinned["transferInspection"], "manifestHash": "0" * 64}
+    wb.storage.put(wb.owner, "wb_artifact", {**artifact, "jobInput": pinned}, artifact["version"])
+    wb.storage.put(wb.owner, "job", {**job, "input": pinned}, job["version"])
+    with pytest.raises(CollaborationError) as error:
+        pipeline.dispatch()
+    assert error.value.code == "agentcore-input-changed"
+    assert pipeline.runtime_calls == 0 and pipeline.parser_calls == 0

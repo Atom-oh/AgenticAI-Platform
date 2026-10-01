@@ -79,6 +79,44 @@ def preflight(source_checks):
     return list(source_checks)
 
 
+def transfer_manifest_hash(paths, resolver):
+    """Digest of the transfer metadata a `document-pages` decision does not
+    cover: the ordered manifest paths and the resolver sent to the analyzer."""
+    return schema.digest({"paths": list(paths), "resolver": resolver})
+
+
+def inspect_transfer(ctx, paths, resolver):
+    """Private identifier inspection of the outgoing paths and resolver
+    (source-admission/1: identifier normalization covers code paths and
+    resolver metadata; SRC-06/G0-ADMISSION).
+
+    The consumed private-intake `document-pages` decisions admit the source
+    TEXT only, while dispatch also transfers the separately supplied manifest
+    paths and resolver profile. They are inspected here with the same intake
+    facilities the code-collection admission uses for its paths and resolver
+    (`intake.admission`'s private deny-list loader, `intake.inspect.inspect`
+    with `contiguous=False`): any deny-listed identifier or rule-detected PII
+    refuses the request -- AgentCore has no derivative of caller-supplied
+    paths to send instead -- and an unavailable deny-list fails closed. The
+    returned binding (inspection profile, metadata-only receipt hash and the
+    inspected metadata digest) is frozen into the accepted job input; dispatch
+    requires the outgoing paths/resolver to match it, so a change aborts."""
+    from intake import derivative, inspect as intake_inspect
+    try:
+        denylist = derivative.canonical_entries(intake_admission._denylist(ctx.host))
+    except derivative.DenylistUnavailable:
+        fail(503, "agentcore-private-inspection-unavailable",
+             "비공개 식별자 검사 기준을 확인하지 못해 AgentCore 전송을 승인할 수 없습니다.")
+    pages = [{"page": index + 1, "text": text} for index, text in enumerate(
+        [*paths, schema.canonical(resolver).decode()])]
+    receipt = intake_inspect.inspect(pages, denylist=denylist, contiguous=False)
+    if receipt["blocking"] or receipt["identifiers"]["count"] or receipt["pii"]:
+        fail(422, "agentcore-private-inspection",
+             "분석 파일 경로 또는 경로 해석 프로필에서 식별 가능 정보가 감지되었습니다. 중립적인 경로로 새 요청을 만드세요.")
+    return {"profile": intake_inspect.PROFILE, "receiptHash": receipt["hash"],
+            "manifestHash": transfer_manifest_hash(paths, resolver)}
+
+
 def identifier(reference):
     ref = schema.source_ref(reference)
     return schema.identity("admission", authority_identity(ref))
