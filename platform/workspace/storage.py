@@ -21,6 +21,7 @@ KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership", "
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
                    "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
                    "wb_artifact", "wb_pension", "wb_report", "wb_tool",
+                   "ac_execution", "ac_operation", "ac_key", "ac_admission",
                    "document", "docrevision", "docbinding", "docaudit", "docanalysis", "docdecision",
                    "exec_report", "exec_request", "exec_quota", "exec_due",
                    "adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver",
@@ -208,7 +209,12 @@ class Storage:
         human = (writer is _HUMAN_WRITER and kind in HUMAN_KINDS
                  and not (item.get("status") in _HUMAN_BLOCKED_STATUS
                           and (previous is None or previous.get("status") != item.get("status"))))
-        if not ledger and not human:
+        # The AgentCore ontology-execution partition (ontology_runtime.authorization.commit_execution's
+        # own owner/kind boundary check) is a separate, self-authorizing writer: its "ac_execution"/
+        # "ac_operation" records legitimately carry their own "executionId" field, which must not be
+        # mistaken for the base execution-ledger's reserved-record marker.
+        runtime_execution = kind in {"ac_execution", "ac_operation"}
+        if not ledger and not human and not runtime_execution:
             self._guard(owner, kind, identifier, item, previous, proposed_jobs, fences)
         data = {key: copy.deepcopy(value) for key, value in item.items()
                 if key not in ("pk", "sk", "owner", "sub", "ttl")}
@@ -227,6 +233,11 @@ class Storage:
             if type(expiry) is not int or not now < expiry <= now + 300000:
                 raise ValueError("An ontology cursor requires a bounded expiry")
             data["ttl"] = expiry // 1000
+        if kind in {"ac_execution", "ac_operation"}:
+            expiry = item.get("ttl")
+            if type(expiry) is not int or not now // 1000 < expiry <= now // 1000 + 31 * 86400:
+                raise ValueError("Runtime records require a bounded retention deadline")
+            data["ttl"] = expiry
         data.setdefault("status", {"asset": "uploading", "contract": "draft", "job": "queued",
                                   "run": "queued", "product": "draft"}.get(kind, "active"))
         encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, default=str).encode()
@@ -234,7 +245,7 @@ class Storage:
             raise ValueError("Metadata exceeds the storage limit; put large evidence in blob storage")
         if expected_version:
             condition = Attr("version").eq(expected_version)
-            if not ledger and not human:
+            if not ledger and not human and not runtime_execution:
                 # DB-level fence: a reserved marker that appears after the pre-read still rejects the write.
                 condition = condition & Attr("executionSchemaVersion").not_exists() & Attr("executionId").not_exists()
         else:

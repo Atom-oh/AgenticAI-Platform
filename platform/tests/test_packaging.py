@@ -86,6 +86,31 @@ def test_worker_image_copies_intake_and_imports_it(tmp_path):
     assert result.stdout.strip() == "ok"
 
 
+def test_worker_image_copies_ontology_runtime_and_constructs_worker(tmp_path):
+    """Worker() imports ontology_runtime at construction (PR #22 review 1, finding 1)."""
+    copies = _dockerfile_copies()
+    assert (["ontology_runtime"], "./ontology_runtime") in copies
+    # Reproduce the image's /var/task layout from the Dockerfile COPY lines.
+    task = tmp_path / "var-task"
+    task.mkdir()
+    for sources, destination in copies:
+        if destination.startswith("/"):
+            continue
+        for source in sources:
+            origin = PLATFORM / source
+            target = task / destination
+            if origin.is_dir():
+                shutil.copytree(origin, target, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+            elif origin.is_file():
+                (target if destination.endswith("/") else target.parent).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(origin, target / origin.name if destination.endswith("/") else target)
+    result = _isolated(task, "from workspace.worker import Worker\n"
+                             "Worker()\nprint('ok')")
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip() == "ok"
+
+
 @pytest.mark.docker
 @pytest.mark.skipif(os.environ.get("RUN_DOCKER_TESTS") != "1" or not shutil.which("docker"),
                     reason="Docker image build is opt-in (RUN_DOCKER_TESTS=1)")

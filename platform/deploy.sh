@@ -39,7 +39,7 @@ assemble_api() {
   rm -rf "$dist" && mkdir -p "$dist/seed/out"
   cp api/*.py "$dist/"
   cp -r api/common api/handlers engine graph onprem semantic "$dist/"
-  for m in registry screengen report agentcore design_loop studio workspace workbench documents intake; do [ -d "$m" ] && cp -r "$m" "$dist/"; done
+  for m in registry screengen report agentcore design_loop studio workspace workbench documents intake ontology_runtime; do [ -d "$m" ] && cp -r "$m" "$dist/"; done
   mkdir -p "$dist/react-kit"
   cp react-kit/catalog.json "$dist/react-kit/"
   cp -r react-kit/ui "$dist/react-kit/"
