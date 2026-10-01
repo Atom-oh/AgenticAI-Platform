@@ -93,8 +93,10 @@ class Capabilities:
         with the same authoritative KMS/registry check `verify` makes per call.
         Used to fence finalization and cached replay, after the token itself was
         already verified earlier in the same attempt (AUTH-04: revocation must
-        still abort a completion or a replay reached without a fresh `verify`)."""
-        self._key(key_id)
+        still abort a completion or a replay reached without a fresh `verify`).
+        Returns the registry record so the caller can fence its exact version into
+        a protected commit, not only recheck it with a fresh Python-level read."""
+        return self._key(key_id)
 
     def issue(self, ledger, key_id):
         now = int(self.clock())

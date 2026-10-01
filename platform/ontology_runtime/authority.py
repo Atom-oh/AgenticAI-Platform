@@ -77,12 +77,13 @@ class Authority:
                 result = json.loads(raw_result)
                 self.evidence.verify(previous["capabilityClaims"],
                     {key: value for key, value in result.items() if key != "runtimeReceipt"}, result["runtimeReceipt"])
+                sources.recheck()
                 # AUTH-04: a cached replay still requires the capability key that
                 # authorized this attempt to be current; a revocation after the
                 # original dispatch must abort every later replay, not just a
-                # fresh `verify`.
+                # fresh `verify`. Checked LAST, after every other read, so a
+                # revocation reaching only after those reads still aborts the replay.
                 self.capabilities.active(previous["capabilityKeyId"])
-                sources.recheck()
                 return result
             fail(409, "agentcore-already-dispatched", "이미 실행된 작업입니다. 현재 작업 상태를 확인하세요.")
         identity = "execution-" + secrets.token_hex(24)
@@ -161,6 +162,13 @@ class Authority:
             raise AuthorizationDenied()
         checks.extend(current_admissions)
         checks.extend(sources.recheck())
+        # AUTH-04: revalidate the capability key in this final guard, immediately
+        # before the commit attempt, and carry its exact registry version into the
+        # completion transaction itself -- a revocation racing this very commit
+        # (after the earlier check above already passed) must still abort it,
+        # not only a revocation observed by an earlier, now-stale read.
+        key_record = self.capabilities.active(binding["capabilityKeyId"])
+        checks.append({"owner": KEYS, "kind": "ac_key", "id": key_record["id"], "version": key_record["version"]})
         if self.storage.clock() // 1000 >= current["deadline"]:
             raise AuthorizationDenied()
         commit_execution(ctx, [self.collaboration._write(EXECUTIONS, "ac_execution",

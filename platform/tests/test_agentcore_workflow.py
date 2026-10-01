@@ -166,6 +166,33 @@ def test_authority_independently_rejects_late_or_invalid_runtime_results(wb, pip
     assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
 
 
+def test_authority_fences_the_capability_key_into_the_completion_transaction(wb, pipeline):
+    """PR #22 review 2, finding 2: round 1's fix (`revoked-capability-key` above)
+    checked `cap-v1` before the final reads, but that Python-level check was never
+    fenced into the completion transaction itself -- a revocation landing in the
+    narrow window between that check and the actual DynamoDB write still let the
+    execution complete. Revoke `cap-v1` from inside the real `TransactWriteItems`
+    call that carries the completion write (identified by its own payload, not by
+    counting calls -- several earlier transactions happen first, one per Gateway
+    tool invocation) and confirm it still aborts, via the DB-level version fence,
+    not only the earlier Python-level check."""
+    table = wb.storage.table()
+    client = table.meta.client
+    original = client.transact_write_items
+
+    def intercept(**kwargs):
+        puts = [entry["Put"]["Item"] for entry in kwargs["TransactItems"] if "Put" in entry]
+        if any(item.get("status") == "completed" for item in puts):
+            key = wb.storage.get(KEYS, "ac_key", "cap-v1")
+            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
+        return original(**kwargs)
+
+    client.transact_write_items = intercept
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert all(item["status"] != "completed" for item in wb.storage.list_page(EXECUTIONS, "ac_execution")["items"])
+
+
 def test_authority_rejects_a_cached_replay_once_its_capability_key_is_revoked(wb, pipeline):
     """PR #22 review 1, finding 4: the cached-replay branch must also refuse a
     revoked capability key, not only a fresh dispatch's finalization."""
@@ -179,6 +206,37 @@ def test_authority_rejects_a_cached_replay_once_its_capability_key_is_revoked(wb
     executions = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"]
     assert executions[0]["status"] == "completed" and executions[0]["resultHash"] == hashlib.sha256(
         schema.canonical(result)).hexdigest()
+
+
+def test_authority_rejects_a_cached_replay_revoked_during_its_own_final_source_recheck(wb, pipeline, monkeypatch):
+    """PR #22 review 2, finding 2: "Recheck replay authority after its final
+    reads." The cached-replay branch's capability check must run LAST, after
+    `sources.recheck()` (its other final read) -- round 1's fix ran it BEFORE
+    that read, so a revocation landing during that very read would have gone
+    unnoticed until the next replay attempt."""
+    from workspace.ontology_sources import Sources
+    result = pipeline.dispatch()
+    assert pipeline.runtime_calls == 1
+    original = Sources.recheck
+    # `sources.verify(pinned["sourceRefs"])`, earlier in dispatch(), makes two of
+    # its own `recheck()`-equivalent reads before the cached-replay branch is
+    # even reached; only the THIRD call within this one dispatch() attempt is
+    # the branch's own explicit `sources.recheck()` -- the final read whose
+    # ordering relative to the capability check this test exercises.
+    calls = {"n": 0}
+
+    def revoke_on_the_branchs_own_recheck(self):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            key = wb.storage.get(KEYS, "ac_key", "cap-v1")
+            wb.storage.put(KEYS, "ac_key", {**key, "state": "revoked"}, key["version"])
+        return original(self)
+
+    monkeypatch.setattr(Sources, "recheck", revoke_on_the_branchs_own_recheck)
+    with pytest.raises((AuthorizationDenied, CollaborationError)):
+        pipeline.dispatch()
+    assert pipeline.runtime_calls == 1
+    assert calls["n"] == 3
 
 
 def test_execution_writer_cannot_modify_project_sources_or_key_registry(wb, monkeypatch):
