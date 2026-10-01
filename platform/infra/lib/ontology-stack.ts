@@ -10,6 +10,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as customResources from 'aws-cdk-lib/custom-resources';
 import { createHash } from 'node:crypto';
+import { intakeConfigured, intakeDeploymentScope } from './intake';
 
 export interface OntologyStackProps extends cdk.StackProps {
   runtimeDirectory: string;
@@ -283,6 +284,15 @@ export class OntologyStack extends cdk.Stack {
     authority.addToRolePolicy(new iam.PolicyStatement({
       actions: ['kms:Sign', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn],
     }));
+    // source-admission/1: admission.require()'s current_policy() rejects every
+    // policy without a deployment scope. Share the same INTAKE_DEPLOYMENT the
+    // intake module's own functions use (intake.ts/workspace.ts), so a policy
+    // registered for that deployment is recognized by both adapter Lambdas.
+    if (intakeConfigured(this.node)) {
+      const intakeDeployment = intakeDeploymentScope(this.node, this);
+      tools.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
+      authority.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
+    }
     const bootstrap = new lambda.DockerImageFunction(this, 'KeyRegistryBootstrap', {
       code: lambda.DockerImageCode.fromEcr(image.repository, {
         tagOrDigest: image.assetHash, entrypoint: ['python', '-m', 'awslambdaric'],
