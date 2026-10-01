@@ -19,7 +19,16 @@ VALUE = re.compile(r"(?:연\s?)?" + QUANTITY.pattern)
 # "(만원)", "[만원]" or "만원" in another (PR #30 review round 2, #4; review round 3, #1: any punctuation, not
 # only parentheses, must count — the unit is set apart by NOT touching another Hangul syllable on either side,
 # which is what distinguishes a genuine unit annotation from an ordinary word that happens to contain "원").
-_BARE_NUMBER = re.compile(_NUMBER)
+#
+# review round 4, #2: a "bare" number is still financial even with a qualifier WORD directly next to it --
+# "최대 999" (max 999), "999 이상" (999 or more) -- not just when it is the ENTIRE field; and a range such as
+# "500~999" is one quantity split across a number field and a unit-annotation field just as a single number is.
+# One qualifier word (never a multi-word phrase, to avoid matching an ordinary sentence that happens to hold a
+# number) is allowed directly before and/or after the number/range, separated by at most one space.
+_QUALIFIER = r"[가-힣]+"
+_RANGE_SEP = r"\s?[~\-–—]\s?"
+_NUMBER_OR_RANGE = _NUMBER + r"(?:" + _RANGE_SEP + _NUMBER + r")?"
+_BARE_NUMBER = re.compile(r"(?:" + _QUALIFIER + r"\s?)?" + _NUMBER_OR_RANGE + r"(?:\s?" + _QUALIFIER + r")?")
 _UNIT_ANNOTATION = re.compile(r"(?<![가-힣])(?:" + _MAGNITUDE + r"\s?)?" + _UNIT + r"(?![가-힣])")
 
 

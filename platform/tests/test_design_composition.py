@@ -171,6 +171,25 @@ def test_split_label_and_value_financial_literal_is_still_critical():
     assert codes(c) == set()
 
 
+def test_qualified_and_range_split_financial_literals_are_still_critical():
+    """PR #30 review round 4, #2: a value qualified by a word ("최대 999") or expressed as a range ("500~999")
+    bypassed is_bare_number's exact-fullmatch-of-a-plain-number check, so it slipped past the split-quantity
+    check even with a sibling unit annotation. Broadening to allow one qualifier word and a number range closes
+    this without flagging ordinary non-numeric text or multi-word phrases that merely contain a number."""
+    c = summary(items=[{"label": "추가 한도 [만원]", "value": "최대 999"}])
+    assert codes(c) == {"literal-financial-value"}
+    c = summary(items=[{"label": "최소 (개월)", "value": "12 이상"}])
+    assert codes(c) == {"literal-financial-value"}
+    c = summary(items=[{"label": "가입 한도 (만원)", "value": "500~999"}])
+    assert codes(c) == {"literal-financial-value"}
+    # A qualifier-adjacent number with no sibling unit annotation, and a multi-word phrase that merely contains
+    # a number, both stay clean.
+    c = summary(items=[{"label": "가입자 수", "value": "최대 999"}])
+    assert codes(c) == set()
+    c = summary(items=[{"label": "회원 안내", "value": "할인 999"}])
+    assert codes(c) == set()
+
+
 def test_the_same_values_bound_from_the_cited_prd_pass():
     assert validate(summary(bound=True), K, flow=FLOW, binding_paths=PATHS) == []
     c = base(); node(c, "n4")["props"] = {}; node(c, "n4")["bind"] = {"children": "product.baseRate"}
