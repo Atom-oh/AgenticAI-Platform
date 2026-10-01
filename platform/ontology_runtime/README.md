@@ -115,10 +115,12 @@ Updates use conditional record versions and current source/project fences.
 
 A `document-pages` decision admits the source text only. The manifest paths and
 the selected resolver profile also reach the analyzer, so AgentCore submission
-privately inspects them with the intake deny-list (`intake.inspect.inspect`,
-`contiguous=False`, as the code-collection admission inspects its paths and
-resolver). A deny-listed identifier or rule-detected PII in any path or in the
-resolver fails with `agentcore-private-inspection`; an unavailable deny-list
+privately inspects every decoded path and every resolver key and string value
+(recursively, never the serialized JSON) with the intake deny-list, running
+both `intake.inspect.inspect` and `intake.derivative.residual`
+(`contiguous=False`, as the code-collection admission inspects its paths and
+resolver). A deny-listed identifier, internal URL or rule-detected PII in any
+path or in the resolver fails with `agentcore-private-inspection`; an unavailable deny-list
 fails with `agentcore-private-inspection-unavailable`. Paths are refused, not
 normalized: Unit B has no admitted derivative of caller-supplied paths. The
 binding `transferInspection` (`{profile, receiptHash, manifestHash}`) is frozen

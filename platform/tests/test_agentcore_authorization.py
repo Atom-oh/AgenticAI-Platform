@@ -323,3 +323,54 @@ def test_the_path_inspection_is_bound_into_the_accepted_job_and_execution_reques
     assert set(binding) == {"profile", "receiptHash", "manifestHash"}
     assert binding["manifestHash"] == transfer_manifest_hash(
         [file["path"] for file in pinned["files"]], pinned["resolver"])
+
+
+QUOTED_TERM = 'Synthetic "Tenant"'
+
+
+@pytest.mark.parametrize("resolver", [
+    # JSON escaping (`\"`) hid a quoted deny-listed term from the serialized scan.
+    {"aliases": {"@ui": f"src/{QUOTED_TERM}"}, "packages": {}, "jsonAssetFields": []},
+    {"aliases": {f"@{QUOTED_TERM}/ui": "src"}, "packages": {}, "jsonAssetFields": []},
+    # `inspect()` alone accepts an internal URL; intake's residual check flags it.
+    {"aliases": {"@ui": "https://design.synthetic.corp/ui"}, "packages": {}, "jsonAssetFields": []},
+    {"aliases": {}, "packages": {}, "jsonAssetFields": ["https://assets.synthetic.corp/x"]},
+], ids=["quoted-term-value", "quoted-term-key", "internal-url-value", "internal-url-nested"])
+def test_decoded_resolver_strings_get_the_complete_residual_checks(wb, monkeypatch, resolver):
+    """PR #34 review 3, finding 1 (source-admission/1, SRC-06/G0-ADMISSION):
+    every decoded resolver key and string value is inspected with the complete
+    intake residual checks (deny-list terms, internal URLs, PII)."""
+    files = collection(wb)
+    _prepared(wb, monkeypatch, files)
+    wb.api.intake_denylist_loader = lambda: [*DENYLIST, {"term": QUOTED_TERM, "kind": "org"}]
+    wb.api.ontology_resolver_profiles = {"tenant": resolver}
+    with pytest.raises(CollaborationError) as error:
+        submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files,
+                             "resolverProfileId": "tenant"})
+    assert error.value.code == "agentcore-private-inspection"
+    _nothing_queued(wb)
+
+
+def test_an_internal_url_in_a_path_is_refused(wb, monkeypatch):
+    files = collection(wb)
+    _prepared(wb, monkeypatch, files)
+    from ontology_runtime.admission import inspect_transfer
+    with pytest.raises(CollaborationError) as error:
+        inspect_transfer(context(wb), ["https://host.synthetic.corp/Button.tsx"],
+                         {"aliases": {}, "packages": {}, "jsonAssetFields": []})
+    assert error.value.code == "agentcore-private-inspection"
+
+
+def test_a_clean_resolver_profile_is_accepted_and_bound(wb, monkeypatch):
+    from ontology_runtime.admission import transfer_manifest_hash
+    files = collection(wb)
+    _prepared(wb, monkeypatch, files)
+    wb.api.intake_denylist_loader = lambda: [*DENYLIST, {"term": QUOTED_TERM, "kind": "org"}]
+    resolver = {"aliases": {"@ui/components": "src/components"}, "packages": {}, "jsonAssetFields": ["icon"]}
+    wb.api.ontology_resolver_profiles = {"clean": resolver}
+    queued = submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files,
+                                  "resolverProfileId": "clean"})
+    pinned = queued["artifact"]["jobInput"]
+    assert pinned["resolver"] == resolver
+    assert pinned["transferInspection"]["manifestHash"] == transfer_manifest_hash(
+        [file["path"] for file in files], resolver)
