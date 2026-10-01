@@ -111,6 +111,28 @@ def test_worker_image_copies_ontology_runtime_and_constructs_worker(tmp_path):
     assert result.stdout.strip() == "ok"
 
 
+def test_runtime_image_context_includes_intake_and_imports_authority(tmp_path):
+    """PR #22 review 2, finding 3: the dedicated Authority/Tools image's build
+    context (`ontology_runtime.prepare_context.prepare`, consumed by
+    `ontology_runtime/Dockerfile`'s `COPY code/ /app/`) excluded `intake`, even
+    though `entrypoints -> authority -> admission` now imports it unconditionally.
+    Both Lambda handlers use this image, so a missing `intake` package is a
+    `ModuleNotFoundError` at import time that local pytest (which imports from the
+    full checkout) never catches."""
+    from ontology_runtime.prepare_context import prepare
+    axe = tmp_path / "axe"
+    axe.mkdir()
+    (axe / "axe.min.js").write_text("/* synthetic */")
+    (axe / "LICENSE").write_text("synthetic license")
+    context = prepare(PLATFORM, tmp_path / "context", axe)
+    assert (context / "code" / "intake" / "admission.py").is_file()
+    result = _isolated(context / "code",
+        "import ontology_runtime.authority, ontology_runtime.tools, intake.admission\n"
+        "assert intake.admission.__file__.startswith(%r)\nprint('ok')" % str(context / "code"))
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip() == "ok"
+
+
 @pytest.mark.docker
 @pytest.mark.skipif(os.environ.get("RUN_DOCKER_TESTS") != "1" or not shutil.which("docker"),
                     reason="Docker image build is opt-in (RUN_DOCKER_TESTS=1)")

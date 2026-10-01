@@ -10,7 +10,7 @@ def prepare(platform, destination, axe):
         raise ValueError("Use a new empty directory for each Runtime context")
     destination.mkdir(parents=True, exist_ok=True)
     files = []
-    for module in ("ontology_runtime", "workspace", "workbench", "documents", "engine", "studio", "graph"):
+    for module in ("ontology_runtime", "intake", "workspace", "workbench", "documents", "engine", "studio", "graph"):
         files.extend(platform.glob(module + "/*.py"))
     files.extend(platform.glob("api/common/*.py"))
     files.extend(path for path in (platform / "react-kit/ui").rglob("*") if path.is_file())
