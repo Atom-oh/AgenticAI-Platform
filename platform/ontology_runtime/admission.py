@@ -32,6 +32,26 @@ MIN_CHECKS_PER_SOURCE = 3
 MAX_SOURCES = SOURCE_CHECK_BUDGET // MIN_CHECKS_PER_SOURCE
 
 
+# ontology-tools/1: a job has at most 60 tool calls. The source-analysis
+# workflow makes one `ontology.source` call per frozen manifest file (paths
+# are retrieved individually, even when several reference one source) plus
+# fixed control calls: the context stage, `ontology.context`, the analyzed
+# stage and `execution.finish`.
+MAX_CALLS = 60
+CONTROL_CALLS = 4
+MAX_FILES = MAX_CALLS - CONTROL_CALLS
+
+
+def preflight_calls(files):
+    """Reject, unchanged and before any read or paid work, a manifest whose
+    workflow would exceed the tool-call limit: distinct paths that reference
+    one admitted source still need one retrieval each."""
+    if len(files) > MAX_FILES:
+        fail(422, "execution-completion-scope",
+             f"AgentCore 분석 묶음의 도구 호출({len(files) + CONTROL_CALLS}회)이 실행 한도({MAX_CALLS}회)를 넘습니다. "
+             f"파일 {MAX_FILES}개 이하의 새 요청으로 나누세요.")
+
+
 def _scope_error(count, limit):
     fail(422, "execution-completion-scope",
          f"AgentCore 분석 묶음의 원본 검증 항목({count}개)이 실행 트랜잭션 한도({limit}개)를 넘습니다. "

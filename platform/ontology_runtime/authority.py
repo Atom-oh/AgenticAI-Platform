@@ -50,6 +50,7 @@ class Authority:
         current, _ = Ontology(ctx).authorize_publication(pinned["name"])
         if (current or {}).get("generation") != pinned["expectedGeneration"]:
             raise AuthorizationDenied()
+        admission.preflight_calls(pinned["files"])
         admission.preflight_sources(pinned["sourceRefs"])
         source_checks = sources.verify(pinned["sourceRefs"])
         checks.extend(source_checks)

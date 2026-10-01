@@ -94,9 +94,11 @@ def admitted(wb, monkeypatch, *, data_class="synthetic", files=None, provenance_
         "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
     files = files or collection(wb)
     refs = [asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files]
-    authorize_admission(wb, monkeypatch, refs, data_class=data_class, provenance_ttl_ms=provenance_ttl_ms)
-    for file, ref in zip(files, refs):
-        classify_admitted(wb, ref, request_id=file["assetId"], data_class=data_class)
+    unique = {file["assetId"]: ref for file, ref in zip(files, refs)}
+    authorize_admission(wb, monkeypatch, list(unique.values()), data_class=data_class,
+                        provenance_ttl_ms=provenance_ttl_ms)
+    for asset_id, ref in unique.items():
+        classify_admitted(wb, ref, request_id=asset_id, data_class=data_class)
     queued = submit(context(wb), {"requestId": "runtime", "name": "runtime", "files": files})
     wb.storage.claim_job(wb.owner, queued["job"]["id"])
     return queued["artifact"]

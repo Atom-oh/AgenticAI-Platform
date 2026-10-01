@@ -17,6 +17,9 @@ KEYS = "ontology-key-registry"
 STAGES = {"admitted": {"context"}, "context": {"analyzed", "generated"},
           "generated": {"compiled"}, "compiled": {"verified"}, "analyzed": {"completed"},
           "verified": {"completed"}}
+# ontology-tools/1 call limit and the workflow's fixed control calls (see
+# `admission.preflight_calls`, which submission and dispatch run).
+MAX_CALLS, CONTROL_CALLS = admission.MAX_CALLS, admission.CONTROL_CALLS
 TOOLS = {"context": "ontology.context", "source": "ontology.source", "stage": "execution.stage", "finish": "execution.finish"}
 
 
@@ -60,7 +63,7 @@ class Tools:
             raise AuthorizationDenied()
         if prior and prior["requestHash"] != fingerprint:
             fail(409, "execution-operation-changed", "같은 작업 ID의 내용이 다릅니다.")
-        if not prior and (ledger.get("calls", 0) >= 60 or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024):
+        if not prior and (ledger.get("calls", 0) >= MAX_CALLS or ledger.get("retrievedBytes", 0) > 4 * 1024 * 1024):
             fail(422, "execution-budget", "실행의 도구 조회 한도를 초과했습니다.")
         fences, admissions = admission.consumed(ctx, ledger["sourceRefs"])
         if fences != ledger.get("admissionFences") or admissions != ledger.get("admissions"):

@@ -90,7 +90,10 @@ def submit(ctx, body):
         fail(400, "ontology-resolver-unavailable", "승인된 경로 해석 프로필을 선택하세요.")
     agentcore = selected_backend(ctx.host)["name"] == "agentcore"
     if agentcore:
-        from ontology_runtime.admission import consumed, preflight, preflight_sources
+        from ontology_runtime.admission import consumed, preflight, preflight_calls, preflight_sources
+        # ontology-tools/1: one retrieval per file plus the control calls must
+        # fit the tool-call limit, before any source read.
+        preflight_calls(files)
         preflight_sources(refs)
     reader = Sources(ctx)
     checks = reader.verify(refs)

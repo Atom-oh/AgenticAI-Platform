@@ -122,6 +122,13 @@ set may hold 90 checks (`SOURCE_CHECK_BUDGET`), so at most 30 sources
 (`MAX_SOURCES`) and, for synthetic or public inputs, 22 sources fit. A larger
 request is rejected unchanged with `execution-completion-scope`; dispatch, tool
 calls and completion rerun the same check before their commits.
+Submission and dispatch also preflight the `ontology-tools/1` limit of 60 tool
+calls: the workflow retrieves each manifest file separately (distinct paths
+that reference one admitted source still cost one `ontology.source` call each)
+and adds 4 control calls (context stage, `ontology.context`, analyzed stage,
+`execution.finish`), so at most 56 files (`MAX_FILES`) are accepted; a larger
+manifest is rejected unchanged with `execution-completion-scope` before any
+source read.
 
 Code Interpreter's role reads only the pinned S3 tool-archive object version.
 The adapter verifies archive/code/lock hashes and the observed architecture/

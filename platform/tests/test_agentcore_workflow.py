@@ -419,10 +419,10 @@ def _submit_sources(wb, monkeypatch, files):
     wb.api.ontology_analyzer_ready = True
     wb.api.ontology_analyzer = RuntimeAnalyzer(
         "arn:aws:lambda:ap-northeast-2:180294183052:function:synthetic-authority:1", "a" * 64)
-    refs = [asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files]
-    authorize_admission(wb, monkeypatch, refs)
-    for file, ref in zip(files, refs):
-        classify_admitted(wb, ref, request_id=file["assetId"])
+    unique = {file["assetId"]: asset_reference(wb.storage.get(wb.owner, "asset", file["assetId"])) for file in files}
+    authorize_admission(wb, monkeypatch, list(unique.values()))
+    for asset_id, ref in unique.items():
+        classify_admitted(wb, ref, request_id=asset_id)
     return submit(context(wb), {"requestId": "budget", "name": "budget", "files": files})
 
 
@@ -675,3 +675,42 @@ def test_a_receipt_verifies_only_against_the_consumed_decisions_it_was_signed_ov
     for admissions in (changed, execution["admissions"][1:], []):
         with pytest.raises(AuthorizationDenied):
             evidence.verify(execution["capabilityClaims"], value, receipt, admissions)
+
+
+def _letters(index):
+    return "".join("abcdefghij"[int(digit)] for digit in f"{index:03d}")
+
+
+def _repeated_paths(wb, count):
+    """`count` distinct paths that all reference ONE admitted asset."""
+    source = asset(wb, "repeated", b"export const repeated = 'repeated';")
+    return [{"assetId": source["id"], "path": f"src/repeat-{_letters(index)}.ts"} for index in range(count)]
+
+
+def test_the_tool_call_budget_is_derived_from_the_workflow_calls():
+    from ontology_runtime import admission, tools
+    assert tools.MAX_CALLS == 60 and tools.CONTROL_CALLS == 4
+    assert admission.MAX_FILES == tools.MAX_CALLS - tools.CONTROL_CALLS == 56
+
+
+def test_a_request_at_the_tool_call_budget_is_executable(wb, monkeypatch):
+    """PR #34 review 2, finding 4 (ontology-tools/1): one `ontology.source`
+    call per file plus the fixed control calls (context stage, context,
+    analyzed stage, finish) fit the 60-call limit at the maximum file count."""
+    from ontology_runtime import admission
+    state = build_pipeline(wb, monkeypatch, files=_repeated_paths(wb, admission.MAX_FILES))
+    state.dispatch()
+    execution = wb.storage.list_page(EXECUTIONS, "ac_execution")["items"][0]
+    assert execution["status"] == "completed" and execution["calls"] == 60
+
+
+@pytest.mark.parametrize("extra", [1, 44])
+def test_a_request_over_the_tool_call_budget_is_rejected_unchanged_at_submission(wb, monkeypatch, extra):
+    """57 distinct paths referencing one admitted asset count as one source but
+    need 61 tool calls: submission rejects them before any paid work."""
+    from ontology_runtime import admission
+    with pytest.raises(CollaborationError) as error:
+        _submit_sources(wb, monkeypatch, _repeated_paths(wb, admission.MAX_FILES + extra))
+    assert error.value.code == "execution-completion-scope"
+    assert wb.storage.list_page(wb.owner, "wb_artifact")["items"] == []
+    assert wb.storage.list_page(wb.owner, "job")["items"] == []
