@@ -1,5 +1,5 @@
 {
-  "base": "b632b9bb2eef6818f7681817e2fe395f0db5b603",
+  "base": "b455fcaf700f37a73080352b98464e86ec9e792d",
   "purpose": "Public identifier deny-list read grant for the two legacy public writers (WsFn, StudioLoopFn); engine plan E2 Step 3a",
   "resources": [
     "StudioLoopFn4AFBBF08",
