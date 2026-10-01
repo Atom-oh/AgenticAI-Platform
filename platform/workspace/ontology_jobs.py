@@ -94,7 +94,7 @@ def submit(ctx, body):
         if len(refs) > 40:
             fail(422, "agentcore-source-budget", "AgentCore 분석 묶음은 원본 40개 이하로 나누세요.")
         from ontology_runtime.admission import require
-        checks.extend(require(ctx, ref) for ref in refs)
+        checks.extend(check for ref in refs for check in require(ctx, ref))
     current = Ontology(ctx).current()
     generation = (current or {}).get("generation")
     if "expectedGeneration" in body and generation != body["expectedGeneration"]:
