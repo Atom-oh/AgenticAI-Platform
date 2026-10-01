@@ -84,3 +84,41 @@ test('ontology service roles separate source authority, sandbox tools and capabi
     assert(runtimeResource.DependsOn.some(name => name.startsWith('RuntimeRoleDefaultPolicy')));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+function _ontologyStack(appContext) {
+  const directory = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'ontology-iac-'));
+  fs.writeFileSync(path.join(directory, 'Dockerfile'), 'FROM scratch\n');
+  const stack = new OntologyStack(new cdk.App({ context: appContext }), 'OntologyTest', {
+    env: { account: '111122223333', region: 'ap-northeast-2' },
+    runtimeDirectory: directory, isolatedSubnets: ['subnet-00000000000000001'],
+    isolatedSecurityGroups: ['sg-00000000000000001'], resourcePrefix: 'ontology_intake_test',
+    toolArchive: { bucket: 'synthetic-tools', key: `tools/${'a'.repeat(64)}.tar.gz`, version: 'synthetic-v1',
+      archiveHash: 'a'.repeat(64), analyzerCodeHash: 'b'.repeat(64), dependencyLockHash: 'c'.repeat(64) },
+  });
+  return { directory, resources: Template.fromStack(stack).toJSON().Resources };
+}
+
+function _environment(resources, prefix) {
+  const [, resource] = Object.entries(resources).find(([key, value]) =>
+    key.startsWith(prefix) && value.Type === 'AWS::Lambda::Function');
+  return resource.Properties.Environment?.Variables ?? {};
+}
+
+test('ontology adapters carry no INTAKE_DEPLOYMENT when intake is not configured', () => {
+  const { directory, resources } = _ontologyStack({});
+  try {
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, undefined);
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, undefined);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('ontology adapters share the same INTAKE_DEPLOYMENT as the rest of the intake module (PR #22 review 2, finding 4)', () => {
+  // admission.require()'s current_policy() rejects every policy without a
+  // deployment scope; both the Authority and Tools Lambdas must receive the
+  // identical value intake.ts/workspace.ts give the intake module's own functions.
+  const { directory, resources } = _ontologyStack({ intakeDeployment: 'offline-ontology-test' });
+  try {
+    assert.equal(_environment(resources, 'OntologyTools').INTAKE_DEPLOYMENT, 'offline-ontology-test');
+    assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, 'offline-ontology-test');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
