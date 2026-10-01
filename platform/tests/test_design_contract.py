@@ -108,6 +108,35 @@ def test_both_eligibility_outcomes_use_the_generic_action():
     assert {s["target"] for s in rule["steps"] if s["action"] == "expectVisible"} == {"terms", "ineligible"}
 
 
+def test_navigation_assertion_follows_the_case_reselected_for_a_hidden_required_text():
+    """PR #30 review round 4, #4: a required text visible only under a DIFFERENT case than the page's own
+    candidate forces a mid-rule reselect (the generated test's last `select` before the click); the navigation
+    assertion must then expect the destination of that now-active case, not the page's original candidate.
+    Here `eligibility`'s candidate case is eligible=True (-> terms), but a required text is visible only when
+    eligible=False, so the rule reselects to an eligible=False case right before clicking -> it must expect
+    `ineligible`, never `terms`."""
+    k = copy.deepcopy(K)
+    k.assets["elig-notice"] = {"id": "elig-notice", "level": "Atom", "title": "자격 안내", "intent": None,
+                               "code": None, "requiredStates": [], "stateProps": {},
+                               "conditions": [{"id": "c-elig-notice", "when": "!cond:eligible", "effect": "include",
+                                               "target": "elig-notice"}],
+                               "bindings": [{"field": "message", "source": "product",
+                                            "path": "product.notice.notice-1", "required": True}],
+                               "composes": [], "reviewState": "approved"}
+    k.screens["eligibility"]["assets"] = [*k.screens["eligibility"]["assets"], "elig-notice"]
+    out, registry, _ = seed(k=k)
+    assert out["findings"] == [], out["findings"]
+    rule = next(r for r in out["contract"]["rules"] if r["id"] == f"page-{registry.page_key('eligibility')}")
+    selects = [s for s in rule["steps"] if s["action"] == "select"]
+    first_case = int(selects[0]["value"].split(":")[0])
+    active_case = int(selects[-1]["value"].split(":")[0])
+    assert CASES[first_case]["eligible"] is True        # the page's own candidate: expects "terms" if unfixed
+    assert CASES[active_case]["eligible"] is False       # the reselect for the hidden notice: actually shows "ineligible"
+    click = next(idx for idx, s in enumerate(rule["steps"]) if s["action"] == "click")
+    expect = rule["steps"][click + 1]
+    assert expect["action"] == "expectVisible" and expect["target"] == "ineligible"
+
+
 def test_rule_and_page_capacity_is_a_finding_never_a_dropped_assertion():
     published = [{"pageId": p, "required": True, "content": f"{p} 필수 안내"}
                  for p in ("intro", "terms", "amount", "preferential", "confirm")]

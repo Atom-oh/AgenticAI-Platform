@@ -211,6 +211,11 @@ def derive(prd, flow, k, registry, published_pages, *, cases, criteria, viewport
         steps = [select(i, screen, state), _step("expectVisible", page_id, True)]
         texts = required_texts(values, k, screen)
         extra = []
+        # A required text hidden under the page's own candidate case `i` forces a reselect to a case `j` that
+        # shows it; that `select` step is the LAST one the generated test actually runs before the click, so
+        # `j` -- not `i` -- is the case in effect when the navigation assertion fires. `active` tracks whichever
+        # case is genuinely current at the end of this loop (PR #30 review round 4, #4).
+        active = i
         for asset_id, _, value in texts:
             target = ids["nodes"][node_key(asset_id)]
             spec = visibility.get(asset_id)
@@ -222,12 +227,13 @@ def derive(prd, flow, k, registry, published_pages, *, cases, criteria, viewport
                 findings.append(_finding("visibility-unverifiable", "no case shows a required text", asset=asset_id))
                 continue
             extra += [select(j, screen, state), _step("expectText", target, value)]
+            active = j
         steps += extra
         if state == "default" and _has_action(k, screen):
             if screen in flow["terminals"]:
                 steps += [_step("click", ids["cta"]), _step("expectVisible", FINISHED_TEST_ID, True)]
             else:
-                dst = successor(i, screen)
+                dst = successor(active, screen)
                 if dst is None:
                     findings.append(_finding("contract-unsupported", "no single successor for the page action",
                                              screen=screen))
