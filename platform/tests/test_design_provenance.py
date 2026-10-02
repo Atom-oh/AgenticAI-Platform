@@ -217,6 +217,42 @@ def test_enum_declared_text_child_violations_fail_generation_and_edit(child):
     assert {"prop-type", "binding-type"} & {f["code"] for f in out["findings"]}
 
 
+def _nested(k):
+    """An enum-children Text that also composes a nested Text bound to a PRD value."""
+    k.assets["body-text"]["composes"] = ["body-text"]
+    c = base()
+    node(c, "n4")["children"] = [{"id": "n9", "asset": "body-text", "bind": {"children": "product.baseRate"}}]
+    return c
+
+
+def test_nested_nodes_under_a_declared_children_prop_are_rejected():
+    k = _enum_text_child_knowledge()
+    assert "prop-type" in codes(_nested(k), k)
+    plain = copy.deepcopy(K)
+    assert "prop-type" not in codes(_nested(plain), plain)             # undeclared children may nest nodes
+
+
+def test_nested_nodes_under_a_declared_children_prop_fail_generation_edit_and_verification():
+    from design_loop.edit import edit
+    from design_loop.verify_graph import verify
+    from test_design_verify_graph import JUDGE, bundle
+    k = _enum_text_child_knowledge()
+    k.screens["amount"]["templateId"] = None
+    proposal = _nested(k)
+    out = generate_screen("amount", k, FLOW, _model(proposal), strategy=strategy("unstructured"),
+                          binding_paths=PATHS, variants=1, retries=1)
+    assert out["variants"][0]["composition"] is None
+    out = edit(base(), "n4", "문구 변경", k, _model(node(proposal, "n4")), flow=FLOW, binding_paths=PATHS)
+    assert "prop-type" in {f["code"] for f in out["findings"]}
+    b = bundle()
+    page = copy.deepcopy(b["screens"][("amount", "default")])
+    page["slots"]["body"].append({"id": "x0", "asset": "body-text", "props": {"children": "본문 텍스트"},
+                                  "children": [{"id": "x1", "asset": "body-text", "bind": {"children": "product.baseRate"}}]})
+    b["screens"][("amount", "default")] = page
+    r = verify(b, k, JUDGE)
+    assert r["verdict"] == "fail" and not r["approvable"]
+
+
 def test_an_enum_declared_bound_text_child_is_not_approvable():
     from design_loop.verify_graph import verify
     from test_design_verify_graph import JUDGE, bundle

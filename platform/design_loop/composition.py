@@ -310,6 +310,9 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         specs, managed = code.get("props", {}), ADAPTER_PROPS.get(code.get("adapter"), set())
         text_child = code.get("childrenProp") == "children"
         props, bind = node.get("props", {}), node.get("bind", {})
+        if "children" in specs and node.get("children"):
+            # react_project appends nested nodes to the same children prop; no declared prop type accepts nodes.
+            add("prop-type", f"{path}.children", "a declared children prop does not accept nested nodes")
         for name, literal in props.items():
             ppath = f"{path}.props.{name}"
             if name == "children" and text_child:
