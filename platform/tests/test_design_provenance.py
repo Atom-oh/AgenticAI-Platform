@@ -176,7 +176,120 @@ def test_unapproved_knowledge_contributes_no_copy():
 
 def test_enum_props_are_design_tokens_checked_by_type():
     c = base(); node(c, "n1")["props"]["as"] = "999만원"
-    assert codes(c) == {"prop-type"}                                   # critical: outside the declared values
+    assert codes(c) == {"prop-type", CODE}                             # critical: outside the declared values
+
+
+def _enum_text_child_knowledge():
+    k = copy.deepcopy(K)
+    k.assets["body-text"]["code"]["props"]["children"] = {"type": "enum", "required": False, "values": ["본문 텍스트"]}
+    return k
+
+
+def test_an_enum_declared_text_child_outside_its_values_is_rejected():
+    k = _enum_text_child_knowledge()
+    assert codes(base(), k) == set()                                   # a declared value is accepted
+    c = base(); node(c, "n4")["props"]["children"] = "가입금액구백구십구만원"
+    assert {"prop-type", CODE} <= codes(c, k)
+
+
+def test_an_enum_declared_text_child_cannot_be_bound():
+    k = _enum_text_child_knowledge()
+    c = base(); n = node(c, "n4"); del n["props"]["children"]; n["bind"] = {"children": "product.baseRate"}
+    assert "product.baseRate" in PATHS
+    assert "binding-type" in codes(c, k)
+    assert "binding-type" in codes(c, k, binding_paths={p: "string" for p in PATHS})
+    plain = base(); m = node(plain, "n4"); del m["props"]["children"]; m["bind"] = {"children": "product.baseRate"}
+    assert "binding-type" not in codes(plain)                          # an undeclared text child still binds as a string
+
+
+@pytest.mark.parametrize("child", [{"props": {"children": "가입금액구백구십구만원"}},
+                                   {"bind": {"children": "product.baseRate"}}])
+def test_enum_declared_text_child_violations_fail_generation_and_edit(child):
+    from design_loop.edit import edit
+    k = _enum_text_child_knowledge()
+    k.screens["amount"]["templateId"] = None
+    proposal = base(); n = node(proposal, "n4"); del n["props"]["children"]; n.update(copy.deepcopy(child))
+    out = generate_screen("amount", k, FLOW, _model(proposal), strategy=strategy("unstructured"),
+                          binding_paths=PATHS, variants=1, retries=1)
+    assert out["variants"][0]["composition"] is None
+    out = edit(base(), "n4", "문구 변경", k, _model({"id": "n4", "asset": "body-text", **copy.deepcopy(child)}),
+               flow=FLOW, binding_paths=PATHS)
+    assert {"prop-type", "binding-type"} & {f["code"] for f in out["findings"]}
+
+
+def _nested(k):
+    """An enum-children Text that also composes a nested Text bound to a PRD value."""
+    k.assets["body-text"]["composes"] = ["body-text"]
+    c = base()
+    node(c, "n4")["children"] = [{"id": "n9", "asset": "body-text", "bind": {"children": "product.baseRate"}}]
+    return c
+
+
+def test_nested_nodes_under_a_declared_children_prop_are_rejected():
+    k = _enum_text_child_knowledge()
+    assert "prop-type" in codes(_nested(k), k)
+    plain = copy.deepcopy(K)
+    assert "prop-type" not in codes(_nested(plain), plain)             # undeclared children may nest nodes
+
+
+def test_node_typed_children_accept_nested_nodes_and_text():
+    node_children = {"type": "node", "required": False}
+    k = copy.deepcopy(K)
+    k.assets["amount-field"]["code"]["props"]["children"] = copy.deepcopy(node_children)
+    assert codes(base(), k) == set()                                   # the Stack still nests its field nodes
+    k = copy.deepcopy(K)
+    k.assets["body-text"]["code"]["props"]["children"] = copy.deepcopy(node_children)
+    assert codes(base(), k) == set()                                   # an approved literal text child
+    c = base(); n = node(c, "n4"); del n["props"]["children"]; n["bind"] = {"children": "product.baseRate"}
+    assert "binding-type" not in codes(c, k)                           # a bound text child
+    assert "prop-type" not in codes(_nested(k), k)                     # nested nodes
+
+
+def test_nested_nodes_under_a_declared_children_prop_fail_generation_edit_and_verification():
+    from design_loop.edit import edit
+    from design_loop.verify_graph import verify
+    from test_design_verify_graph import JUDGE, bundle
+    k = _enum_text_child_knowledge()
+    k.screens["amount"]["templateId"] = None
+    proposal = _nested(k)
+    out = generate_screen("amount", k, FLOW, _model(proposal), strategy=strategy("unstructured"),
+                          binding_paths=PATHS, variants=1, retries=1)
+    assert out["variants"][0]["composition"] is None
+    out = edit(base(), "n4", "문구 변경", k, _model(node(proposal, "n4")), flow=FLOW, binding_paths=PATHS)
+    assert "prop-type" in {f["code"] for f in out["findings"]}
+    b = bundle()
+    page = copy.deepcopy(b["screens"][("amount", "default")])
+    page["slots"]["body"].append({"id": "x0", "asset": "body-text", "props": {"children": "본문 텍스트"},
+                                  "children": [{"id": "x1", "asset": "body-text", "bind": {"children": "product.baseRate"}}]})
+    b["screens"][("amount", "default")] = page
+    r = verify(b, k, JUDGE)
+    assert r["verdict"] == "fail" and not r["approvable"]
+
+
+def test_an_enum_declared_bound_text_child_is_not_approvable():
+    from design_loop.verify_graph import verify
+    from test_design_verify_graph import JUDGE, bundle
+    k = _enum_text_child_knowledge()
+    b = bundle()
+    page = copy.deepcopy(b["screens"][("amount", "default")])
+    page["slots"]["body"].append({"id": "x0", "asset": "body-text", "bind": {"children": "product.baseRate"}})
+    b["screens"][("amount", "default")] = page
+    r = verify(b, k, JUDGE)
+    assert r["verdict"] == "fail" and not r["approvable"]
+    assert any(f["code"] == "binding-type" for f in r["findings"])
+
+
+def test_an_enum_declared_text_child_outside_its_values_is_not_approvable():
+    from design_loop.verify_graph import verify
+    from test_design_verify_graph import JUDGE, bundle
+    k = _enum_text_child_knowledge()
+    b = bundle()
+    page = copy.deepcopy(b["screens"][("amount", "default")])
+    page["slots"]["body"].append({"id": "x0", "asset": "body-text", "props": {"children": "가입금액구백구십구만원"}})
+    b["screens"][("amount", "default")] = page
+    r = verify(b, k, JUDGE)
+    assert r["verdict"] == "fail" and not r["approvable"]
+    assert any(f["code"] == CODE for f in r["findings"])
 
 
 # ---- generation, edit, verification and codegen fail closed ---------------------------------------------------

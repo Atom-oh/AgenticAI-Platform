@@ -109,7 +109,8 @@ def literal_approved(k, asset_id, name, literal, copy):
     asset = k.assets.get(asset_id)
     spec = _specs(asset).get(name)
     if isinstance(spec, dict) and spec.get("type") == "enum":
-        return True                                    # a design token; a value outside `values` is `prop-type`
+        # A declared design token is reviewed with the code layer; anything outside `values` has no source.
+        return all(isinstance(value, str) and value in spec.get("values", []) for value in _shown(literal))
     own = [v for v in _state_literals(asset, name) if not isinstance(v, bool)] if _approved(asset) else []
     for value in _shown(literal):
         if isinstance(value, str):

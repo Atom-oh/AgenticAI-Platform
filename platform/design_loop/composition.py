@@ -310,11 +310,18 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         specs, managed = code.get("props", {}), ADAPTER_PROPS.get(code.get("adapter"), set())
         text_child = code.get("childrenProp") == "children"
         props, bind = node.get("props", {}), node.get("bind", {})
+        # react_project emits nested nodes and the text child into one React children prop. A declared scalar
+        # children spec (string/enum/...) governs all of it; an undeclared or `node` spec accepts nodes and text.
+        scalar_children = specs.get("children") if (specs.get("children") or {}).get("type") not in (None, "node") else None
+        if scalar_children and node.get("children"):
+            add("prop-type", f"{path}.children", "a scalar children prop does not accept nested nodes")
         for name, literal in props.items():
             ppath = f"{path}.props.{name}"
             if name == "children" and text_child:
                 if not isinstance(literal, str) or len(literal) > MAX_TEXT:
                     add("prop-type", ppath, "text child must be a string")
+                elif scalar_children and not _literal_ok(scalar_children, literal):
+                    add("prop-type", ppath, "literal does not match the declared prop type")
             elif name not in specs:
                 add("unknown-prop", ppath, "prop not declared by the code layer")
                 continue
@@ -332,7 +339,10 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
                 add(provenance.CODE, ppath, provenance.MESSAGE)
         for name, bpath in bind.items():
             ppath = f"{path}.bind.{name}"
-            spec = {"type": "string"} if name == "children" and text_child else specs.get(name)
+            if name == "children" and text_child:
+                spec = scalar_children or {"type": "string"}   # an enum binding is rejected by _bind_ok
+            else:
+                spec = specs.get(name)
             if spec is None:
                 add("unknown-prop", ppath, "prop not declared by the code layer")
                 continue
