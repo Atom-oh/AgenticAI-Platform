@@ -2,9 +2,9 @@
 
 A composition tree is the engine's single intermediate representation: one composition per screen and state holds
 every node the page can show; case-dependent nodes carry `visibleWhen`, derived only from an applicable
-`uxModel.conditions` entry. Financial values reach a page only through PRD bindings: any number in displayed literal
-text (digits of any script or Korean numeral words), outside the explicit non-financial forms of
-`financial.NONFINANCIAL_FORMS`, is a critical finding. Validation never repairs; it reports.
+`uxModel.conditions` entry. Financial values reach a page only through PRD bindings, because every displayed literal
+must have an approved source (`provenance`: a binding, approved knowledge copy or an engine template); anything else
+is `unapproved-literal-text`, critical (PR #30 review 7, #1 follow-up). Validation never repairs; it reports.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import re
 from workspace.ontology_ux import STATES, parse_when
 from workspace.ontology_ux import visible as _visible
 
-from .financial import contains_quantity, numerals
+from . import provenance
 
 SCHEMA_VERSION = 1
 TOP = frozenset({"schemaVersion", "screenId", "templateId", "state", "variant", "surface", "slots"})
@@ -135,47 +135,6 @@ def _strings(value):
     elif isinstance(value, dict):
         for item in value.values():
             yield from _strings(item)
-
-
-def _display_strings(value):
-    """Every value a literal can put on screen, numbers included (a numeric list field renders as text too)."""
-    if isinstance(value, bool):
-        return
-    if isinstance(value, (int, float)):
-        yield str(value)
-    elif isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _display_strings(item)
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _display_strings(item)
-
-
-def node_display(node, k):
-    """`{prop: [displayed strings]}` for one node's literal props. Enum props are reviewed design tokens chosen
-    from a closed set (gap "4", as "h1"), not free display text, so only a unit-bearing quantity in one counts;
-    every other literal -- including undeclared
-    props, which are findings of their own -- counts as displayed (fail closed)."""
-    code = ((k.assets.get(node.get("asset")) or {}).get("code") or {}) if isinstance(node, dict) else {}
-    specs = code.get("props", {}) if isinstance(code.get("props"), dict) else {}
-    out = {}
-    for name, literal in (node.get("props") or {}).items() if isinstance(node, dict) else ():
-        spec = specs.get(name) if isinstance(specs.get(name), dict) else {}
-        shown = list(_display_strings(literal))
-        out[name] = [text for text in shown if contains_quantity(text)] if spec.get("type") == "enum" else shown
-    return out
-
-
-def _numeral_findings(strings, path, add):
-    """One finding per numeral code in `strings` (PR #30 review 6, #1): no context is consulted -- a number is
-    displayed or it is not, however the text around it is split across props, nodes or bound units."""
-    for code in dict.fromkeys(code for s in strings for code, _ in numerals(s)):
-        if code == "unsupported-numeral-form":
-            add(code, path, "numeral form cannot be classified; financial quantities must be bound from the PRD")
-        else:
-            add(code, path, "financial quantities must be bound from the PRD")
 
 
 def text_of(c, values=None, k=None):
@@ -308,9 +267,10 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         elif node["id"] in ids:
             add("duplicate-id", path + ".id", "duplicate node id")
         ids.add(node["id"])
-    # the page heading is generated visible text (react_project renders the screen title): no literal number
-    screen = k.screens.get(c["screenId"]) or {}
-    _numeral_findings([screen.get("title")], "screen.title", add)
+    # the page heading is generated visible text (react_project renders the screen title): approved copy only
+    approved = provenance.approved_copy(k)
+    if not provenance.screen_title_approved(k, c["screenId"]):
+        add(provenance.CODE, "screen.title", provenance.MESSAGE)
     # slots
     slots = (template or {}).get("slots", {})
     for name in c["slots"]:
@@ -350,7 +310,6 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
         specs, managed = code.get("props", {}), ADAPTER_PROPS.get(code.get("adapter"), set())
         text_child = code.get("childrenProp") == "children"
         props, bind = node.get("props", {}), node.get("bind", {})
-        displayed = node_display(node, k)
         for name, literal in props.items():
             ppath = f"{path}.props.{name}"
             if name == "children" and text_child:
@@ -369,7 +328,8 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
                 add("prop-type", ppath, "literal does not match the declared prop type")
             if name in bind:
                 add("prop-conflict", ppath, "prop is both literal and bound")
-            _numeral_findings(displayed.get(name, ()), ppath, add)
+            if not provenance.literal_approved(k, asset_id, name, literal, approved):
+                add(provenance.CODE, ppath, provenance.MESSAGE)
         for name, bpath in bind.items():
             ppath = f"{path}.bind.{name}"
             spec = {"type": "string"} if name == "children" and text_child else specs.get(name)

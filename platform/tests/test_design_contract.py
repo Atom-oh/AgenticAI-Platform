@@ -465,8 +465,11 @@ def choice_knowledge():
 
 def choice_screens(k, flow):
     screens = seed_screens(k, flow)
-    options = {"plan-select": [{"value": "monthly", "label": "매월"}, {"value": "yearly", "label": "매년"}],
-               "channel-radio": [{"value": "email", "label": "이메일"}, {"value": "sms", "label": "문자"}]}
+    # Option labels and values are displayed/selected literals, so they need an approved source like any other
+    # literal (provenance; PR #30 review 7, #1 follow-up); the seed's approved screen titles serve as option copy.
+    options = {"plan-select": [{"value": "납입 금액", "label": "납입 금액"}, {"value": "우대 조건", "label": "우대 조건"}],
+               "channel-radio": [{"value": "약관 동의", "label": "약관 동의"},
+                                 {"value": "자동이체 확인", "label": "자동이체 확인"}]}
     for node in screens[("amount", "default")]["slots"]["body"]:
         if node["asset"] in options:
             node["props"]["options"] = options[node["asset"]]
@@ -490,7 +493,7 @@ def test_select_and_radio_contract_passes_and_noop_mutations_fail(local_browser)
     bundle, files = compiled(k, contract, registry, flow, screens)
     report = evaluate_bundle(bundle, contract)
     assert report["passed"], ([c for c in report["checks"] if c["status"] != "pass"], report["blockingFindings"])
-    assert '"o1": "monthly"' in files["src/logic/data.ts"] or '"o1":"monthly"' in files["src/logic/data.ts"]
+    assert '"o1": "납입 금액"' in files["src/logic/data.ts"] or '"o1":"납입 금액"' in files["src/logic/data.ts"]
     page = f"src/pages/{registry.page_id('amount')}.tsx"
     # Playwright's own post-check (a radio click that never checks) can fire before expectChecked; either fails.
     for target, action in ((select_id, {"expectValue"}), (radio_id, {"check", "expectChecked"})):

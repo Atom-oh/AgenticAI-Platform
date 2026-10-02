@@ -85,7 +85,7 @@ def test_compose_retries_once_with_the_findings_and_keeps_both_attempts():
     k = _unstructured()
     good = fill(K, FLOW, "amount", VALUES)
     bad = copy.deepcopy(good)
-    bad["slots"]["body"][0]["children"].append({"id": "x1", "asset": "next-button", "props": {"label": "다음"}})
+    bad["slots"]["body"][0]["children"].append({"id": "x1", "asset": "next-button", "props": {"label": "다음 버튼"}})
     calls = []
 
     def gen(system, user, on_token):
@@ -120,7 +120,7 @@ def test_adapt_uses_the_fill_base_and_rejects_out_of_scope_changes():
     assert classify(k, FLOW, "terms")["route"] == "hybrid"
     base = fill(k, FLOW, "terms", VALUES)
     moved = copy.deepcopy(base)
-    moved["slots"]["header"][0]["props"]["children"] = "다른 제목"
+    moved["slots"]["header"][0]["props"]["children"] = "가입 완료"
     answers = [moved, base]
     gen = lambda s, u, t: json.dumps(answers.pop(0), ensure_ascii=False)  # noqa: E731
     out = generate_screen("terms", k, FLOW, {"generate": gen, "normalize": OK}, strategy=strategy("hybrid"),
