@@ -107,7 +107,7 @@ def test_prop_checks():
     c = base(); node(c, "n1")["props"]["color"] = "red"
     assert codes(c) == {"unknown-prop"}
     c = base(); node(c, "n1")["props"]["as"] = "h7"
-    assert codes(c) == {"prop-type"}
+    assert codes(c) == {"prop-type", "unapproved-literal-text"}       # outside the enum: no type, no source
     c = base(); del node(c, "n6")["props"]["label"]
     assert codes(c) == {"prop-required"}
     c = base(); node(c, "n6")["bind"] = {"label": "product.productName"}

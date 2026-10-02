@@ -315,6 +315,8 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
             if name == "children" and text_child:
                 if not isinstance(literal, str) or len(literal) > MAX_TEXT:
                     add("prop-type", ppath, "text child must be a string")
+                elif name in specs and not _literal_ok(specs[name], literal):
+                    add("prop-type", ppath, "literal does not match the declared prop type")
             elif name not in specs:
                 add("unknown-prop", ppath, "prop not declared by the code layer")
                 continue

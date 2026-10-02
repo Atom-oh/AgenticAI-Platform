@@ -176,7 +176,33 @@ def test_unapproved_knowledge_contributes_no_copy():
 
 def test_enum_props_are_design_tokens_checked_by_type():
     c = base(); node(c, "n1")["props"]["as"] = "999만원"
-    assert codes(c) == {"prop-type"}                                   # critical: outside the declared values
+    assert codes(c) == {"prop-type", CODE}                             # critical: outside the declared values
+
+
+def _enum_text_child_knowledge():
+    k = copy.deepcopy(K)
+    k.assets["body-text"]["code"]["props"]["children"] = {"type": "enum", "required": False, "values": ["본문 텍스트"]}
+    return k
+
+
+def test_an_enum_declared_text_child_outside_its_values_is_rejected():
+    k = _enum_text_child_knowledge()
+    assert codes(base(), k) == set()                                   # a declared value is accepted
+    c = base(); node(c, "n4")["props"]["children"] = "가입금액구백구십구만원"
+    assert {"prop-type", CODE} <= codes(c, k)
+
+
+def test_an_enum_declared_text_child_outside_its_values_is_not_approvable():
+    from design_loop.verify_graph import verify
+    from test_design_verify_graph import JUDGE, bundle
+    k = _enum_text_child_knowledge()
+    b = bundle()
+    page = copy.deepcopy(b["screens"][("amount", "default")])
+    page["slots"]["body"].append({"id": "x0", "asset": "body-text", "props": {"children": "가입금액구백구십구만원"}})
+    b["screens"][("amount", "default")] = page
+    r = verify(b, k, JUDGE)
+    assert r["verdict"] == "fail" and not r["approvable"]
+    assert any(f["code"] == CODE for f in r["findings"])
 
 
 # ---- generation, edit, verification and codegen fail closed ---------------------------------------------------
