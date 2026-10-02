@@ -41,7 +41,7 @@ Each contract edit ships in the task that changes the interface.
   - user-typed edit instructions, normalized at API admission into an `adm_decision` of artifact kind `prompt-text` (C4)
 
   The Runtime never holds the deny-list. The engine's `deps["normalize"]` hook is therefore a **verify-only** check. In the Runtime it is `boundary_check(text)`: the `engine.gate` identifier rules, which raise on a hit, because nothing should remain. A missing hook means the engine returns `blocked: normalization-unavailable` before any model call.
-- Every numeric financial value shown on a screen comes from a PRD binding. Literal financial text in a composition is a critical finding.
+- Every numeric financial value shown on a screen comes from a PRD binding. This is enforced by provenance, not by recognizing number forms (PR #30 review 7, #1 follow-up): every displayed literal must be (a) rendered from a PRD binding, (b) an exact string of approved knowledge copy (`design_loop.provenance.approved_copy`: approved asset titles, string `stateProps` of approved assets, approved Screen titles) or (c) engine template text (`provenance.ENGINE_TEXT`). Anything else, including model-authored text without a number, is `unapproved-literal-text`, critical. Approved copy that contains a number is accepted as reviewed: a human approved that exact text at that node revision, so the engine has not invented it (SPEC 12.4).
 - The existing `design_loop` modules (`prd.py`, `generate.py`, `loop.py`, `review.py`, `rules.py`, `checklist.py`) keep serving the legacy `design_*` WebSocket path unchanged. New modules sit beside them and never change their behavior.
 - Korean UI strings; synthetic public seeds only.
 
@@ -67,7 +67,8 @@ Each contract edit ships in the task that changes the interface.
 | `platform/design_loop/edit.py` | Targeted edits: full masked-document stability and layout-box comparison |
 | `platform/design_loop/coverage.py` | Expected graph × compositions → coverage findings |
 | `platform/design_loop/verify_graph.py` | Reviewer/tester/coverage → master; fail-closed verdicts; HITL metrics |
-| `platform/design_loop/financial.py` | Shared financial-quantity grammar `QUANTITY` used by E7 and E10 |
+| `platform/design_loop/financial.py` | Shared financial-quantity grammar `QUANTITY` used by E7 |
+| `platform/design_loop/provenance.py` | Displayed-literal provenance used by E10, E11, E12 and E14: approved knowledge copy and the enumerated engine template text (PR #30 review 7, #1 follow-up) |
 | `platform/design_loop/evidence.py` | Trusted assembler joining compiler build and Browser report (mirrors `react_runtime.py:77-84`) |
 | `platform/design_loop/convention.py` | Customer convention: screen registry, path/meta rules, handoff layout |
 | `platform/design_loop/handoff.py` | Deterministic convention-layout ZIP derived from approved release source bytes |
@@ -2701,7 +2702,7 @@ def test_mermaid_highlights_case_path():
 
 | Route | Mode | Model use |
 |---|---|---|
-| `structured` | `fill` | Deterministic composition from the approved screen assets and template slots, plus PRD bindings. No model call (`modelCalls: 0`); the model may only propose copy, through the separate edit path. |
+| `structured` | `fill` | Deterministic composition from the approved screen assets and template slots, plus PRD bindings. No model call (`modelCalls: 0`); the model may only propose copy, through the separate edit path. An edit is approvable only when its literal text is approved knowledge copy; new copy must first be approved into the knowledge (provenance, PR #30 review 7, #1 follow-up). |
 | `hybrid` | `adapt` | Start from the `fill` composition. The model may only add or remove assets that `uxModel.conditions` names, or that the slot allow-lists permit. |
 | `unstructured` | `compose` | The model composes from the allow-listed assets. A proposed unknown asset becomes a `new-asset-candidate` finding. |
 
@@ -2756,8 +2757,7 @@ def test_mermaid_highlights_case_path():
 | A composition sets a `callback` prop directly | `callback-literal` | critical |
 | An `on.click` on a component whose adapter is not `action` | `unknown-transition` | critical |
 | `on.click` values: `"next"` is valid on any screen with ≥ 1 outgoing transition (review round 3, N14). `"finish"` is valid **only** on terminal screens (review round 6, Z4). An explicit transition id must leave this screen. Anything else → `unknown-transition` | `unknown-transition` | critical |
-| Any number displayed by a literal (every non-enum prop, text child, list-item field and the screen title): decimal digits of any script, or a Korean numeral word in quantity position (`삼십만원`, `오천원`, `만원`, `한 달`). No financial context is inferred (PR #30 review 6, #1). The only exemption is an explicit non-financial form in `design_loop.financial.NONFINANCIAL_FORMS` (currently the step counter `N단계`). Enum props count only when they hold a unit-bearing quantity. The PRD value grammar `design_loop.financial.QUANTITY` (review round 28, AV2) remains E7's value-unit check | `literal-financial-value` | critical |
-| A numeric character that is not a decimal digit (`①`, `Ⅳ`, `½`, `一`) in a displayed literal | `unsupported-numeral-form` | critical |
+| A displayed literal without an approved source (PR #30 review 7, #1 follow-up; replaces the numeral grammar of review rounds 2-7 and its codes `literal-financial-value` / `unsupported-numeral-form`). Every non-enum literal prop, text child and list-item field must be an exact string of approved knowledge copy (`design_loop.provenance.approved_copy(k)`: titles of approved renderable assets, string-typed `stateProps` values of approved assets, titles of approved Screens; nodes not in `reviewState: "approved"` contribute nothing). A number-typed literal is accepted only as the node's own asset's `stateProps` value for that prop. The screen title is the page heading and must belong to an approved Screen. No trimming, joining or substring match, so split nodes, Hangul numerals, glued text and model-authored text without numbers are all rejected for their source, not their spelling. Enum props are design tokens checked by `prop-type`; booleans are not displayed. Values reach a page only through `bind`. The PRD value grammar `design_loop.financial.QUANTITY` (review round 28, AV2) remains E7's value-unit check | `unapproved-literal-text` | critical |
 | `on.click` transition not in flow or not leaving this screen | `unknown-transition` | critical |
 | `state ∉ STATES`, `surface` unknown | `bad-state`, `bad-surface` | critical |
 
@@ -2770,7 +2770,7 @@ def test_mermaid_highlights_case_path():
   - an empty required slot
   - a nested `next-button` under `amount-field` (`not-composed`)
   - `bind: {"children": "product.unknown"}` (`unknown-binding`)
-  - literal `"연 2.0%"`, `"999만원"` and `"1억원"`, and the same in a `Summary.items` value (`literal-financial-value`). The same values bound from the cited PRD pass. Through `verify_graph`, a generated or edited composition with an unbound `999만원` fails deterministically even with a passing fake judge
+  - literal `"연 2.0%"`, `"999만원"` and `"1억원"`, and the same in a `Summary.items` value (`unapproved-literal-text`; originally `literal-financial-value`). The same values bound from the cited PRD pass. Through `verify_graph`, a generated or edited composition with an unbound `999만원` fails deterministically even with a passing fake judge. The review 5/6/7 repros (`추가 한도` + `999` in separate nodes, `구백구십구만원`, `납입 기간 삼일`, `추가 한도 삼원`, `금리 영퍼센트`, `가입금액구백구십구만원`) and model-authored text without numbers are rejected the same way (`tests/test_design_provenance.py`)
   - the same prop in `props` and `bind` (`prop-conflict`)
 - [ ] **Step 2–4:** Fail → implement → pass. The binding catalog passed in tests is `set(prd_extract.bindings(GOOD))`.
 - [ ] **Step 5: Commit** `git commit -m "feat(design): composition validation for slots, nesting, bindings and financial literals"`
@@ -2785,7 +2785,7 @@ def test_mermaid_highlights_case_path():
 - `fill(k, flow, screen_id, binding_values) -> composition` is deterministic:
   - It uses the template slots in order. Each screen asset goes into the first slot whose allow-list contains it.
   - Required props are bound from the asset's `dataBindings`.
-  - Text copy comes from the asset title, which is not a financial value.
+  - Text copy comes from the approved asset title (approved knowledge copy; `design_loop.provenance`). `adapt`/`compose`/state prompts carry `catalog.approvedCopy`, the only literal text a model may write.
   - On a **terminal** screen (no outgoing transition, e.g. `ineligible` and `done`), the CTA uses `on.click: "finish"` (review round 6, Z4). `App.tsx` handles it by setting `finished: true` and rendering the same page with a `testId="flow-finished"` status element. No successor is invented. Pages whose assets have no CTA simply omit it.
   - The CTA `on.click` is the generic action `"next"`, never a fixed transition id. At runtime the generated `src/logic/flow.ts` `next(screen, caseState)` selects the **single** transition whose `when` holds for the current case, per `flow.traverse`. Every eligibility outcome therefore has a working action (review round 2, N14). `on.click` may also name an explicit transition id, used for secondary buttons such as "이전".
 - `generate_screen(screen_id, k, flow, deps, *, strategy, binding_paths, variants=3, retries=1) -> {"screenId", "variants": [...]}`:
