@@ -334,7 +334,8 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
                 add(provenance.CODE, ppath, provenance.MESSAGE)
         for name, bpath in bind.items():
             ppath = f"{path}.bind.{name}"
-            spec = {"type": "string"} if name == "children" and text_child else specs.get(name)
+            # A declared spec governs bound text children too; an enum binding is rejected by _bind_ok.
+            spec = specs.get(name) or ({"type": "string"} if name == "children" and text_child else None)
             if spec is None:
                 add("unknown-prop", ppath, "prop not declared by the code layer")
                 continue
