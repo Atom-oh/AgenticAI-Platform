@@ -232,6 +232,19 @@ def test_nested_nodes_under_a_declared_children_prop_are_rejected():
     assert "prop-type" not in codes(_nested(plain), plain)             # undeclared children may nest nodes
 
 
+def test_node_typed_children_accept_nested_nodes_and_text():
+    node_children = {"type": "node", "required": False}
+    k = copy.deepcopy(K)
+    k.assets["amount-field"]["code"]["props"]["children"] = copy.deepcopy(node_children)
+    assert codes(base(), k) == set()                                   # the Stack still nests its field nodes
+    k = copy.deepcopy(K)
+    k.assets["body-text"]["code"]["props"]["children"] = copy.deepcopy(node_children)
+    assert codes(base(), k) == set()                                   # an approved literal text child
+    c = base(); n = node(c, "n4"); del n["props"]["children"]; n["bind"] = {"children": "product.baseRate"}
+    assert "binding-type" not in codes(c, k)                           # a bound text child
+    assert "prop-type" not in codes(_nested(k), k)                     # nested nodes
+
+
 def test_nested_nodes_under_a_declared_children_prop_fail_generation_edit_and_verification():
     from design_loop.edit import edit
     from design_loop.verify_graph import verify
