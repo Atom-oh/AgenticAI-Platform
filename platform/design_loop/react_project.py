@@ -15,9 +15,11 @@ import json
 import re
 from pathlib import Path
 
+from workspace.ontology_ux import STATES
+
 from .composition import walk
 from .convention import META_KEYS, PAGE_ID, VALUE_FIELD, Registry
-from .financial import needs_binding
+from . import provenance
 from .local_runner import run_node
 
 KIT = Path(__file__).resolve().parents[1] / "react-kit"
@@ -29,12 +31,13 @@ LOGIC = ("src/logic/cases.ts", "src/logic/data.ts", "src/logic/flow.ts", "src/lo
 KIT_NUMERIC = {"Stack": {"gap"}, "Grid": {"gap", "columns"}, "Inline": {"gap"}}
 # Case-fixture form values per controlled adapter; the contract (E13) fills the same values.
 # Choice fixtures pick the second option: a controlled <select> whose state never updates still shows its first option.
-FIXTURE = {"controlled-text": "10000", "controlled-bool": True, "controlled-choice": "o2"}
+FIXTURE = {"controlled-text": provenance.TEXT_FIXTURE, "controlled-bool": True, "controlled-choice": "o2"}
 FINISHED_TEST_ID = "flow-finished"
 CASE_SELECT = "case-select"
-CASE_SELECT_LABEL = "검증용 케이스"
-FINISHED_MESSAGE = "절차를 완료했습니다."
-CASE_PREFIX = "케이스 "
+# Engine template text (provenance (c)): the only visible strings codegen writes itself; enumerated there.
+CASE_SELECT_LABEL = provenance.CASE_SELECT_LABEL
+FINISHED_MESSAGE = provenance.FINISHED_MESSAGE
+CASE_PREFIX = provenance.CASE_PREFIX
 
 
 def _js(value):
@@ -201,17 +204,19 @@ def _ts_type(value):
 
 
 def _case_label(k, i, screen, state, empty):
-    return f"{CASE_PREFIX}{i + 1} · " + _case_label_tail(k, screen, state, empty)
+    return f"{CASE_PREFIX}{i + 1}{provenance.CASE_SEPARATOR}" + _case_label_tail(k, screen, state, empty)
 
 
 def _case_label_tail(k, screen, state, empty):
-    return f"{k.screens[screen]['title']} · {state}" + (" · 빈 입력" if empty else "")
+    return (f"{k.screens[screen]['title']}{provenance.CASE_SEPARATOR}{state}"
+            + (provenance.CASE_EMPTY_SUFFIX if empty else ""))
 
 
 def generated_text(k, flow, screens, cases):
     """Every visible string codegen emits outside the composition trees: page headings (screen titles), the
     verifier's case-select label and entries, and the completion message. Composition literals are checked by
-    `composition.validate`; these are checked here with the same rule (PR #30 review 1, #6; review 6, #1)."""
+    `composition.validate`; these are built only from engine template text and approved screen titles, which
+    `project` enforces (PR #30 review 1, #6; review 7, #1 follow-up)."""
     texts = [CASE_SELECT_LABEL, FINISHED_MESSAGE]
     keys = [key for key in screens if key[0] in k.screens]
     texts += [k.screens[s]["title"] for s in dict.fromkeys(s for s, _ in keys)]
@@ -222,15 +227,14 @@ def generated_text(k, flow, screens, cases):
 def project(flow, screens, k, prd_bindings, *, cases, registry=None, meta=None):
     """`screens` maps `(screenId, state)` to its composition. Returns `{path: source}`.
 
-    Any number in a generated visible string (outside the engine's own case index) raises `literal-financial-value`:
-    quantities reach a page only through PRD bindings."""
-    # Any number in generated visible text needs a binding (PR #30 review 6, #1). A case label starts with the
-    # engine's own case index ("케이스 3 · "); everything after that prefix is checked like the headings.
-    keys = [key for key in screens if key[0] in k.screens]
-    texts = [CASE_SELECT_LABEL, FINISHED_MESSAGE] + [k.screens[s]["title"] for s, _ in keys]
-    texts += [_case_label_tail(k, s, st, empty) for s, st in keys for empty in (False, True)]
-    if needs_binding(texts):
-        raise ValueError("literal-financial-value: generated visible text carries an unbound financial quantity")
+    Generated visible text has an approved source or codegen refuses (`unapproved-literal-text`; provenance): the
+    headings and case labels show only approved screen titles, engine template text, the engine's own case index
+    and a state name from the closed `STATES` set (PR #30 review 7, #1 follow-up)."""
+    for s, st in screens:
+        if s in k.screens and not provenance.screen_title_approved(k, s):
+            raise ValueError(f"{provenance.CODE}: the heading of {s} is not an approved screen title")
+        if st not in STATES:
+            raise ValueError(f"{provenance.CODE}: case labels show only known states")
     registry = (registry or Registry(k)).register_flow(flow)
     for s in flow["screens"]:
         if (s, "default") not in screens:
@@ -414,7 +418,7 @@ def _sample(spec, asset, name, binding_values):
     if kind == "boolean":
         return False
     if kind == "list":
-        return [{field: ("샘플" if t == "string" else 1) for field, t in spec["item"].items()}]
+        return [{field: (provenance.GALLERY_SAMPLE if t == "string" else 1) for field, t in spec["item"].items()}]
     return None
 
 
@@ -456,7 +460,7 @@ def asset_gallery(k, binding_values):
         "  const setField = (name: string, value: string | boolean) => setForm(prior => ({ ...prior, [name]: value }));",
         "  const text = (name: string): string => { const value = form[name]; return typeof value === 'string' ? value : ''; };",
         "  return (",
-        '    <Screen pageId="gallery" testId={"gallery"} title={"자산 갤러리"} width={"mobile"}>',
+        f'    <Screen pageId="gallery" testId={{"gallery"}} title={{{_js(provenance.GALLERY_TITLE)}}} width={{"mobile"}}>',
         "      <Stack>", *elements, "      </Stack>", "    </Screen>", "  );", "}", ""])
     app = "\n".join(["import GalleryPage from './pages/gallery';", "",
                      "export default function App() {", "  return <GalleryPage />;", "}", ""])

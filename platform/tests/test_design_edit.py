@@ -117,7 +117,10 @@ def test_edit_id_change_from_the_model_is_target_id_changed():
 def test_edit_findings_block_literal_values_and_missing_models():
     out = edit(base(), "n4", "금리 표시", K, gen({"id": "n4", "asset": "body-text", "props": {"children": "연 2.0%"}}),
                flow=FLOW, binding_paths=PATHS)
-    assert "literal-financial-value" in {f["code"] for f in out["findings"]}
+    assert "unapproved-literal-text" in {f["code"] for f in out["findings"]}       # no approved source
+    out = edit(base(), "n4", "문구 수정", K, gen({"id": "n4", "asset": "body-text", "props": {"children": "새 안내"}}),
+               flow=FLOW, binding_paths=PATHS)
+    assert "unapproved-literal-text" in {f["code"] for f in out["findings"]}       # model copy without a number too
     assert edit(base(), "n4", "x", K, {"normalize": OK}, flow=FLOW, binding_paths=PATHS)["blocked"] == "model-unavailable"
     seen = []
     blocked = edit(base(), "n4", "x", K, {"generate": lambda *a: seen.append(a)}, flow=FLOW, binding_paths=PATHS)

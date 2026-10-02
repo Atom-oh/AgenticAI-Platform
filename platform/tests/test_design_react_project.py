@@ -290,31 +290,24 @@ def test_codegen_modules_import_only_stdlib_and_pure_schema():
                 assert all(a.name.split(".")[0] in sys.stdlib_module_names for a in item.names), name
 
 
-def test_generated_visible_text_rejects_unbound_financial_quantities():
-    """PR #30 review 1, #6: headings and every other generated visible string go through the same grammar."""
+def test_generated_visible_text_has_an_approved_source():
+    """PR #30 review 1, #6 / review 7, #1 follow-up: headings and case labels show approved screen titles only;
+    every other generated visible string is engine template text (provenance.ENGINE_TEXT)."""
+    from design_loop import provenance
     from design_loop.react_project import generated_text
     flow = build_flow(K, "savings-signup")
     screens = {(s, "default"): fill(K, flow, s, bindings(GOOD)) for s in flow["screens"]}
     cases = enumerate_cases(expected(GOOD, K)["conditions"])["cases"]
     texts = generated_text(K, flow, screens, cases)
-    assert K.screens["amount"]["title"] in texts and "검증용 케이스" in texts
+    assert K.screens["amount"]["title"] in texts and provenance.CASE_SELECT_LABEL in texts
     k = copy.deepcopy(K)
-    k.screens["amount"]["title"] = "연 9.9% 특판 가입"
-    with pytest.raises(ValueError, match="literal-financial-value"):
-        project(flow, screens, k, bindings(GOOD), cases=cases)
-    # PR #30 review 5 #2: any number in a financial heading, whatever surrounds it, needs a binding
-    for title in ("추가 한도 [만원] 월 최대 999", "우대 금리 최대 0.5"):
+    for title in ("연 9.9% 특판 가입", "추가 한도 [만원] 월 최대 999", "한도 구백구십구만원", "납입 기간 삼일", "가입 안내"):
         k.screens["amount"]["title"] = title
-        with pytest.raises(ValueError, match="literal-financial-value"):
+        k.screens["amount"]["reviewState"] = "candidate"                    # not reviewed: no approved source
+        with pytest.raises(ValueError, match="unapproved-literal-text"):
             project(flow, screens, k, bindings(GOOD), cases=cases)
-    # PR #30 review 6 #1: no context at all -- any number, Korean numeral words included, needs a binding; the
-    # engine's own case index in the case labels ("케이스 3 · ") is not a composition literal and stays allowed.
-    for title in ("추가 999 가입", "한도 구백구십구만원", "삼십만원 혜택", "가입자 수 999"):
-        k.screens["amount"]["title"] = title
-        with pytest.raises(ValueError, match="literal-financial-value"):
-            project(flow, screens, k, bindings(GOOD), cases=cases)
-    k.screens["amount"]["title"] = "2단계 이용 조건 확인"                 # allowlisted step counter + near misses
-    assert project(flow, screens, k, bindings(GOOD), cases=cases)
+        k.screens["amount"]["reviewState"] = "approved"                     # reviewed copy, as approved
+        assert project(flow, screens, k, bindings(GOOD), cases=cases)
 
 
 def test_reserved_looking_published_page_ids_do_not_loop():

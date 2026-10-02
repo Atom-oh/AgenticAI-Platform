@@ -12,12 +12,14 @@ import copy
 import json
 
 from . import composition as comp
+from . import provenance
 from .model_call import call
 
 _SYSTEM = (
     "You edit exactly one node of a mobile banking screen composition. Reply with JSON only: the replacement NODE "
     '{"id", "asset", "props"?, "bind"?, "on"?, "visibleWhen"?, "children"?}. Keep the same "id". Change only what the '
-    "instruction asks. Never write a financial number as literal text: bind it. Callback props are platform-wired."
+    "instruction asks. Every literal text value must be copied exactly from approvedCopy; show any other value "
+    "through a binding path. Callback props are platform-wired."
 )
 
 
@@ -167,7 +169,8 @@ def edit(c, target_id, instruction, k, deps, *, flow, binding_paths, mode="fill"
         return {"composition": None, "findings": [], "stability": None, "blocked": "model-unavailable"}
     target, assets = _context(c, k, location)
     user = json.dumps({"instruction": instruction, "targetId": target_id, "target": target, "assets": assets,
-                       "bindingPaths": sorted(binding_paths), "composition": c}, ensure_ascii=False, sort_keys=True)
+                       "bindingPaths": sorted(binding_paths), "approvedCopy": sorted(provenance.approved_copy(k)),
+                       "composition": c}, ensure_ascii=False, sort_keys=True)
     text, blocked = call(deps, _SYSTEM, user)
     if blocked:
         return {"composition": None, "findings": [], "stability": None, "blocked": blocked}

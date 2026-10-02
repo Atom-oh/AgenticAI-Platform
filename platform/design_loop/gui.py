@@ -1,14 +1,15 @@
 """Strategy-driven GUI generation: fill, adapt, compose; layout and state variants (engine plan, Task E11; G-02, G-03).
 
 `fill` is deterministic: template slots in order, each screen asset in the first slot whose allow-list names it,
-nested COMPOSES children, required props bound from the asset's `dataBindings`, copy from the asset title (never a
-financial value) and the generic `next` action (`finish` on terminal screens). Conditional include/exclude targets
-carry the `visibleWhen` derived from their condition (AJ1).
+nested COMPOSES children, required props bound from the asset's `dataBindings`, copy from the approved asset title
+(approved knowledge copy, `provenance`) and the generic `next` action (`finish` on terminal screens). Conditional
+include/exclude targets carry the `visibleWhen` derived from their condition (AJ1).
 
 `generate_screen` requires the E9 strategy. Structured screens get layout variants from the kit's declared
 variation axes with no model call. Hybrid (`adapt`) and unstructured (`compose`) screens call the injected model;
-every attempt is validated with `composition.validate` and kept (GEN-05). A missing model or normalization hook is
-an explicit blocked outcome, never a pass, and incomplete knowledge never generates.
+every attempt is validated with `composition.validate` and kept (GEN-05). The model sees the approved copy it may
+display (`catalog.approvedCopy`); any other literal text is `unapproved-literal-text`. A missing model or
+normalization hook is an explicit blocked outcome, never a pass, and incomplete knowledge never generates.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from pathlib import Path
 from workspace.ontology_ux import STATES, visible
 
 from . import composition as comp
+from . import provenance
 from .flow import enumerate_cases, traverse
 from .model_call import call
 from .route import classify, shown_assets
@@ -32,8 +34,9 @@ _SYSTEM = (
     "You design one mobile banking screen as a composition tree. Reply with JSON only: one composition object "
     '{"schemaVersion": 1, "screenId", "templateId", "state", "variant", "surface", "slots": {slot: [NODE]}} where '
     'NODE = {"id", "asset", "props"?, "bind"?, "on"?, "visibleWhen"?, "children"?}. Use only the listed assets, '
-    "template slots, binding paths and transition actions. Never write a financial number as literal text: bind it. "
-    "Callback props are wired by the platform and must not appear."
+    "template slots, binding paths and transition actions. Every literal text value must be copied exactly from "
+    "approvedCopy; show any other value through a binding path. Callback props are wired by the platform and must "
+    "not appear."
 )
 
 
@@ -185,6 +188,7 @@ def _catalog(k, screen_id, flow, binding_paths):
                        "terminal": screen_id in flow["terminals"]},
             "templates": [{"id": t, "slots": k.templates[t]["slots"]} for t in templates if t in k.templates],
             "assets": assets, "bindingPaths": sorted(binding_paths),
+            "approvedCopy": sorted(provenance.approved_copy(k)),
             "actions": (["finish"] if screen_id in flow["terminals"] else ["next"])
             + [t["id"] for t in flow["transitions"] if t["src"] == screen_id]}
 

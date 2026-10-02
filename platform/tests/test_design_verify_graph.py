@@ -252,7 +252,7 @@ def test_an_unbound_financial_literal_fails_deterministically_with_a_passing_jud
         {"id": "lit", "asset": "body-text", "props": {"children": "최대 999만원까지 납입"}})
     r = verify(b, K, JUDGE)
     assert r["verdict"] == "fail" and not r["approvable"]
-    assert any(f["code"] == "literal-financial-value" and f["role"] == "reviewer" and f["severity"] == "critical"
+    assert any(f["code"] == "unapproved-literal-text" and f["role"] == "reviewer" and f["severity"] == "critical"
                for f in r["findings"])
 
 
@@ -709,13 +709,15 @@ def test_large_text_second_pass_is_required():
     assert verify(bundle(), K, JUDGE)["verdict"] == "pass"
 
 
-def test_a_financial_quantity_in_a_screen_heading_fails_deterministically():
-    """PR #30 review 1, #6: the codegen heading (the ontology screen title) is generated visible text too."""
+def test_an_unapproved_screen_heading_fails_deterministically():
+    """PR #30 review 1, #6: the codegen heading (the ontology screen title) is generated visible text too. It is
+    approved copy only on an approved Screen (provenance; PR #30 review 7, #1 follow-up)."""
     k = copy.deepcopy(K)
     k.screens["amount"]["title"] = "연 9.9% 특판 가입"
+    k.screens["amount"]["reviewState"] = "candidate"
     r = verify(bundle(), k, JUDGE)
     assert r["verdict"] == "fail" and not r["approvable"]
-    assert any(f["code"] == "literal-financial-value" and f["role"] == "reviewer" and f["severity"] == "critical"
+    assert any(f["code"] == "unapproved-literal-text" and f["role"] == "reviewer" and f["severity"] == "critical"
                and f.get("screen") == "amount" for f in r["findings"])
 
 
