@@ -145,6 +145,7 @@ def project_analysis(ctx, name, payload, bindings, analysis):
     value = validate_analysis(payload, analysis)
     nodes, edges, file_ids, components = {}, {}, {}, {}
     projection_unknown = set()
+    occurrences = {}
     owner_scope = {"kind": "project", "projectId": ctx.project_id}
 
     def add_node(identifier, kind, title, refs, props, subtype=None):
@@ -157,7 +158,11 @@ def project_analysis(ctx, name, payload, bindings, analysis):
         return identifier
 
     def add_edge(src, dst, kind, refs, properties=None):
-        identifier = schema.identity("relation", name, src, dst, kind, properties or {})
+        semantic = {key: value for key, value in (properties or {}).items() if key not in {"line", "column"}}
+        group = schema.digest([src, dst, kind, semantic])
+        occurrence = occurrences.get(group, 0)
+        occurrences[group] = occurrence + 1
+        identifier = schema.identity("relation", name, src, dst, kind, semantic, occurrence)
         edges[identifier] = schema.seal({"id": identifier, "type": kind, "src": {"id": src, "revision": 1},
             "dst": {"id": dst, "revision": 1}, "sourceRefs": refs, "provenance": "parser-extracted",
             "reviewState": "candidate", "tombstone": False, "properties": properties or {}})
