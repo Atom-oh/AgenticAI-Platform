@@ -136,6 +136,8 @@ final authority, source-version and expiry checks are always repeated before
 returning data or committing a mutation.
 Opaque pagination cursors use the separate `ontology_cursor` record kind,
 with an application expiry and DynamoDB TTL of at most five minutes.
+Creating a cursor conditionally checks the project and manifest without rewriting
+the project record; its final authority/source recheck still runs before return.
 
 The v1 schema reserves `published-asset`, `ux-contract` and `run-round` source
 kinds for later authority adapters. Until those adapters are installed, reads fail unavailable.
@@ -196,6 +198,16 @@ Literal `import()`/CommonJS targets retain possible static dependencies with
 `conditional-import` observations and unresolved runtime-loading semantics.
 They do not certify runtime execution or promote a mapping to approval.
 Static manifest coverage is distinct from runtime completeness.
+
+Parser relation IDs exclude line/column positions and distinguish repeated
+same-semantic relations by occurrence order within their endpoint/type/property
+group. Location changes still update source references and content hashes.
+An insertion or removal among otherwise identical occurrences can reassign their
+ordinals; these IDs do not prove an individual syntax node's identity across edits.
+The first republication of an older location-based partition replaces its relation
+IDs and retains the old edges as tombstones. The existing 1,000-edge partition
+limit includes those tombstones: an oversized republication fails without changing
+the manifest. This change does not silently compact history or migrate old IDs.
 
 `ontology_jobs.py` uses existing durable jobs and rechecks actor expiry, source
 revisions and permissions before analysis and publication. A missing configured
