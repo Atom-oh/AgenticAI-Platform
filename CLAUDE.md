@@ -32,7 +32,8 @@ python3 -m pytest tests/ -q                              # all tests
 python3 -m pytest tests/test_ontology_store.py -q -k <name>  # single test
 ```
 
-Node suites:
+Node suites (install Chromium with `npx playwright install --with-deps chromium`
+from `platform/web` and `platform/react-kit` before their browser tests):
 ```bash
 (cd platform/gates && npm ci && npm test)
 (cd platform/react-kit && npm ci --ignore-scripts && node --test test/*.test.cjs)
@@ -40,8 +41,10 @@ Node suites:
 (cd platform/source-analyzer && npm ci --ignore-scripts && npm test)
 ```
 
-Offline CDK check (from `platform/infra`), mirrors CI:
+Offline CDK synth (from `platform/infra`; CI runs additional security checks):
 ```bash
+npm ci
+mkdir -p ../api-dist && touch ../api-dist/.keep
 node -e "require('fs').writeFileSync('cdk.context.json', JSON.stringify({'availability-zones:account=000000000000:region=ap-northeast-2':['ap-northeast-2a','ap-northeast-2b']}))"
 CDK_DEFAULT_ACCOUNT=000000000000 npx cdk synth BankPlatform --quiet -c planeDeployed=false
 python3 ../workspace/check_infra.py cdk.out/BankPlatform.template.json

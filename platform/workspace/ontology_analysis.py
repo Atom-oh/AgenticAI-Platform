@@ -158,7 +158,7 @@ def project_analysis(ctx, name, payload, bindings, analysis):
         return identifier
 
     def add_edge(src, dst, kind, refs, properties=None):
-        semantic = {key: value for key, value in (properties or {}).items() if key not in {"line", "column"}}
+        semantic = {key: prop for key, prop in (properties or {}).items() if key not in {"line", "column"}}
         group = schema.digest([src, dst, kind, semantic])
         occurrence = occurrences.get(group, 0)
         occurrences[group] = occurrence + 1

@@ -220,7 +220,6 @@ def test_unrelated_project_edits_do_not_revoke_ontology_pagination(wb):
     assert first["nodes"][0]["id"] != second["nodes"][0]["id"]
 
 
-
 @pytest.mark.parametrize("changed_kind", ["project", "ontology"])
 def test_cursor_transaction_cannot_outlive_its_project_or_manifest_fence(wb, monkeypatch, changed_kind):
     publish(wb)

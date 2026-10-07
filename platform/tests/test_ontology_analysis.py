@@ -106,7 +106,6 @@ def test_repeated_jsx_usages_preserve_every_observed_location(wb):
     assert len({edge["sourceRefs"][0]["location"]["column"] for edge in usages}) == 2
 
 
-
 def test_parser_relations_keep_identity_when_source_locations_shift(wb):
     files = collection(wb)
     original = wb.storage.get(wb.owner, "asset", "code-app")

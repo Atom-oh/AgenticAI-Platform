@@ -43,7 +43,7 @@ videos/**/.media/
 /.local/
 /samples/
 # Process crash dumps can contain private in-memory data.
-core
-core.[0-9]*
+/core.[0-9]*
+/platform/web/core.[0-9]*
 # Customer source archives are private inputs, never public PR artifacts.
 *.[zZ][iI][pP]
