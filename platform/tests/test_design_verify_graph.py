@@ -753,3 +753,18 @@ def test_missing_production_adapters_block_the_tester():
     build = {**PASS_REPORT["build"], "previewHtml": "<html>x</html>"}
     with pytest.raises(EvidenceUnavailable):
         assemble(build, {"bundleHash": build["bundleHash"]}, contract=CONTRACT_FULL)
+
+
+
+def test_master_reports_missing_required_binding_even_with_approved_fallback_copy():
+    from design_loop.composition import walk
+    prd = {**copy.deepcopy(GOOD), "notices": []}
+    value = bundle(prd=prd, binding_values=bindings(prd), expectation=expected(prd, K))
+    notice = next(node for _, node, _ in walk(value["screens"][("confirm", "default")])
+                  if node["asset"] == "notice-alert")
+    notice.pop("bind")
+    notice["props"] = {"message": K.assets["notice-alert"]["title"]}
+    result = verify(value, K, JUDGE)
+    assert any(f["code"] == "required-binding-missing" and f["severity"] == "critical"
+               for f in result["findings"])
+    assert not result["approvable"]

@@ -21,10 +21,11 @@ loaded from its own path. The approved-media registry is always read explicitly 
 registry blocks publication instead of silently allowing media.
 
 The deny-list lives only in the deployment's private SSM parameter named by `PUBLIC_DENYLIST_PARAM`.
-User decision (PR #30 fix round 1): when NO deny-list is configured (parameter name unset, parameter unreadable or
-empty) `load_patterns()` logs a warning and returns `[]`; the identifier scan is then skipped, but sanitization, the
-CSP and the approved-media registry stay mandatory (unreviewed media in the published text still blocks). With a
-configured deny-list every rule stays fail-closed: hits, incomplete scans and unreviewed media block.
+When the parameter name is unset, `load_patterns()` retains the optional warning mode: it returns `[]` and skips
+identifier matching, while sanitization, CSP and the approved-media registry remain mandatory. Once a parameter
+name is configured, read failures and empty/invalid values block publication, including after cache expiry.
+The integration review narrows the earlier PR #30 unreadable/empty exception to the name-unset case; a failed
+configured check is never relabelled as an unconfigured deployment. Hits and incomplete scans also block.
 Matched text is never logged or returned.
 """
 from __future__ import annotations
@@ -89,8 +90,7 @@ def _unconfigured(reason: str) -> list:
 
 
 def load_patterns() -> list:
-    """Deny-list from the private SSM parameter. Not configured, unreadable or empty -> `[]` with a warning
-    (user decision, PR #30 fix round 1); the caller then publishes only sanitized, media-checked HTML."""
+    """An unset name warns; a configured parameter must be readable and nonempty."""
     name = os.environ.get(PARAM_ENV, "").strip()
     if not name:
         return _unconfigured("is not configured")
@@ -99,11 +99,13 @@ def load_patterns() -> list:
         return list(hit[1])
     try:
         raw = _fetch_parameter(name)
-    except Exception:  # noqa: BLE001 - an unreadable deny-list counts as not configured (warned, never logged)
-        return _unconfigured("is not configured (unreadable)")
-    patterns = [line.strip() for line in str(raw or "").splitlines() if line.strip() and not line.startswith("#")]
+    except Exception:  # noqa: BLE001 - never forward the upstream exception body
+        raise PublicationBlocked("public identifier deny-list is unavailable") from None
+    if not isinstance(raw, str):
+        raise PublicationBlocked("public identifier deny-list is invalid")
+    patterns = [line for line in (value.strip() for value in raw.splitlines()) if line and not line.startswith("#")]
     if not patterns:
-        return _unconfigured("is not configured (empty)")
+        raise PublicationBlocked("public identifier deny-list is empty")
     _cache[name] = (time.time(), patterns)
     return list(patterns)
 

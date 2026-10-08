@@ -220,3 +220,49 @@ def test_gui_imports_only_stdlib_and_pure_schema():
                 or item.module.split(".")[0] in sys.stdlib_module_names, item.module
         elif isinstance(item, ast.Import):
             assert all(a.name.split(".")[0] in sys.stdlib_module_names for a in item.names)
+
+
+@pytest.mark.parametrize("mode", ["fill", "adapt", "compose"])
+def test_missing_required_product_binding_blocks_before_generation(mode):
+    k = copy.deepcopy(K)
+    if mode == "adapt":
+        k.assets["notice-alert"]["reviewState"] = "candidate"
+    elif mode == "compose":
+        k.screens["confirm"]["templateId"] = None
+    selected = strategy(classify(k, FLOW, "confirm")["route"])
+    assert selected["mode"] == mode
+    available = {path: value for path, value in VALUES.items() if path != "product.notice.notice-1"}
+    result = generate_screen("confirm", k, FLOW, {"generate": refuse, "normalize": OK},
+                             strategy=selected, binding_paths=available)
+    assert result["blocked"] == "required-binding-missing" and result["modelCalls"] == 0
+
+
+def test_fill_cannot_replace_a_missing_required_notice_with_the_asset_title():
+    available = {path: value for path, value in VALUES.items() if path != "product.notice.notice-1"}
+    with pytest.raises(ValueError, match="required-binding-missing"):
+        fill(K, FLOW, "confirm", available)
+
+
+def test_approved_asset_copy_cannot_hide_a_missing_required_source_binding():
+    candidate = fill(K, FLOW, "confirm", VALUES)
+    notice = next(node for node in nodes(candidate) if node["asset"] == "notice-alert")
+    notice.pop("bind")
+    notice["props"] = {"message": K.assets["notice-alert"]["title"]}
+    findings = validate(candidate, K, flow=FLOW, binding_paths=PATHS - {"product.notice.notice-1"})
+    assert any(f["code"] == "required-binding-missing" and f["severity"] == "critical" for f in findings)
+
+
+
+def test_added_allowlisted_asset_cannot_hide_its_own_missing_required_binding():
+    k = copy.deepcopy(K)
+    k.assets["alternate-notice"] = copy.deepcopy(k.assets["notice-alert"])
+    k.assets["alternate-notice"]["id"] = "alternate-notice"
+    k.assets["alternate-notice"]["bindings"][0]["path"] = "product.notice.notice-2"
+    template = k.templates[k.screens["amount"]["templateId"]]
+    template["slots"]["body"]["allowed"].append("alternate-notice")
+    candidate = fill(k, FLOW, "amount", VALUES)
+    candidate["slots"]["body"].append({"id": "alternate", "asset": "alternate-notice",
+        "props": {"message": k.assets["alternate-notice"]["title"]}})
+    findings = validate(candidate, k, flow=FLOW, binding_paths=PATHS, mode="compose")
+    assert any(f["code"] == "required-binding-missing" and f.get("binding") == "product.notice.notice-2"
+               for f in findings)

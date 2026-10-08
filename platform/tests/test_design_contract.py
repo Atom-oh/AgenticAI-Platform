@@ -561,3 +561,12 @@ def test_contract_module_imports_only_stdlib_and_pure_schema():
                 or item.module.split(".")[0] in sys.stdlib_module_names, item.module
         elif isinstance(item, ast.Import):
             assert all(a.name.split(".")[0] in sys.stdlib_module_names for a in item.names)
+
+
+
+def test_contract_derivation_refuses_an_unresolved_required_product_binding():
+    prd = {**copy.deepcopy(GOOD), "notices": []}
+    result, _, _ = seed(prd=prd)
+    assert result["contract"] is None
+    assert any(f["code"] == "required-binding-missing" and f["severity"] == "critical"
+               for f in result["findings"])

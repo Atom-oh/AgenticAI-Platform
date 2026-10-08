@@ -10,18 +10,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-
-cfg = json.loads((ROOT / "config" / "stack.json").read_text())
-os.environ.update({
-    "AWS_DEFAULT_REGION": cfg["region"],
-    "ASSETS_BUCKET": cfg["assets_bucket"],
-    "REGISTRY_TABLE": cfg["registry_table"],
-    "HISTORY_TABLE": cfg["history_table"],
-    "SKILLS_BUCKET": cfg["skills_bucket"],
-    "DISPATCHER_FN": cfg.get("dispatcher_fn", ""),
-})
-
-from feedback.assets_api import register_asset  # noqa: E402
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config
 
 ACTOR = "고객사 A UX팀"
 
@@ -122,6 +111,17 @@ description: 시안을 다크모드로 변환할 때의 규칙
 
 
 def main():
+    import boto3
+    from scripts.deployment_config import session_for
+    cfg = load_config(for_deploy=True)
+    # feedback.assets_api uses boto3's default session; bind this dedicated CLI
+    # process to the explicitly selected and verified session before importing it.
+    boto3.DEFAULT_SESSION = session_for(cfg["account"], cfg["region"],
+                                       os.environ.get("BANK_UIUX_PROFILE") or cfg.get("profile"))
+    os.environ.update({"AWS_DEFAULT_REGION": cfg["region"], "ASSETS_BUCKET": cfg["assets_bucket"],
+                       "REGISTRY_TABLE": cfg["registry_table"], "HISTORY_TABLE": cfg["history_table"],
+                       "SKILLS_BUCKET": cfg["skills_bucket"], "DISPATCHER_FN": cfg.get("dispatcher_fn", "")})
+    from feedback.assets_api import register_asset
     for sample in SAMPLES:
         code, out = register_asset(sample, actor=ACTOR)
         print(code, out.get("asset_id", out))

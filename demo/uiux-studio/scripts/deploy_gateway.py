@@ -8,6 +8,7 @@ import boto3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config, require_fields
 from mcp.tool_schemas import TOOL_SCHEMAS  # noqa: E402
 
 GW_NAME = "bank-design-assets-gw"
@@ -29,9 +30,10 @@ def _paginate(fn, key, **kwargs):
 
 
 def main():
-    cfg_path = ROOT / "config" / "stack.json"
-    cfg = json.loads(cfg_path.read_text())
-    client = boto3.client("bedrock-agentcore-control", region_name=cfg["region"])
+    cfg_path = config_path()
+    cfg = load_config(cfg_path, for_deploy=True)
+    require_fields(cfg, 'gateway_role_arn', 'discovery_url', 'm2m_client_id', 'asset_tools_fn_arn')
+    client = deployment_client(cfg, "bedrock-agentcore-control", region_name=cfg["region"])
 
     gws = _paginate(client.list_gateways, "items")
     gw = next((g for g in gws if g["name"] == GW_NAME), None)
@@ -55,6 +57,8 @@ def main():
     else:
         raise TimeoutError(f"gateway not READY after 300s (status: {detail.get('status')})")
     assert detail["status"] == "READY", detail
+    if detail["roleArn"] != cfg["gateway_role_arn"]:
+        raise ValueError("Existing gateway belongs to a different execution role")
 
     targets = _paginate(client.list_gateway_targets, "items", gatewayIdentifier=gw_id)
     target_cfg = {"mcp": {"lambda": {
@@ -72,8 +76,10 @@ def main():
                                      credentialProviderConfigurations=creds)
 
     cfg["gateway_id"] = gw_id
+    cfg["gateway_name"] = detail["name"]
+    cfg["gateway_arn"] = detail["gatewayArn"]
     cfg["gateway_url"] = detail["gatewayUrl"]
-    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+    save_config(cfg, cfg_path)
     print(f"gateway READY: {detail['gatewayUrl']}")
 
 

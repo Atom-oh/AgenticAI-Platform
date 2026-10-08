@@ -2,11 +2,11 @@ import aws_cdk as cdk
 from aws_cdk.assertions import Match, Template
 
 
-def synth():
+def synth(context=None):
     import sys, pathlib
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "infra"))
     from stack import BankUiuxPlatformStack
-    app = cdk.App()
+    app = cdk.App(context=context or {})
     return Template.from_stack(BankUiuxPlatformStack(
         app, "BankUiuxPlatform",
         env=cdk.Environment(account="180294183052", region="ap-northeast-2")))
@@ -70,3 +70,51 @@ def test_history_table_and_dispatcher():
         "FunctionName": "bank-draft-feedback",
         "Environment": {"Variables": Match.object_like({
             "DISPATCHER_FN": Match.any_value(), "HISTORY_TABLE": Match.any_value()})}}))
+
+
+
+def _app_statements(template):
+    for logical_id, policy in template.find_resources("AWS::IAM::Policy").items():
+        if any(name in logical_id for name in ("Dispatcher", "Feedback", "RuntimeRole")):
+            yield from policy["Properties"]["PolicyDocument"]["Statement"]
+
+
+def test_demo_runtime_memory_and_registry_access_has_scoped_resources():
+    import json
+    statements = list(_app_statements(synth()))
+    for statement in statements:
+        resources = statement.get("Resource")
+        if resources == "*" or resources == ["*"]:
+            assert statement.get("Condition", {}).get("StringEquals", {}).get("aws:RequestedRegion") == "ap-northeast-2"
+    invoke = [s for s in statements if s["Action"] == "bedrock-agentcore:InvokeAgentRuntime"]
+    assert len(invoke) == 1 and "runtime/bank_design_harness-*" in json.dumps(invoke[0]["Resource"])
+    memory = [s for s in statements if "bedrock-agentcore:CreateEvent" in (
+        s["Action"] if isinstance(s["Action"], list) else [s["Action"]])]
+    assert len(memory) == 2 and all("memory/bank_design_memory-*" in json.dumps(s["Resource"]) for s in memory)
+    assert not any("bedrock:InvokeModel" in (s["Action"] if isinstance(s["Action"], list) else [s["Action"]])
+                   for s in statements)
+
+
+def test_observed_arns_pin_the_runtime_memory_and_model_grants():
+    model = ["arn:aws:bedrock:us-east-1::foundation-model/synthetic-approved-model",
+             "arn:aws:bedrock:ap-northeast-2:180294183052:inference-profile/synthetic-approved-profile"]
+    runtime = "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/observed_runtime-abc"
+    memory = "arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:memory/observed_memory-abc"
+    statements = list(_app_statements(synth({"runtimeArn": runtime, "memoryArn": memory, "modelResources": model})))
+    invocation = next(s for s in statements if s["Action"] == "bedrock-agentcore:InvokeAgentRuntime")
+    assert set(invocation["Resource"]) == {runtime, runtime + "/runtime-endpoint/*"}
+    models = next(s for s in statements if "bedrock:InvokeModel" in (
+        s["Action"] if isinstance(s["Action"], list) else [s["Action"]]))
+    assert set(models["Resource"]) == set(model)
+    for statement in statements:
+        actions = statement["Action"] if isinstance(statement["Action"], list) else [statement["Action"]]
+        if "bedrock-agentcore:CreateEvent" in actions:
+            assert statement["Resource"] == memory
+
+
+def test_cross_account_service_or_wildcard_model_context_is_refused():
+    import pytest
+    with pytest.raises(ValueError, match="exact ARN"):
+        synth({"memoryArn": "arn:aws:bedrock-agentcore:ap-northeast-2:222222222222:memory/foreign"})
+    with pytest.raises(ValueError, match="exact observed"):
+        synth({"modelResources": ["*"]})

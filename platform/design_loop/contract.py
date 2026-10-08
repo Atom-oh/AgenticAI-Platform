@@ -15,6 +15,7 @@ from __future__ import annotations
 from workspace.ontology_ux import visible as _visible
 
 from .convention import VALUE_FIELD, field_key, node_key
+from .composition import required_binding_findings
 from .flow import expected, traverse
 from .gui import states_for
 from .react_project import CASE_SELECT, FINISHED_TEST_ID, FIXTURE
@@ -165,6 +166,10 @@ def derive(prd, flow, k, registry, published_pages, *, cases, criteria, viewport
     findings, rules = [], []
     if not cases:
         return {"contract": None, "findings": [_finding("contract-capacity", "no cases to verify")]}
+    for screen_id in flow["screens"]:
+        findings.extend(required_binding_findings(k, screen_id, values))
+    if findings:
+        return {"contract": None, "findings": findings}
     registry.register_flow(flow)
     runs = [traverse(flow, case) for case in cases]
     product_cite = cites.get("product.productName")

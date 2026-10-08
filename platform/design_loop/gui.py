@@ -71,6 +71,8 @@ def fill(k, flow, screen_id, binding_values):
     screen = k.screens.get(screen_id)
     if screen is None or screen_id not in flow["screens"]:
         raise ValueError("Unknown flow screen")
+    if comp.required_binding_findings(k, screen_id, binding_values):
+        raise ValueError("required-binding-missing")
     template = k.templates.get(screen.get("templateId"))
     if template is None:
         raise ValueError("fill needs the screen's template")
@@ -226,6 +228,10 @@ def generate_screen(screen_id, k, flow, deps, *, strategy, binding_paths, varian
     expected_mode = route_strategy(classify(k, flow, screen_id)["route"])["mode"]
     if strategy["mode"] != expected_mode:
         return {"screenId": screen_id, "blocked": "strategy-mismatch"}
+    missing = comp.required_binding_findings(k, screen_id, binding_paths)
+    if missing:
+        return {"screenId": screen_id, "blocked": "required-binding-missing", "modelCalls": 0,
+                "findings": missing}
     mode = strategy["mode"]
     if mode == "fill":
         axes = kit_axes() if axes is None else axes

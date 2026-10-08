@@ -1,4 +1,6 @@
+import json
 import pathlib
+import re
 
 import aws_cdk as cdk
 from aws_cdk import (
@@ -19,6 +21,34 @@ ACCOUNT = "180294183052"
 class BankUiuxPlatformStack(cdk.Stack):
     def __init__(self, scope: Construct, cid: str, **kw):
         super().__init__(scope, cid, **kw)
+        # Service IDs are allocated after this base stack. Bootstrap grants
+        # are restricted to this application's named resource families; a
+        # subsequent synth can pin the observed ARNs exactly.
+        prefix = f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:"
+
+        def service_resource(key, kind, family):
+            value = self.node.try_get_context(key)
+            if value is None:
+                return prefix + kind + "/" + family + "-*"
+            parts = value.split(":", 5) if isinstance(value, str) else []
+            if (len(parts) != 6 or parts[:3] != ["arn", "aws", "bedrock-agentcore"]
+                    or parts[3:5] != [self.region, self.account] or not parts[5].startswith(kind + "/")
+                    or any(c in value for c in "*?")):
+                raise ValueError(f"{key} must be an exact ARN in this stack's account and region")
+            return value
+
+        runtime_arn = service_resource("runtimeArn", "runtime", "bank_design_harness")
+        memory_arn = service_resource("memoryArn", "memory", "bank_design_memory")
+        region_only = {"StringEquals": {"aws:RequestedRegion": self.region}}
+        model_resources = self.node.try_get_context("modelResources") or []
+        if isinstance(model_resources, str):
+            model_resources = json.loads(model_resources)
+        if not isinstance(model_resources, list) or any(not isinstance(arn, str) or
+                not re.fullmatch(r"arn:aws:bedrock:[a-z0-9-]+:(?:[0-9]{12})?:(?:foundation-model|inference-profile|application-inference-profile)/[^*?]+", arn)
+                for arn in model_resources):
+            raise ValueError("modelResources must contain exact observed Bedrock model/profile ARNs")
+        if any(arn.split(":", 5)[4] not in ("", self.account) for arn in model_resources):
+            raise ValueError("Model profiles must belong to this deployment account")
 
         def bucket(name):
             return s3.Bucket(self, name.title().replace("-", ""),
@@ -84,7 +114,7 @@ class BankUiuxPlatformStack(cdk.Stack):
             environment={"HISTORY_TABLE": history.table_name, "RUNTIME_ARN": ""})
         history.grant_read_write_data(dispatcher)
         dispatcher.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock-agentcore:InvokeAgentRuntime"], resources=["*"]))
+            actions=["bedrock-agentcore:InvokeAgentRuntime"], resources=[runtime_arn, runtime_arn + "/runtime-endpoint/*"]))
         # async (Event) invokes default to 2 retries on failure, which would re-run
         # (and re-bill) the AgentCore Runtime call that already failed once.
         dispatcher.configure_async_invoke(retry_attempts=0)
@@ -146,9 +176,9 @@ class BankUiuxPlatformStack(cdk.Stack):
         history.grant_read_write_data(feedback)
         dispatcher.grant_invoke(feedback)
         feedback.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock:ListInferenceProfiles"], resources=["*"]))
+            actions=["bedrock:ListInferenceProfiles"], resources=["*"], conditions=region_only))
         feedback.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock-agentcore:CreateEvent"], resources=["*"]))
+            actions=["bedrock-agentcore:CreateEvent"], resources=[memory_arn]))
         feedback_url = feedback.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
         # OAC needs BOTH InvokeFunctionUrl (added by the origin construct) and
@@ -170,32 +200,42 @@ class BankUiuxPlatformStack(cdk.Stack):
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY)
 
         gw_role = iam.Role(self, "GatewayRole", role_name="bank-agentcore-gateway",
-                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"))
+                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com", conditions={
+                               "StringEquals": {"aws:SourceAccount": self.account},
+                               "ArnLike": {"aws:SourceArn": prefix + "gateway/bank-design-assets-gw-*"}}))
         asset_tools.grant_invoke(gw_role)
 
         rt_role = iam.Role(self, "RuntimeRole", role_name="bank-agentcore-runtime",
-                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"))
+                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com", conditions={
+                               "StringEquals": {"aws:SourceAccount": self.account},
+                               "ArnLike": {"aws:SourceArn": runtime_arn}}))
         drafts.grant_read_write(rt_role)
         skills.grant_read(rt_role)
+        # Model availability/permissions must come from observed profile and
+        # foundation-model ARNs. An unconfigured model set gets no invoke grant.
+        if model_resources:
+            rt_role.add_to_policy(iam.PolicyStatement(
+                actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+                resources=model_resources))
         rt_role.add_to_policy(iam.PolicyStatement(
-            actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-            resources=["*"]))
+            actions=["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
+            resources=[f"arn:{self.partition}:ecr:{self.region}:{self.account}:repository/bank-design-harness"]))
         rt_role.add_to_policy(iam.PolicyStatement(
-            actions=["ecr:GetAuthorizationToken", "ecr:BatchGetImage",
-                     "ecr:GetDownloadUrlForLayer", "logs:CreateLogGroup",
-                     "logs:CreateLogStream", "logs:PutLogEvents",
-                     "xray:PutTraceSegments", "xray:PutTelemetryRecords",
-                     "cloudwatch:PutMetricData"],
-            resources=["*"]))
+            actions=["ecr:GetAuthorizationToken", "xray:PutTraceSegments", "xray:PutTelemetryRecords"],
+            resources=["*"], conditions=region_only))
         rt_role.add_to_policy(iam.PolicyStatement(
-            actions=["bedrock-agentcore:CreateEvent",
-                     "bedrock-agentcore:RetrieveMemoryRecords",
-                     "bedrock-agentcore:ListMemoryRecords"],
-            resources=["*"]))
+            actions=["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+            resources=[f"arn:{self.partition}:logs:{self.region}:{self.account}:log-group:/aws/bedrock-agentcore/runtimes/bank_design_harness-*"]))
+        rt_role.add_to_policy(iam.PolicyStatement(
+            actions=["cloudwatch:PutMetricData"], resources=["*"], conditions={"StringEquals": {
+                "aws:RequestedRegion": self.region, "cloudwatch:namespace": "bedrock-agentcore"}}))
+        rt_role.add_to_policy(iam.PolicyStatement(
+            actions=["bedrock-agentcore:CreateEvent", "bedrock-agentcore:RetrieveMemoryRecords",
+                     "bedrock-agentcore:ListMemoryRecords"], resources=[memory_arn]))
         rt_role.add_to_policy(iam.PolicyStatement(
             actions=["secretsmanager:GetSecretValue"],
             resources=[f"arn:aws:secretsmanager:{self.region}:{ACCOUNT}:secret:"
-                       f"bank/m2m-client-secret*"]))
+                       f"bank/m2m-client-secret-??????"]))
 
         discovery = (f"https://cognito-idp.{self.region}.amazonaws.com/"
                      f"{pool.user_pool_id}/.well-known/openid-configuration")
@@ -211,6 +251,8 @@ class BankUiuxPlatformStack(cdk.Stack):
             "GatewayRoleArn": gw_role.role_arn, "RuntimeRoleArn": rt_role.role_arn,
             "FigmaSyncFn": figma_sync.function_name, "AssetToolsFnArn": asset_tools.function_arn,
             "HistoryTable": history.table_name, "DispatcherFn": dispatcher.function_name,
+            "FeedbackFn": feedback.function_name, "McpScope": "bank-mcp/invoke",
+            "ModelResources": json.dumps(model_resources),
             "SpaClientId": spa.user_pool_client_id,
         }.items():
             cdk.CfnOutput(self, name, value=value)

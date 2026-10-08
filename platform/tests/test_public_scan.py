@@ -56,21 +56,41 @@ def blocked(html):
 
 # ------------------------------------------------------------------ gate core
 
-def test_missing_unreadable_or_empty_deny_list_warns_and_scans_nothing(monkeypatch, caplog):
-    """User decision (PR #30 fix round 1): no configured deny-list -> warn, identifier scan skipped."""
+def test_unset_deny_list_warns_and_scans_nothing(monkeypatch, caplog):
     monkeypatch.delenv(ps.PARAM_ENV, raising=False)
     with caplog.at_level("WARNING"):
         assert ps.load_patterns() == []
     assert "not configured" in caplog.text
+
+
+def test_configured_deny_list_read_failure_blocks_without_returning_upstream_text(monkeypatch):
     monkeypatch.setenv(ps.PARAM_ENV, "/test/denylist-" + uuid.uuid4().hex)
-    monkeypatch.setattr(ps, "_fetch_parameter", lambda name: (_ for _ in ()).throw(RuntimeError("AccessDenied")))
-    assert ps.load_patterns() == []
+    monkeypatch.setattr(ps, "_fetch_parameter", lambda name: (_ for _ in ()).throw(RuntimeError(SENTINEL)))
+    with pytest.raises(ps.PublicationBlocked, match="deny-list is unavailable") as error:
+        ps.load_patterns()
+    assert SENTINEL not in str(error.value)
+    assert error.value.__suppress_context__
+
+
+@pytest.mark.parametrize("raw", ["", "# comment only\n\n", "  # indented comment\n", None, 42])
+def test_configured_empty_or_invalid_deny_list_blocks(monkeypatch, raw):
     monkeypatch.setenv(ps.PARAM_ENV, "/test/denylist-" + uuid.uuid4().hex)
-    monkeypatch.setattr(ps, "_fetch_parameter", lambda name: "# comment only\n\n")
-    assert ps.load_patterns() == []
+    monkeypatch.setattr(ps, "_fetch_parameter", lambda name: raw)
+    with pytest.raises(ps.PublicationBlocked):
+        ps.load_patterns()
+
+
+def test_expired_deny_list_cache_does_not_hide_a_configured_read_failure(monkeypatch):
+    now = [1_000.0]
+    monkeypatch.setattr(ps.time, "time", lambda: now[0])
     monkeypatch.setenv(ps.PARAM_ENV, "/test/denylist-" + uuid.uuid4().hex)
     monkeypatch.setattr(ps, "_fetch_parameter", lambda name: "ACME\n# c\nOther Name\n")
     assert ps.load_patterns() == ["ACME", "Other Name"]
+    monkeypatch.setattr(ps, "_fetch_parameter", lambda name: (_ for _ in ()).throw(RuntimeError(SENTINEL)))
+    assert ps.load_patterns() == ["ACME", "Other Name"]
+    now[0] += ps._CACHE_TTL_S
+    with pytest.raises(ps.PublicationBlocked):
+        ps.load_patterns()
 
 
 def test_without_a_deny_list_the_static_safety_still_applies():
@@ -435,3 +455,26 @@ def test_both_publishers_neutralize_foreign_content(monkeypatch):
     tw.w.handler(tw._event(maxRounds=1), None)
     bodies = [b.decode() for (bucket, key), b in s3.objects.items() if key.startswith("studio/drafts/")]
     assert bodies and all(not re.search(r"<[^>]*onerror", b, re.I) and ps.CSP_META in b for b in bodies)
+
+
+
+def test_configured_deny_list_failure_stops_both_public_writers(monkeypatch):
+    loader = ps.load_patterns
+    monkeypatch.setenv(ps.PARAM_ENV, "/test/denylist-" + uuid.uuid4().hex)
+    monkeypatch.setattr(ps, "_fetch_parameter", lambda name: (_ for _ in ()).throw(RuntimeError(SENTINEL)))
+    design, writes = _design(monkeypatch, loader)
+    with pytest.raises(ps.PublicationBlocked):
+        design.store_run("unavailable-policy", _run("<p>clean</p>"), {})
+    assert writes == []
+
+    from test_studio_worker import _Apigw, _S3, _wire, _event, StudioStore, w
+    apigw, s3, store = _Apigw(), _S3(), StudioStore()
+    _wire(monkeypatch, apigw, s3, store)
+    monkeypatch.setattr(w.loop, "run", lambda *a, **kw: pytest.fail("unavailable policy reached generation"))
+    store.put_job({"jobId": "job123456789", "brief": "b", "productCode": "PRD-DEP-001"}, actor="u@x")
+    w.handler(_event(), None)
+    assert not s3.objects
+    assert store.get_job("job123456789")["status"] == "failed"
+    assert apigw.sent[-1]["passed"] is False
+    assert "deny-list is unavailable" in apigw.sent[-1]["error"]
+    assert SENTINEL not in json.dumps(apigw.sent)

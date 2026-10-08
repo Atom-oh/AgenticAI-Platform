@@ -80,3 +80,18 @@ Get current account assignments and credentials from the demo administrator thro
 | Original Studio | `d4zwmnh2s47e9.cloudfront.net` | `demo/uiux-studio/` |
 
 The 2026-09-02 surface-registration notes and later deployment reports are historical evidence. Do not infer current `APPROVED` status, uptime, matching accounts, or a unified authorization policy from these URLs. Old `Nexus`/`Bank` resource names remain identifiers for separate implementations.
+
+
+## 2026-10-08 source-integration correction
+
+The original UI/UX demo's checked-in configuration is now explicitly unconfigured.
+Actual stack/service records are captured outside Git; changing a display or
+resource-name prefix cannot manufacture deployed IDs. The private-record teardown
+path addresses the exact previous Runtime/Gateway/Memory/ECR/secret/stack IDs,
+with a preview before explicit execution. See `uiux-studio/docs/OPERATIONS.md`.
+
+The source IAM policies scope application Runtime/Memory, ECR and log access;
+model invocation requires explicit observed ARNs, and global token/telemetry
+operations have region/namespace conditions. Existing deployed roles and resources
+are unchanged until an authorized deployment/cleanup is performed. These source
+changes do not certify the demo as a private customer workspace.

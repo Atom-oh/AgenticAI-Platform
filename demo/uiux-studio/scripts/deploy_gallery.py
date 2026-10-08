@@ -7,12 +7,15 @@ import boto3
 from botocore.exceptions import ClientError
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT))
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config
 TYPES = {".html": "text/html", ".json": "application/json"}
 
 
 def main():
-    cfg = json.loads((ROOT / "config" / "stack.json").read_text())
-    s3 = boto3.client("s3", region_name=cfg["region"])
+    cfg = load_config(for_deploy=True)
+    s3 = deployment_client(cfg, "s3", region_name=cfg["region"])
     for path in (ROOT / "gallery").iterdir():
         # never clobber a live manifest that already has drafts
         if path.name == "drafts.json":
@@ -34,7 +37,7 @@ def main():
               "invalidate the CloudFront cache (otherwise the new UI may stay hidden "
               "behind the stale edge cache).")
         return
-    cf = boto3.client("cloudfront", region_name=cfg["region"])
+    cf = deployment_client(cfg, "cloudfront", region_name=cfg["region"])
     resp = cf.create_invalidation(
         DistributionId=distribution_id,
         InvalidationBatch={

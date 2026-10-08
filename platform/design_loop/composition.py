@@ -37,6 +37,21 @@ def _finding(code, path, message, severity="critical", **extra):
     return {"severity": severity, "code": code, "path": path, "message": message, **extra}
 
 
+def required_binding_findings(k, screen_id, binding_paths, *, asset_ids=None):
+    """Product inputs required by shown ontology assets cannot be replaced by copy.
+
+    Session bindings belong to trusted interactive adapters and are deliberately
+    distinct from the PRD's product binding catalog.
+    """
+    from .route import shown_assets
+    return [_finding("required-binding-missing", f"screen.{screen_id}.{asset_id}.bindings.{binding['field']}",
+                     "a required product binding is absent from the PRD", binding=binding["path"])
+            for asset_id in (shown_assets(k, screen_id) if asset_ids is None else asset_ids)
+            for binding in (k.assets.get(asset_id) or {}).get("bindings", [])
+            if binding.get("required") and binding.get("source") == "product"
+            and binding["path"] not in binding_paths]
+
+
 # ---- bounded serializer (not schema.digest; review round 3, F6) -----------------------------------------------
 
 def _check_json(value, depth=0):
@@ -244,6 +259,9 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
     if screen is None:
         add("shape", "screenId", "unknown screen")
         return findings
+    findings.extend(required_binding_findings(k, c["screenId"], binding_paths))
+    from .route import shown_assets
+    binding_assets = set(shown_assets(k, c["screenId"]))
     template = k.templates.get(c["templateId"])
     if template is None:
         add("unknown-template", "templateId", "unknown template")
@@ -303,6 +321,9 @@ def validate(c, k, *, flow=None, binding_paths=frozenset(), mode="fill", base=No
             else:
                 add("unknown-asset", path, "unknown asset")
             continue
+        if asset_id not in binding_assets:
+            findings.extend(required_binding_findings(k, c["screenId"], binding_paths, asset_ids=[asset_id]))
+            binding_assets.add(asset_id)
         code = asset.get("code")
         if not code:
             add("no-code-layer", path, "asset has no code layer")

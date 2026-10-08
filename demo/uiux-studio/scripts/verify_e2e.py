@@ -9,16 +9,19 @@ import boto3
 from botocore.config import Config
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT))
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config
 
 
 def m2m_token(cfg):
-    client = boto3.client("cognito-idp", region_name=cfg["region"])
+    client = deployment_client(cfg, "cognito-idp", region_name=cfg["region"])
     secret = client.describe_user_pool_client(
         UserPoolId=cfg["user_pool_id"],
         ClientId=cfg["m2m_client_id"])["UserPoolClient"]["ClientSecret"]
     basic = base64.b64encode(f"{cfg['m2m_client_id']}:{secret}".encode()).decode()
     data = urllib.parse.urlencode({"grant_type": "client_credentials",
-                                   "scope": "bank-mcp/invoke"}).encode()
+                                   "scope": cfg["mcp_scope"]}).encode()
     req = urllib.request.Request(f"https://{cfg['cognito_domain']}/oauth2/token", data=data,
                                  headers={"Authorization": f"Basic {basic}",
                                           "Content-Type": "application/x-www-form-urlencoded"})
@@ -40,11 +43,11 @@ def mcp_call(cfg, token, method, params, rpc_id):
 
 
 def main():
-    cfg = json.loads((ROOT / "config" / "stack.json").read_text())
+    cfg = load_config()
     file_key = json.loads((ROOT / "config" / "figma.json").read_text())["file_key"]
 
     print("1. figma-sync ...")
-    lam = boto3.client("lambda", region_name=cfg["region"])
+    lam = deployment_client(cfg, "lambda", region_name=cfg["region"])
     r = lam.invoke(FunctionName=cfg["figma_sync_fn"],
                    Payload=json.dumps({"file_key": file_key}).encode())
     sync = json.loads(r["Payload"].read())
@@ -63,7 +66,7 @@ def main():
     print("    tokens OK,", len(tools), "tools")
 
     print("3. harness invoke (takes a few minutes) ...")
-    ac = boto3.client("bedrock-agentcore", region_name=cfg["region"],
+    ac = deployment_client(cfg, "bedrock-agentcore", region_name=cfg["region"],
                      config=Config(read_timeout=900, connect_timeout=10, retries={"total_max_attempts": 1}))
     resp = ac.invoke_agent_runtime(agentRuntimeArn=cfg["runtime_arn"], qualifier="DEFAULT",
                                    payload=json.dumps({"brief": "모바일 계좌이체 화면 시안"},

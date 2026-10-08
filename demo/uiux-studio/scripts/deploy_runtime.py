@@ -8,6 +8,9 @@ import time
 import boto3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT))
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config, require_fields
 REPO = "bank-design-harness"
 RUNTIME = "bank_design_harness"
 
@@ -30,10 +33,13 @@ def sh(*args):
 
 
 def main():
-    cfg_path = ROOT / "config" / "stack.json"
-    cfg = json.loads(cfg_path.read_text())
+    cfg_path = config_path()
+    cfg = load_config(cfg_path, for_deploy=True)
+    require_fields(cfg, 'model_id', 'gateway_url', 'user_pool_id', 'm2m_client_id', 'runtime_role_arn', 'drafts_bucket', 'distribution_domain', 'dispatcher_fn', 'cognito_domain')
     region, account = cfg["region"], cfg["account"]
-    ecr = boto3.client("ecr", region_name=region)
+    if not cfg.get("model_resources") or not set(cfg["model_resources"]) <= set(cfg.get("configured_model_resources", [])):
+        raise ValueError("Capture the selected model profile ARNs and deploy the modelResources CDK context before Runtime creation")
+    ecr = deployment_client(cfg, "ecr", region_name=region)
     try:
         ecr.create_repository(repositoryName=REPO)
     except ecr.exceptions.RepositoryAlreadyExistsException:
@@ -56,10 +62,10 @@ def main():
     sh("docker", "buildx", "build", "--platform", "linux/arm64",
        "-f", "harness/Dockerfile", "-t", uri, "--push", ".")
 
-    client_desc = boto3.client("cognito-idp", region_name=region).describe_user_pool_client(
+    client_desc = deployment_client(cfg, "cognito-idp", region_name=region).describe_user_pool_client(
         UserPoolId=cfg["user_pool_id"], ClientId=cfg["m2m_client_id"])
     # store client secret in Secrets Manager so the runtime never gets it via env
-    sm = boto3.client("secretsmanager", region_name=region)
+    sm = deployment_client(cfg, "secretsmanager", region_name=region)
     secret_value = client_desc["UserPoolClient"]["ClientSecret"]
     try:
         sec = sm.create_secret(Name="bank/m2m-client-secret", SecretString=secret_value)
@@ -74,10 +80,10 @@ def main():
            "M2M_SECRET_ARN": sec["ARN"],
            "DRAFTS_BUCKET": cfg["drafts_bucket"],
            "DISTRIBUTION_DOMAIN": cfg["distribution_domain"],
-           "MODEL_ID": "global.anthropic.claude-sonnet-5",
+           "MODEL_ID": cfg["model_id"],
            "MEMORY_ID": cfg.get("memory_id", "")}
 
-    ac = boto3.client("bedrock-agentcore-control", region_name=region)
+    ac = deployment_client(cfg, "bedrock-agentcore-control", region_name=region)
     existing = next((r for r in list_all_agent_runtimes(ac)
                      if r["agentRuntimeName"] == RUNTIME), None)
     kwargs = {"agentRuntimeArtifact": {"containerConfiguration": {"containerUri": uri}},
@@ -85,6 +91,9 @@ def main():
               "roleArn": cfg["runtime_role_arn"],
               "environmentVariables": env}
     if existing:
+        observed = ac.get_agent_runtime(agentRuntimeId=existing["agentRuntimeId"])
+        if observed["roleArn"] != cfg["runtime_role_arn"]:
+            raise ValueError("Existing runtime belongs to a different execution role")
         ac.update_agent_runtime(agentRuntimeId=existing["agentRuntimeId"], **kwargs)
         arn = existing["agentRuntimeArn"]
         rid = existing["agentRuntimeId"]
@@ -101,10 +110,13 @@ def main():
         raise TimeoutError(f"runtime failed to reach READY within 15 minutes, last status: {status}")
     assert status == "READY", status
     cfg["runtime_arn"] = arn
-    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+    cfg["runtime_name"] = RUNTIME
+    cfg["ecr_repository"] = REPO
+    cfg["m2m_secret_arn"] = sec["ARN"]
+    save_config(cfg, cfg_path)
     print(f"runtime READY: {arn}")
 
-    lam = boto3.client("lambda", region_name=region)
+    lam = deployment_client(cfg, "lambda", region_name=region)
     dispatcher_fn = cfg["dispatcher_fn"]
     current_env = lam.get_function_configuration(
         FunctionName=dispatcher_fn)["Environment"]["Variables"]
