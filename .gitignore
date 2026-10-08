@@ -39,12 +39,14 @@ videos/**/.media/
 /.portal-versions-deploy-*/
 /.workbench-deploy-*/
 /.workbench-render-*/
-/.local/ux-guidelines/
+# Local worktrees and private working material.
+/.local/
+/samples/
+# Process crash dumps can contain private in-memory data.
+/core.[0-9]*
+/platform/web/core.[0-9]*
 # Customer source archives are private inputs, never public PR artifacts.
 *.[zZ][iI][pP]
 
-# Tenant originals and tenant-only configuration (never public)
-/samples/
-/.local/
 # Bytecode of the root scanner script (the tree scan reads tracked files only; keep it untracked)
 /scripts/__pycache__/

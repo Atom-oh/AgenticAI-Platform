@@ -210,12 +210,35 @@ def test_cursors_are_opaque_and_bound_to_actor_scope_and_generation(wb):
 
 def test_unrelated_project_edits_do_not_revoke_ontology_pagination(wb):
     publish(wb)
+    before = wb.storage.get(wb.owner, "project", wb.project["id"])
     first = Ontology(context(wb)).read(limit=1)
     project = wb.storage.get(wb.owner, "project", wb.project["id"])
+    assert project == before
     changed = wb.storage.put(wb.owner, "project", {**project, "name": "New project name"}, project["version"])
     assert changed["authorityRevision"] == project["authorityRevision"]
     second = Ontology(context(wb)).read(limit=1, cursor=first["cursor"])
     assert first["nodes"][0]["id"] != second["nodes"][0]["id"]
+
+
+@pytest.mark.parametrize("changed_kind", ["project", "ontology"])
+def test_cursor_transaction_cannot_outlive_its_project_or_manifest_fence(wb, monkeypatch, changed_kind):
+    publish(wb)
+    monkeypatch.setattr("workspace.ontology_store.secrets.token_hex", lambda _: "fixed-cursor")
+    identifier = wb.project["id"] if changed_kind == "project" else CURRENT
+
+    def race():
+        record = wb.storage.get(wb.owner, changed_kind, identifier)
+        if changed_kind == "project":
+            record["members"].pop("bob")
+        else:
+            record["generation"] = "f" * 64
+        wb.storage.put(wb.owner, changed_kind, record, record["version"])
+
+    wb.storage.table().before_transaction = race
+    with pytest.raises(CollaborationError) as error:
+        Ontology(context(wb)).read(limit=1)
+    assert error.value.code == "ontology-cursor-stale"
+    assert wb.storage.get(wb.owner, "ontology_cursor", "cursor-fixed-cursor") is None
 
 
 def test_forged_project_or_publication_scope_is_not_a_new_canonical_authority(wb):

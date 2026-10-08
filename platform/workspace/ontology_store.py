@@ -539,10 +539,17 @@ class Ontology:
         next_cursor = None
         if more:
             next_cursor = "cursor-" + secrets.token_hex(24)
-            self.ctx.commit([self.ctx.write("ontology_cursor", {
-                "id": next_cursor, "projectId": self.ctx.project_id, "fingerprint": fingerprint,
-                "position": position, "expiresAt": self.storage.clock() + 300000,
-                "ttl": self.storage.clock() // 1000 + 300})])
+            from workspace.storage import Conflict
+            from workbench.service import check_source_deadlines
+            try:
+                self.storage.put_many([self.ctx.write("ontology_cursor", {
+                    "id": next_cursor, "projectId": self.ctx.project_id, "fingerprint": fingerprint,
+                    "position": position, "expiresAt": self.storage.clock() + 300000})],
+                    checks=[self.ctx.check("project", self.ctx.scope["project"]), self.ctx.check("ontology", current)],
+                    retry_conflicts=False,
+                    before_attempt=lambda: check_source_deadlines(self.storage, [], self.ctx.claims))
+            except Conflict:
+                fail(409, "ontology-cursor-stale", "조회 중 프로젝트 또는 게시 기준이 변경되었습니다.")
             self._recheck(current)
         return {"schemaVersion": 1, "nodes": selected, "edges": list(edges.values()), "generation": current["generation"],
                 "cursor": next_cursor, "backend": "workspace-project-ontology",

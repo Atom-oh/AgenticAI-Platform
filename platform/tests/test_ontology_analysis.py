@@ -106,6 +106,30 @@ def test_repeated_jsx_usages_preserve_every_observed_location(wb):
     assert len({edge["sourceRefs"][0]["location"]["column"] for edge in usages}) == 2
 
 
+def test_parser_relations_keep_identity_when_source_locations_shift(wb):
+    files = collection(wb)
+    original = wb.storage.get(wb.owner, "asset", "code-app")
+    raw = b'import {Button} from "./Button";export const App=()=> <><Button/><Button/></>;'
+    graphs = []
+    for revision, content in [(2, raw), (3, b"\n\n" + raw)]:
+        key = wb.storage.key_for(wb.owner, "asset", "code-app", f"revision-{revision}.tsx")
+        wb.storage.put_blob_once(key, content, "text/plain")
+        original = wb.storage.put(wb.owner, "asset", {**original, "originalKey": key,
+            "sha256": hashlib.sha256(content).hexdigest(), "size": len(content),
+            "importRevision": revision}, original["version"])
+        payload, bindings = source_input(context(wb), files)
+        graphs.append(project_analysis(context(wb), "stable", payload, bindings, local_analyze(payload)["analysis"]))
+    before, after = [{edge["id"]: edge for edge in graph["edges"]} for graph in graphs]
+    assert before.keys() == after.keys()
+    app = next(node["id"] for node in graphs[0]["nodes"] if node["type"] == "CodeFile" and node["title"] == "App.tsx")
+    usages = [edge for edge in before.values() if edge["src"]["id"] == app and edge["type"] == "USES"]
+    assert len(usages) == 2
+    for edge in usages:
+        shifted = after[edge["id"]]
+        assert shifted["sourceRefs"][0]["location"]["line"] == edge["sourceRefs"][0]["location"]["line"] + 2
+        assert shifted["sourceRefs"][0]["revision"] != edge["sourceRefs"][0]["revision"]
+
+
 def test_oversized_export_names_remain_explicit_unknowns_without_blocking_the_file(wb):
     from test_ontology_sources import asset
     source = asset(wb, "long-export", ("export const " + "x" * 161 + " = 1;").encode())
