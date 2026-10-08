@@ -1,6 +1,6 @@
 {
-  "base": "b455fcaf700f37a73080352b98464e86ec9e792d",
-  "purpose": "Public identifier deny-list read grant for the two legacy public writers (WsFn, StudioLoopFn); engine plan E2 Step 3a",
+  "base": "f5157c75b8276f5f5172b8503a43985dcaf76bb7",
+  "purpose": "Integrated public-output deny-list read grants for WsFn and StudioLoopFn, reviewed against the current main predecessor; no bank Gateway or MyData permission expansion.",
   "resources": [
     "StudioLoopFn4AFBBF08",
     "StudioLoopFnServiceRoleDefaultPolicy73135043",

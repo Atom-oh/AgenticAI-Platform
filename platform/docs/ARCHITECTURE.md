@@ -1,6 +1,7 @@
 # Platform architecture and ontology execution design
 
-Date: 2026-09-23. Status: implementation baseline; service activation gated.
+Design baseline: 2026-09-23. Integration audit: 2026-10-08.
+Status: implementation in progress; service activation gated.
 Scope: the bank platform and its project workspaces. The separate demos and
 educational guidebook retain their own scope.
 
@@ -25,6 +26,10 @@ The [acceptance specification](ONTOLOGY_AGENTCORE_VALIDATION.md) defines the
 case evidence and completion rules. Kiro's completed documentation reviews
 establish document consistency, not Runtime execution, complete implementation
 or permission to skip service gates.
+
+The [implementation register](ONTOLOGY_AGENTCORE_IMPLEMENTATION_STATUS.md) maps
+current code to the remaining integration and live-evidence work. It does not
+replace the acceptance specification or certify any service gate.
 
 Here, data admission approves bytes for transfer, execution admission creates
 an authorized job, and production admission enables a verified cohort. Their
@@ -308,37 +313,36 @@ with a key distinct from the capability key.
 
 ## Implementation ownership and delivery sequence
 
-Baseline inspection: `e097cee8b8a62dbc1d675e112edd401a8072fb46`, 2026-09-23.
-The working tree also contains concurrent ontology code fixes. Preserve and
-review those independently when integrating; this table is not a certification
-of their current tests, merged state or deployment.
+The original 2026-09-23 baseline was `e097cee8b8a62dbc1d675e112edd401a8072fb46`.
+The 2026-10-08 audit integrates ontology branch `c234292` with main `f5157c7`.
+The entries below describe checked-in modules, not deployment or gate completion.
+See the implementation register for concrete paths, tests and remaining work.
 
-| Unit | Modules / change boundary | Baseline and required next work | Exit evidence |
+| Unit | Current code | Required next work | Exit evidence |
 |---|---|---|---|
-| A: canonical data | Ontology maintainer; `workspace/ontology_*.py`, `source-analyzer/`, workbench projection | Foundation exists; the worker admits only the explicit offline analyzer. Reconcile source/authority fixes and retain legacy defaults | Fixed parser/impact oracle and authorization/atomicity negatives; reviewed PR A |
-| B0: execution protocol and writer guards | `workspace/execution_ledger.py`, execution/evidence schemas and actual legacy claim/expiry guards; platform-runtime owner | Offline protocol implemented; not deployed. Discriminator fences, bounded transitions, per-call intent/recovery and profile/admission bindings are in place. Test-key verifiers require explicit offline opt-in, and production rejects them. `publish_candidate` staging, the intake input resolver and the prior-authority adapter remain open | RUN-01–05 O-mode cases importing actual legacy guards plus conditional-storage fakes, expiry/cancellation/malformed-evidence negatives; reviewed B-chain PR; no cloud-readiness claim |
-| B0 intake: private data admission | Planned private admission/image modules under `source-admission/1`; private-intake and security-policy owners, with privacy/infra owner for redaction routing | Implement IAM-only policy/provenance/grant administration, private checks and exact derivatives. Source-document redaction needs its own caller/network/contract verification | SRC-01/05/06 and AUTH-01/08 O-mode/API negatives; reviewed B-chain PR. G0-ADMISSION owns L evidence; missing required privacy blocks |
-| B0 sharing: publication and source adapters | Planned workspace publication/grant adapters and remediation worker; ontology/workspace-release owners | Implement shared-publication authority and `published-asset`/`ux-contract`/`run-round` adapters with owning-contract APIs, source ACLs and withdrawal; uninstalled adapters remain unavailable | AUTH-07/08, ONT-04/09, IMP-05 and HAND-02–05 O-mode/API checks; reviewed B-chain PR. L/U evidence remains required for C |
-| B1: execution authority and capability probes | Durable issuer/key registry and disposable probes; identity/runtime owners, with private-intake owner for transfers | Require reviewed B0 intake administration, inspection and probe-scope decision records, plus deployed B0 writer guards before shared-table probes. Verify durable keys/service topology and retire probe resources | Reviewed B-chain PRs; G0-ADMISSION/identity/runtime/service evidence and stop/go records; probe permission is not full intake completion |
-| B2: service integration | Runtime adapter, ontology Lambda/source broker and scoped IaC; runtime/identity/verifier/model-boundary owners | Integrate proven transports, capabilities, transfers, receipts and metadata-only telemetry. Verify the new Runtime model entry point against existing obligations | G0 plus AUTH-05/GEN-03 telemetry evidence, reproducible compiler/browser evidence and IAM negatives; reviewed B-chain PR; defaults retained |
-| C: application cutover | Workspace dispatch/jobs, intake/generation/release, workbench and frontend readiness | Connect the real backend and exact context/evidence bindings after applicable gates. Preserve existing approval/export APIs | Vertical positive/negative acceptance, private staging, limited synthetic cohort, rollback and reviewed PR C |
-| Production admission | Operator configuration, runbooks and live evidence | Enable only the verified cohort/model set; drain work on its original backend | Required CI/review and current live evidence; explicit full-plan gaps; no automatic local fallback |
+| A: canonical data | Canonical store/API, source analyzer and workbench projection; main's parser-identity and cursor fences retained | Run the complete fixed offline oracle, source/impact negatives and compatibility checks | ONT-01–10, SRC-01–07, IMP-01–05 O portions and ROLL-01; G0-ONTOLOGY is not inferred from pytest totals |
+| B0: execution protocol and writer guards | `workspace/execution_ledger.py`, storage discriminators and actual legacy claim/expiry/repair guards have offline implementations | Connect registered production verification, input/prior authority adapters and atomic graph/artifact completion to this one writer | RUN-01–05 O portions; deployed guard revisions and current live evidence before shared-table probes |
+| B0 intake | `intake/`, document transcription revisions and `infra/lib/intake.ts` implement private inspection/derivatives, admission/review and IAM administration | Verify configured policy/deny-list/reviewer authority and private deployment; separately establish any needed redaction service | SRC-01/05/06, AUTH-01/08; G0-ADMISSION O/L evidence remains required |
+| B0 sharing | `workspace/publications.py`, source adapters and protected HTTP read/release/export paths exist | Validate cross-project lifecycle and withdrawal through deployed callers and the user flow | ONT-04/09, AUTH-07/08, HAND-02–05; current L/U evidence remains required |
+| B1: execution authority and probes | Dedicated capability/key, Identity and authority adapter code exists in `ontology_runtime/`; isolated transport tests use `ac_execution`/`ac_operation` records | Reconcile adapters with B0's `agentcore-execution` job protocol, verify deployed guards, then run disposable configured service probes | G0-ADMISSION/RUNTIME/IDENTITY and other applicable service receipts; adapter tests do not close B1 |
+| B2: service integration | Runtime, Gateway tools, Interpreter/Browser/Memory adapters and a separate IaC stack exist | Implement the unified dispatcher/finish/reconciler path, production verifier registration, and the design-stage model boundary and telemetry integration | G0 gates, signed compiler/browser evidence, AUTH-05/GEN-03; source-analysis adapter calls no model |
+| Design engine | Offline PRD/flow/composition/edit/verification/handoff modules and synthetic fixtures exist under `design_loop/` | Connect them to admitted, ledger-controlled stages and the application records after applicable gates | Engine unit/E2E checks plus GEN/HAND and independently evidenced vertical acceptance |
+| C: application cutover | Existing React canvas, approval/release/export and source-authority hardening remain; the new design engine is not a completed application workflow | Wire persisted stages and human decisions to the unified execution path, validate the full user flow, and prove rollback for a limited synthetic cohort | Complete positive/negative O/L/U evidence; the 54-case integrated denominator remains fixed |
+| Production admission | Defaults and explicit offline opt-in remain guarded | Enable only the verified cohort/model set after required gates; preserve the admitted backend for in-flight work | Required CI/review, deployment-bound live evidence and explicit remaining gaps |
 
-The first coding unit is B0's offline protocol foundation after this design is
-recorded and reviewed. It must not be connected as a production executor until
-the applicable authorization, service and completion gates pass. Preserve the
-plan's independently reviewed A/B/C boundaries; B0/B1/B2 subdivide B for delivery,
-not to bypass those reviews. The B0 intake and sharing work may proceed as
-separately reviewed offline/API units, but C cannot exit without them. B0's
-RUN O-mode evidence belongs to those RUN cases; it does not mark the distinct
-23-case ontology/intake offline level complete.
-That level is the 22 ONT/SRC/IMP cases plus ROLL-01. The private-intake owner
-owns G0-ADMISSION; the ontology owner coordinates its SRC-05/06 offline portions.
-Disposable fixture probes need the protected probe path, not completed customer
-intake/sharing APIs. Full activation still needs all applicable gate evidence.
+The Runtime adapter's `ac_execution`/`ac_operation` protocol is not the B0 ledger.
+`ontology_jobs.process` remains offline-only; installing a `RuntimeAnalyzer`
+object does not wire it into that worker or authorize cloud execution there.
+The unified new-ledger dispatcher and atomic `execution.finish` publication are
+remaining integration work, not an exception to the one-writer requirement.
+
+B0's RUN tests do not complete the separate 23-case ontology/intake offline
+level. That level remains the 22 ONT/SRC/IMP cases plus ROLL-01. The private-intake
+owner owns G0-ADMISSION; the ontology owner coordinates its SRC-05/06 offline
+portions. Disposable probes require protected paths and their own admission.
 The 54-case integrated level is all 57 cases except ROLL-02, ROLL-03 and ROLL-04.
-C also reconciles the React Git-export contract's expected-base and response
-schema fields before enabling its upgraded export path.
+The full acceptance template remains unexecuted until dated case-level receipts
+are recorded; source tests and compilation alone cannot set its gates to PASS.
 
 Implementation details that alter a wire schema, storage authority, role or
 acceptance assertion must update the owning contract with the code. Label

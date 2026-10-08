@@ -12,6 +12,7 @@ amendments below and the architecture's 2026-09-23 baseline are separately scope
 | `AGENTS.md` | Shared agent workflow and review rules |
 | `SPEC.md` | Active bank-platform requirements, including explicit scoped amendments |
 | `platform/docs/ARCHITECTURE.md` | Cross-module implementation design, authority boundaries and staged ownership under SPEC §7-2 |
+| `platform/docs/ONTOLOGY_AGENTCORE_IMPLEMENTATION_STATUS.md` | 2026-10-08 source integration register: concrete B0/intake/sharing/adapter/engine code and remaining unified execution, live gates and application wiring |
 | `platform/docs/ONTOLOGY_AGENTCORE_VALIDATION.md` | Acceptance cases and evidence rules; documentation review is separate from implementation results |
 | `platform/workspace/ONTOLOGY_CONTRACT.md` | Implemented canonical data/API boundaries and explicitly gated source-analysis migration |
 | `platform/docs/ONTOLOGY_AGENTCORE_PLAN.md` | Dated ontology/AgentCore sequence and historical review outcomes; does not override active contracts |
@@ -142,3 +143,19 @@ The synthetic pension workflow is separate from legacy S2; trace its own
 privacy, numeric substitution and output validation path before reusing an S2
 finding. The Skill Creator governs exact private content; it does not retroactively
 change every legacy Registry component record into a Skill.
+
+## 2026-10-08 integration audit
+
+The retained ontology branch includes offline B0 execution, intake, sharing,
+design-engine and dedicated service-adapter implementations. Main integration
+must retain the reviewed parser-identity/cursor changes and verify the actual
+main-stack resource delta against its current base. Architecture descriptions
+that still call all those modules planned are stale.
+
+The dedicated adapter's `ac_execution`/`ac_operation` store is not the B0
+`agentcore-execution` ledger. The application dispatcher, production verifier,
+and atomic finish/publication integration remain required; legacy
+`ontology_jobs.process` remains offline-only. Adapter tests and a configured
+backend do not close that gap or prove a working application/cloud path.
+Review the implementation register against code without waiving the owning
+execution contract or promoting aggregate pytest counts to service-gate PASS.

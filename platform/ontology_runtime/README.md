@@ -4,16 +4,22 @@ This module implements the source-analysis execution path for implementation
 unit B in `platform/docs/ONTOLOGY_AGENTCORE_PLAN.md`. It does not enable the
 production backend or complete the generation/release cutover.
 
+Integration audit (2026-10-08): these adapters currently use their isolated
+`ac_execution`/`ac_operation` records. They do not call the B0
+`workspace.execution_ledger.Ledger`. The unified dispatcher and atomic
+job/artifact/graph `execution.finish` path are still required by
+`platform-execution/1`; a configured `RuntimeAnalyzer` is not a completed
+application execution path. See the [implementation register](../docs/ONTOLOGY_AGENTCORE_IMPLEMENTATION_STATUS.md).
+
 ## Execution and authority
 
 The authenticated workspace API creates a durable analysis artifact/job with
 the actor, project, source revisions, resolver, authorization expiry and selected
-backend. Source analysis using AgentCore is a new-ledger Runtime execution, not
-a cloud analyzer injected into the legacy `ontology_jobs.process` Worker path
-(AGENTCORE_CONTRACT platform-execution/1): `workspace/ontology_jobs.py`'s
-`process()` stays offline-only, and an AgentCore-backed job is dispatched
-separately, through `RuntimeAnalyzer`, to a dedicated IAM execution-authority
-Lambda.
+backend. The required production path is a new-ledger Runtime execution under
+`AGENTCORE_CONTRACT` `platform-execution/1`. The legacy
+`workspace/ontology_jobs.py:process` stays offline-only. `RuntimeAnalyzer`
+provides a separate transport to the IAM execution-authority Lambda; its
+application dispatch and completion wiring remain gated as described above.
 
 `Authority` rechecks project membership, source access, the selected tool archive
 and exact source classification. It creates a bounded execution ledger and a

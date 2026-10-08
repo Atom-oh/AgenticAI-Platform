@@ -14,6 +14,9 @@ their stated scope, not blanket requirements for every module.
 For implementation, start with [the platform architecture](docs/ARCHITECTURE.md).
 It connects existing modules to the ontology execution design, current gaps,
 delivery ownership and required acceptance evidence.
+The [2026-10-08 implementation register](docs/ONTOLOGY_AGENTCORE_IMPLEMENTATION_STATUS.md)
+distinguishes the integrated B0/intake/sharing/design code from remaining
+new-ledger Runtime wiring, live capability gates and the application cutover.
 
 ## Current architecture
 
