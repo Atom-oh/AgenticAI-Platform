@@ -7,12 +7,14 @@ import boto3
 from botocore.config import Config
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config
 
 
 def main():
-    brief = sys.argv[1] if len(sys.argv) > 1 else "하나은행 모바일 계좌이체 화면 시안"
-    cfg = json.loads((ROOT / "config" / "stack.json").read_text())
-    client = boto3.client("bedrock-agentcore", region_name=cfg["region"],
+    brief = sys.argv[1] if len(sys.argv) > 1 else "고객사 A 모바일 계좌이체 화면 시안"
+    cfg = load_config()
+    client = deployment_client(cfg, "bedrock-agentcore", region_name=cfg["region"],
                      config=Config(read_timeout=900, connect_timeout=10, retries={"total_max_attempts": 1}))
     resp = client.invoke_agent_runtime(
         agentRuntimeArn=cfg["runtime_arn"], qualifier="DEFAULT",

@@ -63,6 +63,20 @@ class GitExportError(Exception):
         super().__init__(message)
 
 
+class GitExportDeliveredUnverified(Exception):
+    """The remote branch/commit now genuinely exists (delivery already happened and
+    cannot be undone), but a guard revocation raced the follow-up integrity
+    verification, so its content was never confirmed against what was requested.
+    Deliberately NOT a `GitExportError`: the caller must persist the observed
+    receipt for attribution/recovery without ever treating this as verified
+    success -- a real content mismatch must still fail loudly, never silently
+    reported as "committed"."""
+    def __init__(self, branch, base, sha, source_hash, target):
+        super().__init__("delivered-unverified")
+        self.branch, self.base, self.sha = branch, base, sha
+        self.source_hash, self.target = source_hash, target
+
+
 def _fail(code):
     raise GitExportError(code, _MESSAGES[code])
 
@@ -197,7 +211,14 @@ class _Local:
         if self.run("rev-parse", "--is-bare-repository").strip() != b"true":
             _fail("invalid-input")
 
+    guard = None
+
     def run(self, *args, data=None, env=None, missing=False):
+        if self.guard is not None:
+            self.guard()  # Before every object write, ref update and read of the target repository.
+        return self._run(*args, data=data, env=env, missing=missing)
+
+    def _run(self, *args, data=None, env=None, missing=False):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             _fail("unavailable")
@@ -273,6 +294,8 @@ class _Local:
 
 
 class _Remote:
+    guard = None
+
     def __init__(self, config, token_provider, transport, deadline):
         self.config, self.transport, self.deadline = config, transport, deadline
         self.github = config["provider"] == "github"
@@ -298,6 +321,10 @@ class _Remote:
         self.calls += 1
         if self.calls > 2000 or time.monotonic() >= self.deadline:
             _fail("unavailable")
+        if self.guard is not None:
+            # Retained authority is rechecked before every outbound request (metadata,
+            # content transfer and publication); a refusal is never masked.
+            self.guard()
         try:
             result = self.transport(method, self.root + path, dict(self.headers), payload)
             if not isinstance(result, (dict, list)):
@@ -501,7 +528,9 @@ class GitExporter:
                 "commitUrl": commit_url, "filesUrl": files_url, "repository": config["repository"],
                 "connectionId": config["id"], "sourceHash": source_hash}
 
-    def export_release(self, release_id, source_hash, files, project_key, expected_base_sha=None, commit_time=None):
+    def export_release(self, release_id, source_hash, files, project_key, expected_base_sha=None, commit_time=None,
+                       guard=None):
+        """`guard` (the caller's retained-authority recheck) runs before every outbound operation."""
         _id(release_id)
         _id(project_key)
         if (not isinstance(files, dict) or not 1 <= len(files) <= MAX_FILES
@@ -530,19 +559,21 @@ class GitExporter:
         if branch == self.connection["baseBranch"]:
             _fail("invalid-input")
         try:
-            return self._export(release_id, source_hash, files, project_key, expected_base_sha, when, target, branch)
+            return self._export(release_id, source_hash, files, project_key, expected_base_sha, when, target, branch,
+                                guard)
         except GitExportError as error:
             code = error.code if error.code in _MESSAGES else "unavailable"
             raise GitExportError(code, _MESSAGES[code]) from None
         except (KeyError, TypeError, ValueError, UnicodeError):
             raise GitExportError("invalid-response", _MESSAGES["invalid-response"]) from None
 
-    def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch):
+    def _export(self, release_id, source_hash, files, project_key, expected, when, target, branch, guard=None):
         deadline = time.monotonic() + 120
         if self.connection["provider"] == "local":
             backend = _Local(self.connection, deadline)
         else:
             backend = _Remote(self.connection, self.token_provider, self.transport, deadline)
+        backend.guard = guard
         def existing(sha):
             base = self._verify(backend, sha, release_id, source_hash, project_key, target, files, expected)
             if backend.ref(branch) != sha:
@@ -560,15 +591,58 @@ class GitExporter:
         if any("/".join(target.split("/")[:index]) in tree for index in range(1, len(target.split("/")))):
             _fail("conflict")
         message = self._message(release_id, source_hash, project_key, target, base)
+        # GitLab's `POST /commits` (`backend.create`) creates the commit AND the branch
+        # atomically -- delivery happens there, not at `backend.publish` (which only
+        # re-reads to confirm). GitHub and local instead create loose, unreachable
+        # objects first and only deliver at `backend.publish` (`POST /git/refs` / the
+        # local ref transaction). Anything that interrupts the follow-up verification
+        # after that point -- a guard revocation (`ProtectedCallRefused`), a lookup
+        # failure, or a genuine content/base mismatch (`GitExportError`) -- never
+        # undoes a GitLab delivery that already happened. For GitHub/local nothing has
+        # been delivered yet at this point, so it must keep blocking/failing exactly as
+        # it always has. For GitLab the branch+commit already exist and cannot be
+        # undone, but the SAME failure also blocked the only calls that could have
+        # confirmed their content matches what was requested -- an interrupted check and
+        # a genuine mismatch are indistinguishable here, so this must never be reported
+        # as verified "committed" success (that would silently launder a possibly-wrong
+        # delivery); instead the caller gets the observed facts to persist for
+        # attribution/recovery without claiming they were verified. The receipt is tied
+        # to "did the remote actually receive this commit", never to which exception
+        # class interrupted confirming it. Enumerating exception types here is a
+        # losing game (a guard revocation, a lookup failure, malformed verification
+        # metadata, a one-shot storage error -- anything a dependency can raise) and
+        # `export_release`'s own outer wrapper would convert whatever escapes this
+        # scope to a plain GitExportError OUTSIDE it, with no access to
+        # `sha`/`delivered`, losing the receipt regardless of which specific type it
+        # was. Structurally: once delivery is confirmed (GitLab's `create` already
+        # returned `sha`), ANY exception from the verification/publish step below
+        # means only that verification did not COMPLETE -- never that delivery did
+        # not happen -- so catch bare `Exception` (not `BaseException`: a real
+        # interpreter-level signal like `SystemExit`/`KeyboardInterrupt` still
+        # propagates untouched) and report delivered-unverified independent of type.
         try:
             sha = backend.create(base, tree, target, files, message, when, branch)
-            self._verify(backend, sha, release_id, source_hash, project_key, target, files, base)
-            if backend.ref(self.connection["baseBranch"]) != base:
-                _fail("conflict")
-            backend.publish(branch, sha, self.connection["baseBranch"], base)
+            delivered = self.connection["provider"] == "gitlab"
+            try:
+                self._verify(backend, sha, release_id, source_hash, project_key, target, files, base)
+                if backend.ref(self.connection["baseBranch"]) != base:
+                    _fail("conflict")
+                backend.publish(branch, sha, self.connection["baseBranch"], base)
+            except Exception:
+                if delivered:
+                    raise GitExportDeliveredUnverified(branch, base, sha, source_hash, target) from None
+                raise
         except GitExportError:
             occupied = backend.ref(branch)
             if occupied:
                 return existing(occupied)
             raise
-        return existing(sha)
+        # The transfer is now genuinely delivered (the ref transaction above either
+        # created the branch or raised): its receipt (already verified against `base`
+        # and `files` immediately before publish) is preserved as-is. A further guarded
+        # call here would only re-confirm what publish already committed the provider
+        # to, while letting a guard revocation racing the delivery itself discard the
+        # one observed record of a transfer that already happened and cannot be undone
+        # (`self.guard()` still runs, and still blocks, before every call up to and
+        # including `publish` -- no unguarded transfer is introduced by this).
+        return self._result(branch, base, sha, source_hash, target)

@@ -14,6 +14,9 @@ their stated scope, not blanket requirements for every module.
 For implementation, start with [the platform architecture](docs/ARCHITECTURE.md).
 It connects existing modules to the ontology execution design, current gaps,
 delivery ownership and required acceptance evidence.
+The [2026-10-08 implementation register](docs/ONTOLOGY_AGENTCORE_IMPLEMENTATION_STATUS.md)
+distinguishes the integrated B0/intake/sharing/design code from remaining
+new-ledger Runtime wiring, live capability gates and the application cutover.
 
 ## Current architecture
 
@@ -212,6 +215,21 @@ GRAPH_BACKEND=neptune bash deploy.sh --no-web --no-seed
 privacy contexts: preserve the reviewed `mydataPrivacyFunctionArn` and current
 plane/graph contexts when operating a privacy-enabled main stack. Use the
 [privacy runbook](infra/README-privacy.md) for the optional stack and manifest.
+
+The two legacy public writers (`design-runs/*` from `WsFn`, `studio/drafts/*` from
+`StudioLoopFn`) publish only through `api/common/public_scan.py`: generated HTML is
+made static, then scanned by the root `scripts/check_public_identifiers.py` core
+(copied into `api-dist/common/` with `public-assets.sha256`) against the private
+deny-list in the SecureString parameter `/bank-platform/public-denylist`. The
+operator creates that parameter outside Git. With a parameter name configured,
+both writers block if the parameter cannot be read or contains no valid entries,
+including after the five-minute cache expires. The optional warning mode applies
+only when the parameter name is unset; static sanitization, the `script-src 'none'`
+CSP and the approved-media registry still apply. Hits, incomplete scans and
+unreviewed media block publication. CI separately permits an absent/empty GitHub
+`PUBLIC_DENYLIST` secret with `--allow-missing-patterns`; that warning is not a
+completed identifier scan. `workspace/check_infra.py` asserts the environment
+variable and the exact `ssm:GetParameter` grant.
 
 Destructive cleanup commands exist as `bash teardown.sh` and
 `bash teardown.sh --all`. The first destroys `BankPlatformPlane`; `--all`

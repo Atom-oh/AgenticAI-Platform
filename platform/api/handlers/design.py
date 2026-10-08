@@ -25,7 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common import tracing
+from common import public_scan, tracing
 from common.ctx import Ctx
 from common.log import log_event
 
@@ -166,16 +166,37 @@ def _strip_html(result: dict) -> dict:
     return {**result, "flow": {**flow, "steps": steps}}
 
 
+def _publish(pages: List[tuple], documents: List[tuple], patterns: list) -> None:
+    """공개 게시의 유일한 쓰기 경로 (engine plan E2 3a). 모든 송출 페이로드를 먼저 완성·검사한 뒤에만 쓴다.
+
+    pages: (key, html) — 이미 `prepare_static_html` 로 정적화·검사된 게시본. documents: (key, obj) — 게시될 JSON
+    (리포트·index.json 등, 기존 저장분을 병합한 결과 포함). JSON 은 여기서 게시되는 바이트 그대로 검사하며, 하나라도
+    적중·불완전 검사면 PublicationBlocked 로 쓰기 0건이다."""
+    encoded = [(key, json.dumps(obj, ensure_ascii=False)) for key, obj in documents]
+    for _key, text in encoded:
+        public_scan.check_publishable(text, patterns, language="code")
+    for key, html in pages:
+        _put(key, html.encode("utf-8"), "text/html; charset=utf-8")
+    for key, text in encoded:
+        _put(key, text.encode("utf-8"), "application/json")
+
+
 def store_run(run_id: str, result: dict, meta: dict) -> dict:
     """스텝 HTML → design-runs/<runId>/<step>.html, 리포트 → <runId>.json, 목록 → index.json. WEB_BUCKET 없으면 저장 생략."""
     steps_out: List[dict] = []
     flow = result.get("flow") or {}
     from studio.artifacts import secure_html
+    # 공개 게시 게이트 (engine plan E2 3a): 사설 deny-list 로 정적화·검사를 모두 마친 뒤에만 쓴다.
+    # deny-list 가 설정돼 있으면 적중·불완전 검사·미검토 미디어는 PublicationBlocked 로 쓰기 0건(호출부가 storeError 로 보고).
+    # 병합된 index.json 도 송출 페이로드이므로 기존 행의 식별자도 함께 막는다 (PR #30 review 5 #1).
+    # 설정이 없으면 경고 후 식별자 검사만 생략하고 정적화·CSP·미디어 레지스트리는 그대로 적용한다.
+    patterns = public_scan.load_patterns() if WEB_BUCKET else []
+    pages: List[tuple] = []
     for s in flow.get("steps") or []:
         key = f"{PREFIX}/{run_id}/{s['id']}.html"
         url = f"{WEB_URL}/{key}" if WEB_URL else key
         if WEB_BUCKET:
-            _put(key, secure_html(s.get("html", "")).encode("utf-8"), "text/html; charset=utf-8")
+            pages.append((key, public_scan.prepare_static_html(secure_html(s.get("html", "")), patterns)))
         steps_out.append({"id": s["id"], "title": s.get("title"), "url": url, "htmlChars": len(s.get("html", ""))})
     run = {"runId": run_id, **meta, "createdAt": int(time.time() * 1000), "status": "검토중",
            "validationScope": "static-design", "functionalVerification": "not-run",
@@ -186,10 +207,9 @@ def store_run(run_id: str, result: dict, meta: dict) -> dict:
     full = {**run, "prd": result.get("prd"), "checklist": result.get("checklist"), "report": result.get("report"),
             "flow": _strip_html(result).get("flow")}
     if WEB_BUCKET:
-        _put(f"{PREFIX}/{run_id}.json", json.dumps(full, ensure_ascii=False).encode("utf-8"), "application/json")
         idx = _get_json(INDEX_KEY, {"runs": []})
         idx["runs"] = ([run] + [r for r in idx.get("runs", []) if r.get("runId") != run_id])[:MAX_INDEX]
-        _put(INDEX_KEY, json.dumps(idx, ensure_ascii=False).encode("utf-8"), "application/json")
+        _publish(pages, [(f"{PREFIX}/{run_id}.json", full), (INDEX_KEY, idx)], patterns)
     return full
 
 
@@ -230,12 +250,19 @@ def review_decision(ctx: Ctx, body: dict) -> None:
     if hit is None:
         ctx.post({"type": "design_review", "ok": False, "error": "없음"})
         return
-    _put(INDEX_KEY, json.dumps(idx, ensure_ascii=False).encode("utf-8"), "application/json")
+    documents = [(INDEX_KEY, idx)]
     if full:
         full["status"] = status
         if decision == "approve":
             full["approvalScope"] = "static-design"
-        _put(f"{PREFIX}/{rid}.json", json.dumps(full, ensure_ascii=False).encode("utf-8"), "application/json")
+        documents.append((f"{PREFIX}/{rid}.json", full))
+    try:   # 결정 기록도 공개 산출물을 다시 쓰므로 같은 게시 게이트를 통과해야 한다 (PR #30 review 5 #1)
+        _publish([], documents, public_scan.load_patterns())
+    except public_scan.PublicationBlocked as error:
+        log_event("design.review_blocked", ctx.trace_id, runId=rid, reason=type(error).__name__)
+        ctx.post({"type": "design_review", "ok": False,
+                  "error": "공개 게시 검사에 실패해 검토 결정을 기록하지 않았습니다. 게시 산출물을 정리한 뒤 다시 시도하세요."})
+        return
     log_event("design.review", ctx.trace_id, runId=rid, decision=decision, email=ctx.email)
     ctx.post({"type": "design_review", "ok": True, "run": hit, "approvalScope": "static-design",
               "badge": "정적 시안 승인 · 실제 동작 및 제품 통합은 별도 검증"})

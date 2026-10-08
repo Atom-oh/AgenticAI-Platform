@@ -9,12 +9,14 @@ import sys
 import boto3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config
 
 
 def main():
     username, password = sys.argv[1], sys.argv[2]
-    cfg = json.loads((ROOT / "config" / "stack.json").read_text())
-    idp = boto3.client("cognito-idp", region_name=cfg["region"])
+    cfg = load_config()
+    idp = deployment_client(cfg, "cognito-idp", region_name=cfg["region"])
     try:
         idp.admin_create_user(UserPoolId=cfg["user_pool_id"], Username=username,
                               MessageAction="SUPPRESS")

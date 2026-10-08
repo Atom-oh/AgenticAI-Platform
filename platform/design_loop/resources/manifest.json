@@ -1,0 +1,12 @@
+{
+  "resources": {
+    "checklists.json": {
+      "copiedFrom": "seed/design/checklists.json",
+      "sha256": "8ccd4e4ca92e260f9ef136226e9be443b121b73e0fe2c36a46199df845554be5"
+    },
+    "convention-apply.cjs": {
+      "sha256": "07e941bf64b2c42cf0f69a2285972cc8c25b20b0a75eb3f4d21d1cff1ada6491"
+    }
+  },
+  "schemaVersion": 1
+}

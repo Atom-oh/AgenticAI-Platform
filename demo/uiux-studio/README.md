@@ -1,6 +1,6 @@
 # Original UI/UX Studio
 
-This is the original designer PoC, recorded as migrated from `hana/uiux-platform/` in the earlier account-test repository on 2026-09-02. Its external Figma ingestion, shared MCP assets, Strands Runtime, and HTML gallery are separate from the main React workspace in `platform/workspace/`.
+This is the original designer PoC, recorded as migrated from the `uiux-platform/` project in the earlier account-test repository on 2026-09-02. Its external Figma ingestion, shared MCP assets, Strands Runtime, and HTML gallery are separate from the main React workspace in `platform/workspace/`.
 
 Recorded gallery: <https://d4zwmnh2s47e9.cloudfront.net/>. Obtain current administrator-issued access through the approved credential channel; see [security/governance](../SECURITY-GOVERNANCE.md). A historical endpoint is not current deployment evidence.
 
@@ -30,23 +30,25 @@ Feedback updates the gallery manifest and copies approved HTML into `approved-pa
 
 ## Authentication and remaining concerns
 
-The stack disables Cognito self-registration, supplies human SPA and M2M clients, and uses an `AWS_IAM` Function URL behind CloudFront OAC. Normal POST routes require a designer access token through `x-hana-auth`. Therefore the original “all APIs are unauthenticated” description is stale.
+The stack disables Cognito self-registration, supplies human SPA and M2M clients, and uses an `AWS_IAM` Function URL behind CloudFront OAC. Normal POST routes require a designer access token through `x-bank-auth`. Therefore the original “all APIs are unauthenticated” description is stale.
 
-However, `feedback/handler.py` retains a no-`rawPath` compatibility POST before authentication; asset/job reads and gallery artifacts are not private per-user resources. Generated HTML/same-origin previews, unconditional wildcard IAM grants, and runtime credential configuration also need remediation/review. These are gaps, not policy exemptions. Do not call this implementation production-ready or assign it the main workspace's approval/browser guarantees.
+However, `feedback/handler.py` retains a no-`rawPath` compatibility POST before authentication; asset/job reads and gallery artifacts are not private per-user resources. Generated HTML/same-origin previews and actual deployed IAM/credential configuration still need review. Source policies now restrict Runtime/Memory access to this application and require explicit model resource ARNs; a merge does not update existing deployed roles. These are gaps, not policy exemptions. Do not call this implementation production-ready or assign it the main workspace's approval/browser guarantees.
 
 ## Deployment dependencies
+
+Read the [deployment-record and legacy-cleanup runbook](docs/OPERATIONS.md). The namespace rename does not migrate existing AWS resources. Capture old and new deployments separately; cleanup uses observed IDs and the exact recorded stack ARN.
 
 These are code dependencies, not a command to deploy an unchanged historical configuration:
 
 1. Review current account/region, policies, secret handling, and resources in `infra/`.
-2. After an authorized infrastructure deployment, `scripts/write_config.py` records outputs in `config/stack.json`.
+2. After an authorized infrastructure deployment, `scripts/write_config.py --stack ... --account ... --region ...` records actual outputs in a private file selected by `BANK_UIUX_CONFIG`. The checked-in `config/stack.json` is explicitly unconfigured.
 3. Provision the temporary Figma credential through the approved secret process; never paste it into Markdown or command transcripts.
 4. `deploy_gateway.py` configures the eight tools; `sync_skills.py` publishes seed instructions; `deploy_gallery.py` publishes gallery files.
 5. If using designer memory, run the authorized `deploy_memory.py` step before Runtime configuration.
 6. `deploy_runtime.py` packages the Runtime and fills the dispatcher's `RUNTIME_ARN`.
 7. Validate ingestion, generation, authentication, and feedback in the intended environment using approved synthetic inputs.
 
-CDK declares an empty dispatcher `RUNTIME_ARN` and feedback `MEMORY_ID`. Redeployment can reset these script-populated settings; reapply the appropriate configuration and verify it. Gateway/Runtime setup and designer-account provisioning are separate steps. Current scripts need security review; this ordering does not bless their credential handling or wildcard grants.
+CDK declares an empty dispatcher `RUNTIME_ARN` and feedback `MEMORY_ID`. Redeployment can reset these script-populated settings; reapply the appropriate configuration and verify it. Gateway/Runtime setup and designer-account provisioning are separate steps. Runtime creation also requires the observed selected-model ARNs to be installed through CDK `modelResources` and recaptured in the private record. Validate current IAM and credential handling; source-level restrictions do not attest to the old deployment.
 
 Local tests run from this directory with `python3 -m pytest tests -q` in a provisioned test environment. `scripts/verify_e2e.py` contacts AWS and creates demo artifacts; it is not a read-only/offline check. Teardown scripts and CDK removal policies can delete resources/data; inspect current targets first.
 

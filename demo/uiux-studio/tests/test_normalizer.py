@@ -1,7 +1,7 @@
 from ingestion.normalizer import normalize_figma_file
 
 SAMPLE = {
-    "name": "Hana Design System",
+    "name": "Bank Design System",
     "document": {
         "children": [
             {

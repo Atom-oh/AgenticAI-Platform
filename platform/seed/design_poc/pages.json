@@ -1,0 +1,20 @@
+[
+  {
+    "admissionId": "adm-2",
+    "derivativeHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "sourceRef": {
+      "sourceId": "desc"
+    },
+    "page": 1,
+    "text": "상품명: 데모 청년 적금\n상품유형: 적금\n기본금리 연 2.0%\n가입기간 12개월\n우대금리 자동이체 시 연 0.5%p"
+  },
+  {
+    "admissionId": "adm-3",
+    "derivativeHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "sourceRef": {
+      "sourceId": "terms"
+    },
+    "page": 3,
+    "text": "만 19세 이상 34세 이하 개인만 가입할 수 있습니다. 이 예금은 예금자보호법에 따라 보호됩니다."
+  }
+]

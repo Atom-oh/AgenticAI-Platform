@@ -6,12 +6,15 @@ import pathlib
 import boto3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT))
+from scripts.deployment_config import client as deployment_client, config_path, load_config, save_config
 
 
 def main():
-    cfg = json.loads((ROOT / "config" / "stack.json").read_text())
+    cfg = load_config(for_deploy=True)
     bucket = cfg["skills_bucket"]
-    s3 = boto3.client("s3", region_name=cfg["region"])
+    s3 = deployment_client(cfg, "s3", region_name=cfg["region"])
     count = 0
     for path in (ROOT / "skills").rglob("*"):
         if path.is_file():

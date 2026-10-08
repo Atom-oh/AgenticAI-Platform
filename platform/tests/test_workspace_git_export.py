@@ -458,7 +458,7 @@ def test_gitlab_tree_pagination_does_not_drop_unrelated_files():
 
 @pytest.mark.parametrize("provider", ["github", "gitlab"])
 def test_remote_success_response_with_wrong_source_is_not_committed_evidence(provider):
-    from workspace.git_export import GitExportError
+    from workspace.git_export import GitExportDeliveredUnverified, GitExportError
     service = Remote(provider)
     def corrupted(method, url, headers, payload):
         response = service(method, url, headers, payload)
@@ -467,11 +467,24 @@ def test_remote_success_response_with_wrong_source_is_not_committed_evidence(pro
             tree = service.trees[service.commits[sha]["tree"]]
             tree[TARGET + "/src/App.tsx"] = ("100644", "blob", blob_id(b"wrong source"))
         return response
-    with pytest.raises(GitExportError) as error:
-        remote_exporter(provider, corrupted).export_release("r", source_hash(FILES), FILES, "project-a")
-    assert error.value.code == "conflict"
     if provider == "github":
+        # GitHub creates loose, unreachable objects before `publish`; nothing was
+        # delivered yet, so a mismatch discovered by `_verify` is a plain failure
+        # and no branch is ever created.
+        with pytest.raises(GitExportError) as error:
+            remote_exporter(provider, corrupted).export_release("r", source_hash(FILES), FILES, "project-a")
+        assert error.value.code == "conflict"
         assert "feature/studio-r" not in service.refs
+    else:
+        # GitLab's `POST /commits` delivers the commit AND the branch atomically --
+        # a mismatch discovered only afterward can never be undone, so this must
+        # never be silently reported as a plain, receipt-discarding `GitExportError`
+        # (review 8 #4): the caller gets the observed (possibly-wrong) receipt to
+        # persist for attribution instead.
+        with pytest.raises(GitExportDeliveredUnverified) as error:
+            remote_exporter(provider, corrupted).export_release("r", source_hash(FILES), FILES, "project-a")
+        branch = next(name for name in service.refs if name.startswith("feature/studio-"))
+        assert error.value.sha == service.refs[branch]
 
 
 def test_unavailable_token_provider_cannot_leak_errors_or_contact_transport(capsys):

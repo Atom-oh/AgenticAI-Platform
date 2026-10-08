@@ -1,0 +1,2603 @@
+{
+ "schemaVersion": 1,
+ "projectId": "project-1",
+ "_comment": "Synthetic public design PoC seed. No customer data. Edge src/dst are local ids; tests expand them.",
+ "nodes": [
+  {
+   "id": "color-brand",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Foundation",
+   "title": "브랜드 색상",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "subtype": "color",
+   "properties": {
+    "name": "color-brand",
+    "token": "#1d4ed8",
+    "uxModel": {
+     "layers": {
+      "wireframe": {
+       "blocks": [
+        "swatch"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "space-m",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Foundation",
+   "title": "기본 간격",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "subtype": "spacing",
+   "properties": {
+    "name": "space-m",
+    "token": "16px",
+    "uxModel": {
+     "layers": {
+      "wireframe": {
+       "blocks": [
+        "spacer"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "title",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "화면 제목",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "현재 단계의 제목을 h1으로 표시",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Text",
+       "props": {
+        "as": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "h1"
+         ]
+        },
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "brand"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "body-text",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "본문 텍스트",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "안내 문장 표시",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Text",
+       "props": {
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "muted"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "next-button",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "다음 버튼",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "다음 단계로 이동",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Button",
+       "props": {
+        "label": {
+         "type": "string",
+         "required": true
+        },
+        "kind": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "primary",
+          "secondary"
+         ]
+        },
+        "onClick": {
+         "type": "callback",
+         "required": false
+        }
+       },
+       "childrenProp": null,
+       "adapter": "action"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "amount-input",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "금액 입력",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "월 납입 금액 입력",
+     "dataBindings": [
+      {
+       "field": "value",
+       "source": "session",
+       "path": "session.amount",
+       "required": true
+      }
+     ],
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Input",
+       "props": {
+        "label": {
+         "type": "string",
+         "required": true
+        },
+        "value": {
+         "type": "string",
+         "required": true
+        },
+        "onChange": {
+         "type": "callback",
+         "required": true
+        },
+        "type": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "number"
+         ]
+        },
+        "hint": {
+         "type": "string",
+         "required": false
+        }
+       },
+       "childrenProp": null,
+       "adapter": "controlled-text"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "consent-check",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "동의 체크",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "약관 동의 여부 선택",
+     "dataBindings": [
+      {
+       "field": "checked",
+       "source": "session",
+       "path": "session.agreed",
+       "required": true
+      }
+     ],
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Checkbox",
+       "props": {
+        "label": {
+         "type": "string",
+         "required": true
+        },
+        "checked": {
+         "type": "boolean",
+         "required": true
+        },
+        "onChange": {
+         "type": "callback",
+         "required": true
+        }
+       },
+       "childrenProp": null,
+       "adapter": "controlled-bool"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "notice-alert",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "안내 알림",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "중요 안내와 대체 행동 표시",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Alert",
+       "props": {
+        "message": {
+         "type": "string",
+         "required": true
+        },
+        "title": {
+         "type": "string",
+         "required": false
+        },
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "info",
+          "warning",
+          "danger"
+         ]
+        }
+       },
+       "childrenProp": null
+      }
+     },
+     "dataBindings": [
+      {
+       "field": "message",
+       "source": "product",
+       "path": "product.notice.notice-1",
+       "required": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "rate-summary",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "금리 요약",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "상품 금리와 조건 요약",
+     "dataBindings": [
+      {
+       "field": "items",
+       "source": "product",
+       "path": "product.summaryItems",
+       "required": true
+      }
+     ],
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Summary",
+       "props": {
+        "title": {
+         "type": "string",
+         "required": false
+        },
+        "items": {
+         "type": "list",
+         "required": true,
+         "item": {
+          "label": "string",
+          "value": "string"
+         }
+        }
+       },
+       "childrenProp": null
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "step-bar",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "단계 표시",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "가입 진행 단계 표시",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Stepper",
+       "props": {
+        "steps": {
+         "type": "list",
+         "required": true,
+         "item": {
+          "id": "string",
+          "label": "string"
+         }
+        },
+        "current": {
+         "type": "string",
+         "required": true
+        }
+       },
+       "childrenProp": null
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "amount-field",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Molecule",
+   "title": "금액 입력 필드",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "금액 입력과 도움말",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Stack",
+       "props": {
+        "gap": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "2",
+          "4"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "consent-row",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Molecule",
+   "title": "동의 행",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "동의 체크와 설명",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Stack",
+       "props": {
+        "gap": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "2",
+          "4"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "product-summary",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Organism",
+   "title": "상품 요약",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "상품 핵심 조건 요약",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Panel",
+       "props": {
+        "title": {
+         "type": "string",
+         "required": false
+        },
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "subtle",
+          "brand"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "eligibility-check",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Organism",
+   "title": "가입 자격 확인",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "가입 자격 확인 결과 표시",
+     "requiredStates": [
+      "default",
+      "ineligible"
+     ],
+     "stateProps": {
+      "ineligible": {
+       "tone": "subtle"
+      }
+     },
+     "conditions": [
+      {
+       "id": "c-inel",
+       "when": "!cond:eligible",
+       "effect": "state",
+       "target": "eligibility-check",
+       "state": "ineligible"
+      }
+     ],
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Panel",
+       "props": {
+        "title": {
+         "type": "string",
+         "required": false
+        },
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "subtle",
+          "brand"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "terms-consent",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Organism",
+   "title": "약관 동의",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "필수 약관 동의",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Panel",
+       "props": {
+        "title": {
+         "type": "string",
+         "required": false
+        },
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "subtle",
+          "brand"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "auto-transfer",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Organism",
+   "title": "자동이체 설정",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "자동이체 우대 조건 선택",
+     "conditions": [
+      {
+       "id": "c-branch",
+       "when": "cond:autoTransfer",
+       "effect": "include",
+       "target": "branch-select"
+      }
+     ],
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Panel",
+       "props": {
+        "title": {
+         "type": "string",
+         "required": false
+        },
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "subtle",
+          "brand"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "branch-select",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Organism",
+   "title": "출금 계좌 선택",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "자동이체 출금 계좌 안내",
+     "dataBindings": [
+      {
+       "field": "branch",
+       "source": "session",
+       "path": "session.branch",
+       "required": false
+      }
+     ],
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Panel",
+       "props": {
+        "title": {
+         "type": "string",
+         "required": false
+        },
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "subtle",
+          "brand"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "cta-next",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Organism",
+   "title": "다음 행동",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "주요 행동 버튼 영역",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Stack",
+       "props": {
+        "gap": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "2",
+          "4"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "single-task",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "PageTemplate",
+   "title": "단일 과업 화면",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "한 화면 한 과업",
+     "slots": {
+      "header": {
+       "required": true,
+       "allowed": [
+        "title",
+        "step-bar"
+       ]
+      },
+      "body": {
+       "required": true,
+       "allowed": [
+        "amount-field",
+        "product-summary",
+        "eligibility-check",
+        "terms-consent",
+        "auto-transfer",
+        "branch-select",
+        "notice-alert",
+        "body-text"
+       ]
+      },
+      "footer": {
+       "required": true,
+       "allowed": [
+        "cta-next"
+       ]
+      }
+     },
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Screen",
+       "props": {
+        "header": {
+         "type": "node",
+         "required": true
+        },
+        "body": {
+         "type": "node",
+         "required": true
+        },
+        "footer": {
+         "type": "node",
+         "required": true
+        }
+       },
+       "childrenProp": null
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "intro",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "상품 소개",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "intro"
+   }
+  },
+  {
+   "id": "eligibility",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "가입 자격 확인",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "eligibility"
+   }
+  },
+  {
+   "id": "ineligible",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "가입 불가 안내",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "ineligible"
+   }
+  },
+  {
+   "id": "terms",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "약관 동의",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "terms"
+   }
+  },
+  {
+   "id": "amount",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "납입 금액",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "amount"
+   }
+  },
+  {
+   "id": "preferential",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "우대 조건",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "preferential"
+   }
+  },
+  {
+   "id": "evidence-auto",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "자동이체 확인",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "evidence-auto"
+   }
+  },
+  {
+   "id": "confirm",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "가입 내용 확인",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "confirm"
+   }
+  },
+  {
+   "id": "done",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Screen",
+   "title": "가입 완료",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "pageId": "complete"
+   }
+  },
+  {
+   "id": "savings-signup",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Procedure",
+   "title": "데모 적금 가입",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "entryScreenId": "intro"
+   }
+  },
+  {
+   "id": "r-terms-required",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "PolicyRule",
+   "title": "약관 동의 단계 필수",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "ruleId": "r-terms-required",
+    "statement": "가입 절차에는 약관 동의 단계가 있어야 합니다",
+    "required": true,
+    "severity": "critical",
+    "appliesWhen": "cond:eligible",
+    "citation": {
+     "sourceKind": "document-revision",
+     "page": 1,
+     "quote": "약관 동의 단계",
+     "derivativeHash": "1670a39b9275573e8bbcf41f925b8c5e170ef993d48fa05efdcd22e9135e736b"
+    }
+   }
+  },
+  {
+   "id": "r-ineligible-reason",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "PolicyRule",
+   "title": "자격 미충족 안내",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "ruleId": "r-ineligible-reason",
+    "statement": "자격 미충족이면 사유와 대체 행동을 노출합니다",
+    "required": true,
+    "severity": "critical",
+    "appliesWhen": "!cond:eligible",
+    "citation": {
+     "sourceKind": "document-revision",
+     "page": 2,
+     "quote": "사유와 대체 행동",
+     "derivativeHash": "fb036fb8890583b11dd4a80b269a99dba63ad2835f02982f1ae1467f67d944c3"
+    }
+   }
+  }
+ ],
+ "edges": [
+  {
+   "id": "u-title-color",
+   "type": "USES",
+   "src": "title",
+   "dst": "color-brand",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "u-body-space",
+   "type": "USES",
+   "src": "body-text",
+   "dst": "space-m",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-amount-field-input",
+   "type": "COMPOSES",
+   "src": "amount-field",
+   "dst": "amount-input",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-amount-field-text",
+   "type": "COMPOSES",
+   "src": "amount-field",
+   "dst": "body-text",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-consent-row-check",
+   "type": "COMPOSES",
+   "src": "consent-row",
+   "dst": "consent-check",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-consent-row-text",
+   "type": "COMPOSES",
+   "src": "consent-row",
+   "dst": "body-text",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-product-summary-rate",
+   "type": "COMPOSES",
+   "src": "product-summary",
+   "dst": "rate-summary",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-product-summary-text",
+   "type": "COMPOSES",
+   "src": "product-summary",
+   "dst": "body-text",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-terms-consent-row",
+   "type": "COMPOSES",
+   "src": "terms-consent",
+   "dst": "consent-row",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-branch-select-text",
+   "type": "COMPOSES",
+   "src": "branch-select",
+   "dst": "body-text",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-cta-next-button",
+   "type": "COMPOSES",
+   "src": "cta-next",
+   "dst": "next-button",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-intro-template",
+   "type": "COMPOSES",
+   "src": "intro",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-intro-title",
+   "type": "COMPOSES",
+   "src": "intro",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-intro-product-summary",
+   "type": "COMPOSES",
+   "src": "intro",
+   "dst": "product-summary",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-intro-cta-next",
+   "type": "COMPOSES",
+   "src": "intro",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-intro",
+   "type": "PART_OF",
+   "src": "intro",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-eligibility-template",
+   "type": "COMPOSES",
+   "src": "eligibility",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-eligibility-title",
+   "type": "COMPOSES",
+   "src": "eligibility",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-eligibility-eligibility-check",
+   "type": "COMPOSES",
+   "src": "eligibility",
+   "dst": "eligibility-check",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-eligibility-cta-next",
+   "type": "COMPOSES",
+   "src": "eligibility",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-eligibility",
+   "type": "PART_OF",
+   "src": "eligibility",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-ineligible-template",
+   "type": "COMPOSES",
+   "src": "ineligible",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-ineligible-title",
+   "type": "COMPOSES",
+   "src": "ineligible",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-ineligible-eligibility-check",
+   "type": "COMPOSES",
+   "src": "ineligible",
+   "dst": "eligibility-check",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-ineligible-cta-next",
+   "type": "COMPOSES",
+   "src": "ineligible",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-ineligible",
+   "type": "PART_OF",
+   "src": "ineligible",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-terms-template",
+   "type": "COMPOSES",
+   "src": "terms",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-terms-title",
+   "type": "COMPOSES",
+   "src": "terms",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-terms-terms-consent",
+   "type": "COMPOSES",
+   "src": "terms",
+   "dst": "terms-consent",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-terms-cta-next",
+   "type": "COMPOSES",
+   "src": "terms",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-terms",
+   "type": "PART_OF",
+   "src": "terms",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-amount-template",
+   "type": "COMPOSES",
+   "src": "amount",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-amount-title",
+   "type": "COMPOSES",
+   "src": "amount",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-amount-amount-field",
+   "type": "COMPOSES",
+   "src": "amount",
+   "dst": "amount-field",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-amount-cta-next",
+   "type": "COMPOSES",
+   "src": "amount",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-amount",
+   "type": "PART_OF",
+   "src": "amount",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-preferential-template",
+   "type": "COMPOSES",
+   "src": "preferential",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-preferential-title",
+   "type": "COMPOSES",
+   "src": "preferential",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-preferential-product-summary",
+   "type": "COMPOSES",
+   "src": "preferential",
+   "dst": "product-summary",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-preferential-cta-next",
+   "type": "COMPOSES",
+   "src": "preferential",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-preferential",
+   "type": "PART_OF",
+   "src": "preferential",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-evidence-auto-template",
+   "type": "COMPOSES",
+   "src": "evidence-auto",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-evidence-auto-title",
+   "type": "COMPOSES",
+   "src": "evidence-auto",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-evidence-auto-auto-transfer",
+   "type": "COMPOSES",
+   "src": "evidence-auto",
+   "dst": "auto-transfer",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-evidence-auto-cta-next",
+   "type": "COMPOSES",
+   "src": "evidence-auto",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-evidence-auto",
+   "type": "PART_OF",
+   "src": "evidence-auto",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-confirm-template",
+   "type": "COMPOSES",
+   "src": "confirm",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-confirm-title",
+   "type": "COMPOSES",
+   "src": "confirm",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-confirm-product-summary",
+   "type": "COMPOSES",
+   "src": "confirm",
+   "dst": "product-summary",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-confirm-notice-alert",
+   "type": "COMPOSES",
+   "src": "confirm",
+   "dst": "notice-alert",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-confirm-cta-next",
+   "type": "COMPOSES",
+   "src": "confirm",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-confirm",
+   "type": "PART_OF",
+   "src": "confirm",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-done-template",
+   "type": "COMPOSES",
+   "src": "done",
+   "dst": "single-task",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-done-title",
+   "type": "COMPOSES",
+   "src": "done",
+   "dst": "title",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-done-product-summary",
+   "type": "COMPOSES",
+   "src": "done",
+   "dst": "product-summary",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-done-cta-next",
+   "type": "COMPOSES",
+   "src": "done",
+   "dst": "cta-next",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "p-done",
+   "type": "PART_OF",
+   "src": "done",
+   "dst": "savings-signup",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "n01-intro-eligibility",
+   "type": "NEXT",
+   "src": "intro",
+   "dst": "eligibility",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward"
+   }
+  },
+  {
+   "id": "n02-eligibility-terms",
+   "type": "NEXT",
+   "src": "eligibility",
+   "dst": "terms",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward",
+    "conditionId": "eligible",
+    "condition": "cond:eligible"
+   }
+  },
+  {
+   "id": "n03-eligibility-ineligible",
+   "type": "NEXT",
+   "src": "eligibility",
+   "dst": "ineligible",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward",
+    "conditionId": "eligible",
+    "condition": "!cond:eligible"
+   }
+  },
+  {
+   "id": "n04-terms-amount",
+   "type": "NEXT",
+   "src": "terms",
+   "dst": "amount",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward"
+   }
+  },
+  {
+   "id": "n05-amount-preferential",
+   "type": "NEXT",
+   "src": "amount",
+   "dst": "preferential",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward"
+   }
+  },
+  {
+   "id": "n06-preferential-evidence-auto",
+   "type": "NEXT",
+   "src": "preferential",
+   "dst": "evidence-auto",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward",
+    "conditionId": "autoTransfer",
+    "condition": "cond:autoTransfer"
+   }
+  },
+  {
+   "id": "n07-preferential-confirm",
+   "type": "NEXT",
+   "src": "preferential",
+   "dst": "confirm",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward",
+    "conditionId": "autoTransfer",
+    "condition": "!cond:autoTransfer"
+   }
+  },
+  {
+   "id": "n08-evidence-auto-confirm",
+   "type": "NEXT",
+   "src": "evidence-auto",
+   "dst": "confirm",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward"
+   }
+  },
+  {
+   "id": "n09-confirm-done",
+   "type": "NEXT",
+   "src": "confirm",
+   "dst": "done",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "navigation": "forward"
+   }
+  },
+  {
+   "id": "g-terms-rule",
+   "type": "GOVERNED_BY",
+   "src": "terms",
+   "dst": "r-terms-required",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "g-terms-consent-rule",
+   "type": "GOVERNED_BY",
+   "src": "terms-consent",
+   "dst": "r-terms-required",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "g-ineligible-rule",
+   "type": "GOVERNED_BY",
+   "src": "ineligible",
+   "dst": "r-ineligible-reason",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  }
+ ]
+}

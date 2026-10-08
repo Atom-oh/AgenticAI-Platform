@@ -2,7 +2,7 @@ import type { usePrivacyModels } from './usePrivacyModels';
 import './privacy.css';
 
 const EXAMPLES = [
-  { label: '이름·주소', query: '저는 김하나이고 주소는 서울특별시 중구 가상로 123, 101동 202호입니다. 우대금리 조건을 확인해 주세요.' },
+  { label: '이름·주소', query: '저는 홍길동이고 주소는 서울특별시 중구 가상로 123, 101동 202호입니다. 우대금리 조건을 확인해 주세요.' },
   { label: '전화·이메일', query: '연락처는 010-0000-0000, 이메일은 mydata@example.invalid입니다. 이 상품의 우대금리 조건을 알려 주세요.' },
   { label: '계좌·금액 보존', query: '계좌번호 123-456789-01234의 잔액 1,250,000원, 금리 3.5%, 기간 12개월을 기준으로 안내해 주세요.' },
 ];

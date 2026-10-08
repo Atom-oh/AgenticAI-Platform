@@ -47,3 +47,6 @@ videos/**/.media/
 /platform/web/core.[0-9]*
 # Customer source archives are private inputs, never public PR artifacts.
 *.[zZ][iI][pP]
+
+# Bytecode of the root scanner script (the tree scan reads tracked files only; keep it untracked)
+/scripts/__pycache__/

@@ -9,10 +9,15 @@ from workspace import ontology_schema as schema
 from workspace.ontology_analysis import source_input, project_analysis, validate_analysis, validate_execution, local_analyze, ANALYZER_ROOT
 from workspace.ontology_sources import Sources, asset_reference
 from workspace.ontology_store import Ontology
+from ontology_runtime.dispatch import selected_backend
 
 
 def reconcile(ctx, artifact):
     """Read-triggered recovery never reruns paid work or revives old authorization."""
+    from workspace.storage import is_reserved, ReservedRecord
+    if is_reserved(artifact):
+        ctx.storage._report(ctx.owner, ReservedRecord("wb_artifact", artifact["id"], "marked-artifact"))
+        return artifact
     if artifact.get("status") not in {"queued", "processing"}:
         return artifact
     job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
@@ -83,8 +88,26 @@ def submit(ctx, body):
     profile = {"aliases": {}, "packages": {}, "jsonAssetFields": []} if profile_id == "default" else profiles.get(profile_id)
     if not isinstance(profile, dict):
         fail(400, "ontology-resolver-unavailable", "승인된 경로 해석 프로필을 선택하세요.")
+    agentcore = selected_backend(ctx.host)["name"] == "agentcore"
+    if agentcore:
+        from ontology_runtime.admission import (consumed, inspect_transfer, preflight, preflight_calls,
+                                                preflight_sources)
+        # ontology-tools/1: one retrieval per file plus the control calls must
+        # fit the tool-call limit, before any source read.
+        preflight_calls(files)
+        preflight_sources(refs)
+        # source-admission/1: the paths and resolver reach the analyzer too.
+        transfer_inspection = inspect_transfer(ctx, [file["path"] for file in files], profile)
     reader = Sources(ctx)
     checks = reader.verify(refs)
+    admissions = None
+    if agentcore:
+        # ONT-10: the exact deduplicated source-check set dispatch, every tool
+        # call and completion will fence (the same source fences and `require()`
+        # checks) must fit their transaction budget before the job is accepted.
+        fences, admissions = consumed(ctx, refs)
+        checks.extend(fences)
+        preflight(checks)
     current = Ontology(ctx).current()
     generation = (current or {}).get("generation")
     if "expectedGeneration" in body and generation != body["expectedGeneration"]:
@@ -93,7 +116,13 @@ def submit(ctx, body):
     pinned = {**ctx.authorization(), "operation": "ontology-analyze", "artifactId": identifier,
               "name": name, "files": copy.deepcopy(files), "sourceRefs": refs,
               "resolver": copy.deepcopy(profile), "resolverHash": schema.digest(profile),
-              "expectedGeneration": generation, "authorityHash": schema.digest(list(reader.authority))}
+              "expectedGeneration": generation, "backend": selected_backend(ctx.host),
+              "authorityHash": schema.digest(list(reader.authority))}
+    if admissions is not None:
+        # platform-execution/1: the consumed decisions are frozen into the
+        # accepted, immutable job input; dispatch requires the same list.
+        pinned["admissions"] = admissions
+        pinned["transferInspection"] = transfer_inspection
     artifact = {"id": identifier, "projectId": ctx.project_id, "kind": "ontology-analysis",
                 "status": "queued", "name": name, "sourceRefs": refs, "jobId": job_id, "jobInput": pinned,
                 "createdBy": ctx.actor, "requestId": body["requestId"], "requestHash": schema.digest(body)}
@@ -116,11 +145,17 @@ def process(ctx, pinned, job=None):
     analyzer = getattr(ctx.host, "ontology_analyzer", None)
     if not callable(analyzer):
         fail(503, "ontology-analyzer-unavailable", "구성된 소스 분석기를 호출할 수 없습니다.")
-    # Unit A intentionally admits only this exact offline implementation.
-    # The separately reviewed cloud adapter must install its own pinned factory;
-    # an arbitrary callable's mutable backend label confers no execution trust.
+    # Unit A admits only this exact offline analyzer. AgentCore source analysis is a
+    # new-ledger Runtime execution (AGENTCORE_CONTRACT platform-execution/1), never an
+    # analyzer injected here.
     if analyzer is not local_analyze:
         fail(503, "ontology-analysis-backend", "검증된 분석 실행 환경이 필요합니다.")
+    # ROLL-02: a job admitted/pinned for AgentCore execution must never silently
+    # fall back to the legacy offline analyzer, even under explicit offline opt-in
+    # (PR #22 review 2, minor finding 5) -- only a job pinned to local-offline may
+    # reach this path at all.
+    if pinned.get("backend", {}).get("name") != "local-offline":
+        fail(503, "ontology-analysis-backend", "AgentCore로 승인된 작업은 로컬 실행으로 대체할 수 없습니다.")
     backend = "local-offline"
     if not getattr(ctx.host, "allow_offline_ontology_analysis", False):
         fail(503, "ontology-analysis-backend", "운영 분석을 로컬 실행으로 대체할 수 없습니다.")

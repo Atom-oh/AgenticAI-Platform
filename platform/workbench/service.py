@@ -22,25 +22,106 @@ def fail(status, code, message):
     raise CollaborationError(status, code, message)
 
 
-def check_source_deadlines(storage, checks, claims=None):
-    """Recheck the aggregate deadline after reads and transaction preparation."""
-    deadlines = []
+_TIMED_AUTHORITY = {
+    "capability": ("publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다."),
+    "adm_sharing": ("source-upstream-revoked", "원본의 조직 공유 정책이 만료되었거나 회수되었습니다."),
+    # Admission lineage observed by the shared source reader: expiry changes no version.
+    "adm_decision": ("source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다."),
+    "adm_policy": ("source-upstream-revoked", "원본 반입 정책이 만료되었거나 회수되었습니다."),
+    "adm_provenance": ("source-upstream-revoked", "원본 출처 등록이 만료되었거나 회수되었습니다."),
+    "adm_grant": ("source-upstream-revoked", "원본 검토 권한이 만료되었거나 회수되었습니다."),
+}
+UPSTREAM_ADMISSION_KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision")
+
+
+def _expired(status, code, message):
+    def raise_error():
+        fail(status, code, message)
+    return raise_error
+
+
+# Ranks preserve the established precedence when several deadlines have passed.
+_AUTHORIZATION_EXPIRED = (0, _expired(401, "authorization-expired", "인증이 만료되었습니다."))
+_CAPABILITY_EXPIRED = (1, _expired(403, "publication-capability-required", "조직 게시 권한이 만료되었거나 회수되었습니다."))
+_UPSTREAM_EXPIRED = (2, _expired(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다."))
+_SOURCE_EXPIRED = (3, _expired(409, "stale-evidence", "검증한 원본의 유효 기간이 만료되었습니다."))
+
+
+def collect_source_deadlines(storage, checks, claims=None, deadline=None):
+    """`check_source_deadlines` without the comparison: every structural check
+    (exact version, status, schema) still fails immediately, while each
+    deadline is only collected as `(expiresAt_ms, rank, raise_error)`, for a
+    caller that joins further reads (e.g. key registry records or an attempt
+    deadline) into ONE aggregate compared by `compare_deadlines` with a single
+    fresh clock read taken after the last of them."""
+    collected = []
+    if deadline is not None:
+        if type(deadline) is not int:
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        collected.append((deadline, *_AUTHORIZATION_EXPIRED))
+    expiry = (claims or {}).get("exp")
+    if expiry is not None:
+        try:
+            collected.append((int(expiry) * 1000, *_AUTHORIZATION_EXPIRED))
+        except (ValueError, TypeError, OverflowError):
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
     for check in checks:
+        if check["kind"] in _TIMED_AUTHORITY:
+            # Upstream intake authority (image/transcription admission, policy,
+            # provenance, grant) and IAM-administered organization publication
+            # capability/sharing policy expire without a version change: every
+            # commit attempt rechecks their schema, exact version, status and expiry.
+            from intake import records
+            row = storage.get(check["owner"], check["kind"], check["id"])
+            try:
+                row = records.validate(check["kind"], row) if row else None
+            except ValueError:
+                row = None
+            if (not row or row["version"] != check["version"] or row.get("status") not in ("active", "admitted")
+                    or type(row.get("expiresAt")) is not int):
+                code, message = _TIMED_AUTHORITY[check["kind"]]
+                fail(403 if check["kind"] == "capability" else 409, code, message)
+            collected.append((row["expiresAt"],
+                              *(_CAPABILITY_EXPIRED if check["kind"] == "capability" else _UPSTREAM_EXPIRED)))
+            continue
         if check["kind"] != "wb_source":
             continue
         source = storage.get(check["owner"], check["kind"], check["id"])
         if (not source or source["version"] != check["version"]
                 or type(source.get("accessExpiresAt")) is not int):
             fail(409, "stale-evidence", "검증한 원본 권한이 변경되었습니다.")
-        deadlines.append(source["accessExpiresAt"])
-    expiry = (claims or {}).get("exp")
-    if expiry is None and not deadlines:
-        return
-    now = storage.clock()
-    if expiry is not None and int(expiry) * 1000 <= now:
-        fail(401, "authorization-expired", "인증이 만료되었습니다.")
-    if deadlines and min(deadlines) <= now:
-        fail(409, "stale-evidence", "검증한 원본의 유효 기간이 만료되었습니다.")
+        collected.append((source["accessExpiresAt"], *_SOURCE_EXPIRED))
+    return collected
+
+
+def reader_deadlines(pairs):
+    """`Sources.recheck_deadlines()` `(expiresAt, code)` pairs as collected
+    deadlines, with the same outcomes `Sources.recheck` raises."""
+    return [(expiry, *(_AUTHORIZATION_EXPIRED if code == "authorization-expired" else _UPSTREAM_EXPIRED))
+            for expiry, code in pairs]
+
+
+def compare_deadlines(storage, deadlines):
+    """Compare collected `(expiresAt_ms, rank, raise_error)` deadlines with ONE
+    fresh clock read taken after every read that collected them; the
+    lowest-ranked expired deadline raises."""
+    now = storage.clock()  # after the last read
+    expired = [item for item in deadlines if item[0] <= now]
+    if expired:
+        min(expired, key=lambda item: item[1])[2]()
+
+
+def check_source_deadlines(storage, checks, claims=None, deadline=None):
+    """Recheck the aggregate deadline after reads and transaction preparation.
+
+    Every deadline (source access, upstream admission/policy/provenance/grant
+    expiry, IAM-administered organization publication capability and sharing
+    policy expiry, the token `exp`, and `deadline`, the verified scope's
+    `authorizationExpiresAt` in ms, which binds even when the claims carry no
+    `exp`) is collected during the reads and compared with one fresh clock read
+    taken after the last read, immediately before the transaction attempt.
+    """
+    compare_deadlines(storage, collect_source_deadlines(storage, checks, claims, deadline))
 
 
 def fields(body, allowed):
@@ -156,6 +237,9 @@ class Service:
         project = self.scope["project"]
         if self.claims.get("exp") is not None and int(self.claims["exp"]) * 1000 <= self.storage.clock():
             fail(401, "authorization-expired", "인증이 만료되었습니다.")
+        bound = self.scope.get("authorizationExpiresAt")
+        if bound is not None and (type(bound) is not int or bound <= self.storage.clock()):
+            fail(401, "authorization-expired", "인증이 만료되었습니다.")
         if len(writes) + 1 > 100:
             fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 변경 범위와 근거를 나누세요.")
         unique = {}
@@ -183,7 +267,7 @@ class Service:
             # retry must return there for reauthorization before another send.
             observed = list(unique.values())
             return self.storage.put_many([*writes, fence], checks=observed, retry_conflicts=False,
-                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims))[:-1]
+                before_attempt=lambda: check_source_deadlines(self.storage, observed, self.claims, bound))[:-1]
         except Conflict as error:
             raise CollaborationError(409, "conflict", "프로젝트 또는 근거가 변경되었습니다.") from error
 

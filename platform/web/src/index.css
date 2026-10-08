@@ -1,13 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  /* 색 규칙 (SPEC v2 §8-4) — 하나 브랜드 재정의: Bedrock 영역=Hana Green, VPC 내부=Hana Gold */
-  --cloud: #008485;        /* Hana Green (Pantone 327C) */
-  --onprem: #8a7947;       /* Hana Gold(#AD9A5F)의 본문 대비 강화 톤 */
+  /* 색 규칙 (SPEC v2 §8-4) — 고객사 A 브랜드 재정의: Bedrock 영역=Brand Green, VPC 내부=Brand Gold */
+  --cloud: #008485;        /* Brand Green (Pantone 327C) */
+  --onprem: #8a7947;       /* Brand Gold(#AD9A5F)의 본문 대비 강화 톤 */
   --onprem-soft: #AD9A5F;
   --ok: #0e9f6e;
-  --hana: #008485;
-  --hana-red: #E90061;     /* Hana Red (Pantone 206C) — 오류·차단 */
+  --bank: #008485;
+  --bank-red: #E90061;     /* Brand Red (Pantone 206C) — 오류·차단 */
   --bg: #f4f7f6;           /* 밝은 민트 그레이 */
   --panel: #ffffff;
   --line: #dde5e3;
@@ -138,8 +138,8 @@ body {
   0%   { left: 2px; opacity: 0; background: var(--vpc); box-shadow: 0 0 6px var(--vpc); }
   8%   { opacity: 1; }
   46%  { left: calc(50% - 6px); background: var(--vpc); }
-  52%  { background: var(--hana-red); box-shadow: 0 0 8px var(--hana-red); }
-  90%  { left: calc(50% - 6px); background: var(--hana-red); opacity: 1; }
+  52%  { background: var(--bank-red); box-shadow: 0 0 8px var(--bank-red); }
+  90%  { left: calc(50% - 6px); background: var(--bank-red); opacity: 1; }
   100% { left: calc(50% - 6px); opacity: 0; }
 }
 @keyframes bx-stay {
@@ -156,7 +156,7 @@ body {
 .mdbox .mdp { margin: 2px 0; }
 .mdbox .mds { height: 8px; }
 .mdbox .mdh { color: #103a36; margin: 12px 0 4px; font-size: 15px; font-weight: 700;
-  border-left: 3px solid var(--hana); padding-left: 8px; }
+  border-left: 3px solid var(--bank); padding-left: 8px; }
 .mdbox h3.mdh { font-size: 16px; }
 .mdbox strong { color: #0b2f2b; }
 .mdbox em { color: #0f766e; font-style: normal; }

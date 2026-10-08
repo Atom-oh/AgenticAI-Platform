@@ -19,7 +19,7 @@ def studio(method: str, path: str, token: str = "", body: dict | None = None, ti
     if data is not None:
         headers["x-amz-content-sha256"] = hashlib.sha256(data).hexdigest()
     if token:
-        headers["x-hana-auth"] = token
+        headers["x-bank-auth"] = token
     req = urllib.request.Request(STUDIO_URL + path, data=data, headers=headers, method=method)
     try:
         return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())

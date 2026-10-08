@@ -4,7 +4,7 @@ import pytest
 from moto import mock_aws
 
 SAMPLE = {
-    "name": "Hana DS",
+    "name": "Bank DS",
     "document": {"children": [
         {"name": "Design Tokens", "type": "CANVAS", "children": [
             {"type": "RECTANGLE", "name": "color/primary",
@@ -20,7 +20,7 @@ def aws(monkeypatch):
     monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-2")
     monkeypatch.setenv("ASSETS_BUCKET", "assets")
     monkeypatch.setenv("REGISTRY_TABLE", "registry")
-    monkeypatch.setenv("FIGMA_SECRET_ID", "hana/figma-token")
+    monkeypatch.setenv("FIGMA_SECRET_ID", "bank/figma-token")
     with mock_aws():
         s3 = boto3.client("s3", region_name="ap-northeast-2")
         s3.create_bucket(Bucket="assets",
@@ -31,7 +31,7 @@ def aws(monkeypatch):
                          AttributeDefinitions=[{"AttributeName": "asset_id", "AttributeType": "S"}],
                          BillingMode="PAY_PER_REQUEST")
         sm = boto3.client("secretsmanager", region_name="ap-northeast-2")
-        sm.create_secret(Name="hana/figma-token", SecretString="figd_test")
+        sm.create_secret(Name="bank/figma-token", SecretString="figd_test")
         yield s3, ddb
 
 

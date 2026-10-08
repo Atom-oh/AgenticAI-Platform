@@ -16,7 +16,9 @@ Exact versions: React/ReactDOM 18.3.1, TypeScript 5.6.3, esbuild 0.25.12,
 
 - `ui/index.tsx`: real named exports listed below; generated code imports from `@studio/approved-ui`.
 - `ui/tokens.css`: authoritative styles/tokens. Generated code cannot replace this file or supply CSS.
-- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.0.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
+  Every `font-size` is `calc(var(--studio-text-scale, 1) * <n>px)`; unitless line-heights are unchanged, so the kit
+  is identical at scale 1. Only the verifier sets `--studio-text-scale` (engine plan E12a).
+- `catalog.json`: `{schemaVersion:1,id:"studio-ui",version:"1.2.0",label:"플랫폼 기본 React 컴포넌트",components:[...]}`.
   Each component has `{name,description,props,variationAxes}`. `props` is descriptive data; actual TS types are the compiler authority.
 - `manifest.cjs`: `catalog()` returns descriptor plus `{hash,files:[{path,sha256}]}` calculated from actual `ui/*` and catalog bytes.
   `hash` is SHA256 of canonical JSON of sorted file hashes. It excludes generated timestamps and node_modules.
@@ -83,7 +85,35 @@ Compilation does not execute generated module code, user configuration or packag
 A `kind="react"` task runs compilation in the credential-free browser child, then
 the behavioral/a11y/image verifier checks the actual static bundle. The response contains build fields and browser report.
 `evaluate_html` remains compatible; `evaluate_bundle` fulfills only exact local bundle URLs in memory and denies every other request.
+`evaluate_html`/`evaluate_bundle(..., text_scale=1.0)`: a scale in 1..3 other than 1 sets `--studio-text-scale` through the
+verifier's init script and adds `largeText: {status, overflow:[testId], unscaled:[testId]}` (tagged elements that overflow,
+and tagged elements whose text did not scale). A failed or unmeasured large-text pass is a blocking finding. The 1.1.0
+catalog bump changes `catalogHash`, so runs approved under 1.0.0 become historical.
+The exported runner (`templates/flow.test.cjs`, E12b) matches the verifier for `expectVisible false`: it polls the
+target count up to the step timeout; 0 passes (a conditionally unmounted node), 1 must not be visible, more than 1
+fails with "Unique target required". The 1.2.0 catalog bump records this runner change.
+
+Engine-derived contracts (`design_loop/contract.py`, engine plan E13) are composition-independent and frozen at
+flow approval. Targets come only from `design_loop.convention.Registry`: the page root `<pageId>`, `k<p>-cta`,
+`k<p>-f<n>`, `k<p>-n<n>`, `k<p>-f<n>-o<j>`, `case-select` (the generated App's `검증용 케이스` Select, options
+`<caseIndex>:<screenId>:<state>[:empty]`) and `flow-finished`. `derive` returns one normalized contract or the
+critical findings `contract-capacity`, `published-page-missing`, `visibility-unverifiable` or
+`contract-unsupported`, never a partial contract. Every compile, repair and Browser run uses that exact contract.
 Do not silently replace a failed React build with HTML or a stub.
+
+Engine handoff package (`design_loop/handoff.py`, engine plan E17; offline and unwired until C). The customer
+screen id comes from `Registry.assign` (`<area>-<num>` under the synthetic `seed/design_poc/convention.json`; the
+tenant copy is private) and is compiled into each page as `export const meta = {sid, type, dver, status, level1,
+level2, level3} as const;`. `handoff.build(release source.zip, layout, manifest_fields=...)` places every release
+`source.zip` entry byte-identical under `project/` (nothing is relocated, so the policy and relative imports hold),
+adds `convention/screens.json` (`project/src/pages/<slug>.tsx` → `{sid, type, dver, status, levels,
+conventionPath, state, sha256}`), `convention/apply.cjs`, `manifest.json` (`approvalHash`, `releaseId`,
+`sourceHash`, `bundleHash`, `sourceZipSha256`, `componentPackage: "@studio/approved-ui"`,
+`customerPackage: "not-verified"`), `CHANGES.md` and `verification-report.json`. It refuses a `sourceHash` that
+differs from the entries, an unmapped page, a page whose compiled meta sid differs from the layout, and duplicate
+convention paths. The ZIP is deterministic, at most 512 entries and 40 MiB. The customer applies the physical path
+layout after approval with `convention/apply.cjs`, which type-checks the relocated layout with its own
+`convention/tsconfig.json`; the project's `npm run typecheck` covers only `src/`.
 
 ## Projects, scoped access and planning
 
@@ -153,6 +183,68 @@ Implemented by `workspace/http.py`, `batches.py`, `releases.py`, and `git_servic
   It makes no AI call and compares the rebuilt page against the approved screenshot
   at tolerance `0.02`; this does not prove fidelity to an original design image.
 - GET `/releases/:id` and `/releases/:id/blob?kind=source|dist|manifest|report` expose authorized results.
+- Round and release bytes share one delivery gate (`Sources.round_delivery`,
+  `ONTOLOGY_CONTRACT.md` "Source authority"): every chunk of
+  `/runs/:id/blob?kind=html|screenshot|diff|report|source|dist|candidate`, every
+  `/releases/:id/blob` chunk, `/runs/:id/baseline` and `/releases/:id/git` apply the
+  publishing-handoff/1 round-state content permission and the upstream-lineage
+  permission checks; a restricted state or revoked upstream is `404 not-found`.
+  The same reader rechecks every observed version and deadline after each chunk's
+  bytes are read and before the chunk is returned.
+- Authorization precedes artifact validation, and missing and inaccessible runs,
+  rounds, releases and baselines return the byte-identical body
+  `404 {"code":"not-found","error":"Resource not found"}`; `409 baseline-unavailable`
+  is returned only to a caller authorized for that round.
+- Content-bearing JSON routes use the same reader in a project scope:
+  `GET /contracts/:id` (`Sources.contract_access`: bound `assetIds` and baseline
+  still permitted), `GET /runs/:id` (`Sources.run_access`: run-level lineage; rounds
+  whose own admission lineage is revoked, or whose publishing-handoff/1 state
+  (draft/failed/needs-changes) is restricted from the caller's role, are omitted), `GET /releases/:id`, the
+  `/contracts`, `/runs` and `/releases` listings and `/batches/:id` runs. An
+  inaccessible record is `404 not-found` or omitted; listings page only authorized
+  rows with an opaque `pagecur-…` cursor (5-minute `ontology_cursor` record bound
+  to actor, role, project, authority epoch, listing and `limit`, default 100;
+  `409 list-cursor-stale` otherwise).
+- One response gate (`workspace.http.ResponseGate`) serves every project-scoped
+  workspace and publication route. `workspace.http.ROUTES` is the complete route
+  inventory; `match_route` dispatches nothing else, and every route declares the
+  authorized views its JSON fields or blob bytes are serialized through
+  (`tests/test_response_gate.py` fails for an unregistered route or view). Before
+  processing, the addressed resource (asset, contract, run, release, job, batch)
+  and any run-round target (`/runs/:id/blob`, `/runs/:id/baseline`,
+  `/runs/:id/approve`, `POST /releases`) are authorized; afterwards every embedded
+  record is re-read and serialized through its view (`asset_access`,
+  `contract_access`, `run_access` with revoked rounds omitted, round delivery,
+  job inputs, publication/grant visibility), each on a probe reader absorbed into
+  one aggregate reader. ONE final aggregate recheck (plus retained destination
+  readers for publication impact) runs after all storage reads, including each
+  blob chunk, immediately before the response is returned. An inaccessible
+  singular record is the same `404` as a missing one, inaccessible list rows are
+  omitted, and an undeclared response field fails closed (`503`). Contract and
+  run approvals are fenced by that authorization: every version the gate observed
+  joins the approval transaction and each attempt first reruns the aggregate
+  recheck (currency, expiry, historical references), so a revocation before
+  storage persists no approval. Upload, workbench,
+  document and intake jobs keep their own module authority; the delegated prefixes
+  (`http.DELEGATED`) are listed by name.
+- Queued `propose`/`run` generation and `release` rebuild jobs are gated at
+  execution by `ontology_sources.job_lineage` (recorded actor's current authority and
+  the same lineage checks) before any model call or rebuild, and the same reader is
+  rechecked before the outcome (job completion / release `ready`) is recorded.
+  Inside the generation, repair and rebuild loops every model call and protected
+  service call (browser verifier, React build) goes through one wrapper
+  (`ontology_sources.protected_calls`) that rechecks the retained reader
+  immediately before the call; a revoked input refuses the call
+  (`ProtectedCallRefused`) and fails the job without further rounds.
+- The queued Git export worker (`git_service.process_export`) rebuilds the recorded
+  actor's current `export` scope (`ontology_sources.job_reader`), reruns the same
+  round-delivery lineage check at execution and rechecks that reader after reading
+  the source archive, immediately before the external exporter call. The same
+  retained reader travels into the exporter (`export_release(..., guard=
+  ontology_sources.authority_guard(reader))`): every outbound request — metadata
+  reads, each content (blob/tree/commit) transfer and the branch publication, and
+  every local repository write — rechecks it first, and a refusal fails the export
+  before any further transfer.
 - Release record includes sourceHash,bundleHash,catalogHash,contractHash,guidelineId,approval,rebuildEvidence,status.
 - GET `/git-connections` exposes configured connection IDs/labels/repository visibility only; no credentials.
 - POST `/releases/:id/git` `{connectionId,requestId}` starts authorized feature-branch export.

@@ -14,6 +14,7 @@ import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { denyIntakeAdministrationWrites, intakeConfigured, intakeDeploymentScope } from './intake';
 
 export interface StudioWorkspaceProps {
   apiCode: lambda.Code;
@@ -27,6 +28,8 @@ export interface StudioWorkspaceProps {
 }
 
 export class StudioWorkspace extends Construct {
+  public readonly recordsTable: dynamodb.Table;
+
   constructor(scope: Construct, id: string, props: StudioWorkspaceProps) {
     super(scope, id);
     const stack = cdk.Stack.of(this);
@@ -96,6 +99,7 @@ export class StudioWorkspace extends Construct {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+    this.recordsTable = table;
     const renderVpc = new ec2.Vpc(this, 'RenderVpc', {
       ipAddresses: ec2.IpAddresses.cidr('10.79.0.0/24'),
       maxAzs: 2, natGateways: 0, createInternetGateway: false,
@@ -209,6 +213,32 @@ export class StudioWorkspace extends Construct {
       ],
     }));
     browser.grantInvoke(workerRole);
+    // source-admission/1: the intake-image task runs the residual scan in the Worker.
+    // The private deny-list is an SSM SecureString named by context; without it
+    // the Worker has no deny-list and image admission blocks (denylist-unavailable).
+    // The deployment scope is set below for the API and Worker together. Without any
+    // intake context the template is unchanged (no main-stack delta until B1).
+    const intakeDenylistParam = this.node.tryGetContext('intakeDenylistParam');
+    if (intakeDenylistParam !== undefined) {
+      if (typeof intakeDenylistParam !== 'string' || !/^\/[A-Za-z0-9_.\/-]{1,1000}$/.test(intakeDenylistParam)) {
+        throw new Error('intakeDenylistParam must be an SSM parameter name starting with "/"; values are never inlined.');
+      }
+      worker.addEnvironment('INTAKE_DENYLIST_PARAM', intakeDenylistParam);
+      workerRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [`arn:${stack.partition}:ssm:${stack.region}:${stack.account}:parameter${intakeDenylistParam}`],
+      }));
+      const intakeDenylistKeyArn = this.node.tryGetContext('intakeDenylistKeyArn');
+      if (intakeDenylistKeyArn !== undefined) {
+        if (typeof intakeDenylistKeyArn !== 'string' || !/^arn:[a-z0-9-]+:kms:[a-z0-9-]+:\d{12}:key\/[A-Za-z0-9-]+$/.test(intakeDenylistKeyArn)) {
+          throw new Error('intakeDenylistKeyArn must be the customer-managed KMS key ARN of the deny-list parameter.');
+        }
+        workerRole.addToPolicy(new iam.PolicyStatement({
+          actions: ['kms:Decrypt'], resources: [intakeDenylistKeyArn],
+          conditions: { StringEquals: { 'kms:ViaService': `ssm.${stack.region}.amazonaws.com` } },
+        }));
+      }
+    }
     const apiLogs = new logs.LogGroup(this, 'ApiLogs', {
       retention: logs.RetentionDays.ONE_WEEK, removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
@@ -239,6 +269,20 @@ export class StudioWorkspace extends Construct {
       actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:ConditionCheckItem'],
       resources: [table.tableArn],
     }));
+    // source-admission/1: with any intake context, the Workspace API (reviewer routes,
+    // document admission) and the Worker (intake-image) share IntakeAdminFn's scope.
+    if (intakeConfigured(this.node)) {
+      const intakeDeployment = intakeDeploymentScope(this.node, stack);
+      apiFn.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
+      worker.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
+    }
+    // source-admission/1: only IntakeAdminFn writes the intake:deployment partition.
+    // Added with any intake context, so the default (intake-off) template is unchanged
+    // and check_infra requires the Deny whenever intake is configured.
+    if (intakeConfigured(this.node)) {
+      denyIntakeAdministrationWrites(apiRole, table);
+      denyIntakeAdministrationWrites(workerRole, table);
+    }
     apiRole.addToPolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:ListUsers'],
       resources: [stack.formatArn({ service: 'cognito-idp', resource: 'userpool',

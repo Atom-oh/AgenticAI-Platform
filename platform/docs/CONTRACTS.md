@@ -291,3 +291,97 @@ Extend existing run/round/release/Git interfaces with exact context and observed
 service receipts. The [design](ARCHITECTURE.md) maps the integration sequence;
 the [acceptance cases](ONTOLOGY_AGENTCORE_VALIDATION.md) define its verification.
 The default backend and graph mode remain legacy until their applicable gates.
+
+### Execution ledger storage and reserved jobs
+
+The storage kinds `exec_report`, `exec_request`, `exec_quota` and `exec_due`
+belong to `platform-execution/1`. See the record fields in
+[`workspace/AGENTCORE_CONTRACT.md`](../workspace/AGENTCORE_CONTRACT.md). An
+`exec_report` is a metadata-only record of a refused legacy write. It is
+delivered to the IAM-only reconciler through an `exec_due` entry.
+
+Every legacy `POST` route that creates a job goes through `WorkspaceAPI._new_job`.
+Those routes reject a reserved task (`agentcore-execution`) with
+`400 reserved-task`.
+
+Legacy workers, stale-job expiry, dispatch-failure handling, `_mark_failed` and
+analysis/document read repair never change these records:
+
+- a reserved job
+- an artifact marked for new execution
+- an artifact whose stored job is reserved
+
+Each refusal is reported and returns the record unchanged. A legacy write to a
+linked artifact also checks, in the same transaction, that the stored linked
+job is unchanged since the guard read it; a job that becomes reserved in
+between makes the write fail with a conflict.
+
+An unmarked record whose legacy-format job (not an `exec-` id) is missing, for
+example after the 30-day job retention TTL, keeps its legacy behavior: human
+document review and legacy repair continue, with the job's absence fenced in
+the same transaction. A missing `exec-` job is treated as reserved. The
+reconciler only closes refusal reports; it never mutates an unmarked legacy
+record or rewrites a document lifecycle state.
+
+## Source admission (`source-admission/1`)
+
+Private intake (`intake/*`) owns source admission and de-identified derivatives;
+the binding details are in
+[`workspace/AGENTCORE_CONTRACT.md`](../workspace/AGENTCORE_CONTRACT.md) (`source-admission/1`).
+Offline code and tests exist; no route or function is deployed by this record.
+
+| Method / path | Input / output |
+|---|---|
+| GET `/studio-api/intake/reviews` | JWT access token, `X-Workspace-Project`, and a current IAM-administered reviewer grant → `{reviews: [{id, revision, source: {sourceKind, sourceId, revision}, title, dataClass, artifactKind, pageCount, inspection: {pages, chars, pii, identifiers, blocking}, derivativePreview, image?, tables?, expiresAt}]}`; only `pending-review` decisions the actor may review (grant **and** current source access); the preview is derivative text only, serialized by artifact kind: document pages/prompt text show the first derivative page, code collections their derivative paths, images their verified OCR text plus `image: {decisionId, format, width, height, sha256, visionSha256, size}` (a reference, never bytes), transcriptions their normalized text plus bounded `tables`; an unreadable derivative is skipped, not a queue failure |
+| POST `/studio-api/intake/reviews/{decisionId}` | `{approve: boolean, reason}` (closed fields; the reason is not stored) → `{decision: {id, revision, status, expiresAt}}`; `403 review-grant-required` / `source-access-required`, `409 decision-not-pending` / `policy-changed` / `conflict` |
+
+These routes confer no administration: no workspace/project API creates, edits or
+activates a policy, provenance registration, reviewer grant or resolver profile.
+In-app `platform-operators`/`admin` groups confer nothing.
+
+Storage kinds: `adm_policy`, `adm_provenance`, `adm_grant`, `adm_resolver` and
+`adm_audit` live in the owner partition `intake:deployment`; `adm_decision` lives
+in the project partition `project:<id>`. Derivative pages, inspection receipts,
+code-collection index/files/mapping, prompt text and image/vision derivatives are
+private blobs under `Storage.key_for(owner, "adm_decision", <id>, ...)`.
+The Worker task `intake-image` (job target `adm_decision.decisionId`) produces
+image decisions atomically with its job completion.
+
+The IAM-only administration Lambda (`intake/admin_handler.py`) also owns the
+organization `design_publish`/`policy_publish` capabilities used by shared
+publications: `grant_capability` (record `{id, actor, name, expiresAt}`) and
+`revoke_capability` (`{id, expectedRevision}`). Kind `capability` lives in
+`intake:deployment` with an `adm_audit` event per write. No workspace route
+creates or activates a capability; project ownership confers none.
+The same entry point owns organization-sharing source policies (kind
+`adm_sharing` in `intake:deployment`): `grant_sharing` (record `{id, projectId,
+source: {sourceKind, sourceId, revision, sha256}, audience: "organization",
+expiresAt}`, where `id` must equal `records.sharing_policy_id(projectId, source)`;
+re-issue with `expectedRevision` creates a new revision) and `revoke_sharing`
+(`{id, expectedRevision}`). One policy admits exactly one origin source revision
+(`asset`, `document-revision` or `product-guideline`) to organization publication.
+
+## Shared publications
+
+Shared-publication authority and the `published-asset` source adapter follow
+[`workspace/AGENTCORE_CONTRACT.md`](../workspace/AGENTCORE_CONTRACT.md)
+"Shared-publication authority". Offline code and tests exist
+(`workspace/publications.py`, `tests/test_publications.py`); no route is deployed by this record.
+All routes require a JWT access token and `X-Workspace-Project`; a publication the
+caller cannot use returns the same `404 not-found` as a missing one.
+
+| Method / path | Input / output |
+|---|---|
+| POST `/studio-api/publications` | Origin project; `{kind: "design"\|"policy", nodeIds, revisionBindings: {nodeId: {revision, contentHash}}}` (closed fields). Design: owner/designer; policy: owner/planner. Every node must be a current, readable, `approved` origin node at the bound revision whose sources are publishable (`asset`, `document-revision`, `product-guideline`, `package`, no `allowedRoles`) and, except `package`, each covered by a current `adm_sharing` policy → `201 {publication: {id, originProject, kind, revision, nodes, sharing: [{policyId, revision}], hash, status: "proposed", recallNeeded}}`. A changed binding or sharing-policy revision of the same node set is a new revision; `409 publication-source-policy-required` without a policy. Proposal and approval record `ontologyGeneration` and fence the ontology manifest (`ontology`/`project-current` version) read with the nodes; a later ontology change fails the transaction (`409 ontology-changed`/`conflict`). A changed binding of the same node set is a new revision; `409 publication-binding-stale` / `publication-restricted-source` / `publication-withdrawn`, `422 publication-node-kind` |
+| POST `/studio-api/publications/{id}/approve` | Origin project; `{}`. Requires a current `capability` for the actor (`design_publish` or `policy_publish`) **and** origin source authority (source-owner role that can still read every bound node) → `{publication: {..., status: "published", approvedBy, capability: {id, revision}}}`. The capability's version, status and expiry are rechecked by the storage transaction guard immediately before submission (`workbench/service.check_source_deadlines`); `403 publication-capability-required` / `publication-authority-required` |
+| POST `/studio-api/publications/{id}/grants` | Destination project owner; `{roles}` → `201 {grant: {id, publicationId, publicationRevision, publicationHash, originProject, destinationProject, roles, revision, status}, reference}` where `reference` is the `published-asset` source reference. A new publication revision needs a new grant; changed roles bump the grant revision |
+| POST `/studio-api/publications/{id}/withdraw` | Origin owner or the approving publisher; `{}` → `{publication: {..., status: "withdrawn", recallNeeded: boolean}}`. Destination IDs stay internal recall metadata. First and replayed responses omit `nodes`/`sharing` unless the caller can currently read every bound source; a replayed approval of a published revision requires the same source access (`403 publication-authority-required`) |
+| GET `/studio-api/publications` | `?view=origin` (default): this project's publications the caller can currently read (same source check as detail); `?view=granted`: this project's active grants that name the caller's current role and still pass the upstream check (a grant excluding the role is omitted, including for the destination owner). Paged with `limit` (1–100) and an opaque `cursor` (`pubcur-…`): a random ID of an `ontology_cursor` record in the caller's project partition, bound to actor, role, project, authority epoch, view and `limit`, expiring after five minutes; storage keys stay server-side and hidden rows never supply continuation (`409 publication-cursor-stale` otherwise). The origin view scans only its own ID prefix (`pub-<origin digest>-…`) |
+| GET `/studio-api/publications/{id}` | Origin members who can currently read every recorded node source (`Sources.authorize`), or destination members whose role the latest active grant names while that grant passes the `published-asset` adapter's historical checks (grant ∩ current upstream audience); a destination receives only that granted revision's snapshot metadata. Otherwise `404 not-found` |
+| GET `/studio-api/publications/{id}/impact` | Origin members → `{publicationId, dependents: [{projectId, nodeIds}], coverage: {complete: false, unknown: ["restricted-or-unmapped"]}}`; only destinations where the caller is a current member able to read the dependents, no hidden IDs or counts |
+
+Storage kinds: `publication` in the owner partition `publication:deployment` (IDs carry a per-origin prefix)
+(revision history and immutable per-revision snapshot blobs under
+`Storage.key_for("publication:deployment", "publication", <id>, "revisions/<n>.json")`);
+`pub_grant` in the destination partition `project:<id>`; `capability` in
+`intake:deployment`.

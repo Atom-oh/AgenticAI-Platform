@@ -171,7 +171,7 @@ test('synthetic examples edit the query, and selected allowlist model stays sepa
   }] });
   const query = page.getByLabel('상담 질문', { exact: true });
   for (const [name, expected] of [
-    ['합성 예시: 이름·주소', /김하나.*서울.*가상로/],
+    ['합성 예시: 이름·주소', /홍길동.*서울.*가상로/],
     ['합성 예시: 전화·이메일', /010-0000-0000.*mydata@example\.invalid/],
     ['합성 예시: 계좌·금액 보존', /123-456789-01234.*1,250,000원.*3\.5%.*12개월/],
   ]) {

@@ -1,4 +1,6 @@
+import json
 import pathlib
+import re
 
 import aws_cdk as cdk
 from aws_cdk import (
@@ -16,13 +18,41 @@ from constructs import Construct
 ACCOUNT = "180294183052"
 
 
-class HanaUiuxPlatformStack(cdk.Stack):
+class BankUiuxPlatformStack(cdk.Stack):
     def __init__(self, scope: Construct, cid: str, **kw):
         super().__init__(scope, cid, **kw)
+        # Service IDs are allocated after this base stack. Bootstrap grants
+        # are restricted to this application's named resource families; a
+        # subsequent synth can pin the observed ARNs exactly.
+        prefix = f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:"
+
+        def service_resource(key, kind, family):
+            value = self.node.try_get_context(key)
+            if value is None:
+                return prefix + kind + "/" + family + "-*"
+            parts = value.split(":", 5) if isinstance(value, str) else []
+            if (len(parts) != 6 or parts[:3] != ["arn", "aws", "bedrock-agentcore"]
+                    or parts[3:5] != [self.region, self.account] or not parts[5].startswith(kind + "/")
+                    or any(c in value for c in "*?")):
+                raise ValueError(f"{key} must be an exact ARN in this stack's account and region")
+            return value
+
+        runtime_arn = service_resource("runtimeArn", "runtime", "bank_design_harness")
+        memory_arn = service_resource("memoryArn", "memory", "bank_design_memory")
+        region_only = {"StringEquals": {"aws:RequestedRegion": self.region}}
+        model_resources = self.node.try_get_context("modelResources") or []
+        if isinstance(model_resources, str):
+            model_resources = json.loads(model_resources)
+        if not isinstance(model_resources, list) or any(not isinstance(arn, str) or
+                not re.fullmatch(r"arn:aws:bedrock:[a-z0-9-]+:(?:[0-9]{12})?:(?:foundation-model|inference-profile|application-inference-profile)/[^*?]+", arn)
+                for arn in model_resources):
+            raise ValueError("modelResources must contain exact observed Bedrock model/profile ARNs")
+        if any(arn.split(":", 5)[4] not in ("", self.account) for arn in model_resources):
+            raise ValueError("Model profiles must belong to this deployment account")
 
         def bucket(name):
             return s3.Bucket(self, name.title().replace("-", ""),
-                             bucket_name=f"hana-{name}-{ACCOUNT}",
+                             bucket_name=f"bank-{name}-{ACCOUNT}",
                              block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
                              removal_policy=cdk.RemovalPolicy.DESTROY,
                              auto_delete_objects=True)
@@ -31,13 +61,13 @@ class HanaUiuxPlatformStack(cdk.Stack):
         skills = bucket("skill-registry")
         drafts = bucket("design-drafts")
 
-        registry = ddb.Table(self, "Registry", table_name="hana-design-registry",
+        registry = ddb.Table(self, "Registry", table_name="bank-design-registry",
                              partition_key=ddb.Attribute(name="asset_id",
                                                          type=ddb.AttributeType.STRING),
                              billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
                              removal_policy=cdk.RemovalPolicy.DESTROY)
 
-        history = ddb.Table(self, "History", table_name="hana-asset-history",
+        history = ddb.Table(self, "History", table_name="bank-asset-history",
                             partition_key=ddb.Attribute(name="asset_id",
                                                         type=ddb.AttributeType.STRING),
                             sort_key=ddb.Attribute(name="version",
@@ -45,7 +75,7 @@ class HanaUiuxPlatformStack(cdk.Stack):
                             billing_mode=ddb.BillingMode.PAY_PER_REQUEST,
                             removal_policy=cdk.RemovalPolicy.DESTROY)
 
-        figma_secret = sm.Secret(self, "FigmaToken", secret_name="hana/figma-token",
+        figma_secret = sm.Secret(self, "FigmaToken", secret_name="bank/figma-token",
                                  description="Figma PAT (operator-injected, temporary)",
                                  removal_policy=cdk.RemovalPolicy.DESTROY)
 
@@ -56,15 +86,15 @@ class HanaUiuxPlatformStack(cdk.Stack):
         common_env = {"ASSETS_BUCKET": assets.bucket_name,
                       "REGISTRY_TABLE": registry.table_name,
                       "SKILLS_BUCKET": skills.bucket_name,
-                      "FIGMA_SECRET_ID": "hana/figma-token"}
+                      "FIGMA_SECRET_ID": "bank/figma-token"}
 
         figma_sync = lambda_.Function(
-            self, "FigmaSync", function_name="hana-figma-sync",
+            self, "FigmaSync", function_name="bank-figma-sync",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="ingestion.figma_sync.handler", code=code,
             timeout=cdk.Duration.minutes(2), environment=common_env)
         asset_tools = lambda_.Function(
-            self, "AssetTools", function_name="hana-design-asset-tools",
+            self, "AssetTools", function_name="bank-design-asset-tools",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="mcp.asset_tools.handler", code=code,
             timeout=cdk.Duration.seconds(30), environment=common_env)
@@ -77,25 +107,25 @@ class HanaUiuxPlatformStack(cdk.Stack):
         registry.grant_read_data(asset_tools)
 
         dispatcher = lambda_.Function(
-            self, "Dispatcher", function_name="hana-generate-dispatcher",
+            self, "Dispatcher", function_name="bank-generate-dispatcher",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="dispatch.handler.handler", code=code,
             timeout=cdk.Duration.seconds(900),
             environment={"HISTORY_TABLE": history.table_name, "RUNTIME_ARN": ""})
         history.grant_read_write_data(dispatcher)
         dispatcher.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock-agentcore:InvokeAgentRuntime"], resources=["*"]))
+            actions=["bedrock-agentcore:InvokeAgentRuntime"], resources=[runtime_arn, runtime_arn + "/runtime-endpoint/*"]))
         # async (Event) invokes default to 2 retries on failure, which would re-run
         # (and re-bill) the AgentCore Runtime call that already failed once.
         dispatcher.configure_async_invoke(retry_attempts=0)
 
         pool = cognito.UserPool(
-            self, "Pool", user_pool_name="hana-uiux-platform",
+            self, "Pool", user_pool_name="bank-uiux-platform",
             self_sign_up_enabled=False,  # org policy: admin-created users only
             removal_policy=cdk.RemovalPolicy.DESTROY)
         domain = pool.add_domain("Domain", cognito_domain=cognito.CognitoDomainOptions(
-            domain_prefix=f"hana-uiux-{ACCOUNT}"))
-        server = pool.add_resource_server("Rs", identifier="hana-mcp", scopes=[
+            domain_prefix=f"bank-uiux-{ACCOUNT}"))
+        server = pool.add_resource_server("Rs", identifier="bank-mcp", scopes=[
             cognito.ResourceServerScope(scope_name="invoke", scope_description="invoke MCP")])
         m2m = pool.add_client("M2M", generate_secret=True, o_auth=cognito.OAuthSettings(
             flows=cognito.OAuthFlows(client_credentials=True),
@@ -126,7 +156,7 @@ class HanaUiuxPlatformStack(cdk.Stack):
             })
 
         feedback = lambda_.Function(
-            self, "Feedback", function_name="hana-draft-feedback",
+            self, "Feedback", function_name="bank-draft-feedback",
             runtime=lambda_.Runtime.PYTHON_3_13, architecture=lambda_.Architecture.ARM_64,
             handler="feedback.handler.handler", code=code,
             timeout=cdk.Duration.seconds(15),
@@ -146,9 +176,9 @@ class HanaUiuxPlatformStack(cdk.Stack):
         history.grant_read_write_data(feedback)
         dispatcher.grant_invoke(feedback)
         feedback.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock:ListInferenceProfiles"], resources=["*"]))
+            actions=["bedrock:ListInferenceProfiles"], resources=["*"], conditions=region_only))
         feedback.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock-agentcore:CreateEvent"], resources=["*"]))
+            actions=["bedrock-agentcore:CreateEvent"], resources=[memory_arn]))
         feedback_url = feedback.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
         # OAC needs BOTH InvokeFunctionUrl (added by the origin construct) and
@@ -169,33 +199,43 @@ class HanaUiuxPlatformStack(cdk.Stack):
             origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY)
 
-        gw_role = iam.Role(self, "GatewayRole", role_name="hana-agentcore-gateway",
-                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"))
+        gw_role = iam.Role(self, "GatewayRole", role_name="bank-agentcore-gateway",
+                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com", conditions={
+                               "StringEquals": {"aws:SourceAccount": self.account},
+                               "ArnLike": {"aws:SourceArn": prefix + "gateway/bank-design-assets-gw-*"}}))
         asset_tools.grant_invoke(gw_role)
 
-        rt_role = iam.Role(self, "RuntimeRole", role_name="hana-agentcore-runtime",
-                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"))
+        rt_role = iam.Role(self, "RuntimeRole", role_name="bank-agentcore-runtime",
+                           assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com", conditions={
+                               "StringEquals": {"aws:SourceAccount": self.account},
+                               "ArnLike": {"aws:SourceArn": runtime_arn}}))
         drafts.grant_read_write(rt_role)
         skills.grant_read(rt_role)
+        # Model availability/permissions must come from observed profile and
+        # foundation-model ARNs. An unconfigured model set gets no invoke grant.
+        if model_resources:
+            rt_role.add_to_policy(iam.PolicyStatement(
+                actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+                resources=model_resources))
         rt_role.add_to_policy(iam.PolicyStatement(
-            actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-            resources=["*"]))
+            actions=["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
+            resources=[f"arn:{self.partition}:ecr:{self.region}:{self.account}:repository/bank-design-harness"]))
         rt_role.add_to_policy(iam.PolicyStatement(
-            actions=["ecr:GetAuthorizationToken", "ecr:BatchGetImage",
-                     "ecr:GetDownloadUrlForLayer", "logs:CreateLogGroup",
-                     "logs:CreateLogStream", "logs:PutLogEvents",
-                     "xray:PutTraceSegments", "xray:PutTelemetryRecords",
-                     "cloudwatch:PutMetricData"],
-            resources=["*"]))
+            actions=["ecr:GetAuthorizationToken", "xray:PutTraceSegments", "xray:PutTelemetryRecords"],
+            resources=["*"], conditions=region_only))
         rt_role.add_to_policy(iam.PolicyStatement(
-            actions=["bedrock-agentcore:CreateEvent",
-                     "bedrock-agentcore:RetrieveMemoryRecords",
-                     "bedrock-agentcore:ListMemoryRecords"],
-            resources=["*"]))
+            actions=["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+            resources=[f"arn:{self.partition}:logs:{self.region}:{self.account}:log-group:/aws/bedrock-agentcore/runtimes/bank_design_harness-*"]))
+        rt_role.add_to_policy(iam.PolicyStatement(
+            actions=["cloudwatch:PutMetricData"], resources=["*"], conditions={"StringEquals": {
+                "aws:RequestedRegion": self.region, "cloudwatch:namespace": "bedrock-agentcore"}}))
+        rt_role.add_to_policy(iam.PolicyStatement(
+            actions=["bedrock-agentcore:CreateEvent", "bedrock-agentcore:RetrieveMemoryRecords",
+                     "bedrock-agentcore:ListMemoryRecords"], resources=[memory_arn]))
         rt_role.add_to_policy(iam.PolicyStatement(
             actions=["secretsmanager:GetSecretValue"],
             resources=[f"arn:aws:secretsmanager:{self.region}:{ACCOUNT}:secret:"
-                       f"hana/m2m-client-secret*"]))
+                       f"bank/m2m-client-secret-??????"]))
 
         discovery = (f"https://cognito-idp.{self.region}.amazonaws.com/"
                      f"{pool.user_pool_id}/.well-known/openid-configuration")
@@ -211,6 +251,8 @@ class HanaUiuxPlatformStack(cdk.Stack):
             "GatewayRoleArn": gw_role.role_arn, "RuntimeRoleArn": rt_role.role_arn,
             "FigmaSyncFn": figma_sync.function_name, "AssetToolsFnArn": asset_tools.function_arn,
             "HistoryTable": history.table_name, "DispatcherFn": dispatcher.function_name,
+            "FeedbackFn": feedback.function_name, "McpScope": "bank-mcp/invoke",
+            "ModelResources": json.dumps(model_resources),
             "SpaClientId": spa.user_pool_client_id,
         }.items():
             cdk.CfnOutput(self, name, value=value)
