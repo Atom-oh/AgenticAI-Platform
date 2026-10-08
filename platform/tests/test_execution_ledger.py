@@ -687,6 +687,38 @@ def test_scheduled_sweep_discovers_lost_leases_without_supplied_ids(env):
     assert all(row["status"] == "done" for row in storage.list(DUE_OWNER, "exec_due"))
 
 
+
+@pytest.mark.parametrize("kind,stage", [("model", "generate"), ("interpreter", "compile"), ("browser", "browser")])
+def test_long_call_remains_current_while_its_attempt_heartbeats(env, kind, stage):
+    storage, ledger, now = env
+    job = running(env)
+    call = ledger.tool().intent(*ids(job), stage=stage, kind=kind, min_remaining_ms=240_000,
+                                operation_id=op_id())
+    for _ in range(3):
+        now[0] += 60_000
+        ledger.tool().heartbeat(*ids(job))
+        ledger.reconciler().run_due()
+        current = storage.get(OWNER, "job", job["id"])
+        assert current["status"] == "running"
+        assert not current["unknownOutcome"]
+        assert current["calls"][0]["status"] == "intent"
+    result = ledger.tool().outcome(*ids(job), call["callId"], status="completed",
+        **({"service_session_id": "observed-session"} if kind != "model" else {}))
+    assert result["status"] == "running" and result["calls"][0]["status"] == "completed"
+
+
+def test_long_call_still_enters_recovery_after_heartbeats_stop(env):
+    storage, ledger, now = env
+    job = running(env)
+    ledger.tool().intent(*ids(job), stage="generate", kind="model", min_remaining_ms=240_000,
+                         operation_id=op_id())
+    now[0] += 60_000
+    ledger.tool().heartbeat(*ids(job))
+    now[0] += PROFILE_DEFAULT["leaseMs"] + 1
+    current = ledger.reconciler().sweep(OWNER, job["id"])
+    assert current["status"] == "recovery_required" and current["unknownOutcome"]
+
+
 def test_scheduled_sweep_of_a_live_heartbeating_job_reschedules_it(env):
     storage, ledger, now = env
     job = running(env)

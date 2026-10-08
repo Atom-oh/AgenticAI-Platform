@@ -1779,9 +1779,10 @@ class Ledger:
                                       extra={"unknownOutcome": job["unknownOutcome"] or unknown})
         elif job["status"] in ("dispatched", "running"):
             attempt = job["attempt"] or {}
-            hung = any(call.get("status") == "intent" and call["at"] + profile["leaseMs"] <= now
-                       for call in job["calls"])
-            if now >= attempt.get("leaseExpiresAt", 0) or hung:
+            # A pending call is not a lost outcome while its attempt keeps
+            # heartbeating. Service calls may outlast one lease interval; the
+            # execution deadline above and the actual lease remain the bounds.
+            if now >= attempt.get("leaseExpiresAt", 0):
                 return self._commit(owner, job, {**job, "status": "recovery_required", "recoveryAt": now,
                                                  "unknownOutcome": job["unknownOutcome"] or unknown})
         due = self.storage.get(DUE_OWNER, "exec_due", job["dueId"]) if job.get("dueId") else None

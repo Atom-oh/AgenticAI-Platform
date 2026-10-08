@@ -332,15 +332,21 @@ class Sources:
 
     @staticmethod
     def _round_states(run):
-        """The objective (role-independent) `round_state()` of every round on
-        `run`, in stable list order -- a pure function of the run's OWN
-        content, unaffected by which actor/role is observing it. Two reads
-        of the SAME run content always compute the SAME tuple here,
-        regardless of who observes it, so storing it in `self.observed` per
-        review 12 #1 never spuriously conflicts across different callers
-        remembering the same run for different reasons (round_delivery's one
-        round vs run_access's every round)."""
-        return tuple(round_state(run, row) for row in run.get("rounds", []) if isinstance(row, dict))
+        """Role-independent content/currency and round-visibility fence.
+
+        A historical access check cannot authorize rebinding a current source
+        after archive, output-type, lineage or source-content changes. Only
+        worker progress/measurement fields may advance without changing this
+        snapshot. Status still participates through each round's visibility.
+        """
+        progress_fields = {"version", "updatedAt", "status", "progress", "bestRound", "stopReason",
+                           "elapsedMs", "usage", "functionalStatus", "visualStatus", "contextWarnings"}
+        content = {key: value for key, value in run.items() if key not in progress_fields}
+        # Workspace criteria include fractional tolerances, so they are not
+        # restricted to the ontology node schema's integer-only JSON subset.
+        digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        return (digest, tuple(round_state(run, row) for row in run.get("rounds", []) if isinstance(row, dict)))
 
     def _remember(self, kind, record):
         check = self.ctx.check(kind, record)
@@ -399,9 +405,9 @@ class Sources:
         regresses) while the run itself stays perfectly accessible. Content
         already read/served from that round before this recheck runs must
         not be treated as still current just because the RUN is still
-        reachable -- so this also fails if any round's objective state
-        changed from what was originally observed, never substituting a
-        generic "still accessible" check for that content-specific one.
+        reachable. The frozen content/currency fingerprint and every round's
+        objective state must match; generic historical accessibility cannot
+        replace the original current-source conditions.
         """
         # Fails as `_not_found()` (404), not a distinguishable 409, in every
         # branch below: this helper can be reached from `absorb()` (a nested

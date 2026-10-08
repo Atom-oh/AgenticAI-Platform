@@ -1439,3 +1439,54 @@ def test_run_json_and_listings_apply_round_state_permission(env, design):
     row = next(item for item in listed["runs"] if item["id"] == failed["id"])
     assert row["rounds"] == []
     assert [r["number"] for r in http(env, "GET", f"/runs/{failed['id']}", actor="carol")[1]["run"]["rounds"]] == [1]
+
+
+@pytest.mark.parametrize("change", ["archive", "output-type", "source-hash", "contract-hash"])
+def test_run_current_source_recheck_never_advances_a_changed_content_fence(env, design, change):
+    import copy
+    run = react_run(env, design[1])
+    reader = Sources(ctx(env))
+    reader.resolve(run_round_reference(run, 1))
+    owner = f"project:{env.pid}"
+    fence = reader.observed[(owner, "run", run["id"])]
+    original_version = fence["version"]
+    changed = copy.deepcopy(run)
+    if change == "archive":
+        changed["archived"] = True
+    elif change == "output-type":
+        changed["outputType"] = "html"
+    elif change == "source-hash":
+        changed["rounds"][0]["sourceHash"] = "0" * 64
+    else:
+        changed["contractHash"] = "0" * 64
+    env.api.storage.put(owner, "run", changed, run["version"])
+    assert code(reader.recheck) == (404, "not-found")
+    assert fence["version"] == original_version
+
+
+def test_archiving_a_round_source_before_publication_cannot_advance_the_manifest(env, design, monkeypatch):
+    from test_ontology_schema import node
+    from workspace.ontology_store import Ontology
+    run = react_run(env, design[1])
+    ref = run_round_reference(run, 1)
+    graph = {"schemaVersion": 1, "projectId": env.pid, "edges": [],
+             "nodes": [node("screen-r", "Screen", project=env.pid, sourceRefs=[ref])]}
+    owner = f"project:{env.pid}"
+    before = env.api.storage.get(owner, "ontology", "project-current")
+    write = env.api.storage.put_blob_once
+    raced = []
+
+    def archive_during_indexes(key, data, mime):
+        result = write(key, data, mime)
+        if "index-nodes-" in key and not raced:
+            raced.append(True)
+            current = env.api.storage.get(owner, "run", run["id"])
+            env.api.storage.put(owner, "run", {**current, "archived": True}, current["version"])
+        return result
+
+    monkeypatch.setattr(env.api.storage, "put_blob_once", archive_during_indexes)
+    with pytest.raises(CollaborationError):
+        Ontology(ctx(env)).publish_candidate("archived-race", graph,
+            expected_generation=(before or {}).get("generation"), request_id="archived-race")
+    assert raced
+    assert env.api.storage.get(owner, "ontology", "project-current") == before
