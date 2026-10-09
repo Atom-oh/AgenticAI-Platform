@@ -333,7 +333,7 @@ See the implementation register for concrete paths, tests and remaining work.
 The Runtime adapter's `ac_execution`/`ac_operation` protocol is not the B0 ledger.
 `ontology_jobs.process` remains offline-only; installing a `RuntimeAnalyzer`
 object does not wire it into that worker or authorize cloud execution there.
-The unified new-ledger dispatcher and atomic `execution.finish` publication are
+The unified new-ledger dispatcher and atomic `execution.finish` publication were
 remaining integration work, not an exception to the one-writer requirement.
 
 B0's RUN tests do not complete the separate 23-case ontology/intake offline
@@ -396,3 +396,17 @@ Keep the legacy isolated verifier until jobs drain and rollback is demonstrated.
 Customer deployment remains a separate decision requiring real integration,
 frontend acceptance, security validation and authorized deployment. A ready
 publishing package, successful code review or source Git export does not grant it.
+
+## Unified source path update (2026-10-09)
+
+[Unified source execution](UNIFIED_SOURCE_EXECUTION.md) advances the B0/B1/C source
+slice described by the dated audit above. The new source API, real admission/prior
+resolver, registered KMS verifier, queue dispatcher, machine Gateway, Runtime
+workflow and trusted atomic publication adapter use the same reserved ledger.
+`ac_execution`/`ac_operation` are compatibility prototypes, not the configured
+application transport. Source lifecycle updates include marked artifacts.
+
+The prior table's remaining source-wiring items are now implemented in code;
+the deployment/live-gate, complete design-stage application and cohort/rollback
+requirements remain. The main stack retains its default configuration. Preserve
+the existing React canvas while implementing the later persisted design flow.

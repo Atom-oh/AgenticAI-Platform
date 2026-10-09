@@ -510,3 +510,25 @@ Offline analyzer tests run real Node code with no inherited AWS credentials.
 CI installs the pinned analyzer before Python integration tests and runs its
 own Node boundary suite. AgentCore, sharing, generation/release context binding
 and deployment acceptance remain separate required implementation work.
+
+## Admitted source execution amendment (2026-10-09)
+
+The [unified source path](../docs/UNIFIED_SOURCE_EXECUTION.md) adds the project
+`/ontology/executions` admission/status/cancel/retry API. It accepts a real admitted
+code-collection and uses the B0 ledger through Runtime and a machine Gateway tool.
+The existing files-based analyses route remains explicitly offline.
+
+`admitted-code` is a source kind: `sourceId` is the intake decision ID, `revision`
+is its string revision, `sha256` hashes the normalized collection index, and
+`audienceRevision` is `current-project-members-v1`. `location.path` identifies a normalized file.
+Current resolution requires the current admitted decision, policy, provenance or
+reviewer grant, original source authority and resolver. Historical authorization
+permits metadata only under current access; content uses current resolution.
+Raw names, original mappings and private object keys are not source-read results.
+
+`publish_candidate(_stage=True)` returns `{writes,checks,sourceRefs,result}` after
+validation and immutable blob preparation without a current-manifest write. An
+already published request marker is a staging conflict, not permission to write
+a terminal job later. Only the ledger composes and commits the source publication
+with the marked analysis artifact and signed completion. The trusted adapter is
+now implemented; no sequential publication/completion fallback is permitted.

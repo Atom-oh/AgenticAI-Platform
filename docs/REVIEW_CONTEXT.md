@@ -159,3 +159,11 @@ and atomic finish/publication integration remain required; legacy
 backend do not close that gap or prove a working application/cloud path.
 Review the implementation register against code without waiving the owning
 execution contract or promoting aggregate pytest counts to service-gate PASS.
+
+## 2026-10-09 source execution follow-up
+
+The design in `platform/docs/UNIFIED_SOURCE_EXECUTION.md` updates
+the source-wiring gap in the 2026-10-08 audit. New application/Runtime/IaC callers
+use B0, real intake/prior authority and coupled source publication. The old
+`ac_*` transport remains compatibility code. Assess the source-only implementation
+and tests separately from unrun live gates and unfinished design-stage UI wiring.

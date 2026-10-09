@@ -123,6 +123,19 @@ def route(host, scope, claims, method, parts, body, query):
             if not node or not ontology._visible_node(current, node, historical=True):
                 fail(404, "not-found", "읽을 수 있는 영향 분석 시작 노드가 없습니다.")
         return 200, _impact_views(ontology, current, body, raw_seeds)
+    if parts and parts[0] == "executions":
+        from ontology_runtime.execution_entrypoints import api_operation
+        from workspace.execution_ledger import LedgerError
+        try:
+            if parts == ["executions"] and method == "POST":
+                return 202, api_operation(ctx, "submit", body)
+            if len(parts) == 2 and method == "GET":
+                return 200, api_operation(ctx, "read", identifier=parts[1])
+            if len(parts) == 3 and method == "POST" and parts[2] in {"cancel", "retry"}:
+                return 200, api_operation(ctx, parts[2], body, parts[1])
+            fail(404, "not-found", "소스 분석 실행 경로를 찾을 수 없습니다.")
+        except LedgerError as error:
+            fail(409, error.code, "소스 분석 실행의 현재 승인 조건을 확인하세요.")
     if parts == ["analyses"] and method == "POST":
         from workspace.ontology_jobs import submit
         return 202, public(submit(ctx, body))

@@ -557,7 +557,7 @@ def verified(host, scope, decision_id, *, claims=None, sources=None, observe=Non
     return decision, data
 
 
-def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=None):
+def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=None, historical=False):
     storage, owner, project_id = host.storage, scope["owner"], _project(scope)
     decision = _load(host, scope, decision_id)
     if not records.is_current(decision, storage.clock()) or decision["status"] != "admitted":
@@ -578,7 +578,14 @@ def _verified(host, scope, decision_id, *, claims=None, sources=None, observe=No
             raise AdmissionError("grant-revoked")
         upstream.append(("adm_grant", grant))
     reader = sources or Sources(inspect.context(host, scope, claims))
-    _source_current(host, scope, decision, reader)
+    if historical:
+        # This mode is exposed only by the metadata-only snapshot authorizer.
+        # It does not authorize transfer or reuse of superseded originals.
+        if decision["artifact"]["kind"] != "code-collection":
+            raise AdmissionError("artifact-kind-unsupported", 422)
+        reader.authorize(dict(decision["source"]))
+    else:
+        _source_current(host, scope, decision, reader)
     data = _read_verified(storage, owner, decision["artifact"]["key"], decision["derivation"]["derivativeHash"],
                           "artifact-changed")
     if decision["artifact"]["sha256"] != decision["derivation"]["derivativeHash"]:
@@ -632,6 +639,14 @@ def _lineage_checks(host, scope, decision, reader, claims):
             or decision["derivation"]["originalHash"] != image["derivation"]["derivativeHash"]):
         raise AdmissionError("source-changed")
     return checks
+
+
+def authorize_snapshot(host, scope, decision_id, *, claims=None):
+    """Current permission for historical code-collection metadata, never bytes."""
+    decision, _, reader, checks = _verified(host, scope, decision_id, claims=claims, historical=True)
+    authority = Authority(host, reader, checks)
+    authority.recheck()
+    return decision, authority
 
 
 def verify(host, scope, decision_id, *, claims=None, sources=None, observe=None):

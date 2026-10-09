@@ -1,179 +1,77 @@
 # Dedicated ontology Runtime adapters
 
-This module implements the source-analysis execution path for implementation
-unit B in `platform/docs/ONTOLOGY_AGENTCORE_PLAN.md`. It does not enable the
-production backend or complete the generation/release cutover.
-
-Integration audit (2026-10-08): these adapters currently use their isolated
-`ac_execution`/`ac_operation` records. They do not call the B0
-`workspace.execution_ledger.Ledger`. The unified dispatcher and atomic
-job/artifact/graph `execution.finish` path are still required by
-`platform-execution/1`; a configured `RuntimeAnalyzer` is not a completed
-application execution path. See the [implementation register](../docs/ONTOLOGY_AGENTCORE_IMPLEMENTATION_STATUS.md).
+The source-only application path now uses `workspace.execution_ledger.Ledger`
+from admission through Runtime and atomic ontology publication. It remains off
+in the main stack unless explicitly configured. No live service gate or full
+application cutover is claimed. See the [unified source design](../docs/UNIFIED_SOURCE_EXECUTION.md)
+for API fields, protocol, persistence, recovery and validation scope.
 
 ## Execution and authority
 
-The authenticated workspace API creates a durable analysis artifact/job with
-the actor, project, source revisions, resolver, authorization expiry and selected
-backend. The required production path is a new-ledger Runtime execution under
-`AGENTCORE_CONTRACT` `platform-execution/1`. The legacy
-`workspace/ontology_jobs.py:process` stays offline-only. `RuntimeAnalyzer`
-provides a separate transport to the IAM execution-authority Lambda; its
-application dispatch and completion wiring remain gated as described above.
+`execution_entrypoints.py` constructs single-attempt storage, the registered
+KMS receipt verifier and actual admission/prior adapters. The authenticated API
+creates a reserved execution and marked analysis artifact and sends only their
+opaque reference to SQS. The IAM dispatcher allocates one attempt, signs its
+bounded capability and records dispatch intent before a single Runtime call.
+The versioned dispatcher and Runtime endpoint fix the selected deployment.
+Uncertain calls enter bounded recovery, never automatic paid replay.
 
-`Authority` rechecks project membership, source access, the selected tool archive
-and exact source classification. It creates a bounded execution ledger and a
-KMS-signed capability for one actor/project/attempt/Runtime session. A request ID
-or an execution ID alone is insufficient authorization. A dispatch marker
-prevents an implicit second Runtime execution for an uncertain first attempt.
+`execution_protocol.py` binds capability claims to the live B0 job and checks
+the authoritative capability key, Gateway binding, membership and expiry.
+`execution_tools.py` exposes one machine-only `execution` Gateway tool; it
+never accepts caller-selected owner/job/attempt identifiers. Model discovery
+excludes it. Capability/receipt-key versions join actual transactions.
 
-Runtime receives the capability over its IAM invocation. Fixed workflow code
-adds authorization to Gateway calls; model-facing schemas omit that envelope.
-The separate Gateway target validates the signature, active signing-key record,
-ledger binding, allowed operation, deadlines, current membership, source
-classification and source revisions on every tool call. Execution writes use
-conditional project/source checks without rewriting the project record. Runtime
-roles can write only the execution partition. Authority can create result objects
-only in its execution prefix. Neither role can alter sources or the key registry.
-Each protected call also binds the original artifact and running workspace job.
-Cancellation, terminal artifacts and admission-time membership changes reject
-further work. Coupled writes check those job/artifact versions, and tool commits
-retain the capability's shorter expiry. Execution and operation records retain
-their bounded DynamoDB TTL.
-Admission pins an immutable Authority Lambda version. That version selects a
-retained Runtime version endpoint; changing an unqualified function cannot move
-an admitted job to different code. Unknown transport outcomes carry
-`agentcore-outcome-unknown`, including possible billing, instead of ordinary
-success or automatic replay.
+`execution_workflow.py` claims once, heartbeats, transfers the normalized
+manifest through hash/ETag-bound chunks and invokes the fixed Interpreter.
+It records the observed session and signed context/analyze evidence, then
+asks the ledger to finish. `SourcePublication` stages graph/index blobs and
+combines graph, marker, artifact and terminal execution writes atomically.
+The watchdog discovers due jobs; the IAM reconciler can complete existing
+valid evidence without rerunning Interpreter. The source workflow calls no model.
 
-The source-analysis workflow obtains context/source data through Gateway, reads
-scoped structured Memory events, runs the pinned analyzer in Code Interpreter,
-signs its result with a distinct evidence key, records continuity hashes and
-finishes the ledger. Authority verifies that result before returning it to the
-workspace publisher. No model is called by this source-analysis workflow.
+The previous `authority.py`, `tools.py`, `workflow.py`, `dispatch.py` and `ac_*`
+record protocol remain isolated compatibility adapters. They are not the new
+Runtime/stack entrypoints. The files-based legacy ontology worker remains
+explicitly offline and cannot execute a new reserved job.
 
-## Identity and credential permissions
+## Identity and data boundaries
 
-Runtime uses IAM inbound authentication. Its automatically managed workload
-identity is recorded as deployment evidence. AWS does not allow that managed
-identity to request a token through the manual Identity token APIs.
+Runtime uses IAM inbound authentication and a dedicated Identity M2M workload
+for the separate JWT Gateway. Its role can broker only that provider's machine
+credential and read the provider's exact managed-secret ARN. The execution
+capability supplies the separate project/actor/attempt authorization. Tokens
+and secret values never enter logs, Memory, model prompts or stored artifacts.
 
-The stack therefore registers a separate machine workload for the dedicated
-Gateway. Runtime's role can request that workload's token and broker the
-configured OAuth client credential through Identity. The workload ARN is fixed
-in deployment configuration and signed execution claims; arguments cannot select
-another identity or credential provider.
+Runtime has no workspace S3/DynamoDB or Lambda invocation grant. Interpreter
+reads only its exact tool-archive version. The Gateway Lambda can stage
+workspace outputs and publication, with explicit IAM Denies on intake
+administration and key-registry partitions. The API can send to the exact queue
+but cannot sign capabilities or invoke Runtime. Bank Gateway, private plane,
+MyData and Registry capabilities are outside these roles.
 
-`GetResourceOauth2Token` also requires `secretsmanager:GetSecretValue` on the
-provider's backing secret. A deployment custom resource reads only the
-provider's secret ARN using `GetOauth2CredentialProvider`. Runtime receives
-permission for that exact ARN. It has no general Secrets Manager listing or
-reading permission. Tokens and secret values are not written to artifacts,
-Memory, model prompts, browser pages or logs.
+Only real admitted code-collections feed the new path. Intake normalizes source
+identifiers, paths and resolver/package names together, retains the private
+mapping, and rechecks policy/provenance/reviewer/source/resolver authority.
+Runtime receives only the admitted normalized payload. Graph file locations
+refer to that admitted collection, not the original ZIP namespace.
 
-Runtime can invoke the configured Interpreter, Browser and Memory resources and
-sign evidence. It cannot directly read the workspace source bucket/table or
-invoke Lambda tools. The Gateway role invokes only the separate ontology target.
-The target cannot sign capabilities/evidence, call bank model APIs, invoke the
-private plane/bridge or reset/write the shared Registry. The bank IAM Gateway
-and its customer-profile tools are separate resources.
-
-## Input, tooling and receipts
-
-Project read access is distinct from AgentCore admission. A project owner must
-record `synthetic`, `public` or `internal-non-sensitive` classification against
-an exact current source reference. Admission records have their own version
-fences. The ledger pins those exact record versions through completion.
-Private intake independently scans the actual text and metadata using the
-platform rule detector and records the detector/source hashes. Detected
-identifiers block admission; a cleaned derivative must be registered separately.
-The owner label is not a replacement for inspection. These rule checks are not
-a complete semantic PII certification.
-
-Source analysis transfers TS/TSX/JS/JSX/HTML/CSS/JSON text. Binary resources
-contribute path/hash descriptors only; this receipt never authorizes sending
-their original bytes. Image normalization and binary transfer remain separate
-cutover work. Changing source bytes/revision or the inspection profile requires
-another classification.
-
-`POST /ontology/sources/admission` is owner-only and accepts `requestId`,
-`sourceRef`, `classification`, `reason` and `decisionId`. `decisionId` names the
-private-intake `adm_decision` (`source-admission/1`) that admitted this exact
-source revision under the current policy; it must be `admitted`, current, of the
-same data class and policy revision, and its admitted derivative must equal the
-original bytes (`originalHash == derivativeHash`), because the Runtime transfer
-reads the source itself. A missing, blocked (for example `denylist-unavailable`),
-pending-review, expired or mismatched decision fails with
-`agentcore-admission-decision-required`; a normalized derivative fails with
-`agentcore-admission-derivative`. The decision id, revision, artifact hash and
-inspection hash are pinned on the record, and every dispatch, tool call,
-completion and cached replay re-verifies that exact decision through
-`intake.admission.verify` and fences its record versions. Separately from those
-transaction fences (`admissionFences`), the consumed decisions are bound as an
-immutable `admissions` list `[{decisionId, revision, artifactHash}]`
-(`platform-execution/1`; string revision, distinct decision ids) in the accepted
-job input, the execution request, the attempt ledger record and the signed
-Runtime receipt; each later boundary requires the same list. It returns `{admission}` with the
-source, classification, inspection and record version. The same source/request
-ID and exact body replay the existing inspected result; changing the body or
-inspection profile under that ID fails with `admission-request-changed`.
-Updates use conditional record versions and current source/project fences.
-
-A `document-pages` decision admits the source text only. The manifest paths and
-the selected resolver profile also reach the analyzer, so AgentCore submission
-privately inspects every decoded path and every resolver key and string value
-(recursively, never the serialized JSON) with the intake deny-list, running
-both `intake.inspect.inspect` and `intake.derivative.residual`
-(`contiguous=False`, as the code-collection admission inspects its paths and
-resolver). A deny-listed identifier, internal URL or rule-detected PII in any
-path or in the resolver fails with `agentcore-private-inspection`; an unavailable deny-list
-fails with `agentcore-private-inspection-unavailable`. Paths are refused, not
-normalized: Unit B has no admitted derivative of caller-supplied paths. The
-binding `transferInspection` (`{profile, receiptHash, manifestHash}`) is frozen
-into the accepted job input and the execution request; dispatch requires the
-outgoing paths/resolver to match `manifestHash` (`agentcore-input-changed`).
-
-AgentCore submission preflights the `ONTOLOGY_CONTRACT.md` transaction budget
-(ONT-10) on the complete deduplicated source-check set that dispatch, every
-tool call and completion fence: the source fences plus every check `require()`
-returns (classification, policy, provenance or grant, intake decision). With at
-most 7 non-source operations per path inside the contract's reserve of 10, that
-set may hold 90 checks (`SOURCE_CHECK_BUDGET`), so at most 30 sources
-(`MAX_SOURCES`) and, for synthetic or public inputs, 22 sources fit. A larger
-request is rejected unchanged with `execution-completion-scope`; dispatch, tool
-calls and completion rerun the same check before their commits.
-Submission and dispatch also preflight the `ontology-tools/1` limit of 60 tool
-calls: the workflow retrieves each manifest file separately (distinct paths
-that reference one admitted source still cost one `ontology.source` call each)
-and adds 4 control calls (context stage, `ontology.context`, analyzed stage,
-`execution.finish`), so at most 56 files (`MAX_FILES`) are accepted; a larger
-manifest is rejected unchanged with `execution-completion-scope` before any
-source read.
-
-Code Interpreter's role reads only the pinned S3 tool-archive object version.
-The adapter verifies archive/code/lock hashes and the observed architecture/
-Node major before using the trusted tool commands. Source modules, package
-hooks, arbitrary build configuration and model-authored commands are not run.
-Actual interpreter/session/tool/input hashes are retained in execution receipts.
-
-The Browser adapter uses authenticated automation against the configured
-isolated VPC browser. It delegates static-bundle fulfillment and checks to the
-existing verifier. It records the actual Browser version, viewport, adapter,
-verifier and axe hashes. Browser credentials never enter page resources. The module
-also provides compiler/browser adapters; source-analysis success alone is not
-compile, browser, generation, release or customer-workflow acceptance.
-
-Memory has no extraction strategies. It stores bounded structured continuity
-events and hashes under managed-HMAC organization/project/actor namespaces and
-execution sessions. Reads exclude superseded attempts. It does not grant
-source access or replace source/approval revalidation.
+The fixed Interpreter checks archive, parser, lock, architecture and Node major
+before executing trusted analyzer code. Submitted source, package hooks and
+arbitrary build commands are never executed. Browser/compiler adapters remain
+available for later design integration; source success does not prove those gates.
+Structured Memory stores hashes and keyed project/actor references, with no
+extraction strategy. It cannot authorize a source or substitute for current checks.
 
 ## Validation
 
-Use Python 3.12, the workspace requirements and the pinned infra dependencies:
+Use Python 3.12, the workspace requirements, `cryptography==50.0.1` for the
+independent test RSA oracle, and the pinned infra dependencies:
 
 ```bash
 PYTHONPATH=platform python -m pytest \
+  platform/tests/test_execution_integration.py \
+  platform/tests/test_execution_ledger.py \
   platform/tests/test_agentcore_capability.py \
   platform/tests/test_agentcore_identity.py \
   platform/tests/test_agentcore_authorization.py \

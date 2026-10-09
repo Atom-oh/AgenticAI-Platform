@@ -12,11 +12,12 @@ def prepare(platform, destination, axe):
     files = []
     for module in ("ontology_runtime", "intake", "workspace", "workbench", "documents", "engine", "studio", "graph"):
         files.extend(platform.glob(module + "/*.py"))
-    files.extend(platform.glob("api/common/*.py"))
     files.extend(path for path in (platform / "react-kit/ui").rglob("*") if path.is_file())
     files.extend(platform / "react-kit" / name for name in ("catalog.json", "package.json", "package-lock.json"))
     planned = [(source, "code/" + source.relative_to(platform).as_posix(),
                 source.relative_to(platform).as_posix()) for source in sorted(files)]
+    planned.extend((source, "code/common/" + source.name, "common/" + source.name)
+                   for source in sorted(platform.glob("api/common/*.py")))
     planned.extend([(axe / "axe.min.js", "code/workspace/axe.min.js", "workspace/axe.min.js"),
                     (axe / "LICENSE", "code/workspace/AXE_LICENSE", "workspace/AXE_LICENSE")])
     planned.extend((platform / "ontology_runtime" / name, name, "@build/" + name)

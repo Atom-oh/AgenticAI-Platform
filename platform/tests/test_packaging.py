@@ -126,8 +126,10 @@ def test_runtime_image_context_includes_intake_and_imports_authority(tmp_path):
     (axe / "LICENSE").write_text("synthetic license")
     context = prepare(PLATFORM, tmp_path / "context", axe)
     assert (context / "code" / "intake" / "admission.py").is_file()
+    assert (context / "code" / "common" / "costguard.py").is_file()
     result = _isolated(context / "code",
         "import ontology_runtime.authority, ontology_runtime.tools, intake.admission\n"
+        "import ontology_runtime.execution_entrypoints, ontology_runtime.execution_workflow, common.costguard\n"
         "assert intake.admission.__file__.startswith(%r)\nprint('ok')" % str(context / "code"))
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.strip() == "ok"

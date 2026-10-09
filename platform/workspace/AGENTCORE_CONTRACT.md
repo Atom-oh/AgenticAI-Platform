@@ -31,14 +31,18 @@ A source reference contains `sourceKind`, `sourceId`, `revision`, `sha256`,
 `audienceRevision` and a location when applicable: document page, source
 path/export/line, or image region. Implemented source-kind identifiers are
 `asset`, `document-revision`, `product-guideline`, `workbench-document`,
-`package`, `run-round`, `ux-contract` and `published-asset`. Imported code
-revisions use `asset` with an exact import revision, byte hash and file location.
-The last three have installed authority adapters (B0 sharing) in
+`package`, `run-round`, `ux-contract`, `published-asset` and `admitted-code`.
+Original imported code uses `asset` with an exact import revision, byte hash and
+file location. Normalized admitted collections use `admitted-code` with their
+decision revision/index hash and normalized file location.
+The `run-round`, `ux-contract` and `published-asset` authority adapters are in
 `workspace/ontology_sources.py` and `workspace/publications.py`; their rules are
 in `ONTOLOGY_CONTRACT.md` "Source authority". A missing and an inaccessible
 record return the same `404 not-found`. Current resolution alone admits reuse;
 historical authorization admits metadata only. Intake (`source-admission/1`)
-has no admission adapter for these kinds and still refuses them with `503`.
+still refuses admission of those three derivative kinds with `503`.
+`admitted-code` resolves an existing code-collection decision and its current
+authority; it is not an additional intake input kind.
 IDs are stable within a scope; revision hashes identify immutable content.
 Original IDs live in namespace mappings. Ambiguity cannot silently select
 the first match.
@@ -603,10 +607,11 @@ caller-supplied test flag is not a trust basis.
 
 #### Record fields (v1)
 
-Status: the offline protocol is implemented in `workspace/execution_ledger.py`
-(B0). It is not deployed. No API route, dispatcher, Lambda facade or IAM role
-calls it yet; those transports are planned (C, B2). Offline tests are the only
-callers.
+Status (2026-10-09): the source-analysis API, queue dispatcher, machine Gateway,
+Runtime and atomic publication adapter now call this ledger. See
+[unified source execution](../docs/UNIFIED_SOURCE_EXECUTION.md) for exact interfaces,
+authority and offline validation scope. Production activation and live service
+gates remain unverified; design-stage application wiring is still separate.
 
 Job record (`kind="job"`, id `exec-` + 128 random bits, written only with the
 module-private ledger writer token):
@@ -614,10 +619,11 @@ module-private ledger writer token):
 | Field | Meaning |
 |---|---|
 | `task`, `executionSchemaVersion` | Immutable discriminator `agentcore-execution` / exact `int` 1 |
-| `requestKey`, `inputHash` | Actor-scoped idempotency key; digest of actor, operation, model, manifest, admissions, backend revision, profile hash, authority, completion scope, `supersedes` |
+| `requestKey`, `inputHash` | Actor-scoped idempotency key; digest of actor, operation, model, manifest, admissions, backend revision, profile hash, authority, completion scope, `supersedes` and optional source artifact descriptor |
 | `actor`, `actorRole`, `projectId`, `authority` | Verified requester, role at admission and `{authorityRevision, membershipDigest}` from the current project record |
 | `operation`, `model`, `backend`, `backendConfigRevision` | Closed operation map (`OPERATIONS`), selected model, `agentcore`, backend revision |
 | `profile`, `profileBody` | `{id, revision, hash}` and the bounded profile body (`PROFILE_DEFAULT`) |
+| `artifact` | Source analysis only: immutable `{id,name,expectedGeneration,sourceRefs,requestHash}`; marked artifact lifecycle is ledger-owned |
 | `manifest`, `admissions` | Immutable input manifest `{ref, hash}`; consumed decisions `[{decisionId, revision, artifactHash}]` |
 | `status`, `fence`, `attempt`, `attempts` | State, fencing number, current attempt, archived attempts (with `stages` receipt hashes and `late` diagnostics) |
 | `calls`, `budget` | Per-call intents; `{calls, maxCalls, tokensReserved, tokensUsed, tokenBudget}` |
@@ -626,7 +632,7 @@ module-private ledger writer token):
 | `deadlineAt`, `authorizationExpiresAt`, `recoveryAt` | `min(now + deadlineMs, authorization expiry)`; JWT expiry; recovery start |
 | `completionScope` | Frozen `{nonSourceOperations, sourceChecks, sourceBindings}` accepted at admission |
 | `obligations` | Frozen `{sourceChecks: [{owner, kind, id, version}], sourceBindings: [...]}` taken from the validated input manifest |
-| `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate` |
+| `ops` | `{operationId: {digest, version, status, value?}}`, bounded by `maxCalls + 80`, pruned at `allocate`, `bind_capability`, `dispatch_uncertain` |
 | `result`, `error`, `unknownOutcome`, `supersedes`, `dueId` | Terminal result manifest, error code, unknown-outcome flag, superseded job, current due entry |
 | `deliverables` | Set at completion: the result manifest's bundle and sources bound to their compile, Browser and generate receipt hashes |
 | `accounting` | Pending daily-usage obligations `[{id: "chg-"+40 hex, tokens, callId}]`, committed in the same write as the outcome that charges them |
@@ -635,7 +641,9 @@ module-private ledger writer token):
 | `settlementDueAt` | Set by any terminal transition that leaves `intent` calls: `now + recoveryWindowMs`, the bound for settling them |
 
 Attempt: `{id: "att-"+32 hex, fence, sessionId: "rt-"+40 hex, leaseExpiresAt,
-heartbeatAt, startedAt, completionSubmissions?}`. A `heartbeat` extends the
+heartbeatAt, startedAt, completionSubmissions?, capability?, dispatchIntentAt?}`.
+The capability stores only `{digest,claims,keyId,expiresAt}`; it is committed with
+dispatch intent before one Runtime invocation. A `heartbeat` extends the
 lease only while the attempt's ORIGINAL lease, the deadline and the
 authorization expiry still hold; its `before_attempt` guard rechecks them
 immediately before submission (`stale-attempt`/`deadline`), so an expired
@@ -873,15 +881,19 @@ object whose `admissions` equals the admitted decisions exactly, whose
 predicates are also checks of the admission transaction and are frozen as
 `obligations`. At completion the ledger rechecks and itself submits every frozen
 source predicate (a changed source fails the job with `authority-changed`).
-`stage_completion` returns `{writes, checks, sourceBindings, sourceChecks?}`:
+`stage_completion` returns `{writes, checks, sourceBindings, sourceChecks?}`.
+The exact source adapter additionally returns an integer `expiresAt`, checked
+by the final guard after receipt verification:
 `sourceBindings` must equal the frozen bindings exactly, a declared
 `sourceChecks` must equal the frozen predicates exactly, and a staged check of
 a frozen record at another version is refused, all with
 `completion-obligations`. Non-source operations above
 `completionScope.nonSourceOperations` return `execution-completion-scope`.
-`source.analyze` completion (`finish` and `reconcile`) returns
-`completion-unavailable` (`reason: source-staging-adapter`) until the ontology
-staging adapter supplies its manifest, request-marker and artifact publication.
+`source.analyze` completion requires the exact installed `SourcePublication`
+adapter, which supplies staged ontology manifest, request-marker and marked
+artifact publication. Without it, `finish`/`reconcile` return
+`completion-unavailable` (`reason: source-staging-adapter`). Arbitrary callbacks
+do not lift that refusal.
 Protected operations (`intent`, `stage`, `open_*`, `read_chunk`,
 `write_chunk`, `close_output`, `finish`, `reconcile`) share one guard. It
 revalidates the requester's membership, every consumed admission (the
@@ -926,7 +938,7 @@ re-read, not treated as a lost race), and returns `unknown-outcome`.
 | Facade (caller role) | Methods |
 |---|---|
 | `api()` (authenticated API) | `admit`, `cancel`, `retry`, `read` |
-| `dispatcher()` (IAM-only dispatcher) | `allocate` |
+| `dispatcher()` (IAM-only dispatcher) | `allocate`, `bind_capability`, `dispatch_uncertain` |
 | `tool()` (ontology Lambda facade) | `claim`, `heartbeat`, `intent`, `outcome`, `stage`, `finish`, `fail`, `open_manifest`, `open_prior`, `open_input`, `read_chunk`, `open_output`, `write_chunk`, `close_output` |
 | `reconciler()` (IAM-only watchdog/reconciler) | `sweep`, `reconcile`, `settle`, `resolve_orphan`, `run_due` |
 
@@ -993,17 +1005,14 @@ token. That token applies only to kinds `run`, `release`, `gitexport` and
 refusal reports by tombstoning their due entries; it never mutates the reported
 record, so an unmarked legacy record keeps its lifecycle state.
 
-Not yet implemented in B0:
+B0 source-path follow-up (2026-10-09):
 
-- the staging mode of `publish_candidate`. `ontology_store.py` is owned by
-  Unit A. `finish` accepts a `stage_completion` callable whose writes and
-  checks commit with the terminal job. Until the staging adapter exists,
-  `source.analyze` completion is refused with `completion-unavailable`.
-- the admitted-input resolver and the run-round prior-authority adapter. They
-  come from the B0 intake and sharing units. Because every protected operation
-  revalidates the consumed admissions through the resolver, production refuses
-  protected operations (and input/prior transfers) until they are wired.
-- the 4 MiB model-visible text budget.
+- `publish_candidate(_stage=True)` and the exact `SourcePublication` adapter now
+  compose ontology, request-marker and artifact writes with the terminal job.
+- `ExecutionSources` now resolves actual admitted input and run-round/release
+  priors with complete current lineage and deadline fences.
+- The model-visible text budget remains part of later model workflow wiring;
+  the new source-only machine workflow exposes no model tools or model calls.
 
 ### source-admission/1
 
@@ -1358,3 +1367,31 @@ adapter/IaC units. B0/B1/B2 in the architecture register subdivide these units;
 they do not change A/B/C gate or review obligations. C cannot complete sharing,
 source-analysis or handoff acceptance without the corresponding B authority
 adapters and private-admission evidence.
+
+## Unified source execution amendment (2026-10-09)
+
+[The source execution design](../docs/UNIFIED_SOURCE_EXECUTION.md) defines the new
+application/transport interfaces and their bounded source-only scope. Production
+construction requires `KmsVerifier`, single-attempt storage and the exact
+`ExecutionSources` adapter on that storage. Gateway calls additionally use the
+exact `ExecutionAccess` adapter. Admitted-input and prior adapters return all
+lineage predicates in `checks`, in addition to their primary `check`/predicate
+and minimum `expiresAt`. Their full set joins every protected transaction.
+
+Receipt signatures are domain-separated from the compatibility adapter protocol.
+Key registry versions and expiry bounds join staging/completion transactions;
+a successful in-process signature check alone is insufficient. The dedicated
+Runtime and Gateway select the unified protocol from deployment configuration.
+The isolated `ac_execution`/`ac_operation` prototype is not an application writer.
+Earlier B0-only status notes above describe historical delivery boundaries; the
+remaining work is live service validation, full design-stage wiring and rollout.
+
+The dedicated Lambda roles share the project workspace table: `PutItem` and
+`ConditionCheckItem` support dynamic project/quota/due partitions; admission and
+key administration partitions have explicit write Denies. They have no
+UpdateItem/DeleteItem/BatchWriteItem Allow. Publication S3 writes are restricted
+to `workspace/*/job/exec-*/*`, `workspace/*/wb_artifact/*` and
+`workspace/*/ontology/*`. The watchdog alone may delete execution `parts/`
+objects. These shared Lambda roles enforce project authority in the trusted
+facade/ledger; they are not per-project IAM sessions. Runtime has none of these
+workspace data grants.

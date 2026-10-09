@@ -9,8 +9,12 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as customResources from 'aws-cdk-lib/custom-resources';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { createHash } from 'node:crypto';
-import { intakeConfigured, intakeDeploymentScope } from './intake';
+import { intakeConfigured, intakeDeploymentScope, denyIntakeAdministrationWrites, INTAKE_WRITE_ACTIONS } from './intake';
 
 export interface OntologyStackProps extends cdk.StackProps {
   runtimeDirectory: string;
@@ -21,6 +25,7 @@ export interface OntologyStackProps extends cdk.StackProps {
     analyzerCodeHash: string; dependencyLockHash: string;
   };
   workspaceTableName?: string;
+  cacheTableName?: string;
   workspaceBucketName?: string;
   resourcePrefix?: string;
   /**
@@ -62,6 +67,7 @@ export class OntologyStack extends cdk.Stack {
       new s3.Bucket(this, 'SyntheticSources', {
         encryption: s3.BucketEncryption.S3_MANAGED, blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
         enforceSSL: true, versioned: true, removalPolicy: cdk.RemovalPolicy.RETAIN,
+        lifecycleRules: [{ tagFilters: { 'workspace-temporary': 'true' }, expiration: cdk.Duration.days(1) }],
       });
     const capabilities = new kms.Key(this, 'CapabilityKey', {
       keySpec: kms.KeySpec.RSA_2048, keyUsage: kms.KeyUsage.SIGN_VERIFY,
@@ -75,22 +81,30 @@ export class OntologyStack extends cdk.Stack {
       keySpec: kms.KeySpec.HMAC_256, keyUsage: kms.KeyUsage.GENERATE_VERIFY_MAC,
       description: 'Keyed project and actor namespaces for ontology Memory',
     });
-    const executionOwner = createHash('sha256').update('ontology-executions').digest('hex');
     const registryOwner = createHash('sha256').update('ontology-key-registry').digest('hex');
-    const grantExecutionStore = (fn: lambda.Function, resultWriter: boolean) => {
+    const grantExecutionStore = (fn: lambda.Function, outputWriter: boolean) => {
       table.grantReadData(fn);
       sources.grantRead(fn, 'workspace/*');
       fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['dynamodb:ConditionCheckItem'], resources: [table.tableArn],
+        actions: ['dynamodb:PutItem', 'dynamodb:ConditionCheckItem'], resources: [table.tableArn],
       }));
-      fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['dynamodb:PutItem'], resources: [table.tableArn],
-        conditions: { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': [`owner#${executionOwner}`] } },
+      denyIntakeAdministrationWrites(fn.role!, table);
+      fn.addToRolePolicy(new iam.PolicyStatement({ effect: iam.Effect.DENY,
+        actions: INTAKE_WRITE_ACTIONS, resources: [table.tableArn],
+        conditions: { 'ForAnyValue:StringEquals': { 'dynamodb:LeadingKeys': [`owner#${registryOwner}`] } },
       }));
-      if (resultWriter) fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['s3:PutObject'], resources: [sources.arnForObjects(`workspace/${executionOwner}/*`)],
+      if (outputWriter) fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['s3:PutObject', 's3:PutObjectTagging'], resources: [
+          sources.arnForObjects('workspace/*/job/exec-*/*'), sources.arnForObjects('workspace/*/wb_artifact/*'),
+          sources.arnForObjects('workspace/*/ontology/*')],
       }));
     };
+    const cache = props.cacheTableName ? dynamodb.Table.fromTableName(this, 'SharedBudgetTable', props.cacheTableName) :
+      new dynamodb.Table(this, 'SyntheticBudgetTable', {
+        partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, encryption: dynamodb.TableEncryption.AWS_MANAGED,
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+      });
     const principal = () => new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
       conditions: { StringEquals: { 'aws:SourceAccount': this.account } },
     });
@@ -166,22 +180,27 @@ export class OntologyStack extends cdk.Stack {
     const image = new ecrAssets.DockerImageAsset(this, 'ExecutionImage', {
       directory: props.runtimeDirectory, platform: ecrAssets.Platform.LINUX_ARM64,
     });
-    const common = { capabilityKeyId: 'cap-v1', evidenceKeyId: 'evidence-v1',
-      evidenceKeyArn: evidence.keyArn, workload, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
-      toolArchiveHash: props.toolArchive.archiveHash };
+    const revision = createHash('sha256').update(JSON.stringify({ code: image.assetHash,
+      toolArchive: props.toolArchive, prefix, workspaceTable: props.workspaceTableName ?? 'synthetic',
+      workspaceBucket: props.workspaceBucketName ?? 'synthetic', cacheTable: props.cacheTableName ?? 'synthetic',
+      intakeDeployment: props.intakeDeployment ?? this.node.tryGetContext('intakeDeployment') ?? null })).digest('hex');
+    const common = { protocol: 'platform-execution/1', revision, capabilityKeyId: 'cap-v1', evidenceKeyId: 'evidence-v1',
+      evidenceKeyArn: evidence.keyArn, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
+      interpreter: { ...props.toolArchive, identifier: interpreter.attrCodeInterpreterId,
+        region: this.region, architecture: 'arm64', nodeMajor: 24 } };
     const tools = new lambda.DockerImageFunction(this, 'OntologyTools', {
       code: lambda.DockerImageCode.fromEcr(image.repository, {
         tagOrDigest: image.assetHash, entrypoint: ['python', '-m', 'awslambdaric'],
-        cmd: ['ontology_runtime.entrypoints.tools_handler'],
+        cmd: ['ontology_runtime.execution_entrypoints.tools_handler'],
       }),
       architecture: lambda.Architecture.ARM_64, memorySize: 1024, timeout: cdk.Duration.seconds(120),
       reservedConcurrentExecutions: 10,
       environment: { WORKSPACE_TABLE: table.tableName, WORKSPACE_BUCKET: sources.bucketName,
-        ONTOLOGY_CONFIGURATION: this.toJsonString(common) },
+        SOURCE_EXECUTION_CONFIGURATION: this.toJsonString(common) },
     });
-    grantExecutionStore(tools, false);
+    grantExecutionStore(tools, true);
     tools.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['kms:Verify', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn],
+      actions: ['kms:Verify', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn, evidence.keyArn],
     }));
     const gatewayRole = new iam.Role(this, 'GatewayRole', { assumedBy: principal() });
     tools.grantInvoke(gatewayRole);
@@ -198,10 +217,8 @@ export class OntologyStack extends cdk.Stack {
       ['sourceKind', 'sourceId', 'revision', 'sha256', 'audienceRevision'].map(name => [name, { type: 'string' }])),
       required: ['sourceKind', 'sourceId', 'revision', 'sha256', 'audienceRevision'] };
     const definitions: { name: string; properties: Record<string, agentcore.CfnGatewayTarget.SchemaDefinitionProperty>; required: string[] }[] = [
-      { name: 'context', properties: { nodeIds: { type: 'array', items: { type: 'string' } } }, required: ['nodeIds'] },
-      { name: 'source', properties: { sourceRef: reference }, required: ['sourceRef'] },
-      { name: 'stage', properties: { stage: { type: 'string' }, receiptHash: { type: 'string' } }, required: ['stage', 'receiptHash'] },
-      { name: 'finish', properties: { manifestHash: { type: 'string' } }, required: ['manifestHash'] },
+      { name: 'execution', properties: { action: { type: 'string' }, arguments: { type: 'object' } },
+        required: ['action', 'arguments'] },
     ];
     const target = new agentcore.CfnGatewayTarget(this, 'Target', {
       gatewayIdentifier: gateway.attrGatewayIdentifier, name: 'ontology',
@@ -262,6 +279,7 @@ export class OntologyStack extends cdk.Stack {
       agentRuntimeArtifact: { containerConfiguration: { containerUri: image.imageUri } },
       networkConfiguration: { networkMode: 'PUBLIC' },
       environmentVariables: { AWS_REGION: this.region, ONTOLOGY_RUNTIME_CONFIGURATION: this.toJsonString({
+        protocol: 'platform-execution/1', evidenceKeyId: common.evidenceKeyId,
         gatewayUrl: gateway.attrGatewayUrl, workload, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
         provider: provider.name, memoryId: memory.attrMemoryId,
         memoryNamespaceKeyArn: memoryNamespaceKey.keyArn, organization: `${this.account}:${prefix}`,
@@ -281,15 +299,15 @@ export class OntologyStack extends cdk.Stack {
     const authority = new lambda.DockerImageFunction(this, 'ExecutionAuthority', {
       code: lambda.DockerImageCode.fromEcr(image.repository, {
         tagOrDigest: image.assetHash, entrypoint: ['python', '-m', 'awslambdaric'],
-        cmd: ['ontology_runtime.entrypoints.authority_handler'],
+        cmd: ['ontology_runtime.execution_entrypoints.dispatch_handler'],
       }),
       architecture: lambda.Architecture.ARM_64, memorySize: 1024, timeout: cdk.Duration.minutes(15),
       reservedConcurrentExecutions: 2,
       environment: { WORKSPACE_TABLE: table.tableName, WORKSPACE_BUCKET: sources.bucketName,
-        ONTOLOGY_CONFIGURATION: this.toJsonString({ ...common, runtimeArn: runtime.attrAgentRuntimeArn,
+        SOURCE_EXECUTION_RUNTIME: this.toJsonString({ runtimeArn: runtime.attrAgentRuntimeArn,
           runtimeQualifier: endpoint.name }) },
     });
-    grantExecutionStore(authority, true);
+    grantExecutionStore(authority, false);
     authority.addToRolePolicy(new iam.PolicyStatement({
       actions: ['kms:Sign', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn],
     }));
@@ -302,6 +320,41 @@ export class OntologyStack extends cdk.Stack {
       tools.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
       authority.addEnvironment('INTAKE_DEPLOYMENT', intakeDeployment);
     }
+    const executionConfig = this.toJsonString(common);
+    for (const fn of [tools, authority]) {
+      fn.addEnvironment('SOURCE_EXECUTION_CONFIGURATION', executionConfig);
+      fn.addEnvironment('CACHE_TABLE', cache.tableName);
+    }
+    authority.addToRolePolicy(new iam.PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [cache.tableArn],
+      conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['usage#*'] } } }));
+    const maintenance = (id: string, handler: string) => {
+      const fn = new lambda.DockerImageFunction(this, id, {
+        code: lambda.DockerImageCode.fromEcr(image.repository, {
+          tagOrDigest: image.assetHash, entrypoint: ['python', '-m', 'awslambdaric'], cmd: [handler],
+        }), architecture: lambda.Architecture.ARM_64, memorySize: 1024, timeout: cdk.Duration.minutes(2),
+        reservedConcurrentExecutions: 1,
+        environment: { WORKSPACE_TABLE: table.tableName, WORKSPACE_BUCKET: sources.bucketName,
+          SOURCE_EXECUTION_CONFIGURATION: executionConfig, CACHE_TABLE: cache.tableName,
+          ...(intakeDeployment ? { INTAKE_DEPLOYMENT: intakeDeployment } : {}) },
+      });
+      grantExecutionStore(fn, true);
+      fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['kms:Verify', 'kms:GetPublicKey', 'kms:DescribeKey'],
+        resources: [evidence.keyArn] }));
+      return fn;
+    };
+    const watchdog = maintenance('ExecutionWatchdog', 'ontology_runtime.execution_entrypoints.watchdog_handler');
+    watchdog.addToRolePolicy(new iam.PolicyStatement({ actions: ['s3:DeleteObject'],
+      resources: [sources.arnForObjects('workspace/*/job/exec-*/parts/*')] }));
+    const reconciler = maintenance('ExecutionReconciler', 'ontology_runtime.execution_entrypoints.reconcile_handler');
+    new events.Rule(this, 'ExecutionSchedule', { schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [new targets.LambdaFunction(watchdog, { retryAttempts: 0 })] });
+    const dispatchQueue = new sqs.Queue(this, 'ExecutionDispatchQueue', {
+      encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true,
+      visibilityTimeout: cdk.Duration.minutes(90), retentionPeriod: cdk.Duration.days(4),
+      deadLetterQueue: { queue: new sqs.Queue(this, 'ExecutionDispatchDlq', {
+        encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true, retentionPeriod: cdk.Duration.days(14),
+      }), maxReceiveCount: 5 },
+    });
     const bootstrap = new lambda.DockerImageFunction(this, 'KeyRegistryBootstrap', {
       code: lambda.DockerImageCode.fromEcr(image.repository, {
         tagOrDigest: image.assetHash, entrypoint: ['python', '-m', 'awslambdaric'],
@@ -339,7 +392,11 @@ export class OntologyStack extends cdk.Stack {
     }
     const authorityVersion = authority.currentVersion;
     authorityVersion.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    authorityVersion.addEventSource(new SqsEventSource(dispatchQueue, { batchSize: 1,
+      reportBatchItemFailures: true, maxConcurrency: 2 }));
     const outputs: Record<string, string> = {
+      ExecutionConfiguration: executionConfig, DispatchQueueArn: dispatchQueue.queueArn,
+      DispatchQueueUrl: dispatchQueue.queueUrl, ReconcilerArn: reconciler.functionArn,
       WorkspaceTable: table.tableName, WorkspaceBucket: sources.bucketName, RuntimeArn: runtime.attrAgentRuntimeArn,
       AuthorityArn: authorityVersion.functionArn, ToolsArn: tools.functionArn, GatewayId: gateway.attrGatewayIdentifier,
       GatewayUrl: gateway.attrGatewayUrl, TargetId: target.attrTargetId, CapabilityKeyArn: capabilities.keyArn,

@@ -310,9 +310,10 @@ class Ledger:
         # B0 intake (pages_for / admitted derivative) and the B0-sharing run-round adapter are separate units;
         # until they are wired, production refuses input and prior transfers (fail closed).
         self.input_resolver, self.prior_authority = input_resolver, prior_authority
+        self.access = None
 
     @classmethod
-    def production(cls, storage, *, verifier):
+    def production(cls, storage, *, verifier, sources=None, access=None):
         if _offline_verifier(type(verifier)):          # independent of registry membership
             raise PermissionError("offline receipt verifiers are not production verifiers")
         if type(verifier) not in _REGISTERED:
@@ -321,7 +322,17 @@ class Ledger:
             raise PermissionError("the receipt verifier must expose its key-registry revision")
         if getattr(storage, "single_attempt", False) is not True:
             raise PermissionError("the ledger requires a single-attempt storage transport")
-        return cls(storage, verifier, _CONSTRUCT, cost_gate=CostGuardGate())
+        from workspace.execution_sources import ExecutionSources
+        if type(sources) is not ExecutionSources or sources.host.storage is not storage:
+            raise PermissionError("reviewed source authority on the same storage is required")
+        if access is not None:
+            from ontology_runtime.execution_protocol import ExecutionAccess
+            if type(access) is not ExecutionAccess or access.storage is not storage:
+                raise PermissionError("reviewed execution access on the same storage is required")
+        ledger = cls(storage, verifier, _CONSTRUCT, cost_gate=CostGuardGate(),
+                     input_resolver=sources, prior_authority=sources.prior)
+        ledger.access = access
+        return ledger
 
     @classmethod
     def offline(cls, storage, *, verifier, cost_gate=None, input_resolver=None, prior_authority=None):
@@ -331,7 +342,7 @@ class Ledger:
                    input_resolver=input_resolver, prior_authority=prior_authority)
 
     def api(self): return _Facade(self, ("admit", "cancel", "retry", "read"))
-    def dispatcher(self): return _Facade(self, ("allocate",))
+    def dispatcher(self): return _Facade(self, ("allocate", "bind_capability", "dispatch_uncertain"))
     def tool(self): return _Facade(self, ("claim", "heartbeat", "intent", "outcome", "stage", "finish", "fail",
                                           "open_manifest", "open_prior", "open_input", "read_chunk",
                                           "open_output", "write_chunk", "close_output"))
@@ -349,12 +360,41 @@ class Ledger:
 
     def _put(self, owner, job, expected, *, extra_writes=(), checks=None, before_attempt=None):
         writes = [{"owner": owner, "kind": "job", "item": job, "expected_version": expected}, *extra_writes]
+        checks, before_attempt = self._access_guard(owner, job, checks or [], before_attempt)
         try:
             saved = self.storage.put_many(writes, checks or [], retry_conflicts=False, _writer=_WRITER,
                                           before_attempt=before_attempt)
         except Conflict as error:
             raise LedgerError("conflict") from error
         return saved[0]
+
+    def _access_guard(self, owner, job, checks, guard):
+        if self.access is None:
+            return checks, guard
+        authority = self.access.authorize(owner, job["id"])
+        checks = self._merge_checks(checks, authority["checks"])
+        def final():
+            current = self.access.authorize(owner, job["id"])
+            if current != authority:
+                raise LedgerError("execution-not-authorized")
+            if guard:
+                guard()
+            if self.storage.clock() >= authority["expiresAt"]:
+                raise LedgerError("execution-not-authorized")
+        return checks, final
+
+    def _artifact_writes(self, owner, before, job):
+        descriptor = job.get("artifact")
+        if not descriptor or (before or {}).get("status") == job["status"]:
+            return []
+        if job["status"] in {"succeeded", "needs_changes"}:
+            return []  # The trusted publication adapter composes the successful artifact write.
+        record = self.storage.get(owner, "wb_artifact", descriptor["id"])
+        if (not record or record.get("executionId") != job["id"] or record.get("jobId") != job["id"]
+                or record.get("executionSchemaVersion") != SCHEMA_VERSION):
+            raise LedgerError("artifact-changed")
+        return [{"owner": owner, "kind": "wb_artifact", "expected_version": record["version"],
+                 "item": {**record, "status": job["status"], "error": job.get("error")}}]
 
     def _quota_writes(self, owner, actor, project_id, *, add=None, remove=None):
         """Per-actor (global) and per-project active lists, written in the caller's transaction."""
@@ -484,7 +524,8 @@ class Ledger:
                 entry["value"] = value
             ops[operation_id] = entry
             job["ops"] = ops
-        writes = [*list(extra_writes), *self._pending_writes(owner, before, job)]
+        writes = [*list(extra_writes), *self._pending_writes(owner, before, job),
+                  *self._artifact_writes(owner, before, job)]
         if reindex:
             writes = [*self._due_writes(owner, before, job), *writes]
         return job, writes
@@ -597,7 +638,7 @@ class Ledger:
     # --- API role ----------------------------------------------------------
     def _admit(self, owner, *, request_key, actor, project_id, operation, model, manifest, admissions,
                backend_config_revision, authorization_expires_at, project_authority, profile=None,
-               completion_scope=None, supersedes=None):
+               completion_scope=None, supersedes=None, artifact=None):
         profile = copy.deepcopy(profile or PROFILE_DEFAULT)
         if operation not in OPERATIONS:
             raise LedgerError("unknown-operation")
@@ -626,11 +667,19 @@ class Ledger:
         now = self.storage.clock()
         if authorization_expires_at <= now:
             raise LedgerError("authorization-expired")
+        if artifact is not None:
+            if (operation != "source.analyze" or not isinstance(artifact, dict)
+                    or set(artifact) != {"id", "name", "expectedGeneration", "sourceRefs", "requestHash"}
+                    or not _is_ident(artifact["id"]) or not _is_ident(artifact["name"])
+                    or not _is_sha(artifact["requestHash"]) or not isinstance(artifact["sourceRefs"], list)):
+                raise LedgerError("artifact-invalid")
+            for reference in artifact["sourceRefs"]:
+                schema.source_ref(reference)
         ref = {"id": profile["id"], "revision": profile["revision"], "hash": profile_hash(profile)}
         input_hash = schema.digest({"actor": actor, "operation": operation, "model": model, "manifest": manifest,
                                     "admissions": admissions, "backendConfigRevision": backend_config_revision,
                                     "profileHash": ref["hash"], "authority": project_authority,
-                                    "completionScope": scope, "supersedes": supersedes})
+                                    "completionScope": scope, "supersedes": supersedes, **({"artifact": artifact} if artifact else {})})
         marker_id = schema.identity("exec-req", owner, actor, request_key)
         marker = self.storage.get(owner, "exec_request", marker_id)
         if marker:
@@ -669,14 +718,29 @@ class Ledger:
                "authorizationExpiresAt": authorization_expires_at, "result": None, "error": None,
                "unknownOutcome": False, "authority": project_authority, "completionScope": scope,
                "obligations": obligations, "releaseBaseline": baseline,
+               **({"artifact": copy.deepcopy(artifact)} if artifact else {}),
                "supersedes": supersedes, "ops": {}, "clock": now, "dueId": None}
         marker_write = {"owner": owner, "kind": "exec_request",
                         "item": {"id": marker_id, "jobId": job_id, "inputHash": input_hash}, "expected_version": None}
+        artifact_writes = []
+        if artifact:
+            artifact_writes.append({"owner": owner, "kind": "wb_artifact", "expected_version": None,
+                "item": {**copy.deepcopy(artifact), "kind": "ontology-analysis", "projectId": project_id,
+                    "executionSchemaVersion": SCHEMA_VERSION, "executionId": job_id, "jobId": job_id,
+                    "createdBy": actor, "requestId": request_key, "status": "queued"}})
         due = self._due_writes(owner, None, job)
+        expiry = authorization_expires_at
+        if not self.offline:
+            live_checks, expiries = self._source_checks(owner, job)
+            source_checks = self._merge_checks(source_checks, live_checks)
+            expiry = min([expiry, *expiries])
+        def admitted_now():
+            if self.storage.clock() >= expiry:
+                raise LedgerError("authorization-expired")
         # The project record's version is a transactional fence: a concurrent membership change aborts admission.
-        return self._put(owner, job, None, extra_writes=[marker_write, *quotas, *due],
+        return self._put(owner, job, None, extra_writes=[marker_write, *quotas, *due, *artifact_writes],
                          checks=[{"owner": owner, "kind": "project", "id": project_id, "version": project["version"]},
-                                 *source_checks])
+                                 *source_checks], before_attempt=admitted_now)
 
     _BINDING_FIELDS = frozenset({"sourceKind", "sourceId", "revision", "audience"})
 
@@ -786,6 +850,32 @@ class Ledger:
                    "heartbeatAt": None, "startedAt": now}
         after = {**job, "status": "dispatched", "fence": fence, "attempt": attempt, "ops": {}}
         return self._commit(owner, job, after, checks=[check], op=op)
+
+    def _bind_capability(self, owner, job_id, attempt_id, fence, *, digest, claims, key_check, operation_id):
+        job = self._get(owner, job_id)
+        op, replay = self._op(job, "bind_capability", operation_id,
+            {"digest": digest, "claims": claims, "keyCheck": key_check, "attemptId": attempt_id, "fence": fence})
+        if replay:
+            raise LedgerError("dispatch-already-bound")  # A replay is never permission to invoke again.
+        attempt = self._current(job, attempt_id, fence, statuses=("dispatched",))
+        if (attempt.get("capability") or not _is_sha(digest) or self._authority_check(key_check) is None
+                or not isinstance(claims, dict) or type(claims.get("exp")) is not int):
+            raise LedgerError("execution-not-authorized")
+        checks, guard = self._protect(owner, job, extra_expiries=[claims["exp"] * 1000], cost=True)
+        self._fresh_obligations(owner, job)
+        checks = self._merge_checks(checks, [*job["obligations"]["sourceChecks"], key_check])
+        binding = {"digest": digest, "claims": copy.deepcopy(claims), "keyId": key_check["id"],
+                   "expiresAt": claims["exp"] * 1000}
+        return self._commit(owner, job, {**job, "attempt": {**attempt, "capability": binding,
+                    "dispatchIntentAt": self.storage.clock()}}, checks=checks, before_attempt=guard, op=op)
+
+    def _dispatch_uncertain(self, owner, job_id, attempt_id):
+        job = self._get(owner, job_id)
+        if (job["status"] not in {"dispatched", "running"}
+                or (job.get("attempt") or {}).get("id") != attempt_id):
+            return job
+        return self._commit(owner, job, {**job, "status": "recovery_required", "unknownOutcome": True,
+                                       "recoveryAt": self.storage.clock()})
 
     # --- tool role: attempts, leases and receipts ------------------------------
     def _current(self, job, attempt_id, fence, *, statuses=("dispatched", "running"), lease=True):
@@ -1054,6 +1144,18 @@ class Ledger:
                 raise LedgerError("receipt-invalid")
         entry["receiptRef"] = key
 
+    def _evidence_authority(self):
+        if self.offline:
+            return [], []
+        try:
+            result = self.verifier.authorization()
+            checks, expiry = result["checks"], result["expiresAt"]
+            if type(expiry) is not int or any(self._authority_check(row) is None for row in checks):
+                raise ValueError()
+            return checks, [expiry]
+        except Exception as error:
+            raise LedgerError("receipt-invalid", reason="key-registry") from error
+
     def _key_revision(self):
         """The verifier's current key-registry revision (verifier epoch); None for a verifier without one."""
         revision = getattr(self.verifier, "revision", None)
@@ -1143,8 +1245,13 @@ class Ledger:
         # A prior this receipt consumes must be granted now, and its grant (and expiry) is a predicate of the
         # stage write, rechecked by the same final guard (review 8, #2).
         consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, job, [entry])
-        checks, guard = self._protect(owner, job, extra_expiries=consumed_expiries)
-        checks = self._merge_checks(checks, consumed_checks)
+        key_checks, key_expiries = self._evidence_authority()
+        key_guard = self._key_guard([receipt], self._key_revision())
+        checks, temporal = self._protect(owner, job, extra_expiries=[*consumed_expiries, *key_expiries])
+        checks = self._merge_checks(checks, [*consumed_checks, *key_checks])
+        def guard():
+            key_guard()
+            temporal()
         self._retain_receipt(owner, job, entry, receipt)
         after = {**job, "stages": [*job["stages"], entry], "nonces": [*job.get("nonces", []), entry["nonce"]],
                  "consumedPriors": self._merge_consumed_priors(job, [entry])}
@@ -1376,13 +1483,13 @@ class Ledger:
             raise LedgerError("transfer-invalid")
         # The new handle does not exist yet, so it fences its own creation with the prior's grant and expiry
         # (review 10, #2): _protect's handle scan alone would not find it in time.
-        check, expiry = self._prior_grant(owner, job, prior)
-        if check is None:
+        checks, expiry = self._prior_details(owner, job, prior)
+        if checks is None:
             raise LedgerError("transfer-invalid")
         return self._open_read(owner, job, op, source="prior", key=prior["key"], sha256=prior.get("sha256"),
                                binding={"prior": {k: prior[k] for k in ("sourceKind", "sourceId", "revision", "key",
                                                                          "sha256") if k in prior}},
-                               extra_checks=[check], extra_expiries=[expiry] if expiry is not None else [])
+                               extra_checks=checks, extra_expiries=[expiry] if expiry is not None else [])
 
     @staticmethod
     def _authority_check(value):
@@ -1401,7 +1508,7 @@ class Ledger:
         read immediately before delivery or submission."""
         return value["expiresAt"] if isinstance(value, dict) and type(value.get("expiresAt")) is int else None
 
-    def _prior_grant(self, owner, job, prior):
+    def _prior_details(self, owner, job, prior):
         """The prior's current grant predicate and optional expiry bound, or (None, None) when not granted."""
         if not callable(self.prior_authority):
             return None, None
@@ -1411,23 +1518,36 @@ class Ledger:
             return None, None
         if not isinstance(raw, dict):
             return None, None
-        check = self._authority_check({key: value for key, value in raw.items() if key != "expiresAt"})
-        return (check, self._expiry_bound(raw)) if check is not None else (None, None)
+        check = self._authority_check({key: value for key, value in raw.items() if key not in {"expiresAt", "checks"}})
+        extra = raw.get("checks", [])
+        if check is None or not isinstance(extra, list) or any(self._authority_check(row) is None for row in extra):
+            return None, None
+        return self._merge_checks([check], extra), self._expiry_bound(raw)
+
+    def _prior_grant(self, owner, job, prior):
+        checks, expiry = self._prior_details(owner, job, prior)
+        return (checks[0], expiry) if checks else (None, None)
 
     def _prior_current(self, owner, job, prior):
         """The prior's current grant predicate, or None when it is no longer granted."""
         return self._prior_grant(owner, job, prior)[0]
 
-    def _resolve_admitted(self, owner, admission):
+    def _resolve_admitted(self, owner, admission, job=None):
         """The resolver's current view of an admitted artifact ({key, sha256, check}), or None when withdrawn."""
         if not callable(self.input_resolver) or not isinstance(admission, dict):
             return None
         try:
-            blob = self.input_resolver(owner, copy.deepcopy(admission))
+            from workspace.execution_sources import ExecutionSources
+            if type(self.input_resolver) is ExecutionSources:
+                blob = self.input_resolver(owner, copy.deepcopy(admission), job=job)
+            else:
+                blob = self.input_resolver(owner, copy.deepcopy(admission))
         except Exception:  # noqa: BLE001
             return None
         if (not isinstance(blob, dict) or not _is_key(blob.get("key")) or not _is_sha(blob.get("sha256"))
-                or self._authority_check(blob.get("check")) is None):
+                or self._authority_check(blob.get("check")) is None
+                or not isinstance(blob.get("checks", []), list)
+                or any(self._authority_check(row) is None for row in blob.get("checks", []))):
             return None
         return blob
 
@@ -1437,20 +1557,20 @@ class Ledger:
         guard to recheck against a fresh clock immediately before delivery or submission."""
         checks, expiries = [], []
         for admission in job["admissions"]:
-            blob = self._resolve_admitted(owner, admission)
+            blob = self._resolve_admitted(owner, admission, job)
             if blob is None or blob.get("sha256") != admission.get("artifactHash"):
                 self._source_revoked(owner, job, {"decisionId": admission.get("decisionId")})
-            checks.append(self._authority_check(blob["check"]))
+            checks = self._merge_checks(checks, [blob["check"], *blob.get("checks", [])])
             expiry = self._expiry_bound(blob)
             if expiry is not None:
                 expiries.append(expiry)
         opened = set()
         for handle in (job.get("handles") or {}).values():
             if handle.get("direction") == "in" and handle.get("source") == "prior":
-                check, expiry = self._prior_grant(owner, job, handle.get("prior") or {})
-                if check is None:
+                prior_checks, expiry = self._prior_details(owner, job, handle.get("prior") or {})
+                if prior_checks is None:
                     self._source_revoked(owner, job, {"prior": (handle.get("prior") or {}).get("sourceId")})
-                checks.append(check)
+                checks = self._merge_checks(checks, prior_checks)
                 if expiry is not None:
                     expiries.append(expiry)
                 opened.add((handle.get("prior") or {}).get("key"))
@@ -1505,11 +1625,11 @@ class Ledger:
         for prior in self._consumed_priors(owner, job, stages):
             if prior["key"] in skip:
                 continue
-            check, expiry = self._prior_grant(owner, job, prior) if prior.get("sourceKind") in ("run-round", "release") \
+            prior_checks, expiry = self._prior_details(owner, job, prior) if prior.get("sourceKind") in ("run-round", "release") \
                 else (None, None)
-            if check is None:
+            if prior_checks is None:
                 self._source_revoked(owner, job, {"prior": prior.get("sourceId")})
-            checks.append(check)
+            checks = self._merge_checks(checks, prior_checks)
             if expiry is not None:
                 expiries.append(expiry)
         return checks, expiries
@@ -1529,7 +1649,7 @@ class Ledger:
         return merged
 
     def _source_revoked(self, owner, job, source):
-        if job["status"] not in TERMINAL:
+        if "version" in job and job["status"] not in TERMINAL:
             self._terminal(owner, job, "failed", error={"code": "authority-changed", "source": source},
                            bump_fence=True)
         raise LedgerError("authority-changed", source=source)
@@ -1539,7 +1659,7 @@ class Ledger:
         if handle.get("source") == "input":
             admission = next((row for row in job["admissions"] if row.get("decisionId") == handle.get("decisionId")
                               and row.get("revision") == handle.get("revision")), None)
-            blob = self._resolve_admitted(owner, admission) if admission else None
+            blob = self._resolve_admitted(owner, admission, job) if admission else None
             if (blob is None or blob["key"] != handle["key"] or blob.get("sha256") != handle["sha256"]
                     or admission.get("artifactHash") != handle["sha256"]):
                 raise LedgerError("transfer-invalid")
@@ -1560,7 +1680,7 @@ class Ledger:
         admission = next((row for row in job["admissions"] if row.get("decisionId") == decision_id), None)
         if admission is None or stage not in OPERATIONS[job["operation"]] or not callable(self.input_resolver):
             raise LedgerError("transfer-invalid")
-        blob = self._resolve_admitted(owner, admission)
+        blob = self._resolve_admitted(owner, admission, job)
         # RUN-05: the served bytes are exactly the frozen admission's artifact (decision, revision, hash).
         if (not isinstance(blob, dict) or not isinstance(blob.get("key"), str)
                 or not isinstance(admission.get("artifactHash"), str) or blob.get("sha256") != admission["artifactHash"]):
@@ -1650,6 +1770,7 @@ class Ledger:
 
     def _fence(self, owner, job, checks, guard):
         """A check-only transaction: nothing is written, every predicate and the final guard must still hold."""
+        checks, guard = self._access_guard(owner, job, checks, guard)
         predicates = [{"owner": owner, "kind": "job", "id": job["id"], "version": job["version"]}, *checks]
         try:
             self.storage.put_many([], predicates, retry_conflicts=False, before_attempt=guard, _writer=_WRITER)
@@ -2210,7 +2331,8 @@ class Ledger:
             self._contention_failure(owner, before["id"], before["attempt"]["id"],
                                      ("recovery_required",) if recovery else ("dispatched", "running"))
             raise LedgerError("completion-contention")
-        if job["operation"] in _COMPLETION_UNAVAILABLE:
+        from workspace.execution_source import SourcePublication
+        if job["operation"] in _COMPLETION_UNAVAILABLE and type(stage_completion) is not SourcePublication:
             # ontology-tools/1: source analysis publishes ontology/artifact state only through the staging adapter
             # (publish_candidate(_stage=True)), which B0 does not provide. Refuse rather than complete without it.
             raise LedgerError("completion-unavailable", reason=_COMPLETION_UNAVAILABLE[job["operation"]])
@@ -2240,13 +2362,17 @@ class Ledger:
         # Priors consumed by receipts supplied to reconcile (not yet in ``before``) are revalidated too (review
         # 7), and their expiry bounds (review 8, #2) are rechecked by the same final guard.
         consumed_checks, consumed_expiries = self._consumed_prior_checks(owner, before, stages)
-        protected, temporal = self._protect(owner, before, recovery=recovery, extra_expiries=consumed_expiries)
-        protected = self._merge_checks(protected, consumed_checks)
+        key_checks, key_expiries = self._evidence_authority()
+        protected, temporal = self._protect(owner, before, recovery=recovery,
+                                            extra_expiries=[*consumed_expiries, *key_expiries])
+        protected = self._merge_checks(protected, [*consumed_checks, *key_checks])
         key_guard = self._key_guard(receipts, key_revision)
 
         def guard():
             key_guard()
-            temporal()          # last: lease, deadline and authorization expiry immediately before submission
+            temporal()          # after receipt verification and every staged source read
+            if "expiresAt" in staged and self.storage.clock() >= staged["expiresAt"]:
+                raise LedgerError("authority-changed")
         after = {**job, "status": status, "result": copy.deepcopy(result), "deliverables": deliverables,
                  "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock(),
                  "consumedPriors": self._merge_consumed_priors(before, stages)}
@@ -2260,12 +2386,16 @@ class Ledger:
         if stage_completion is not None:
             staged = stage_completion({"job": copy.deepcopy(prepared_job), "writes": copy.deepcopy(writes),
                                        "checks": copy.deepcopy(checks)})
-            if (not isinstance(staged, dict) or set(staged) - {"writes", "checks", "sourceChecks", "sourceBindings"}
+            if (not isinstance(staged, dict) or set(staged) - {"writes", "checks", "sourceChecks", "sourceBindings", "expiresAt"}
                     or not all(isinstance(staged.get(name, []), list)
                                for name in ("writes", "checks", "sourceChecks", "sourceBindings"))):
                 raise LedgerError("completion-invalid")
+            if "expiresAt" in staged and (type(stage_completion) is not SourcePublication or type(staged["expiresAt"]) is not int):
+                raise LedgerError("completion-invalid")
             writes.extend(staged.get("writes", []))
             checks.extend(staged.get("checks", []))
+        checks = self._merge_checks([], checks)
+        checks, guard = self._access_guard(owner, before, checks, guard)
         checks = self._check_obligations(job, writes, checks, staged)
         if len(writes) + len(checks) > TRANSACTION_LIMIT:
             raise LedgerError("execution-completion-scope", limits={"transaction": TRANSACTION_LIMIT})

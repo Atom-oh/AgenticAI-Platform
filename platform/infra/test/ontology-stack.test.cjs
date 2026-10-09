@@ -57,19 +57,44 @@ test('ontology service roles separate source authority, sandbox tools and capabi
     assert(!tools.includes('kms:Sign'));
     assert(!tools.includes('lambda:InvokeFunction'));
     assert(!tools.some(action => action.startsWith('bedrock:')));
-    const executionOwner = createHash('sha256').update('ontology-executions').digest('hex');
-    for (const prefix of ['OntologyTools', 'ExecutionAuthority']) {
+    for (const prefix of ['OntologyTools', 'ExecutionAuthority', 'ExecutionWatchdog', 'ExecutionReconciler']) {
       const statements = policy(prefix);
-      assert(!actions(statements).some(action => ['dynamodb:DeleteItem', 'dynamodb:UpdateItem', 'dynamodb:BatchWriteItem',
-        's3:DeleteObject', 's3:DeleteObjectVersion'].includes(action)));
-      const writes = statements.filter(statement => [].concat(statement.Action).includes('dynamodb:PutItem'));
-      assert.equal(writes.length, 1);
-      assert.deepEqual(writes[0].Condition['ForAllValues:StringEquals']['dynamodb:LeadingKeys'], [`owner#${executionOwner}`]);
+      const allowed = statements.filter(statement => statement.Effect === 'Allow');
+      assert(!actions(allowed).some(action => ['dynamodb:DeleteItem', 'dynamodb:UpdateItem', 'dynamodb:BatchWriteItem',
+        's3:DeleteObjectVersion'].includes(action)));
+      const deny = statements.filter(statement => statement.Effect === 'Deny');
+      const partitions = deny.flatMap(statement => statement.Condition['ForAnyValue:StringEquals']['dynamodb:LeadingKeys']);
+      for (const owner of ['intake:deployment', 'ontology-key-registry']) {
+        assert(partitions.includes('owner#' + createHash('sha256').update(owner).digest('hex')));
+      }
     }
-    assert(!tools.includes('s3:PutObject'));
-    const sourceWrites = policy('ExecutionAuthority').filter(statement => [].concat(statement.Action).includes('s3:PutObject'));
-    assert.equal(sourceWrites.length, 1);
-    assert(JSON.stringify(sourceWrites[0].Resource).includes(`workspace/${executionOwner}/`));
+    assert(tools.includes('s3:PutObject'));
+    assert(!actions(policy('ExecutionAuthority')).includes('s3:PutObject'));
+    const literal = value => typeof value === 'string' ? value : value['Fn::Join'] ?
+      value['Fn::Join'][1].map(literal).join(value['Fn::Join'][0]) : 'synthetic';
+    const expectedFields = ['protocol', 'revision', 'capabilityKeyId', 'evidenceKeyId', 'evidenceKeyArn',
+      'workloadIdentityArn', 'interpreter'].sort();
+    for (const prefix of ['OntologyTools', 'ExecutionAuthority', 'ExecutionWatchdog', 'ExecutionReconciler']) {
+      const environment = _environment(resources, prefix);
+      assert.deepEqual(Object.keys(JSON.parse(literal(environment.SOURCE_EXECUTION_CONFIGURATION))).sort(), expectedFields);
+      if (prefix !== 'ExecutionAuthority') {
+        assert.equal(environment.SOURCE_EXECUTION_RUNTIME, undefined);
+        assert(!actions(policy(prefix)).includes('bedrock-agentcore:InvokeAgentRuntime'));
+      }
+      if (prefix !== 'ExecutionWatchdog') assert(!actions(policy(prefix)).includes('s3:DeleteObject'));
+    }
+    assert.deepEqual(Object.keys(JSON.parse(literal(_environment(resources, 'ExecutionAuthority').SOURCE_EXECUTION_RUNTIME))).sort(),
+      ['runtimeArn', 'runtimeQualifier']);
+    const puts = policy('OntologyTools').filter(row => [].concat(row.Action).includes('s3:PutObject'));
+    for (const scope of ['/job/exec-*/*', '/wb_artifact/*', '/ontology/*']) assert(JSON.stringify(puts).includes(scope));
+
+    assert.equal(byType('AWS::Lambda::EventSourceMapping').length, 1);
+    assert.equal(byType('AWS::Lambda::EventSourceMapping')[0].Properties.BatchSize, 1);
+    assert.equal(byType('AWS::Lambda::EventSourceMapping')[0].Properties.ScalingConfig.MaximumConcurrency, 2);
+    assert(JSON.stringify(byType('AWS::Lambda::EventSourceMapping')[0].Properties.FunctionName).includes('Version'));
+    assert.equal(byType('AWS::Events::Rule').length, 1);
+    const definitions = byType('AWS::BedrockAgentCore::GatewayTarget')[0].Properties.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload;
+    assert.deepEqual(definitions.map(row => row.Name), ['execution']);
     const registryOwner = createHash('sha256').update('ontology-key-registry').digest('hex');
     const bootstrap = policy('KeyRegistryBootstrap').find(statement => [].concat(statement.Action).includes('dynamodb:PutItem'));
     assert.deepEqual(bootstrap.Condition['ForAllValues:StringEquals']['dynamodb:LeadingKeys'], [`owner#${registryOwner}`]);

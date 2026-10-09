@@ -1,6 +1,6 @@
 # Ontology/AgentCore implementation register
 
-Date: 2026-10-08. Scope: source integration of ontology branch `c234292` and main
+Date: 2026-10-09. Scope: unified source-execution follow-up to source integration of ontology branch `c234292` and main
 `f5157c7`. This register is subordinate to SPEC, the [architecture](ARCHITECTURE.md)
 and the owning contracts. It records implementation and gaps, not deployment.
 Final review/CI evidence belongs to the exact integration PR HEAD.
@@ -10,10 +10,10 @@ Final review/CI evidence belongs to the exact integration PR HEAD.
 | Area | Concrete implementation and focused tests | Remaining requirement |
 |---|---|---|
 | Canonical ontology | `workspace/ontology_store.py`, `ontology_sources.py`, `ontology_ux.py`, `source-analyzer/`; `test_ontology_*` | Preserve old parser-edge/tombstone capacity limits; run the independent bounded oracle and current-source/revocation cases |
-| B0 execution | `workspace/execution_ledger.py`, `workspace/storage.py`, legacy worker/expiry/repair guards; `test_execution_ledger.py`, `test_execution_guards.py` | Connect the production verifier, admitted-input/prior-handle adapters, dispatcher and atomic completion facade |
+| B0 execution | `workspace/execution_ledger.py`, `workspace/storage.py`, legacy worker/expiry/repair guards; `test_execution_ledger.py`, `test_execution_guards.py` | The production verifier, real admission/prior adapters, queue dispatcher and atomic source publication now have a unified caller path; live probes and later design-stage wiring remain |
 | Private intake | `intake/{records,admin_handler,inspect,derivative,admission,review,collection,prompts,images,imaging,transcription,worker,audit}.py`; `test_intake_*`; `documents/library.py` | Configure and verify private policy/deny-list/reviewer administration, source bindings and any required redaction service; no customer-data admission from project ownership alone |
 | Sharing and derivative reads | `workspace/publications.py`, `ontology_sources.py`, `http.py`, `batches.py`, `releases.py`, `git_service.py`; `test_publications.py`, `test_sources_adapters.py`, project React-flow tests | Deployed cross-project grant/withdrawal checks, source-bound UI acceptance and prospective cleanup/recall evidence |
-| Dedicated service adapters | `ontology_runtime/{authority,authorization,capability,dispatch,tools,workflow,interpreter,browser,identity,memory}.py`; `test_agentcore_*`; `infra/lib/ontology-stack.ts` | Current adapter transport uses `ac_execution`/`ac_operation`. It must be reconciled with B0's `agentcore-execution` protocol before production use. Service configuration and READY status are insufficient |
+| Dedicated service adapters | `ontology_runtime/{authority,authorization,capability,dispatch,tools,workflow,interpreter,browser,identity,memory}.py`; `test_agentcore_*`; `infra/lib/ontology-stack.ts` | Dedicated Runtime/IaC now select B0 through `execution_{entrypoints,protocol,tools,workflow}.py`; `ac_*` adapters remain isolated compatibility code. Service gates and production activation remain unverified |
 | Offline design engine | `design_loop/{knowledge,derive,guide_rules,prd_extract,flow,composition,gui,edit,contract,coverage,verify_graph,react_project,handoff,benchmark}.py`; `test_design_*`, synthetic seed and golden fixtures | No completed persisted application-stage API/dispatcher wiring. Legacy process generation remains a distinct caller |
 | Public-output controls | `scripts/check_public_identifiers.py`, `api/common/public_scan.py`, legacy public-writer hooks and CI; `test_public_identifiers.py`, `test_public_scan.py` | Configured deny-list coverage and reviewed media registry remain necessary. CI's inherited allow-missing mode warns when its secret is absent; that result is not evidence that customer identifiers were scanned. A configured runtime SSM deny-list must be readable and nonempty; failures block publication. Only an unset parameter name keeps runtime warning mode. Private intake retains its own blocking checks |
 | Main/IaC compatibility | Existing bank security/privacy checks and dedicated intake/ontology constructs | Bind the reviewed main resource inventory to the actual integration base and inspect every changed resource; retain bank Gateway and MyData isolation |
@@ -22,14 +22,14 @@ Final review/CI evidence belongs to the exact integration PR HEAD.
 
 1. Integrate the independently developed source changes, preserve current main
    fixes, reconcile contract wording, and complete exact-HEAD review and CI.
-2. Connect B0's production verifier and execution profile to the dedicated
+2. Source path implemented in [unified execution](UNIFIED_SOURCE_EXECUTION.md); validate deployed B0's production verifier and execution profile to the dedicated
    authority/Runtime adapters. Replace the isolated adapter execution protocol
    in the application path; do not create another authoritative job writer.
-3. Implement staged ontology publication and one conditional completion
+3. Source path implemented; validate deployed staged ontology publication and one conditional completion
    transaction covering job, attempt, artifact, manifest, request marker and
    receipt pointers. Recheck all source/admission/profile/expiry fences; preserve
    the operation reserve and bounded contention/unknown-outcome handling.
-4. Connect admitted-input/prior-handle resolution, fixed caller roles and the
+4. Source path implemented; validate deployed admitted-input/prior-handle resolution, fixed caller roles and the
    dispatcher/watchdog/reconciler. A legacy workbench job cannot become a new
    execution merely because a cloud analyzer is configured.
 5. Run B1 probes using reviewed deployed writer guards and the intended account,
@@ -59,3 +59,14 @@ stand in for its entire independent oracle or required O/L/U modes.
 Integration status updates must state: current code, exact tests/review,
 remaining caller wiring, configured/live evidence, and the next blocking gate.
 No code merge or document review alone authorizes production activation.
+
+## Source integration follow-up
+
+`execution_source.py` creates one job/marked artifact and stages coupled graph
+publication; `execution_sources.py` supplies actual intake/prior authority;
+`execution_verifier.py` verifies domain-separated KMS receipts. The new Runtime
+path uses bounded transfers, signed context/analyze receipts, a single dispatcher
+invocation and IAM recovery. Source-only application status/cancel/retry routes
+are implemented. Main opt-in remains absent by default. See the linked design
+for exact contracts and tests. This advances steps 2–4 in code; it does not close
+steps 5–7, service gates, independent acceptance or the complete design UI flow.

@@ -1488,9 +1488,14 @@ def test_production_requires_a_registered_verifier_and_single_attempt_storage(mo
     monkeypatch.setattr(module, "_REGISTERED", {ReviewedVerifier})
     with pytest.raises(PermissionError):
         Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b"), verifier=ReviewedVerifier())
-    ledger = Ledger.production(Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True),
-                               verifier=ReviewedVerifier())
-    assert isinstance(ledger.cost_gate, module.CostGuardGate) and ledger.input_resolver is None
+    from types import SimpleNamespace
+    from workspace.execution_sources import ExecutionSources
+    storage = Storage(table=FakeTable(), s3=FakeS3(), bucket="b", single_attempt=True)
+    with pytest.raises(PermissionError):
+        Ledger.production(storage, verifier=ReviewedVerifier())
+    ledger = Ledger.production(storage, verifier=ReviewedVerifier(),
+                               sources=ExecutionSources(SimpleNamespace(storage=storage)))
+    assert isinstance(ledger.cost_gate, module.CostGuardGate) and type(ledger.input_resolver) is ExecutionSources
 
 
 # === PR #27 review round 1 regressions ===============================================================

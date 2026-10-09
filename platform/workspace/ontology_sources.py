@@ -13,7 +13,7 @@ from workspace.collaboration import CollaborationError
 
 PROJECT_AUDIENCE = "current-project-members-v1"
 # Kinds whose audience is the current project (or grant), never a ref-supplied role list.
-_SHARED_AUDIENCE = {"asset", "product-guideline", "package", "run-round", "ux-contract", "published-asset"}
+_SHARED_AUDIENCE = {"asset", "product-guideline", "package", "run-round", "ux-contract", "published-asset", "admitted-code"}
 # edit_design-class roles may inspect draft/failed/needs-changes rounds (AGENTCORE_CONTRACT publishing-handoff/1).
 ROUND_EDITORS = frozenset({"owner", "designer", "developer"})
 MAX_ROUND_ADMISSIONS = 50
@@ -504,6 +504,8 @@ class Sources:
         if "allowedRoles" in ref and self.ctx.scope["role"] not in ref["allowedRoles"]:
             fail(403, "ontology-source-forbidden", "기록된 원본 읽기 권한이 없습니다.")
         kind = ref["sourceKind"]
+        if kind == "admitted-code":
+            return self._admitted_code(ref, text=text)
         if kind == "run-round":
             run, row = self._round(ref)
             if run.get("archived"):
@@ -678,6 +680,8 @@ class Sources:
         elif kind == "package":
             if ref["sourceId"] != "studio-ui" or ref["audienceRevision"] != "platform-package-v1":
                 fail(403, "ontology-source-forbidden", "허용된 플랫폼 패키지가 아닙니다.")
+        elif kind == "admitted-code":
+            record = self._admitted_code(ref, historical=True)["record"]
         elif kind == "run-round":
             run, record = self._round(ref)
             self._round_upstream_historical(run, record)
@@ -691,6 +695,38 @@ class Sources:
         if remember:
             self.historical_refs[schema.digest(ref)] = ref
         return record
+
+    def _admitted_code(self, ref, *, text=False, historical=False):
+        from intake import admission, collection
+        try:
+            if historical:
+                decision, authority = admission.authorize_snapshot(self.ctx.host, self.ctx.scope,
+                    ref["sourceId"], claims=self.ctx.claims)
+            else:
+                decision, data, authority = admission.authorized(self.ctx.host, self.ctx.scope,
+                    ref["sourceId"], claims=self.ctx.claims)
+                collection.check_resolver(self.ctx.host, self.ctx.scope, decision, authority, json.loads(data))
+            if (decision["artifact"]["kind"] != "code-collection" or str(decision["revision"]) != ref["revision"]
+                    or decision["artifact"]["sha256"] != ref["sha256"]
+                    or ref["audienceRevision"] != PROJECT_AUDIENCE):
+                _not_found()
+            fences, _ = authority.collect_deadlines()
+            for check in [*authority.checks, *fences]:
+                self._remember_owned(check["owner"], check["kind"], check)
+            content = None
+            if text:
+                path = ref.get("location", {}).get("path")
+                payload = collection.analyzer_request(self.ctx.host, self.ctx.scope, decision["id"], claims=self.ctx.claims)
+                matches = [file for file in payload["files"] if file["path"] == path and "text" in file]
+                if len(matches) != 1:
+                    _not_found()
+                content = matches[0]["text"]
+            authority.recheck()
+            return {"ref": ref, "kind": "admitted-code", "record": {
+                "id": decision["id"], "revision": str(decision["revision"]), "kind": "code-collection",
+                "sha256": decision["artifact"]["sha256"], "files": decision["artifact"]["files"]}, "text": content}
+        except admission.AdmissionError:
+            _not_found()
 
     # run-round ------------------------------------------------------------
 
@@ -1280,7 +1316,7 @@ class Sources:
                 # request does not re-flag this same benign progress.
                 self._reauthorize_current((check["owner"], check["kind"], check["id"]), check, row)
             if check["kind"] in ("adm_policy", "adm_provenance", "adm_grant", "adm_decision", "capability",
-                                 "adm_sharing"):
+                                 "adm_sharing", "adm_resolver"):
                 if row.get("status") not in ("active", "admitted") or type(row.get("expiresAt")) is not int:
                     fail(409, "source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다.")
                 deadlines.append((row["expiresAt"], "source-upstream-revoked"))

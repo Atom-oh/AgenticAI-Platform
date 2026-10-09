@@ -29,6 +29,7 @@ _TIMED_AUTHORITY = {
     "adm_decision": ("source-upstream-revoked", "원본 반입 승인이 만료되었거나 회수되었습니다."),
     "adm_policy": ("source-upstream-revoked", "원본 반입 정책이 만료되었거나 회수되었습니다."),
     "adm_provenance": ("source-upstream-revoked", "원본 출처 등록이 만료되었거나 회수되었습니다."),
+    "adm_resolver": ("source-upstream-revoked", "원본 해석 정책이 만료되었거나 회수되었습니다."),
     "adm_grant": ("source-upstream-revoked", "원본 검토 권한이 만료되었거나 회수되었습니다."),
 }
 UPSTREAM_ADMISSION_KINDS = ("adm_policy", "adm_provenance", "adm_grant", "adm_decision")
