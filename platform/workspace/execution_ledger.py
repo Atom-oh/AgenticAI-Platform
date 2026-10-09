@@ -2370,7 +2370,9 @@ class Ledger:
 
         def guard():
             key_guard()
-            temporal()          # last: lease, deadline and authorization expiry immediately before submission
+            temporal()          # after receipt verification and every staged source read
+            if "expiresAt" in staged and self.storage.clock() >= staged["expiresAt"]:
+                raise LedgerError("authority-changed")
         after = {**job, "status": status, "result": copy.deepcopy(result), "deliverables": deliverables,
                  "verifiedKeyRevision": key_revision, "completedAt": self.storage.clock(),
                  "consumedPriors": self._merge_consumed_priors(before, stages)}
@@ -2384,9 +2386,11 @@ class Ledger:
         if stage_completion is not None:
             staged = stage_completion({"job": copy.deepcopy(prepared_job), "writes": copy.deepcopy(writes),
                                        "checks": copy.deepcopy(checks)})
-            if (not isinstance(staged, dict) or set(staged) - {"writes", "checks", "sourceChecks", "sourceBindings"}
+            if (not isinstance(staged, dict) or set(staged) - {"writes", "checks", "sourceChecks", "sourceBindings", "expiresAt"}
                     or not all(isinstance(staged.get(name, []), list)
                                for name in ("writes", "checks", "sourceChecks", "sourceBindings"))):
+                raise LedgerError("completion-invalid")
+            if "expiresAt" in staged and (type(stage_completion) is not SourcePublication or type(staged["expiresAt"]) is not int):
                 raise LedgerError("completion-invalid")
             writes.extend(staged.get("writes", []))
             checks.extend(staged.get("checks", []))

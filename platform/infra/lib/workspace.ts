@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { createHash } from 'node:crypto';
+import { RegionInfo } from 'aws-cdk-lib/region-info';
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -261,7 +262,7 @@ export class StudioWorkspace extends Construct {
     if (sourceExecution !== undefined) {
       if (!sourceExecution || typeof sourceExecution !== 'object' || Array.isArray(sourceExecution) ||
           Object.keys(sourceExecution).some(key => !['queueArn', 'configuration'].includes(key)) ||
-          !new RegExp(`^arn:${stack.partition}:sqs:${stack.region}:${stack.account}:[A-Za-z0-9_-]+$`).test(sourceExecution.queueArn) ||
+          !new RegExp(`^arn:${RegionInfo.get(stack.region).partition}:sqs:${stack.region}:${stack.account}:[A-Za-z0-9_-]+$`).test(sourceExecution.queueArn) ||
           sourceExecution.configuration?.protocol !== 'platform-execution/1' || !intakeConfigured(this.node)) {
         throw new Error('sourceExecution requires an exact local queue, unified configuration and configured intake');
       }

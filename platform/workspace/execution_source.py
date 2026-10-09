@@ -89,7 +89,7 @@ class SourcePublication:
         if hashlib.sha256(raw).hexdigest() != job["manifest"]["hash"]:
             raise LedgerError("manifest-invalid")
         manifest = json.loads(raw)
-        decision, payload, checks, _ = ExecutionSources(self.host).collection(ctx, job["admissions"][0]["decisionId"])
+        decision, payload, checks, expiry = ExecutionSources(self.host).collection(ctx, job["admissions"][0]["decisionId"])
         if (len(job["admissions"]) != 1 or manifest["payload"] != payload
                 or manifest["tool"] != self.configuration["interpreter"]
                 or unique(checks) != unique(job["obligations"]["sourceChecks"])):
@@ -123,7 +123,8 @@ class SourcePublication:
                                     "record": {"id": decision["id"]}} for file in payload["files"]}
         graph = project_analysis(ctx, artifact["name"], payload, bindings, result["analysis"])
         graph_key, graph_hash = ctx.put_json("wb_artifact", artifact["id"], "candidate.json", graph)
-        plan = Ontology(ctx).publish_candidate(artifact["name"], graph,
+        store = Ontology(ctx)
+        plan = store.publish_candidate(artifact["name"], graph,
             expected_generation=artifact["expectedGeneration"], request_id=artifact["id"],
             _producer="parser-extracted", _stage=True)
         published = plan["result"]
@@ -132,5 +133,8 @@ class SourcePublication:
             "execution": execution, "coverage": result["analysis"]["coverage"],
             "generation": published["generation"], "partitionId": published["partitionId"],
             "identities": published["identities"], "receiptHashes": job["result"]["receipts"]}, artifact["version"])
-        return {"writes": [*plan["writes"], write], "checks": unique([*checks, *plan["checks"]]),
+        fences, deadlines = store.sources.recheck_deadlines()
+        expiry = min([expiry, *[bound for bound, _ in deadlines]])
+        return {"writes": [*plan["writes"], write], "checks": unique([*checks, *plan["checks"], *fences]),
+                "expiresAt": expiry,
                 "sourceChecks": job["obligations"]["sourceChecks"], "sourceBindings": job["obligations"]["sourceBindings"]}

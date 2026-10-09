@@ -310,3 +310,45 @@ def test_prior_resolver_carries_lineage_and_rejects_changed_contract(env):
     storage.put("project:" + env.pid, "contract", {**contract, "status": "draft"}, contract["version"])
     with pytest.raises(Exception):
         resolver.prior("project:" + env.pid, job, prior)
+
+
+def test_api_can_cancel_owned_job_after_input_revocation(integrated, monkeypatch):
+    from ontology_runtime import execution_entrypoints as entry
+    from intake.records import INTAKE_OWNER
+    s = integrated
+    grant = s.storage.get(INTAKE_OWNER, "adm_grant", "grant-1")
+    s.env.admin({"op": "revoke_grant", "id": grant["id"], "expectedRevision": grant["revision"]})
+    monkeypatch.setenv("SOURCE_EXECUTION_CONFIGURATION", "configured")
+    monkeypatch.setenv("SOURCE_EXECUTION_QUEUE_URL", "queue")
+    session = SimpleNamespace(client=lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(entry, "dependencies", lambda: (s.env.api, s.config, s.ledger, s.verifier, s.capabilities, session, None))
+    result = entry.api_operation(s.ctx, "cancel", {}, s.job_id)
+    assert result["job"]["status"] == "cancelled"
+    assert s.storage.get(s.owner, "wb_artifact", s.artifact_id)["status"] == "cancelled"
+
+
+def test_staged_source_expiry_is_checked_after_final_receipt_verification(integrated, monkeypatch):
+    s = integrated
+    stage = SourcePublication.__call__
+    original_clock = s.storage.clock
+    clock = [original_clock()]
+    s.storage.clock = lambda: clock[0]
+    s.workflow.clock = s.storage.clock
+    verify = s.verifier.verify
+    expire_during_verify = []
+    def staged(self, prepared):
+        result = stage(self, prepared)
+        result["expiresAt"] = clock[0] + 1000
+        expire_during_verify.append(True)
+        return result
+    def verified(receipt):
+        result = verify(receipt)
+        if expire_during_verify:
+            clock[0] += 1000
+        return result
+    monkeypatch.setattr(SourcePublication, "__call__", staged)
+    monkeypatch.setattr(s.verifier, "verify", verified)
+    with pytest.raises(LedgerError, match="authority-changed"):
+        run(s)
+    assert s.storage.get(s.owner, "ontology", "project-current") is None
+    assert s.storage.get(s.owner, "wb_artifact", s.artifact_id)["status"] == "running"

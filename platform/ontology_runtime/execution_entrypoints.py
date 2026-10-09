@@ -154,12 +154,15 @@ def api_operation(ctx, action, body=None, identifier=None):
     if action == "submit":
         return submit(request, body, ledger, config, enqueue)
     job = ledger.api().read(request.owner, identifier)
+    from workbench.service import fields
+    if action == "cancel":
+        fields(body or {}, set())
+        # Stopping owned work remains available when its input grant was withdrawn.
+        return {"job": view_job(ledger.api().cancel(request.owner, identifier, actor=request.actor))}
     artifact = request.get("wb_artifact", job["artifact"]["id"])
     from workspace.ontology_sources import Sources
     Sources(request).verify(artifact["sourceRefs"])
-    if action == "cancel":
-        job = ledger.api().cancel(request.owner, identifier, actor=request.actor)
-    elif action == "retry":
+    if action == "retry":
         from workbench.service import fields
         fields(body, {"acknowledgeUnknownOutcome"})
         job = ledger.api().retry(request.owner, identifier, actor=request.actor,

@@ -86,7 +86,8 @@ class ExecutionSources:
         if key != prior.get("key") or not self.host.storage.owns_key(owner, key):
             raise ValueError("Foreign prior bytes")
         raw = self.host.storage.get_blob(key)
-        if hashlib.sha256(raw).hexdigest() != prior.get("sha256"):
+        if (hashlib.sha256(raw).hexdigest() != prior.get("sha256")
+                or not release and hashlib.sha256(raw).hexdigest() != row.get("sourceArchiveSha256")):
             raise ValueError("Prior hash changed")
         if release:
             from workspace.releases import approval_hash

@@ -97,7 +97,9 @@ and returns conditional writes without publishing a current manifest. The
 ledger combines those writes, the ontology request marker and completed
 artifact with its terminal job/attempt/receipt/quota/due writes in one
 transaction. Source obligations are frozen at admission and cannot be trimmed.
-The existing 100-operation limit, declared non-source reserve, bounded proven
+The adapter also returns the minimum expiry of every staged source; the final
+transaction guard checks it after receipt verification. The existing
+100-operation limit, declared non-source reserve, bounded proven
 contention retries and unknown-outcome rules apply. Any failed predicate leaves
 all public completion state unchanged. Unreferenced immutable blobs are not
 proof of publication.

@@ -877,7 +877,9 @@ object whose `admissions` equals the admitted decisions exactly, whose
 predicates are also checks of the admission transaction and are frozen as
 `obligations`. At completion the ledger rechecks and itself submits every frozen
 source predicate (a changed source fails the job with `authority-changed`).
-`stage_completion` returns `{writes, checks, sourceBindings, sourceChecks?}`:
+`stage_completion` returns `{writes, checks, sourceBindings, sourceChecks?}`.
+The exact source adapter additionally returns an integer `expiresAt`, checked
+by the final guard after receipt verification:
 `sourceBindings` must equal the frozen bindings exactly, a declared
 `sourceChecks` must equal the frozen predicates exactly, and a staged check of
 a frozen record at another version is refused, all with
