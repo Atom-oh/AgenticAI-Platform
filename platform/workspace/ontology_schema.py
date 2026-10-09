@@ -18,7 +18,7 @@ NODE_TYPES = frozenset((*LEVELS, "Component", "Product", "PolicyRule", "CodeFile
                         "CodeSymbol", "Asset", "Test", "Team", "API", "Document", "Skill"))
 SOURCE_KINDS = frozenset({"asset", "product-guideline", "workbench-document",
                          "document-revision", "package", "published-asset",
-                         "ux-contract", "run-round"})
+                         "ux-contract", "run-round", "admitted-code"})
 PROVENANCE = frozenset({"parser-extracted", "declared", "model-inferred", "verified-build"})
 REVIEW_STATES = frozenset({"candidate", "reviewed", "approved", "rejected", "deprecated"})
 DEPENDENCIES = frozenset({"COMPOSES", "USES", "IMPLEMENTS", "IMPORTS", "REFERENCES", "GOVERNED_BY"})

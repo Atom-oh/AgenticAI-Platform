@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { createHash } from 'node:crypto';
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -255,6 +256,27 @@ export class StudioWorkspace extends Construct {
         WORKBENCH_CONNECTIONS_JSON: knowledgeConfiguration },
       description: 'JWT-owned private file chunks, contracts, runs and approvals',
     });
+    // Explicit opt-in only after the dedicated deployment's review and service gates.
+    const sourceExecution = this.node.tryGetContext('sourceExecution');
+    if (sourceExecution !== undefined) {
+      if (!sourceExecution || typeof sourceExecution !== 'object' || Array.isArray(sourceExecution) ||
+          Object.keys(sourceExecution).some(key => !['queueArn', 'configuration'].includes(key)) ||
+          !new RegExp(`^arn:${stack.partition}:sqs:${stack.region}:${stack.account}:[A-Za-z0-9_-]+$`).test(sourceExecution.queueArn) ||
+          sourceExecution.configuration?.protocol !== 'platform-execution/1' || !intakeConfigured(this.node)) {
+        throw new Error('sourceExecution requires an exact local queue, unified configuration and configured intake');
+      }
+      const queue = sqs.Queue.fromQueueArn(this, 'SourceExecutionQueue', sourceExecution.queueArn);
+      queue.grantSendMessages(apiRole);
+      apiFn.addEnvironment('SOURCE_EXECUTION_QUEUE_URL', queue.queueUrl);
+      apiFn.addEnvironment('SOURCE_EXECUTION_CONFIGURATION', JSON.stringify(sourceExecution.configuration));
+      // The API admits jobs. It receives no signing or Runtime invocation rights.
+      apiRole.addToPolicy(new iam.PolicyStatement({ effect: iam.Effect.DENY,
+        actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem', 'dynamodb:BatchWriteItem',
+          'dynamodb:PartiQLInsert', 'dynamodb:PartiQLUpdate', 'dynamodb:PartiQLDelete'], resources: [table.tableArn],
+        conditions: { 'ForAnyValue:StringEquals': { 'dynamodb:LeadingKeys': [
+          'owner#' + createHash('sha256').update('ontology-key-registry').digest('hex')] } },
+      }));
+    }
     if (props.mydataPrivacyFunctionArn) {
       apiFn.addEnvironment('MYDATA_PRIVACY_FUNCTION_ARN', props.mydataPrivacyFunctionArn);
       apiRole.addToPolicy(new iam.PolicyStatement({

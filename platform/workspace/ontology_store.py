@@ -221,7 +221,8 @@ class Ontology:
         return current, prior
 
     def publish_candidate(self, name, graph, *, expected_generation, request_id, additional_checks=(),
-                          _producer="declared", _completion_writes=None, _origin="manual", _replacement_complete=True):
+                          _producer="declared", _completion_writes=None, _origin="manual", _replacement_complete=True,
+                          _stage=False):
         current, prior = self.authorize_publication(name, origin=_origin)
         schema._identifier(request_id)
         if _producer not in {"declared", "parser-extracted"}:
@@ -233,6 +234,8 @@ class Ontology:
         marker_id = schema.identity("ontology-request", self.ctx.actor, _producer, request_id)
         marker = self.storage.get(self.ctx.owner, "ontology", marker_id)
         if marker:
+            if _stage:
+                fail(409, "ontology-publication-replay", "게시 완료 상태와 실행 기록을 먼저 확인하세요.")
             if marker.get("requestHash") != request_hash:
                 fail(409, "request-changed", "같은 요청 ID의 내용이 달라졌습니다.")
             if "sourceRefs" not in marker:
@@ -381,11 +384,17 @@ class Ontology:
                   "sourceRefs": list({authority_identity(ref): ref for ref in refs}.values())}
         completion = (_completion_writes(copy.deepcopy(marker)) if _completion_writes else [])
         self.sources.recheck()
-        self.ctx.commit([self.ctx.write("ontology", updated, current["version"] if current else None),
-                         self.ctx.write("ontology", marker), *completion], checks)
-        return {"generation": updated["generation"], "partitionId": partition,
-                "nodes": len(normalized["nodes"]), "edges": len(normalized["edges"]), "identities": identities,
-                "coverage": normalized.get("coverage", {"complete": False})}
+        writes = [self.ctx.write("ontology", updated, current["version"] if current else None),
+                  self.ctx.write("ontology", marker), *completion]
+        result = {"generation": updated["generation"], "partitionId": partition,
+                  "nodes": len(normalized["nodes"]), "edges": len(normalized["edges"]), "identities": identities,
+                  "coverage": normalized.get("coverage", {"complete": False})}
+        if _stage:
+            # Trusted completion adapters receive a plan, never an independently
+            # published graph. The ledger is the only caller that commits it.
+            return {"writes": writes, "checks": checks, "sourceRefs": marker["sourceRefs"], "result": result}
+        self.ctx.commit(writes, checks)
+        return result
 
     def _replace_indexes(self, updated, current, partition, old, new):
         changes = {}

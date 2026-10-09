@@ -11,11 +11,11 @@ import httpx
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from botocore.config import Config
 
-from ontology_runtime.capability import Evidence
 from ontology_runtime.identity import Gateway
 from ontology_runtime.interpreter import Interpreter
 from ontology_runtime.memory import Memory
-from ontology_runtime.workflow import Workflow
+from ontology_runtime.execution_workflow import ExecutionWorkflow
+from ontology_runtime.execution_protocol import ReceiptSigner
 from workspace import ontology_schema as schema
 
 app = BedrockAgentCoreApp()
@@ -42,10 +42,13 @@ def invoke(payload, context):
             # machine identity brokers only the dedicated Gateway credential.
             gateway = Gateway(client, http, endpoint=configuration["gatewayUrl"], workload=configuration["workload"],
                 provider=configuration["provider"], scopes=["ontology/tools"])
-            workflow = Workflow(gateway, Interpreter(client, configuration["interpreter"]),
-                Memory(client, configuration["memoryId"], session.client("kms"),
-                       configuration["memoryNamespaceKeyArn"], configuration["organization"]),
-                Evidence(session.client("kms"), configuration["evidenceKeyArn"]))
+            if configuration.get("protocol") != "platform-execution/1":
+                raise ValueError("A reviewed unified execution configuration is required")
+            workflow = ExecutionWorkflow(gateway, Interpreter(client, configuration["interpreter"]),
+                ReceiptSigner(session.client("kms", config=Config(retries={"total_max_attempts": 1})),
+                              configuration["evidenceKeyArn"], configuration["evidenceKeyId"]),
+                memory=Memory(client, configuration["memoryId"], session.client("kms"),
+                              configuration["memoryNamespaceKeyArn"], configuration["organization"]))
             return workflow.analyze(payload, context.session_id)
     except Exception as error:
         operation = getattr(error, "operation_name", None)
