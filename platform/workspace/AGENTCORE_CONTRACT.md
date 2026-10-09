@@ -31,14 +31,18 @@ A source reference contains `sourceKind`, `sourceId`, `revision`, `sha256`,
 `audienceRevision` and a location when applicable: document page, source
 path/export/line, or image region. Implemented source-kind identifiers are
 `asset`, `document-revision`, `product-guideline`, `workbench-document`,
-`package`, `run-round`, `ux-contract` and `published-asset`. Imported code
-revisions use `asset` with an exact import revision, byte hash and file location.
-The last three have installed authority adapters (B0 sharing) in
+`package`, `run-round`, `ux-contract`, `published-asset` and `admitted-code`.
+Original imported code uses `asset` with an exact import revision, byte hash and
+file location. Normalized admitted collections use `admitted-code` with their
+decision revision/index hash and normalized file location.
+The `run-round`, `ux-contract` and `published-asset` authority adapters are in
 `workspace/ontology_sources.py` and `workspace/publications.py`; their rules are
 in `ONTOLOGY_CONTRACT.md` "Source authority". A missing and an inaccessible
 record return the same `404 not-found`. Current resolution alone admits reuse;
 historical authorization admits metadata only. Intake (`source-admission/1`)
-has no admission adapter for these kinds and still refuses them with `503`.
+still refuses admission of those three derivative kinds with `503`.
+`admitted-code` resolves an existing code-collection decision and its current
+authority; it is not an additional intake input kind.
 IDs are stable within a scope; revision hashes identify immutable content.
 Original IDs live in namespace mappings. Ambiguity cannot silently select
 the first match.
@@ -1381,3 +1385,13 @@ Runtime and Gateway select the unified protocol from deployment configuration.
 The isolated `ac_execution`/`ac_operation` prototype is not an application writer.
 Earlier B0-only status notes above describe historical delivery boundaries; the
 remaining work is live service validation, full design-stage wiring and rollout.
+
+The dedicated Lambda roles share the project workspace table: `PutItem` and
+`ConditionCheckItem` support dynamic project/quota/due partitions; admission and
+key administration partitions have explicit write Denies. They have no
+UpdateItem/DeleteItem/BatchWriteItem Allow. Publication S3 writes are restricted
+to `workspace/*/job/exec-*/*`, `workspace/*/wb_artifact/*` and
+`workspace/*/ontology/*`. The watchdog alone may delete execution `parts/`
+objects. These shared Lambda roles enforce project authority in the trusted
+facade/ledger; they are not per-project IAM sessions. Runtime has none of these
+workspace data grants.

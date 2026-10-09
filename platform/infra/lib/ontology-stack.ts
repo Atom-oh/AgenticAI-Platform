@@ -94,7 +94,9 @@ export class OntologyStack extends cdk.Stack {
         conditions: { 'ForAnyValue:StringEquals': { 'dynamodb:LeadingKeys': [`owner#${registryOwner}`] } },
       }));
       if (outputWriter) fn.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['s3:PutObject', 's3:PutObjectTagging'], resources: [sources.arnForObjects('workspace/*')],
+        actions: ['s3:PutObject', 's3:PutObjectTagging'], resources: [
+          sources.arnForObjects('workspace/*/job/exec-*/*'), sources.arnForObjects('workspace/*/wb_artifact/*'),
+          sources.arnForObjects('workspace/*/ontology/*')],
       }));
     };
     const cache = props.cacheTableName ? dynamodb.Table.fromTableName(this, 'SharedBudgetTable', props.cacheTableName) :
@@ -183,7 +185,7 @@ export class OntologyStack extends cdk.Stack {
       workspaceBucket: props.workspaceBucketName ?? 'synthetic', cacheTable: props.cacheTableName ?? 'synthetic',
       intakeDeployment: props.intakeDeployment ?? this.node.tryGetContext('intakeDeployment') ?? null })).digest('hex');
     const common = { protocol: 'platform-execution/1', revision, capabilityKeyId: 'cap-v1', evidenceKeyId: 'evidence-v1',
-      evidenceKeyArn: evidence.keyArn, workload, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
+      evidenceKeyArn: evidence.keyArn, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
       interpreter: { ...props.toolArchive, identifier: interpreter.attrCodeInterpreterId,
         region: this.region, architecture: 'arm64', nodeMajor: 24 } };
     const tools = new lambda.DockerImageFunction(this, 'OntologyTools', {
@@ -391,7 +393,7 @@ export class OntologyStack extends cdk.Stack {
     const authorityVersion = authority.currentVersion;
     authorityVersion.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     authorityVersion.addEventSource(new SqsEventSource(dispatchQueue, { batchSize: 1,
-      reportBatchItemFailures: true }));
+      reportBatchItemFailures: true, maxConcurrency: 2 }));
     const outputs: Record<string, string> = {
       ExecutionConfiguration: executionConfig, DispatchQueueArn: dispatchQueue.queueArn,
       DispatchQueueUrl: dispatchQueue.queueUrl, ReconcilerArn: reconciler.functionArn,

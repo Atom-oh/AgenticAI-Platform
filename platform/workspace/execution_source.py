@@ -122,7 +122,7 @@ class SourcePublication:
         bindings = {file["path"]: {"ref": {**ref, "location": {"path": file["path"]}},
                                     "record": {"id": decision["id"]}} for file in payload["files"]}
         graph = project_analysis(ctx, artifact["name"], payload, bindings, result["analysis"])
-        graph_key, graph_hash = ctx.put_json("wb_artifact", artifact["id"], "candidate.json", graph)
+        graph_key, graph_hash = ctx.put_json("wb_artifact", artifact["id"], "candidate/" + job["attempt"]["id"] + ".json", graph)
         store = Ontology(ctx)
         plan = store.publish_candidate(artifact["name"], graph,
             expected_generation=artifact["expectedGeneration"], request_id=artifact["id"],

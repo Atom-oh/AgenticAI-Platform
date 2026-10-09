@@ -117,6 +117,7 @@ def integrated(env, monkeypatch):
             value["execution"].update(backend="agentcore-code-interpreter", sessionId="observed-session", region="ap-northeast-2",
                 interpreterId="interpreter", architecture="arm64", nodeVersion="v24.0.0", toolArchiveHash="a" * 64)
             return value
+    state.tools = tools
     state.workflow = ExecutionWorkflow(Gateway(), Interpreter(), ReceiptSigner(kms, config["evidenceKeyArn"], "evidence"), clock=storage.clock)
     return state
 
@@ -267,8 +268,9 @@ def test_publication_rejects_key_revocation_at_actual_transaction(integrated, mo
             s.storage._table.before_transaction = revoke
         return original(writes, checks, **kwargs)
     monkeypatch.setattr(s.storage, "put_many", guarded)
-    with pytest.raises(LedgerError, match="conflict"):
+    with pytest.raises(LedgerError) as error:
         run(s)
+    assert error.value.code in {"conflict", "receipt-invalid"}
     assert Ontology(s.ctx).current() is None
     assert s.storage.get(s.owner, "job", s.job_id)["status"] == "running"
     assert s.storage.get(s.owner, "wb_artifact", s.artifact_id)["status"] == "running"
@@ -352,3 +354,48 @@ def test_staged_source_expiry_is_checked_after_final_receipt_verification(integr
         run(s)
     assert s.storage.get(s.owner, "ontology", "project-current") is None
     assert s.storage.get(s.owner, "wb_artifact", s.artifact_id)["status"] == "running"
+
+
+def test_deployment_configuration_has_the_exact_iac_fields(integrated):
+    from ontology_runtime.execution_entrypoints import configuration
+    value = {key: item for key, item in integrated.config.items() if key not in {"runtimeArn", "runtimeQualifier"}}
+    assert configuration(json.dumps(value)) == value
+    with pytest.raises(ValueError):
+        configuration(json.dumps({**value, "workload": "unexpected"}))
+
+
+def test_gateway_retries_proven_watchdog_race_with_one_call_intent(integrated):
+    s = integrated
+    now = [s.storage.clock()]
+    s.storage.clock = lambda: now[0]
+    job, token = allocated(s)
+    args = (s.owner, s.job_id, job["attempt"]["id"], job["fence"])
+    s.ledger.tool().claim(*args, operation_id="claim" * 8)
+    now[0] += 60000
+    s.ledger.tool().heartbeat(*args)
+    now[0] += 60000  # original due entry is overdue, the extended lease is still live
+    before = s.storage.get(s.owner, "job", s.job_id)["version"]
+    sweeps = []
+    def sweep():
+        sweeps.append(s.ledger.reconciler().sweep(s.owner, s.job_id))
+    s.storage._table.before_transaction = sweep
+    event = {"action": "intent", "arguments": {"stage": "analyze", "kind": "interpreter", "min_remaining_ms": 300000},
+             "_executionAuthorization": {"capability": token, "operationId": "intent" * 8}}
+    result = s.tools.invoke(event, s.metadata)
+    assert len(sweeps) == 1 and result["callId"]
+    current = s.storage.get(s.owner, "job", s.job_id)
+    assert current["status"] == "running" and current["version"] >= before + 2
+    assert len(current["calls"]) == current["budget"]["calls"] == 1
+    replay = s.tools.invoke(event, s.metadata)
+    assert replay["replayed"] is True and replay["callId"] == result["callId"]
+    assert not s.invocations
+
+
+def test_source_change_during_admission_never_terminalizes_an_unstored_job(integrated, monkeypatch):
+    s = integrated
+    s.ledger.api().cancel(s.owner, s.job_id, actor="alice")
+    monkeypatch.setattr(ExecutionSources, "__call__", lambda *args, **kwargs: None)
+    request = {"requestId": "second", "name": "source-analysis", "collectionDecisionId": s.decision["id"]}
+    with pytest.raises(LedgerError, match="authority-changed"):
+        submit(s.ctx, request, s.ledger, s.config, lambda *args: pytest.fail("Rejected admission was queued"))
+    assert s.storage.get(s.owner, "wb_artifact", s.ctx.identity("wb_artifact", "second")) is None

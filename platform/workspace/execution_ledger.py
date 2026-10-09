@@ -1649,7 +1649,7 @@ class Ledger:
         return merged
 
     def _source_revoked(self, owner, job, source):
-        if job["status"] not in TERMINAL:
+        if "version" in job and job["status"] not in TERMINAL:
             self._terminal(owner, job, "failed", error={"code": "authority-changed", "source": source},
                            bump_fence=True)
         raise LedgerError("authority-changed", source=source)

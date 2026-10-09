@@ -65,7 +65,8 @@ extraction strategy. It cannot authorize a source or substitute for current chec
 
 ## Validation
 
-Use Python 3.12, the workspace requirements and the pinned infra dependencies:
+Use Python 3.12, the workspace requirements, `cryptography==50.0.1` for the
+independent test RSA oracle, and the pinned infra dependencies:
 
 ```bash
 PYTHONPATH=platform python -m pytest \

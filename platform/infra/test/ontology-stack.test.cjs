@@ -70,8 +70,27 @@ test('ontology service roles separate source authority, sandbox tools and capabi
     }
     assert(tools.includes('s3:PutObject'));
     assert(!actions(policy('ExecutionAuthority')).includes('s3:PutObject'));
+    const literal = value => typeof value === 'string' ? value : value['Fn::Join'] ?
+      value['Fn::Join'][1].map(literal).join(value['Fn::Join'][0]) : 'synthetic';
+    const expectedFields = ['protocol', 'revision', 'capabilityKeyId', 'evidenceKeyId', 'evidenceKeyArn',
+      'workloadIdentityArn', 'interpreter'].sort();
+    for (const prefix of ['OntologyTools', 'ExecutionAuthority', 'ExecutionWatchdog', 'ExecutionReconciler']) {
+      const environment = _environment(resources, prefix);
+      assert.deepEqual(Object.keys(JSON.parse(literal(environment.SOURCE_EXECUTION_CONFIGURATION))).sort(), expectedFields);
+      if (prefix !== 'ExecutionAuthority') {
+        assert.equal(environment.SOURCE_EXECUTION_RUNTIME, undefined);
+        assert(!actions(policy(prefix)).includes('bedrock-agentcore:InvokeAgentRuntime'));
+      }
+      if (prefix !== 'ExecutionWatchdog') assert(!actions(policy(prefix)).includes('s3:DeleteObject'));
+    }
+    assert.deepEqual(Object.keys(JSON.parse(literal(_environment(resources, 'ExecutionAuthority').SOURCE_EXECUTION_RUNTIME))).sort(),
+      ['runtimeArn', 'runtimeQualifier']);
+    const puts = policy('OntologyTools').filter(row => [].concat(row.Action).includes('s3:PutObject'));
+    for (const scope of ['/job/exec-*/*', '/wb_artifact/*', '/ontology/*']) assert(JSON.stringify(puts).includes(scope));
+
     assert.equal(byType('AWS::Lambda::EventSourceMapping').length, 1);
     assert.equal(byType('AWS::Lambda::EventSourceMapping')[0].Properties.BatchSize, 1);
+    assert.equal(byType('AWS::Lambda::EventSourceMapping')[0].Properties.ScalingConfig.MaximumConcurrency, 2);
     assert(JSON.stringify(byType('AWS::Lambda::EventSourceMapping')[0].Properties.FunctionName).includes('Version'));
     assert.equal(byType('AWS::Events::Rule').length, 1);
     const definitions = byType('AWS::BedrockAgentCore::GatewayTarget')[0].Properties.TargetConfiguration.Mcp.Lambda.ToolSchema.InlinePayload;

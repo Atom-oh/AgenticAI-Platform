@@ -26,6 +26,16 @@ class ExecutionTools:
         self.host, self.verifier, self.capabilities, self.configuration = host, verifier, capabilities, configuration
 
     def invoke(self, event, context):
+        # A failed conditional transaction wrote nothing. Re-read and reauthorize
+        # its exact operation ID; never retry an unknown transport outcome.
+        for attempt in range(3):
+            try:
+                return self._invoke_once(event, context)
+            except LedgerError as error:
+                if error.code != "conflict" or attempt == 2:
+                    raise
+
+    def _invoke_once(self, event, context):
         schema._fields(event, {"action", "arguments", "_executionAuthorization"})
         action, args, envelope = event["action"], event["arguments"], event["_executionAuthorization"]
         if not isinstance(action, str) or action not in ACTIONS:

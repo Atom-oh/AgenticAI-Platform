@@ -63,7 +63,10 @@ conditional writes, including receipt staging and publication.
 The dedicated Gateway exposes one machine-only `execution` tool with
 `{action,arguments,_executionAuthorization:{capability,operationId}}`.
 `ExecutionTools.ACTIONS` is the closed argument allowlist. Job/owner/attempt
-identifiers come only from the verified capability. The tool is excluded from
+identifiers come only from the verified capability. A proven conditional conflict permits at most two fresh authorization retries
+of the same operation ID in the Lambda facade. Unknown transport outcomes are
+never retried there; an existing call intent remains a replay, not permission
+for another paid invocation. The tool is excluded from
 model-visible discovery; this source workflow invokes no model. The previous
 `ac_execution`/`ac_operation` adapters remain compatibility test code, and are
 not the dedicated Runtime/application entrypoints.
