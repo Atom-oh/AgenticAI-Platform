@@ -153,6 +153,13 @@ def extract_prd(pages, deps, *, model):
         prd = None
     if not isinstance(prd, dict):
         return {"prd": None, "issues": [{"field": "*", "code": "parse-failed"}]}
+    return validate_prd(pages, prd)
+
+
+def validate_prd(pages, prd):
+    """Validate a proposed or human-edited PRD without invoking a model."""
+    if admitted(pages) is None or not isinstance(prd, dict):
+        return {"prd": None, "issues": [{"field": "*", "code": "admission-invalid"}]}
     try:
         schema.canonical(prd)
     except ValueError:

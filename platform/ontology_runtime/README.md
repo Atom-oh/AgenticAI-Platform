@@ -115,3 +115,16 @@ separately. Integration with the latest foundation, concurrency/cost admission,
 versioned cohort activation, generation/release wiring, full negative acceptance
 and rollback remain cutover gates. Do not enable the production default merely
 because a synthetic source analysis passed.
+
+## Design delivery candidate
+
+`design_workflow.py`, `design_model.py` and `execution_session.py` extend the
+single ledger transport to the configured design cohort. Model payloads are
+privately inspected through Gateway and measured through `engine/gate.py`;
+actual compiler/Browser results use the existing evidence assembler. Runtime
+receives only exact model invocation grants and no workspace datastore rights.
+`design_loop` and its checked resources are included in the image context.
+The [delivery design](../docs/DESIGN_EXECUTION_DELIVERY.md) records interfaces,
+remaining approvals and unrun live gates. Run `test_design_execution.py`,
+`test_design_api.py`, `test_execution_memory.py`, the authority-race tests and
+the existing source/ledger checks before enabling this configuration.

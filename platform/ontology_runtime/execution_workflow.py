@@ -78,8 +78,13 @@ class ExecutionWorkflow:
                 raise AuthorizationDenied()
             source = {"key": handle["key"], "size": handle["total"], "sha256": handle["sha256"]}
             memory_scope = {"actor": job["actor"], "projectId": job["projectId"], "executionId": job["executionId"],
-                            "attemptId": job["attemptId"], "resourcesHash": handle["sha256"], "iat": self.clock() // 1000}
-            continuity = self.memory.read(memory_scope) if self.memory else {"events": [], "authority": False}
+                            "attemptId": job["attemptId"], "resourcesHash": job["memoryContextHash"], "iat": self.clock() // 1000}
+            continuity = {"events": [], "authority": False}
+            if self.memory:
+                sessions = call("memory_sessions", {}, "memory-before")["sessions"]
+                continuity = self.memory.read_sessions(memory_scope, sessions)
+                if call("memory_sessions", {}, "memory-after")["sessions"] != sessions:
+                    raise AuthorizationDenied()
             context = upload("context", "context.json", {"manifestHash": handle["sha256"],
                              "admissions": job["admissions"], "continuity": continuity})
             receipts = [stage("context", [source], [context], {"kind": "runtime", "sessionId": runtime_session_id}, {})]
@@ -91,11 +96,10 @@ class ExecutionWorkflow:
                  "service_session_id": result["execution"]["sessionId"]}, "outcome-analyze")
             output = upload("analyze", "analysis.json", result)
             final = upload("analyze", "result.json", {"schemaVersion": 1, "objects": [output]})
+            memory = self.memory.append(memory_scope, "analyzed", output["sha256"]) if self.memory else None
             receipts.append(stage("analyze", [context, source], [output, final], {"kind": "interpreter",
                 "sessionId": result["execution"]["sessionId"], "taskId": intent["callId"], "exitCode": 0,
-                "profile": job["toolProfiles"]["interpreter"]}, {"coverage": result["analysis"]["coverage"], "analysis": output}))
-            if self.memory:
-                self.memory.append(memory_scope, "analyzed", receipts[-1])
+                "profile": job["toolProfiles"]["interpreter"]}, {"coverage": result["analysis"]["coverage"], "analysis": output, **({"memory": memory} if memory else {})}))
             # Serialize heartbeat with terminal completion; no background renewal races with publication.
             stop.set()
             return call("finish", {"status": "succeeded", "result": {"manifestRef": final["key"],

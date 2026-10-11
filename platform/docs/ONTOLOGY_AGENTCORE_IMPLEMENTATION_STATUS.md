@@ -70,3 +70,14 @@ invocation and IAM recovery. Source-only application status/cancel/retry routes
 are implemented. Main opt-in remains absent by default. See the linked design
 for exact contracts and tests. This advances steps 2–4 in code; it does not close
 steps 5–7, service gates, independent acceptance or the complete design UI flow.
+
+## Design delivery candidate (2026-10-11)
+
+The candidate branch adds persistent design records, exact PRD/flow/UX/frontend
+decisions, design operations through the B0 Runtime, compiler/Browser/large-text
+verification, source-preserving release/handoff, recent-session Memory indexing
+and the existing-canvas UI extension. See [delivery interfaces](DESIGN_EXECUTION_DELIVERY.md).
+Validation is in progress; this is not a completed live/cutover claim.
+AWS payload/destination approval, explicit synthetic Memory deletion authorization
+and the registered Git target/credential are pending. The acceptance template
+retains its fixed cases and unrun live modes.

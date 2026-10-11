@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from botocore.auth import SigV4Auth
+from botocore.config import Config
 from botocore.awsrequest import AWSRequest
 
 from workspace.browser import evaluate_bundle
@@ -17,9 +18,9 @@ from workspace import browser as verifier, ontology_schema as schema
 class Browser:
     def __init__(self, session, identifier, region):
         self.session, self.identifier, self.region = session, identifier, region
-        self.client = session.client("bedrock-agentcore", region_name=region)
+        self.client = session.client("bedrock-agentcore", region_name=region, config=Config(retries={"total_max_attempts": 1}))
 
-    def evaluate(self, build, contract, reference=None, visual_tolerance=0.15):
+    def evaluate(self, build, contract, reference=None, visual_tolerance=0.15, text_scale=1.0):
         if build.get("ok") is not True:
             raise ValueError("A successful trusted build is required")
         contract = validate_contract(contract)
@@ -44,7 +45,7 @@ class Browser:
                     service_workers="block", accept_downloads=False, offline=True)
 
             result = evaluate_bundle(files, contract, reference, visual_tolerance,
-                expected_hash=build["bundleHash"], _context_factory=context)
+                expected_hash=build["bundleHash"], text_scale=text_scale, _context_factory=context)
             axe = Path(os.environ.get("AXE_PATH", str(Path(verifier.__file__).parent / "axe.min.js")))
             if not axe.is_file():
                 axe = Path(verifier.__file__).parents[1] / "gates/node_modules/axe-core/axe.min.js"

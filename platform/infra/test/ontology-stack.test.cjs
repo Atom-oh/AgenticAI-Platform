@@ -214,3 +214,41 @@ test('a self-contained synthetic table keeps the stack-name default', () => {
     assert.equal(_environment(resources, 'ExecutionAuthority').INTAKE_DEPLOYMENT, 'OntologyTest');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('design cohort adds exact model and private inspection rights without giving models source-store access', () => {
+  const design = { projects: ['p-synthetic'], models: ['global.anthropic.claude-sonnet-5'] };
+  const { directory, resources } = _ontologyStack({ intakeDeployment: 'OntologyTest' }, {
+    design, intakeDenylistParam: '/ontology/synthetic/denylist',
+  });
+  try {
+    const policy = prefix => Object.entries(resources).filter(([key, row]) => key.startsWith(prefix) && row.Type === 'AWS::IAM::Policy')
+      .flatMap(([, row]) => row.Properties.PolicyDocument.Statement);
+    const allow = prefix => policy(prefix).filter(row => row.Effect === 'Allow');
+    const invoke = allow('RuntimeRole').find(row => [].concat(row.Action).includes('bedrock:InvokeModel'));
+    assert(invoke);
+    assert(JSON.stringify(invoke.Resource).includes('global.anthropic.claude-sonnet-5'));
+    assert(!JSON.stringify(invoke.Resource).includes('claude-opus'));
+    assert(!allow('RuntimeRole').some(row => [].concat(row.Action).some(action => /^(s3:|dynamodb:|lambda:)/.test(action))));
+    for (const prefix of ['OntologyTools', 'ExecutionReconciler']) {
+      assert.equal(_environment(resources, prefix).INTAKE_DENYLIST_PARAM, '/ontology/synthetic/denylist');
+      const ssm = allow(prefix).find(row => [].concat(row.Action).includes('ssm:GetParameter'));
+      assert(JSON.stringify(ssm.Resource).includes('parameter/ontology/synthetic/denylist'));
+      assert(![].concat(ssm.Resource).includes('*'));
+    }
+    assert(!allow('OntologyTools').some(row => [].concat(row.Action).some(action => action.startsWith('bedrock:'))));
+    for (const prefix of ['OntologyTools', 'ExecutionWatchdog', 'ExecutionReconciler']) {
+      const usage = allow(prefix).find(row => [].concat(row.Action).includes('dynamodb:UpdateItem'));
+      assert.deepEqual(usage.Condition['ForAllValues:StringLike']['dynamodb:LeadingKeys'], ['usage#*', 'usage-charge#*']);
+      assert(!JSON.stringify(usage.Resource).includes('WorkspaceTable'));
+    }
+    const runtime = Object.values(resources).find(row => row.Type === 'AWS::BedrockAgentCore::Runtime');
+    assert.equal(runtime.Properties.EnvironmentVariables.BEDROCK_READ_TIMEOUT, '180');
+    assert(!JSON.stringify(policy('ExecutionWatchdog')).includes('DeleteEvent'));
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('design deployment rejects unscoped projects, unsupported models and missing private inspection', () => {
+  assert.throws(() => _ontologyStack({}, { design: { projects: ['*'], models: ['global.anthropic.claude-sonnet-5'] } }), /explicit projects/);
+  assert.throws(() => _ontologyStack({}, { design: { projects: ['p-test'], models: ['invented-model'] } }), /exact supported/);
+  assert.throws(() => _ontologyStack({}, { design: { projects: ['p-test'], models: ['global.anthropic.claude-sonnet-5'] } }), /deny-list/);
+});

@@ -6,6 +6,7 @@ import IntakePanel from './IntakePanel';
 import SampleGallery from './SampleGallery';
 import RulesPanel from './RulesPanel';
 import RunsPanel from './RunsPanel';
+import DesignPanel from './DesignPanel';
 import CollaborationSidebar from './CollaborationSidebar';
 import GuidelineLibrary from './GuidelineLibrary';
 import ProductPlanner from './ProductPlanner';
@@ -141,6 +142,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
 }) {
   const { client, project, role } = useWorkspaceScope();
   const [step, setStep] = useState<WorkflowStep>(() => initialWorkflowStep(route, role, initialStep));
+  const [designMode, setDesignMode] = useState<'canvas' | 'procedure'>('canvas');
   const [assetTab, setAssetTab] = useState<'guides' | 'files' | 'components'>(initialStep === 'files' || route.assetId ? 'files' : 'guides');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -235,8 +237,8 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
     setContracts(previous => [contract, ...previous.filter(item => item.id !== contract.id)]);
   }, []);
   const product = products.find(item => item.id === productId);
-  const scopedContracts = contracts.filter(item => !productId || !item.productId || item.productId === productId);
-  const scopedRuns = runs.filter(item => !productId || item.productId === productId);
+  const scopedContracts = contracts.filter(item => !item.designId && (!productId || !item.productId || item.productId === productId));
+  const scopedRuns = runs.filter(item => !item.designId && (!productId || item.productId === productId));
   const navigate = (next: WorkflowStep, runId?: string, round?: number, criteriaId?: string) => {
     if (criteriaPending) { setError('기준 시안 조회가 끝나면 다음 단계로 이동할 수 있습니다.'); return; }
     setStep(next);
@@ -324,7 +326,13 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
           <ComponentCatalogPanel summary={config.componentCatalog} />
           <button onClick={() => navigate('design')}>흐름·상태 설계로</button></section>}
       </div>
-      <div hidden={step !== 'review'}><RunsPanel key={productId || 'unbound'} config={config} assets={assets}
+      <div hidden={step !== 'review'}>
+        {project && <nav className="ws-asset-tabs" aria-label="화면 만들기 방식">
+          <button aria-pressed={designMode === 'canvas'} onClick={() => setDesignMode('canvas')}>요청에서 시작</button>
+          <button aria-pressed={designMode === 'procedure'} onClick={() => setDesignMode('procedure')}>절차·자료에서 시작</button>
+        </nav>}
+        {project && designMode === 'procedure' && <DesignPanel config={config} onDirty={onCompose} />}
+        <div hidden={designMode !== 'canvas'}><RunsPanel key={productId || 'unbound'} config={config} assets={assets}
         contracts={scopedContracts} runs={scopedRuns} initialRunId={requestedRun.id} initialRound={requestedRun.round}
         refresh={() => void refresh()} preferredContract={preferredContract} preferredSelection={preferredSelection} editing={editing} onSelection={reviewSelection} product={product}
         selectedAssets={selected.filter(id => assets.some(asset => asset.id === id && !asset.archived && !asset.system && asset.uploadStatus === 'stored'))}
@@ -336,7 +344,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
           // new draft. Do not turn absence into an explicit empty selection.
           navigate('design', undefined, undefined, id || undefined);
         }}
-        onHandoff={(runId, round) => navigate('handoff', runId, round)} /></div>
+        onHandoff={(runId, round) => navigate('handoff', runId, round)} /></div></div>
       {step === 'handoff' && <HandoffPanel key={productId || 'unbound'} runs={scopedRuns} contracts={scopedContracts} selection={selection}
         product={product} initialRunId={requestedRun.id} initialRound={requestedRun.round} onSelection={handoffSelection}
         onReview={(runId, round) => navigate('review', runId, round)} />}

@@ -32,8 +32,17 @@ class ExecutionCapabilities:
         self.keys = Capabilities(kms, lambda identifier: storage.get(KEY_OWNER, "ac_key", identifier)
                                  if identifier == key_id else None, clock=lambda: storage.clock() / 1000)
 
+    def allowed(self, job):
+        if job.get("operation") == "source.analyze":
+            return True
+        from workspace.design_execution import OPERATIONS
+        configured = self.configuration.get("design") or {}
+        return (job.get("operation") in OPERATIONS.values()
+                and job.get("projectId") in configured.get("projects", [])
+                and job.get("model") in configured.get("models", []))
+
     def issue(self, job):
-        if (not supported_execution(job) or job["status"] != "dispatched" or job["operation"] != "source.analyze"
+        if (not supported_execution(job) or job["status"] != "dispatched" or not self.allowed(job)
                 or job["backendConfigRevision"] != self.configuration["revision"]):
             raise AuthorizationDenied()
         key = self.keys._key(self.configuration["capabilityKeyId"], signing=True)
@@ -71,8 +80,8 @@ class ExecutionCapabilities:
                 raise AuthorizationDenied()
             owner = "project:" + claims["projectId"]
             job = self.storage.get(owner, "job", claims["executionId"])
-            live = {"dispatched", "running"} | ({"succeeded"} if allow_success else set())
-            if (not supported_execution(job) or job["status"] not in live or job["operation"] != "source.analyze"
+            live = {"dispatched", "running"} | ({"succeeded", "needs_changes"} if allow_success else set())
+            if (not supported_execution(job) or job["status"] not in live or not self.allowed(job)
                     or job["backendConfigRevision"] != self.configuration["revision"]
                     or binding(job, self.configuration["workloadIdentityArn"]) != {k: claims[k] for k in binding(job, self.configuration["workloadIdentityArn"])}
                     or now >= min(job["deadlineAt"], job["authorizationExpiresAt"], job["attempt"]["leaseExpiresAt"])):

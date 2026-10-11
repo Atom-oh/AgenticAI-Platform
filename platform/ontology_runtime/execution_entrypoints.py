@@ -22,11 +22,20 @@ from workspace.storage import Storage
 
 def configuration(value=None):
     result = json.loads(value if value is not None else os.environ["SOURCE_EXECUTION_CONFIGURATION"])
-    if (not isinstance(result, dict) or set(result) != {"protocol", "revision", "capabilityKeyId", "evidenceKeyId",
+    if (not isinstance(result, dict) or set(result) - {"design"} != {"protocol", "revision", "capabilityKeyId", "evidenceKeyId",
             "evidenceKeyArn", "workloadIdentityArn", "interpreter"}
             or result["protocol"] != "platform-execution/1" or not isinstance(result["revision"], str)
             or not result["revision"]):
         raise ValueError("A versioned source-execution deployment is required")
+    if "design" in result:
+        from engine.model_catalog import MODEL_IDS
+        design = result["design"]
+        if (not isinstance(design, dict) or set(design) != {"projects", "models"}
+                or not isinstance(design["projects"], list) or not 1 <= len(design["projects"]) <= 20
+                or any(not isinstance(p, str) or not p.startswith("p-") for p in design["projects"])
+                or not isinstance(design["models"], list) or not design["models"]
+                or any(model not in MODEL_IDS for model in design["models"])):
+            raise ValueError("Explicit design cohort and exact models are required")
     return result
 
 
@@ -64,7 +73,7 @@ class Dispatcher:
             job = self.ledger.dispatcher().bind_capability(owner, identifier, attempt, job["fence"],
                 digest=hashlib.sha256(token.encode()).hexdigest(), claims=claims, key_check=key,
                 operation_id=secrets.token_hex(24))
-            payload = {"capability": token, "executionId": job["id"], "runtimeSessionId": job["attempt"]["sessionId"],
+            payload = {"capability": token, "operation": job["operation"], "executionId": job["id"], "runtimeSessionId": job["attempt"]["sessionId"],
                        "workloadIdentity": self.config["workloadIdentityArn"]}
             response = self.client.invoke_agent_runtime(agentRuntimeArn=self.config["runtimeArn"],
                 qualifier=self.config["runtimeQualifier"], runtimeSessionId=job["attempt"]["sessionId"],
@@ -78,7 +87,7 @@ class Dispatcher:
                 if stream:
                     stream.close()
             current = self.ledger.api().read(owner, identifier)
-            if current["status"] not in {"succeeded", "failed", "cancelled", "expired"}:
+            if current["status"] not in {"succeeded", "needs_changes", "failed", "cancelled", "expired"}:
                 self.ledger.dispatcher().dispatch_uncertain(owner, identifier, attempt)
             return view_job(self.ledger.api().read(owner, identifier))
         except Exception:
@@ -127,15 +136,23 @@ def reconcile_handler(event, context):
         raise ValueError("Only a persisted execution reference is accepted")
     job = ledger.api().read(event["owner"], event["jobId"])
     stages = job.get("stages", [])
-    outputs = [output for row in stages if row["stage"] == "analyze" for output in row["outputs"]
-               if output["key"].endswith("/analyze/result.json")]
+    final_stage = "analyze" if job["operation"] == "source.analyze" else "verify"
+    outputs = [output for row in stages if row["stage"] == final_stage for output in row["outputs"]
+               if output["key"].endswith("/" + final_stage + "/result.json")]
     if len(outputs) != 1:
         return {"status": "evidence-incomplete"}
     result = {"manifestRef": outputs[0]["key"], "manifestHash": outputs[0]["sha256"],
               "receipts": [row["receiptHash"] for row in stages]}
+    status = ledger._terminal_status(job, stages)
+    if status not in {"succeeded", "needs_changes"}:
+        return {"status": "evidence-incomplete"}
+    completion = SourcePublication(host, config)
+    if job["operation"].startswith("design."):
+        from workspace.design_execution import DesignPublication
+        completion = DesignPublication(host, config)
     completed = ledger.reconciler().reconcile(event["owner"], job["id"], job["attempt"]["id"], receipts=[],
-        status="succeeded", result=result, operation_id=hashlib.sha256((job["id"] + job["attempt"]["id"] + "reconcile").encode()).hexdigest(),
-        stage_completion=SourcePublication(host, config))
+        status=status, result=result, operation_id=hashlib.sha256((job["id"] + job["attempt"]["id"] + "reconcile").encode()).hexdigest(),
+        stage_completion=completion)
     return view_job(completed)
 
 

@@ -80,6 +80,10 @@ def secret_token(connection):
 
 def create_export(api, owner, release, body, scope, gate=None):
     from workspace.http import HTTPError, _json
+    if release.get("designId"):
+        accepted = release.get("frontendAcceptance") or {}
+        if any(accepted.get(key) != release.get(key) for key in ("sourceHash", "bundleHash", "approvalHash")):
+            raise HTTPError(409, "frontend-acceptance-required", "개발자의 정확한 전달 자료 확인이 필요합니다.")
     connections = api.git_connections()
     connection = connections.get(body.get("connectionId"))
     if connection is None:

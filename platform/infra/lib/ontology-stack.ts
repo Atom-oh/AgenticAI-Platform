@@ -26,6 +26,8 @@ export interface OntologyStackProps extends cdk.StackProps {
   };
   workspaceTableName?: string;
   cacheTableName?: string;
+  design?: { projects: string[]; models: string[] };
+  intakeDenylistParam?: string;
   workspaceBucketName?: string;
   resourcePrefix?: string;
   /**
@@ -46,6 +48,17 @@ export class OntologyStack extends cdk.Stack {
         [props.toolArchive.archiveHash, props.toolArchive.analyzerCodeHash, props.toolArchive.dependencyLockHash]
           .some(value => !/^[a-f0-9]{64}$/.test(value))) {
       throw new Error('Ontology requires isolated networking and an immutable, verified tool archive');
+    }
+    const approvedModels = new Set(['global.anthropic.claude-sonnet-5', 'global.anthropic.claude-opus-5',
+      'global.openai.gpt-6-astra', 'global.anthropic.claude-fable-5-1', 'global.anthropic.claude-fable-5']);
+    if (props.design && (!Array.isArray(props.design.projects) || !props.design.projects.length ||
+        props.design.projects.length > 20 || props.design.projects.some(id => !/^p-[a-zA-Z0-9_-]+$/.test(id)) ||
+        !Array.isArray(props.design.models) || !props.design.models.length || props.design.models.some(id => !approvedModels.has(id)))) {
+      throw new Error('Design execution requires explicit projects and exact supported model profiles');
+    }
+    const denylistParam = props.intakeDenylistParam ?? this.node.tryGetContext('intakeDenylistParam');
+    if (props.design && (typeof denylistParam !== 'string' || !/^\/[A-Za-z0-9_./-]+$/.test(denylistParam))) {
+      throw new Error('Design execution requires its private intake deny-list parameter');
     }
     const prefix = props.resourcePrefix ?? 'bankplatform_ontology';
     const workload = `${prefix}_gateway_m2m`;
@@ -96,7 +109,8 @@ export class OntologyStack extends cdk.Stack {
       if (outputWriter) fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['s3:PutObject', 's3:PutObjectTagging'], resources: [
           sources.arnForObjects('workspace/*/job/exec-*/*'), sources.arnForObjects('workspace/*/wb_artifact/*'),
-          sources.arnForObjects('workspace/*/ontology/*')],
+          sources.arnForObjects('workspace/*/ontology/*'), ...(props.design ? [sources.arnForObjects('workspace/*/design/*'),
+            sources.arnForObjects('workspace/*/run/*'), sources.arnForObjects('workspace/*/release/*')] : [])],
       }));
     };
     const cache = props.cacheTableName ? dynamodb.Table.fromTableName(this, 'SharedBudgetTable', props.cacheTableName) :
@@ -181,11 +195,12 @@ export class OntologyStack extends cdk.Stack {
       directory: props.runtimeDirectory, platform: ecrAssets.Platform.LINUX_ARM64,
     });
     const revision = createHash('sha256').update(JSON.stringify({ code: image.assetHash,
-      toolArchive: props.toolArchive, prefix, workspaceTable: props.workspaceTableName ?? 'synthetic',
+      toolArchive: props.toolArchive, design: props.design ?? null, denylistParam: denylistParam ?? null, prefix, workspaceTable: props.workspaceTableName ?? 'synthetic',
       workspaceBucket: props.workspaceBucketName ?? 'synthetic', cacheTable: props.cacheTableName ?? 'synthetic',
       intakeDeployment: props.intakeDeployment ?? this.node.tryGetContext('intakeDeployment') ?? null })).digest('hex');
     const common = { protocol: 'platform-execution/1', revision, capabilityKeyId: 'cap-v1', evidenceKeyId: 'evidence-v1',
       evidenceKeyArn: evidence.keyArn, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
+      ...(props.design ? { design: props.design } : {}),
       interpreter: { ...props.toolArchive, identifier: interpreter.attrCodeInterpreterId,
         region: this.region, architecture: 'arm64', nodeMajor: 24 } };
     const tools = new lambda.DockerImageFunction(this, 'OntologyTools', {
@@ -274,12 +289,18 @@ export class OntologyStack extends cdk.Stack {
       actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
       resources: [`arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/*`],
     }));
+    if (props.design) runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'],
+      resources: props.design.models.flatMap(model => [
+        `arn:${this.partition}:bedrock:*:${this.account}:inference-profile/${model}`,
+        `arn:${this.partition}:bedrock:*::foundation-model/${model.replace(/^global\./, '')}`,
+      ]),
+    }));
     const runtime = new agentcore.CfnRuntime(this, 'Runtime', {
       agentRuntimeName: prefix, roleArn: runtimeRole.roleArn, protocolConfiguration: 'HTTP',
       agentRuntimeArtifact: { containerConfiguration: { containerUri: image.imageUri } },
       networkConfiguration: { networkMode: 'PUBLIC' },
-      environmentVariables: { AWS_REGION: this.region, ONTOLOGY_RUNTIME_CONFIGURATION: this.toJsonString({
-        protocol: 'platform-execution/1', evidenceKeyId: common.evidenceKeyId,
+      environmentVariables: { AWS_REGION: this.region, ...(props.design ? { BEDROCK_READ_TIMEOUT: '180' } : {}), ONTOLOGY_RUNTIME_CONFIGURATION: this.toJsonString({
+        protocol: 'platform-execution/1', evidenceKeyId: common.evidenceKeyId, browserId: browser.attrBrowserId,
         gatewayUrl: gateway.attrGatewayUrl, workload, workloadIdentityArn: gatewayIdentity.attrWorkloadIdentityArn,
         provider: provider.name, memoryId: memory.attrMemoryId,
         memoryNamespaceKeyArn: memoryNamespaceKey.keyArn, organization: `${this.account}:${prefix}`,
@@ -346,6 +367,18 @@ export class OntologyStack extends cdk.Stack {
     watchdog.addToRolePolicy(new iam.PolicyStatement({ actions: ['s3:DeleteObject'],
       resources: [sources.arnForObjects('workspace/*/job/exec-*/parts/*')] }));
     const reconciler = maintenance('ExecutionReconciler', 'ontology_runtime.execution_entrypoints.reconcile_handler');
+    if (props.design) {
+      for (const fn of [tools, watchdog, reconciler]) fn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:ConditionCheckItem'],
+        resources: [cache.tableArn], conditions: { 'ForAllValues:StringLike': {
+          'dynamodb:LeadingKeys': ['usage#*', 'usage-charge#*'] } },
+      }));
+      for (const fn of [tools, reconciler]) {
+        fn.addEnvironment('INTAKE_DENYLIST_PARAM', denylistParam);
+        fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'],
+          resources: [`arn:${this.partition}:ssm:${this.region}:${this.account}:parameter${denylistParam}`] }));
+      }
+    }
     new events.Rule(this, 'ExecutionSchedule', { schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(watchdog, { retryAttempts: 0 })] });
     const dispatchQueue = new sqs.Queue(this, 'ExecutionDispatchQueue', {

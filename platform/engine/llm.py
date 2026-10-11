@@ -123,6 +123,13 @@ class ClaudeStream(AdapterStream):
                 self.usage = normalize_usage(ev["metadata"].get("usage", {}))
 
 
+class ObservedUsage(dict):
+    """Usage mapping plus SDK request metadata; no prompt or response content."""
+    def __init__(self, value, request_id=None):
+        super().__init__(value)
+        self.request_id = request_id
+
+
 class ClaudeAdapter:
     route = "claude"
     tier = "0/1"
@@ -168,7 +175,7 @@ class ClaudeAdapter:
     def generate(self, system: str, user: str, max_tokens: int = 1500, temperature: float = 0.2) -> Tuple[str, dict]:
         r = self._client().converse(**self._kwargs(system, user, max_tokens, temperature, self.model_id))
         text = "".join(b.get("text", "") for b in r.get("output", {}).get("message", {}).get("content", []))
-        return text, normalize_usage(r.get("usage", {}))
+        return text, ObservedUsage(normalize_usage(r.get("usage", {})), r.get("ResponseMetadata", {}).get("RequestId"))
 
     def stream(self, system: str, user: str, max_tokens: int = 1500, temperature: float = 0.2) -> ClaudeStream:
         r = self._client().converse_stream(**self._kwargs(system, user, max_tokens, temperature, self.model_id))

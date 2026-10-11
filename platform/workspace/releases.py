@@ -64,6 +64,8 @@ def create_release(api, owner, body, scope, gate=None):
     from workspace.http import HTTPError, _integer, _json
     number = _integer(body.get("round"), "Round", 1, 5)
     run = api._get(owner, "run", body.get("runId"))
+    if run.get("designId"):
+        raise HTTPError(409, "design-route-required", "절차 기반 설계의 재빌드·전달 경로를 사용하세요.")
     api._criteria(owner, {}, scope, api._get(owner, "contract", run["contractId"]))
     try:
         row, _, _ = approved_artifacts(api.storage, owner, run, number, gate=gate)

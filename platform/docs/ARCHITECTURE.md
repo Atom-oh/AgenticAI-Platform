@@ -410,3 +410,11 @@ The prior table's remaining source-wiring items are now implemented in code;
 the deployment/live-gate, complete design-stage application and cohort/rollback
 requirements remain. The main stack retains its default configuration. Preserve
 the existing React canvas while implementing the later persisted design flow.
+
+## Final delivery work (2026-10-11)
+
+[Design execution delivery](DESIGN_EXECUTION_DELIVERY.md) defines the next
+persistent application/Runtime interfaces and final live-gate sequence before
+implementation. It preserves the current canvas and the single execution writer.
+Status remains implementation/validation in progress until the named code,
+service, UI and rollback evidence is recorded against the final revision.

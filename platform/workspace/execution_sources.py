@@ -54,7 +54,15 @@ class ExecutionSources:
         ctx = context(self.host, job)
         if owner != ctx.owner:
             raise ValueError("Foreign execution")
-        decision, _, checks, expiry = self.collection(ctx, binding["decisionId"])
+        decision, data, authority = admission.authorized(self.host, ctx.scope, binding["decisionId"], claims=ctx.claims)
+        if decision["artifact"]["kind"] == "code-collection":
+            collection.check_resolver(self.host, ctx.scope, decision, authority, json.loads(data))
+            collection.analyzer_request(self.host, ctx.scope, decision["id"], claims=ctx.claims)
+        fences, deadlines = authority.collect_deadlines()
+        checks = unique([*authority.checks, *fences])
+        expiry = min([job["authorizationExpiresAt"], *[value for value, _ in deadlines]])
+        if self.host.storage.clock() >= expiry:
+            raise admission.AdmissionError("authorization-expired", 401)
         if (str(decision["revision"]) != binding["revision"]
                 or decision["artifact"]["sha256"] != binding["artifactHash"]):
             raise admission.AdmissionError("decision-not-current")

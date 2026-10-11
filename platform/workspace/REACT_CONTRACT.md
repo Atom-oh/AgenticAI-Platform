@@ -328,3 +328,18 @@ and `compile.cjs`; approval and release checks are in `workspace/http.py`,
 and `react-kit` tests with the dependencies in CI. Historical test totals and
 live Astra/Fable runs are dated in [the platform README](../README.md); they do
 not certify the current deployment or a customer's package/Git integration.
+
+## Persistent procedure design (2026-10-11 candidate)
+
+The [design delivery path](../docs/DESIGN_EXECUTION_DELIVERY.md) adds persisted
+PRD/flow approvals and Runtime-backed generated variants to the existing canvas.
+Its immutable contract records project the exact human-approved flow contract.
+Generated runs and releases are ledger-owned and refuse legacy generation or
+approval routes. The dedicated design UI owns their exact UX decision and
+source-preserving rebuild; it does not weaken existing personal/legacy flows.
+
+Design release download checks every chunk and whole-object hash. Frontend
+package acceptance is a separate developer/owner decision over exact source,
+bundle and approval hashes. Registered Git export requires that acceptance and
+retains its original source/criteria/destination checks. Customer API/auth/deploy
+integration remains explicitly unverified.

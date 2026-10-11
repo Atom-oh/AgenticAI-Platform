@@ -330,9 +330,11 @@ def generate(system: str, user: str, max_tokens: int = 300, route: Optional[str]
     ad = adapter(r, model_id=model_id)
     boundary = check(system, user, purpose, trace_id, r, ad.model_id)
     text, usage = ad.generate(system, user, max_tokens=max_tokens, temperature=temperature)
+    request_id = getattr(usage, "request_id", None)
     usage = llm.normalize_usage(usage)
     return text, usage, {"modelId": ad.model_id, "route": r, "tier": ad.tier, "endpoint": getattr(ad, "endpoint", ""),
-                         "boundary": boundary, "usage": usage, "purpose": purpose}
+                         "boundary": boundary, "usage": usage, "purpose": purpose,
+                         **({"requestId": request_id} if isinstance(request_id, str) and request_id else {})}
 
 
 def generate_with_images(system: str, user: str, images: list[dict], *, model_id: str,

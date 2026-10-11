@@ -17,13 +17,13 @@ import re
 import time
 from decimal import Decimal
 
-KINDS = frozenset({"asset", "contract", "job", "run", "project", "membership", "ontology_cursor",
+KINDS = frozenset({"asset", "contract", "job", "run", "project", "design", "membership", "ontology_cursor",
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
                    "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
                    "wb_artifact", "wb_pension", "wb_report", "wb_tool",
                    "ac_execution", "ac_operation", "ac_key", "ac_admission",
                    "document", "docrevision", "docbinding", "docaudit", "docanalysis", "docdecision",
-                   "exec_report", "exec_request", "exec_quota", "exec_due",
+                   "exec_report", "exec_request", "exec_quota", "exec_due", "exec_memory",
                    "adm_policy", "adm_provenance", "adm_grant", "adm_decision", "adm_audit", "adm_resolver",
                    "capability", "adm_sharing", "publication", "pub_grant"})
 MAX_BLOB_BYTES = 50 * 1024 * 1024
@@ -228,6 +228,11 @@ class Storage:
                 int(authority(previous) != authority(data))) if previous else 1)
         if kind == "job":
             data["ttl"] = now // 1000 + JOB_RETENTION_SECONDS
+        if kind == "exec_memory":
+            expiry = data.get("expiresAt")
+            if type(expiry) is not int or expiry <= now:
+                raise ValueError("Memory index requires a current bounded expiry")
+            data["ttl"] = expiry // 1000
         if kind == "ontology_cursor":
             expiry = data.get("expiresAt")
             if type(expiry) is not int or not now < expiry <= now + 300000:

@@ -52,6 +52,8 @@ def create_batch(api, owner, body, scope, gate=None):
     # guideline asset) must 404 identically to a missing contract, never this
     # 409 or the criteria-changed one below.
     contract = api._authorized_contract(owner, data["contractId"], gate)
+    if contract.get("designId"):
+        raise HTTPError(409, "design-route-required", "절차 기반 설계에서 생성·검증을 진행하세요.")
     if (contract.get("status") != "approved" or contract["version"] != data["contractVersion"]
             or not contract.get("catalogHash")):
         raise HTTPError(409, "code-criteria-required", "현재 React 코드·상품 기준이 승인된 규칙을 선택하세요.")

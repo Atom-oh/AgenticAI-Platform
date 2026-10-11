@@ -1395,3 +1395,26 @@ to `workspace/*/job/exec-*/*`, `workspace/*/wb_artifact/*` and
 objects. These shared Lambda roles enforce project authority in the trusted
 facade/ledger; they are not per-project IAM sessions. Runtime has none of these
 workspace data grants.
+
+## Design delivery integration (2026-10-11 candidate)
+
+[Design execution delivery](../docs/DESIGN_EXECUTION_DELIVERY.md) defines the new
+application, human-decision and Runtime interfaces. The existing B0 operation
+set and authority checks remain. Design-enabled deployment configuration names
+explicit project IDs and exact model IDs; it does not enable every project.
+`design` records and stage artifacts carry execution markers and reject legacy
+writers. Only the exact `DesignPublication` adapter completes design-linked
+operations; human decisions use the existing module-checked human writer.
+
+The machine tool adds `inspect_model` (private complete-payload inspection plus
+a bounded `modelInspections` hash/byte ledger) and `memory_sessions` (at most 20
+current same-actor sessions). `memoryContextHash` binds source/admission checks,
+project authority, profile/backend and model. `exec_memory` indexes publish with
+completion and carry three-day expiry. This index is not an authorization grant.
+Explicit physical event purge is not yet installed; existing retention and
+current-source read denial remain. No live Memory gate is implied.
+
+Design completion may conditionally update the design record whose version is
+already checked by source protection. The corresponding conditional Put enforces
+that identical predicate exactly once; a different expected version still fails.
+No source predicate is discarded or refreshed to complete an over-budget request.

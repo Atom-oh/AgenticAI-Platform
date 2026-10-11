@@ -50,3 +50,15 @@ class Memory:
                     result.append({"stage": value["stage"], "evidenceHash": value["evidenceHash"]})
         return {"events": result, "truncated": bool(response.get("nextToken")),
                 "authority": False}
+
+    def read_sessions(self, claims, sessions):
+        if not isinstance(sessions, list) or len(sessions) > 20:
+            raise ValueError("Memory session scope is bounded")
+        events, truncated = [], False
+        for session in sessions:
+            if session.get("resourcesHash") != claims["resourcesHash"]:
+                raise ValueError("Memory references do not match the current source context")
+            result = self.read({**claims, **session})
+            events.extend(result["events"])
+            truncated = truncated or result["truncated"]
+        return {"events": events[:100], "truncated": truncated or len(events) > 100, "authority": False}
