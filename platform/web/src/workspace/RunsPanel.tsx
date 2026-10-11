@@ -8,6 +8,7 @@ import { JobProgress, ModelPicker, Notice, PrivatePreview, useDownload } from '.
 import VerificationLoop, { deriveVerificationLoop, hasExactApproval } from './VerificationLoop';
 import { StateEvidence } from './StatePlan';
 import CanvasRequest from './CanvasRequest';
+import ComparisonTray from './ComparisonTray';
 import type { PreviewSelection } from './previewSelection';
 import type { Asset, Batch, Contract, GuideRef, Job, Product, Round, Run, Selection, WorkspaceConfig } from './types';
 
@@ -367,6 +368,24 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
             {slot.error && <span>{slot.error}</span>}
             <small>{item?.rounds?.length ? `${item.rounds.length}개 라운드 · 개별 근거 확인` : '완료 근거 미확인'}</small></button>;
         })}</div>
+        <ComparisonTray key={batch.id}>
+          {slots.map((slot, index) => {
+            const id = slot.runId;
+            const item = runs.find(value => value.id === id) || batchRuns.find(value => value.id === id) || attempts.find(value => value.run?.id === id)?.run;
+            const round = item?.rounds.find(value => value.number === item.bestRound);
+            const title = slot.role === 'baseline' ? '엄격 기준안 · 고정' : `시안 ${index + (batch.mode === 'guided' ? 0 : 1)}`;
+            return <article className={`ws-comparison-card ${slot.role === 'baseline' ? 'ws-baseline' : ''}`} key={slot.index}>
+              <h4>{title}</h4><p>{item ? stateLabel(item.status) : '기록 미확인'}{round ? ` · ${round.number}라운드` : ''}</p>
+              {slot.error && <Notice error>{slot.error}</Notice>}
+              {id && round?.hasScreenshot ? <PrivatePreview
+                key={`${id}:${round.number}:${round.sourceHash}:${round.bundleHash}`}
+                path={`/runs/${resource(id)}/blob?kind=screenshot&round=${round.number}`} title={`${title} 검수 시작 화면`} format="image/png" /> :
+                <p>비교할 검수 화면이 아직 없습니다.</p>}
+              <small>검수 시작 화면 · 상세 동작과 승인은 개별 검토에서 확인하세요.</small>
+              <button disabled={!id} aria-pressed={!!id && id === runId} onClick={() => id && selectRun(id)}>{title} 검토하기</button>
+            </article>;
+          })}
+        </ComparisonTray>
         {batch.status === 'partial' && (pendingBatch.current?.batchId === batch.id ? <button disabled={sending || approving || !canGenerate}
           onClick={() => void generate(pendingBatch.current!.payload)}>같은 설정으로 준비 실패한 안 다시 시도</button> :
           <p className="ws-muted">이전 세션의 부분 완료 비교입니다. 준비된 결과는 확인할 수 있으며, 재생성하려면 새 비교를 만들어 주세요.</p>)}

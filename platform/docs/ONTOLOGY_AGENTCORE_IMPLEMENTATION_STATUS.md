@@ -78,6 +78,13 @@ decisions, design operations through the B0 Runtime, compiler/Browser/large-text
 verification, source-preserving release/handoff, recent-session Memory indexing
 and the existing-canvas UI extension. See [delivery interfaces](DESIGN_EXECUTION_DELIVERY.md).
 Validation is in progress; this is not a completed live/cutover claim.
+The UI follow-up adds directed flow diagrams to both design editors, on-demand
+side-by-side candidate previews, and single common-menu entries for tasks and
+knowledge. Owning contract: REACT_CONTRACT (persistent procedure design).
+`workspace-visual-review.test.cjs` covers branches, back/self edges, missing
+targets, preview evidence mismatch/retry, scope changes and narrow layouts with
+real Chromium and explicit API doubles. These are U-mode regressions for
+GEN-05/HAND-01–03, not G0-BROWSER or live model/service acceptance.
 AWS payload/destination approval, explicit synthetic Memory deletion authorization
 and the registered Git target/credential are pending. The acceptance template
 retains its fixed cases and unrun live modes.

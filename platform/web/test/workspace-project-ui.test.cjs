@@ -76,6 +76,12 @@ test('project scope, collaboration, guided baselines and real release metadata r
       const target = url.pathname.replace('/studio-api', '');
       const method = route.request().method(), body = method === 'GET' ? null : route.request().postDataJSON();
       calls.push({ target, method, scope, body, query: Object.fromEntries(url.searchParams) });
+      // Procedure-design configuration is read when entering a project. This suite exercises legacy batches.
+      if (target === '/designs/config') return json({ enabled: false, models: [] });
+      if (target === '/designs') return json({ designs: [] });
+      if (target === '/designs/inputs') return json({ inputs: [] });
+      if (target === '/documents') return json({ documents: [] });
+      if (target === '/ontology') return json({ nodes: [] });
       if (target === '/config') { assert.equal(scope, 'personal'); return json({ actorId: 'actor', models: [{ id: 'fable', label: 'Fable' }],
         componentCatalog: { id: catalog.id, label: catalog.label, version: catalog.version, hash: catalog.hash },
         defaultModel: 'fable', extensions: ['html', 'png', 'jpg', 'svg', 'css', 'pdf', 'fig'], maxFileBytes: 52428800, chunkBytes: 2097152 }); }
@@ -207,7 +213,9 @@ test('project scope, collaboration, guided baselines and real release metadata r
           checks: contract.rules.map(rule => ({ caseId: rule.id, title: `${rule.title} 근거`, status: 'pass', required: true })),
           blockingFindings: [], networkRequests: [], consoleErrors: [] };
         const guideAsset = systemGuides.find(asset => target === `/assets/${asset.id}/blob`);
-        const bytes = Buffer.from(guideAsset ? guideText(guideAsset.importRevision) : url.searchParams.get('kind') === 'report' ? JSON.stringify(report) : html);
+        const bytes = url.searchParams.get('kind') === 'screenshot'
+          ? Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
+          : Buffer.from(guideAsset ? guideText(guideAsset.importRevision) : url.searchParams.get('kind') === 'report' ? JSON.stringify(report) : html);
         const offset = Number(url.searchParams.get('offset')), chunk = bytes.subarray(offset, offset + 128);
         return route.fulfill({ body: chunk, headers: { 'X-SHA256': hash(bytes), 'X-Content-Type': 'application/octet-stream',
           'X-Total-Size': String(bytes.length), 'X-Chunk-Size': String(chunk.length) } });
@@ -320,6 +328,16 @@ test('project scope, collaboration, guided baselines and real release metadata r
     assert.equal(await page.locator('.ws-comparison button').count(), 3);
     assert.match(await page.locator('.ws-comparison button').first().innerText(), /엄격 기준안.*고정/s);
     assert.match(await page.locator('.ws-comparison').innerText(), /실패/);
+    await page.getByRole('button', { name: '시안 나란히 비교', exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('.ws-comparison-card img')].filter(img => img.naturalWidth > 0).length >= 2);
+    assert.equal(await page.locator('.ws-comparison-card').count(), 3);
+    assert.match(await page.locator('.ws-comparison-card').first().innerText(), /엄격 기준안 · 고정/);
+    assert.match(await page.locator('.ws-comparison-previews').innerText(), /실패/);
+    assert(calls.filter(call => call.query.kind === 'screenshot').every(call => call.scope === 'a' && call.query.round === '1'));
+    const baselinePreview = await page.locator('.ws-comparison-card').nth(0).boundingBox();
+    const variationPreview = await page.locator('.ws-comparison-card').nth(1).boundingBox();
+    assert.equal(baselinePreview.y, variationPreview.y);
+    await page.getByRole('button', { name: '나란히 비교 닫기' }).click();
     await page.getByLabel('추가 변형 수', { exact: true }).selectOption('5');
     await page.getByRole('button', { name: '기준안 + 변형 5개 만들기' }).click();
     await page.waitForFunction(() => document.querySelectorAll('.ws-comparison button').length === 6);

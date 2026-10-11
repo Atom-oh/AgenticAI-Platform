@@ -40,6 +40,11 @@ test('history protects unsaved scope and product switches never reopen the previ
           extensions: ['txt'], maxFileBytes: 52428800, chunkBytes: 2097152 });
         if (target === '/projects') return json({ projects: [project('p'), project('q')] });
         if (target.startsWith('/projects/')) return json({ project: project(target.split('/')[2]) });
+        if (target === '/designs/config') return json({ enabled: false, models: [] });
+        if (target === '/designs') return json({ designs: [] });
+        if (target === '/designs/inputs') return json({ inputs: [] });
+        if (target === '/documents') return json({ documents: [] });
+        if (target === '/ontology') return json({ nodes: [] });
         if (target === '/products') return json({ products });
         if (/^\/products\/[ab]\/ontology$/.test(target)) return json({ ontology: { schemaVersion: 1, projectId: 'p',
           productId: target.split('/')[2], guidelineId: url.searchParams.get('revision'), hash: 'a'.repeat(64), nodes: [], edges: [] } });

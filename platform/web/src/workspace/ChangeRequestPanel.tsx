@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { messageOf, resource } from './client';
 import { useWorkspaceClient } from './WorkspaceScope';
 import { Notice } from './shared';
+import FlowDiagram from './FlowDiagram';
 import { UX_STATES } from './workflow';
 import type { ChangeRequest, EditableContract, GuideRef, Run, UXState } from './types';
 
@@ -192,6 +193,8 @@ export default function ChangeRequestPanel({ draft, runs = [], disabled, stage, 
           transitions: [...request.transitions, { id: nextId('link'), from: request.screens[0].id, to: request.screens[1].id,
             action: '', condition: '', retention: '' }],
         })}>화면 연결 추가</button></div>
+      <FlowDiagram screens={request.screens.map(screen => ({ id: screen.id, title: screen.title, removed: screen.change === 'remove' }))}
+        transitions={request.transitions.map(link => ({ ...link, condition: link.condition || '미정의' }))} />
       {request.transitions.map(link => <fieldset disabled={disabled} key={link.id} className="ws-transition">
         <div className="ws-transition-path">{(['from', 'to'] as const).map((key, index) => <label className="ws-field" key={key}>
           {index ? '→ 도착 화면' : '출발 화면'}<select value={link[key]} onChange={event => update({ transitions: request.transitions.map(item =>

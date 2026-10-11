@@ -331,6 +331,18 @@ not certify the current deployment or a customer's package/Git integration.
 
 ## Persistent procedure design (2026-10-11 candidate)
 
+The flow review UI projects the current screens and directed transitions into a
+read-only diagram. Selecting a transition highlights its endpoints and retains
+its full condition/retention text; missing or removed endpoints remain warnings.
+This display does not evaluate product conditions or add a flow approval.
+
+On-demand side-by-side comparison uses authorized exact-round screenshots for
+legacy batches and isolated React previews for persistent design variants.
+Each candidate retains its own status and evidence identity. Design previews
+reject source/bundle or verdict mismatches and unmount on scope/revision changes;
+failed or unavailable candidates remain visible as failures. Comparison selection
+only opens the existing individual review; it never creates an approval/release.
+
 The [design delivery path](../docs/DESIGN_EXECUTION_DELIVERY.md) adds persisted
 PRD/flow approvals and Runtime-backed generated variants to the existing canvas.
 Its immutable contract records project the exact human-approved flow contract.

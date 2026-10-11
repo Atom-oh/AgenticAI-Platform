@@ -51,6 +51,11 @@ test('guideline page selection reaches AI proposal, exact citations survive edit
         const scope = route.request().headers()['x-workspace-project'] || 'personal';
         const body = method === 'GET' ? null : route.request().postDataJSON();
         calls.push({ target, method, scope, body });
+        if (target === '/designs/config') return json({ enabled: false, models: [] });
+        if (target === '/designs') return json({ designs: [] });
+        if (target === '/designs/inputs') return json({ inputs: [] });
+        if (target === '/documents') return json({ documents: [] });
+        if (target === '/ontology') return json({ nodes: [] });
         if (target === '/config') return json({ actorId: 'actor', models: [{ id: 'astra', label: 'Astra' }],
           defaultModel: 'astra', maxFileBytes: 52428800, chunkBytes: 2097152, extensions: ['json', 'pdf', 'md'] });
         if (target === '/projects') return json({ projects: [project] });

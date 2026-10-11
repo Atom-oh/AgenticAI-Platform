@@ -3,6 +3,8 @@ import { useWorkspaceScope } from './WorkspaceScope';
 import { messageOf, resource } from './client';
 import { Notice } from './shared';
 import DesignHandoff from './DesignHandoff';
+import FlowDiagram from './FlowDiagram';
+import DesignComparison from './DesignComparison';
 import type { WorkspaceConfig } from './types';
 
 type Variant = { artifactId: string; jobId: string; variant: number; passed: boolean; sourceHash: string; bundleHash: string;
@@ -206,8 +208,8 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
           })()}>이 PRD 확정</button>
         </details>}
         {detail?.flow && <details open={!current.approvals.flow}><summary>흐름과 필수 확인 기준</summary>
-          <ol>{detail.flow.flow.screens.map((id, index) => <li key={id}>화면 {index + 1}</li>)}</ol>
-          {detail.flow.flow.transitions.map(item => <p key={item.id}>이동 조건: {item.when || '항상'}</p>)}
+          <FlowDiagram key={`${current.id}:${detail.flowHash}`} screens={detail.flow.flow.screens.map((id, index) => ({ id, title: `화면 ${index + 1} · ${id}` }))}
+            transitions={detail.flow.flow.transitions.map(item => ({ id: item.id, from: item.src, to: item.dst, condition: item.when }))} />
           {detail.flow.contract?.rules.map(rule => <p key={rule.id}>✓ {rule.title}</p>)}
           {detail.flow.issues.map((issue, index) => <p key={index}>{issue.code || issue.message}</p>)}
           <button disabled={!designRole || active || !!detail.flow.issues.length} onClick={() => void act(`/designs/${resource(current.id)}/approve-flow`, { version: current.version, hash: detail.flowHash })}>이 흐름과 확인 기준 승인</button>
@@ -242,5 +244,6 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
       {findings && <div><strong>{findings.verdict === 'pass' ? '검증 통과' : '확인이 필요합니다'}</strong>
         {(findings.findings || []).map((item, index) => <p key={index}>{item.severity} · {item.message || item.code}</p>)}</div>}
     </main></div>
+    {!!current?.variants.length && <DesignComparison designId={current.id} variants={current.variants} selected={variantId} onSelect={id => void show(id)} />}
   </section>;
 }
