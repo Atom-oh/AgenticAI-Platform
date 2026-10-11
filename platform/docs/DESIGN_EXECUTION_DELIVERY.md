@@ -213,3 +213,9 @@ geometry remain in the hash-checked private artifact returned by artifact view.
 Admission reserves 64 KiB of metadata headroom before dispatch; a design whose
 history reaches that bound requires a new design rather than spending on a job
 that cannot publish. Existing idempotent requests still return their durable result.
+
+The common Git worker image also packages `design_loop` and its resources:
+registered design exports reauthorize canonical design criteria in that worker.
+API ZIP assembly already includes the package. Isolated packaging tests import
+`workspace.design_stages` using only Docker COPY contents, so a checkout-local
+module cannot hide a missing deployed dependency.

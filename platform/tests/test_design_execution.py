@@ -68,8 +68,20 @@ def pipeline(design_state, monkeypatch):
         def evaluate(self,build,contract,reference=None,visual_tolerance=0.15,text_scale=1.0):
             import base64
             state.browsers+=1
+            import os
+            remote=None
+            def context(playwright,viewport):
+                nonlocal remote
+                # Match the AgentCore adapter's one-browser/per-rule-context lifecycle.
+                # Lambda's single-process launch mode is covered by the legacy verifier tests.
+                if remote is None:
+                    remote=playwright.chromium.launch(headless=True,
+                        executable_path=os.environ.get('WORKSPACE_CHROMIUM_PATH'),
+                        args=['--no-sandbox','--disable-background-networking','--disable-dev-shm-usage'])
+                return remote.new_context(viewport=viewport,device_scale_factor=1,
+                    service_workers='block',accept_downloads=False,offline=True)
             result=evaluate_bundle({n:base64.b64decode(v) for n,v in build['files'].items()},contract,reference,
-                visual_tolerance,expected_hash=build['bundleHash'],text_scale=text_scale)
+                visual_tolerance,expected_hash=build['bundleHash'],text_scale=text_scale,_context_factory=context)
             result['browserExecution']={'sessionId':'browser-'+str(state.browsers),'backend':'agentcore-browser'}
             return result
     class Model(DesignModel):
@@ -272,7 +284,8 @@ def test_edit_rechecks_layout_outside_the_exact_selected_subtree(pipeline, monke
     decide(s.ctx,s.design['id'],'prd',{'version':s.design['version'],'prd':s.prd,'hash':schema.digest(s.prd)})
     record=s.ctx.get('design',s.design['id'])
     decide(s.ctx,record['id'],'flow',{'version':record['version'],'hash':record['flow']['sha256']})
-    assert execute(s,'generate')[0]['status']=='succeeded'
+    generated_result,_=execute(s,'generate')
+    assert_succeeded(s,generated_result)
     record=s.ctx.get('design',s.design['id']);variant=record['variants'][0]
     artifact=s.ctx.get('wb_artifact',variant['artifactId'])
     generated=read_object(s.ctx,artifact['result'])['generated']
@@ -346,3 +359,29 @@ def test_metadata_capacity_is_refused_before_dispatch_or_reservation(pipeline, m
                s.ledger,s.config,lambda *args:dispatched.append(args))
     assert error.value.code=='design-history-limit'
     assert not dispatched and not s.models and not s.charges
+
+
+def assert_succeeded(state, result):
+    """Expose non-content evidence when a real compiler/Browser assertion fails in CI."""
+    if result['status']=='succeeded':return
+    from workspace.design_api import read_object
+    record=state.ctx.get('design',state.design['id']);details={'status':result['status']}
+    if record.get('variants'):
+        variant=record['variants'][-1]
+        value=read_object(state.ctx,state.ctx.get('wb_artifact',variant['artifactId'])['result'])
+        verification=value['verification']
+        details['verification']={'verdict':verification.get('verdict'),'approvable':verification.get('approvable'),
+            'findings':[{key:item.get(key) for key in ('role','code','severity')} for item in verification.get('findings',[])]}
+        for kind in ('browser','largeText'):
+            report=read_object(state.ctx,value[kind]);large=report.get('largeText',{})
+            details[kind]={'passed':report.get('passed'),'functionalStatus':report.get('functionalStatus'),
+                'engineError':report.get('engineError'),'networkCount':len(report.get('networkRequests',[])),
+                'consoleCount':len(report.get('consoleErrors',[])),
+                'accessibility':{'status':report.get('accessibility',{}).get('status'),
+                    'ids':[item.get('id') for item in report.get('accessibility',{}).get('violations',[])]},
+                'checks':[{'id':check['caseId'],'status':check['status'],
+                    'steps':[{key:item.get(key) for key in ('index','action','status')} for item in check.get('steps',[]) if item['status']!='pass']}
+                    for check in report.get('checks',[]) if check['status']!='pass'],
+                'largeText':{'status':large.get('status'),'overflowCount':len(large.get('overflow',[])),
+                    'unscaledCount':len(large.get('unscaled',[]))}}
+    assert result['status']=='succeeded',details
