@@ -134,8 +134,11 @@ def reconcile_handler(event, context):
     host, config, ledger, _, _, _, _ = dependencies()
     if set(event) != {"owner", "jobId"}:
         raise ValueError("Only a persisted execution reference is accepted")
-    job = ledger.api().read(event["owner"], event["jobId"])
-    stages = job.get("stages", [])
+    # IAM-only recovery needs complete internal evidence; the public projection is size-bounded.
+    job = ledger._get(event["owner"], event["jobId"])
+    if job.get("status") != "recovery_required" or not job.get("attempt"):
+        return {"status": "evidence-incomplete"}
+    stages = [row for row in job.get("stages", []) if row.get("attemptId") == job["attempt"]["id"]]
     final_stage = "analyze" if job["operation"] == "source.analyze" else "verify"
     outputs = [output for row in stages if row["stage"] == final_stage for output in row["outputs"]
                if output["key"].endswith("/" + final_stage + "/result.json")]

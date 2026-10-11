@@ -355,3 +355,25 @@ package acceptance is a separate developer/owner decision over exact source,
 bundle and approval hashes. Registered Git export requires that acceptance and
 retains its original source/criteria/destination checks. Customer API/auth/deploy
 integration remains explicitly unverified.
+
+### Canonical design criteria and delivery
+
+A persistent design assertion contract binds `projectId`, `designId`,
+`designSnapshotHash` and `catalogHash` as a complete criteria set. It does not
+combine those with product-guideline criteria. The human-approved flow record
+and current canonical/source admissions remain authoritative. Legacy product
+contracts still require their complete original product/guideline/asset/hash set.
+Sources and Git delivery validate these design criteria and retain every observed
+version and admission expiry for their final outgoing-request check. Frozen
+contract approval includes its stored version and exact normalized hash.
+
+Failed design previews and each source/bundle/screenshot chunk apply the same
+owner/designer/developer round-state permission as legacy content. Delayed preview
+responses cannot change the selected evidence; edit instruction approval is bound
+to the exact submitted text, design and variant. Switching canvas/procedure mode
+keeps both editors mounted with independent dirty-state tracking.
+
+Partial edit approval requires both structural stability and Browser checkpoint
+layout stability within one pixel outside the selected subtree. Missing or
+incomplete geometry fails verification. Full findings remain private downloadable
+evidence; bounded stage receipts carry summaries and exact object references.

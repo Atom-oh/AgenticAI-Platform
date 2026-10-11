@@ -751,7 +751,7 @@ class WorkspaceAPI:
                 except AdmissionError as error:
                     raise HTTPError(error.status, error.code, "자료의 현재 반입 승인이 필요합니다.") from None
                 except LedgerError as error:
-                    raise HTTPError(409, error.code, "설계의 현재 승인 조건과 실행 상태를 확인하세요.") from None
+                    raise HTTPError(403 if error.code == "forbidden" else 503 if error.code == "design-execution-unavailable" else 409, error.code, "설계의 현재 승인 조건과 실행 상태를 확인하세요.") from None
             if segments[0] == "ontology":
                 from workspace.ontology_api import route
                 scope = self.collaboration.require(scope, "read")

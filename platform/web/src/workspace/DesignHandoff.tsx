@@ -13,6 +13,8 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
   const [release, setRelease] = useState<Release | null>(null);
   const [selected, setSelected] = useState('');
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [connectionError, setConnectionError] = useState('');
+  const current = useRef({ designId, selected }); current.current = { designId, selected };
   const [connectionId, setConnectionId] = useState('');
   const [confirmPublic, setConfirmPublic] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -24,11 +26,11 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
   const allowed = role === 'owner' || role === 'developer';
   const load = async (id: string, signal?: AbortSignal) => {
     const result = await client.get<{ release: Release }>(`/designs/${resource(designId)}/releases/${resource(id)}`, signal);
-    if (!signal?.aborted) setRelease(result.release);
+    if (!signal?.aborted && current.current.designId === designId && current.current.selected === id) setRelease(result.release);
   };
   useEffect(() => { if (!releaseIds.includes(selected)) setSelected(releaseIds.at(-1) || ''); }, [releaseIds.join(','), selected]);
   useEffect(() => {
-    setRelease(null); setError('');
+    operation.current?.abort(); setBusy(false); setJob(null); setNote(''); setRelease(null); setError('');
     if (!selected) return;
     const abort = new AbortController();
     void load(selected, abort.signal).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
@@ -37,8 +39,8 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
   useEffect(() => {
     const abort = new AbortController();
     void client.get<{ connections: Connection[] }>('/git-connections', abort.signal).then(value => {
-      if (!abort.signal.aborted) setConnections(value.connections);
-    }).catch(() => { if (!abort.signal.aborted) setConnections([]); });
+      if (!abort.signal.aborted) { setConnections(value.connections); setConnectionError(''); }
+    }).catch(reason => { if (!abort.signal.aborted) { setConnections([]); setConnectionError(messageOf(reason)); } });
     return () => abort.abort();
   }, [client]);
   useEffect(() => () => operation.current?.abort(), []);
@@ -68,29 +70,30 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
   };
   const accept = async () => {
     if (!release || !allowed || busy) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); const abort = new AbortController(); operation.current = abort;
     try {
       await client.post(`/designs/${resource(designId)}/releases/${resource(release.id)}/accept`, {
         version: release.version, sourceHash: release.sourceHash, bundleHash: release.bundleHash, note: '플랫폼 소스 패키지 검토 완료',
-      });
-      await load(release.id); setNote('이 소스·화면 버전에 대한 개발자 확인을 기록했습니다.');
-    } catch (reason) { setError(messageOf(reason)); }
-    finally { setBusy(false); }
+      }, abort.signal);
+      if (abort.signal.aborted) return;
+      await load(release.id, abort.signal); if (abort.signal.aborted) return; setNote('이 소스·화면 버전에 대한 개발자 확인을 기록했습니다.');
+    } catch (reason) { if (!abort.signal.aborted) setError(messageOf(reason)); }
+    finally { if (!abort.signal.aborted) setBusy(false); }
   };
   const connection = connections.find(item => item.id === connectionId);
   const requiresPublic = connection?.visibility !== 'private';
   const exportGit = async () => {
     if (!release || !allowed || !release.frontendAcceptance || !connection || busy || (requiresPublic && !confirmPublic)) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); const abort = new AbortController(); operation.current = abort;
     const key = JSON.stringify([release.id, connection.id, connection.connectionHash]);
     pending.current = pending.current?.key === key ? pending.current : { key, requestId: crypto.randomUUID() };
     try {
       const result = await client.post<{ job: Job }>(`/releases/${resource(release.id)}/git`, {
         requestId: pending.current.requestId, connectionId: connection.id, connectionHash: connection.connectionHash, confirmPublic,
-      });
-      setJob(result.job);
-    } catch (reason) { setError(messageOf(reason)); }
-    finally { setBusy(false); }
+      }, abort.signal);
+      if (!abort.signal.aborted) setJob(result.job);
+    } catch (reason) { if (!abort.signal.aborted) setError(messageOf(reason)); }
+    finally { if (!abort.signal.aborted) setBusy(false); }
   };
   if (!releaseIds.length) return null;
   return <section aria-label="검증된 개발 전달" className="ws-section">
@@ -104,7 +107,8 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
         {release.frontendAcceptance ? '개발자 확인 완료' : '이 전달 버전 개발자 확인'}</button>
       <label className="ws-field">등록된 Git 전달 대상<select value={connectionId} onChange={e => { setConnectionId(e.target.value); setConfirmPublic(false); }}>
         <option value="">저장소 선택</option>{connections.map(item => <option key={item.id} value={item.id}>{item.label || item.repository}</option>)}</select></label>
-      {!connections.length && <p>관리자가 등록한 Git 연결이 없습니다. ZIP 전달은 사용할 수 있습니다.</p>}
+      {connectionError && <Notice error>Git 연결 상태를 확인하지 못했습니다: {connectionError}</Notice>}
+      {!connections.length && !connectionError && <p>관리자가 등록한 Git 연결이 없습니다. ZIP 전달은 사용할 수 있습니다.</p>}
       {connection && requiresPublic && <label><input type="checkbox" checked={confirmPublic} onChange={e => setConfirmPublic(e.target.checked)} />대상의 공개 범위를 확인했습니다.</label>}
       <button disabled={busy || !allowed || !release.frontendAcceptance || !connection || (requiresPublic && !confirmPublic)} onClick={() => void exportGit()}>등록된 저장소로 전달</button>
     </>}

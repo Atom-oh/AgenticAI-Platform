@@ -69,7 +69,7 @@ class DesignWorkflow:
         output = execution.upload("verify", "design.json", verified)
         final = execution.upload("verify", "result.json", {"objects": [output]})
         memory = self.memory.append(execution.memory_scope, "generated", output["sha256"]) if self.memory else None
-        execution.stage("verify", [generated], [output, final], {"issues": verified["issues"], "designResult": output, **({"memory": memory} if memory else {})})
+        execution.stage("verify", [generated], [output, final], {"issues": [{"code": "prd-issues", "count": len(verified["issues"])}] if verified["issues"] else [], "designResult": output, **({"memory": memory} if memory else {})})
         return execution.finish(final, "succeeded" if not verified["issues"] else "needs_changes")
 
     @staticmethod
@@ -168,7 +168,10 @@ class DesignWorkflow:
         large_ref = execution.upload("browser", "large-text.json", large)
         shot = execution.upload("browser", "screenshot.png", base64.b64decode(report["screenshotBase64"], validate=True), binary=True)
         browser_result = {"passed": report["passed"], "functionalStatus": report["functionalStatus"],
-                          "accessibility": report["accessibility"], "report": report_ref}
+                          "accessibility": {"status": report["accessibility"].get("status"),
+                              "violations": [{"count": len(report["accessibility"].get("violations", []))}] if report["accessibility"].get("violations") else []},
+                          "blockingFindings": [{"count": len(report.get("blockingFindings", []))}] if report.get("blockingFindings") else [],
+                          "report": report_ref, "largeText": {"report": large_ref, "sessionId": large["browserExecution"]["sessionId"], "taskId": large_call}}
         if baseline:
             browser_result.update(comparison=manifest["approved"]["screenshot"], visualDiff=report["visual"].get("changedRatio"))
         execution.stage("browser", [dist_zip, *([baseline] if baseline else [])], [report_ref, large_ref, shot], browser_result,
@@ -192,12 +195,19 @@ class DesignWorkflow:
             covered = coverage.check(manifest["prd"], bundle["flow"], bundle["expectation"], bundle["screens"],
                                      delivery.knowledge(manifest["snapshot"]), bundle["binding_values"])
             issues = [*checked, *covered["findings"]]
-            passed = not missing and not covered["blocked"] and not any(f["severity"] == "critical" for f in issues)
+            passed = not missing and not covered["blocked"] and not issues
             verified = {"verdict": "pass" if passed else "fail", "passed": passed, "approvable": passed,
                         "issues": issues, "findings": issues, "reviewer": "approved-source-rebuild"}
         else:
             verified = verify_graph.verify(bundle, delivery.knowledge(manifest["snapshot"]), deps,
                                            mode=generated["mode"], judgments=judgments)
+        if manifest["operation"] == "design.edit":
+            measured = delivery.edit_layout(manifest, report)
+            verified["layout"] = measured
+            if not measured["stable"]:
+                verified.update(verdict="fail", approvable=False)
+                verified.setdefault("findings", []).append({"severity": "critical", "role": "tester",
+                    "code": "edit-layout-changed", "message": "Layout outside the selected subtree changed or lacks evidence."})
         value = {"generated": generated, "verification": verified, "build": build_ref,
                  "source": source_zip, "bundle": dist_zip, "browser": report_ref, "largeText": large_ref,
                  "screenshot": shot, "variant": manifest["variant"], "contract": contract,
@@ -205,7 +215,10 @@ class DesignWorkflow:
         output = execution.upload("verify", "design.json", value)
         final = execution.upload("verify", "result.json", {"objects": [*([source_files] if manifest["operation"] != "design.release" else []), source_zip, dist_zip, output]})
         memory = self.memory.append(execution.memory_scope, "verified", output["sha256"]) if self.memory else None
-        execution.stage("verify", [dist_zip, report_ref, large_ref], [output, final], {**verified, "designResult": output, **({"memory": memory} if memory else {})})
+        summary = {key: verified[key] for key in ("verdict", "passed", "approvable", "reviewer") if key in verified}
+        if "issues" in verified:
+            summary["issues"] = [{"code": "verification-issues", "count": len(verified["issues"])}] if verified["issues"] else []
+        execution.stage("verify", [dist_zip, report_ref, large_ref], [output, final], {**summary, "designResult": output, **({"memory": memory} if memory else {})})
         if manifest["operation"] == "design.release" and not verified["passed"]:
             execution.call("fail", {"code": "design-release-verification-failed"})
             return {"status": "failed"}

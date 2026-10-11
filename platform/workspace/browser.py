@@ -390,6 +390,23 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                     if axe_source and not result["accessibility"].get("checkedStates"):
                         _accessibility(page, axe_source, result, "initial")
                     for index, step in enumerate(rule["steps"]):
+                        if contract.get("designId"):
+                            # Trusted isolated-world geometry, never application-supplied measurements.
+                            boxes = _isolated_eval(page, """(() => {
+                              const nodes = [...document.querySelectorAll('[data-testid]')];
+                              if (nodes.length > 256) throw new Error('layout-capacity');
+                              const boxes = {}, seen = new Set();
+                              for (const node of nodes) {
+                                const id = node.getAttribute('data-testid');
+                                if (seen.has(id)) throw new Error('duplicate-layout-id');
+                                seen.add(id); const r = node.getBoundingClientRect();
+                                if (r.width && r.height && node.getClientRects().length)
+                                  boxes[id] = [r.x, r.y, r.width, r.height];
+                              }
+                              return boxes;
+                            })()""")
+                            result.setdefault("layoutBoxes", {})[rule["id"] + ":" + str(index)] = boxes
+
                         _phase("interaction")
                         if time.monotonic() - started > 80:
                             check["status"] = "incomplete"

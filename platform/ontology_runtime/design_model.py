@@ -31,8 +31,13 @@ class DesignModel:
         if not os.environ.get("BEDROCK_READ_TIMEOUT"):
             raise RuntimeError("single-attempt-model-transport-required")
         call_id = self.execution.intent("generate", "model", 180000, max_tokens=8192)
-        text, usage, info = gate.generate(payload["system"], payload["user"], max_tokens=8192, route="bedrock",
-            model_id=self.manifest["model"], purpose="design.execute", trace_id=self.execution.job["executionId"])
+        try:
+            text, usage, info = gate.generate(payload["system"], payload["user"], max_tokens=8192, route="bedrock",
+                model_id=self.manifest["model"], purpose="design.execute", trace_id=self.execution.job["executionId"])
+        except gate.GateRefused:
+            # This exception is raised by the pre-model boundary before any provider request.
+            self.execution.outcome(call_id, status="failed", usage={"inputTokens": 0, "outputTokens": 0})
+            raise
         self.execution.outcome(call_id, usage={key: usage[key] for key in ("inputTokens", "outputTokens")})
         self.calls.append(call_id)
         self.boundaries.append({"callId": call_id, "modelId": info["modelId"], "usage": usage,

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceScope } from './WorkspaceScope';
 import { messageOf, resource } from './client';
-import { Notice } from './shared';
+import { Notice, previewFrameDocument } from './shared';
+import { readPreviewSelection } from './previewSelection';
 import DesignHandoff from './DesignHandoff';
 import FlowDiagram from './FlowDiagram';
 import DesignComparison from './DesignComparison';
@@ -32,7 +33,7 @@ async function hash(value: unknown) {
 }
 
 export default function DesignPanel({ config, onDirty }: { config: WorkspaceConfig; onDirty: (value: boolean) => void }) {
-  const { client, project, role } = useWorkspaceScope();
+  const { client, role } = useWorkspaceScope();
   const [enabled, setEnabled] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [designs, setDesigns] = useState<Design[]>([]);
@@ -50,12 +51,17 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   const [preview, setPreview] = useState('');
   const [findings, setFindings] = useState<Variant['verification'] | null>(null);
   const [instruction, setInstruction] = useState('');
-  const [instructionId, setInstructionId] = useState('');
+  const [instructionBinding, setInstructionBinding] = useState<{ id: string; text: string; designId: string; artifactId: string } | null>(null);
+  const instructionId = instructionBinding?.id || '';
+  const selection = useRef({ designId: selected, artifactId: variantId, instruction });
+  selection.current = { designId: selected, artifactId: variantId, instruction };
+  const previewRequest = useRef<AbortController | null>(null);
+  const [viewed, setViewed] = useState<{ designId: string; artifactId: string; sourceHash: string; bundleHash: string } | null>(null);
   const [targets, setTargets] = useState<{ screenId: string; state: string; targetId: string; testId: string; label: string }[]>([]);
   const [target, setTarget] = useState('');
   const [selectMode, setSelectMode] = useState(false);
   const iframe = useRef<HTMLIFrameElement | null>(null);
-  const selectionNonce = useMemo(() => crypto.randomUUID(), [preview, selectMode]);
+  const selectionNonce = useMemo(() => crypto.randomUUID(), [viewed, preview]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -68,7 +74,16 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const [settings, records, docs, graph] = await Promise.all([
       client.get<{ enabled: boolean; models: string[] }>('/designs/config', signal),
-      client.get<{ designs: Design[] }>('/designs', signal),
+      (async () => {
+        const designs: Design[] = []; let cursor: string | undefined; const seen = new Set<string>();
+        do {
+          const page = await client.get<{ designs: Design[]; cursor?: string }>(`/designs${cursor ? '?cursor=' + encodeURIComponent(cursor) : ''}`, signal);
+          designs.push(...page.designs); cursor = page.cursor;
+          if (cursor && seen.has(cursor)) throw new Error('설계 목록 페이지가 반복되었습니다. 새로 조회하세요.');
+          if (cursor) seen.add(cursor);
+        } while (cursor && !signal?.aborted);
+        return { designs };
+      })(),
       client.get<{ documents: Doc[] }>('/documents', signal),
       client.get<{ nodes: Procedure[] }>('/ontology', signal),
     ]);
@@ -96,7 +111,9 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
     }
   }, [client]);
   useEffect(() => {
-    setDetail(null); setPreview(''); setVariantId(''); setFindings(null); setTargets([]); setAcknowledge(false);
+    previewRequest.current?.abort(); operation.current?.abort(); setBusy(false);
+    setDetail(null); setPreview(''); setViewed(null); setVariantId(''); setFindings(null); setTargets([]); setTarget(''); setAcknowledge(false);
+    setInstruction(''); setInstructionBinding(null);
     if (!selected) return;
     const abort = new AbortController();
     void load(selected, abort.signal).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
@@ -114,7 +131,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
     const dirty = !!instruction.trim() || (!!detail?.prd && prd !== JSON.stringify(detail.prd.prd, null, 2));
     onDirty(dirty || busy);
   }, [instruction, prd, detail?.prd, busy, onDirty]);
-  useEffect(() => () => { operation.current?.abort(); onDirty(false); }, [onDirty]);
+  useEffect(() => () => { operation.current?.abort(); previewRequest.current?.abort(); onDirty(false); }, [onDirty]);
   const act = async (path: string, body: Record<string, unknown>, idempotent = false) => {
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
@@ -123,6 +140,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
       if (!acknowledge) { setError('이전 실행의 추가 비용 가능성을 먼저 확인하세요.'); setBusy(false); return; }
       body = { ...body, acknowledgeUnknownOutcome: true };
     }
+    const subject = { ...selection.current };
     const key = JSON.stringify([path, body]);
     if (idempotent) {
       request.current = request.current?.key === key ? request.current : { key, body: { ...body, requestId: crypto.randomUUID() } };
@@ -134,7 +152,9 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
       request.current = null;
       if (result.design) { setSelected(result.design.id); await load(result.design.id, abort.signal); }
       if (result.decision) {
-        if (result.decision.id && path === '/designs/instructions') setInstructionId(result.decision.id);
+        if (result.decision.id && path === '/designs/instructions') {
+          setInstructionBinding({ id: result.decision.id, text: String(body.text), designId: subject.designId, artifactId: subject.artifactId });
+        }
         setNotice(result.decision.status === 'admitted' ? '자료 사용 승인이 완료되었습니다.' :
           result.decision.status === 'blocked' ? `자료 사용이 차단되었습니다: ${(result.decision.blocking || []).join(', ')}` : '지정된 검토자의 자료 사용 승인을 기다리고 있습니다.');
         await refresh(abort.signal);
@@ -144,33 +164,46 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   };
   const show = async (id: string) => {
     if (!detail) return;
-    setError(''); setPreview(''); setVariantId(id); setTargets([]);
+    const subject = detail.design;
+    const expected = subject.variants.find(item => item.artifactId === id);
+    if (!expected) return;
+    const controller = new AbortController(); previewRequest.current?.abort(); previewRequest.current = controller;
+    setError(''); setPreview(''); setViewed(null); setFindings(null); setVariantId(id); setTargets([]); setTarget('');
+    setInstructionBinding(null); setInstruction('');
     try {
-      const value = await client.get<{ previewHtml: string; verification: Variant['verification']; targets: typeof targets }>(
-        `/designs/${resource(detail.design.id)}/artifacts/${resource(id)}`);
-      setPreview(value.previewHtml); setFindings(value.verification); setTargets(value.targets); setTarget('');
-    } catch (reason) { setError(messageOf(reason)); }
+      const value = await client.get<{ previewHtml: string; verification: Variant['verification']; targets: typeof targets; sourceHash: string; bundleHash: string }>(
+        `/designs/${resource(subject.id)}/artifacts/${resource(id)}`, controller.signal);
+      if (controller.signal.aborted || previewRequest.current !== controller || selection.current.designId !== subject.id) return;
+      if (value.sourceHash !== expected.sourceHash || value.bundleHash !== expected.bundleHash ||
+          (expected.passed && value.verification.verdict !== 'pass')) throw new Error('선택한 시안과 표시할 검증 근거가 다릅니다.');
+      setPreview(value.previewHtml); setFindings(value.verification); setTargets(value.targets);
+      setViewed({ designId: subject.id, artifactId: id, sourceHash: value.sourceHash, bundleHash: value.bundleHash });
+    } catch (reason) { if (!controller.signal.aborted) setError(messageOf(reason)); }
   };
   const current = detail?.design;
   const active = busy || !!current?.activeJobId;
   const selectedVariant = current?.variants.find(v => v.artifactId === variantId);
-  const approvedInstruction = inputs.some(item => item.id === instructionId && item.kind === 'prompt-text');
+  const viewMatches = !!viewed && viewed.designId === current?.id && viewed.artifactId === selectedVariant?.artifactId &&
+    viewed.sourceHash === selectedVariant?.sourceHash && viewed.bundleHash === selectedVariant?.bundleHash;
+  const approvedInstruction = !!instructionBinding && instructionBinding.text === instruction &&
+    instructionBinding.designId === current?.id && instructionBinding.artifactId === selectedVariant?.artifactId &&
+    inputs.some(item => item.id === instructionId && item.kind === 'prompt-text');
+  const syncSelection = () => iframe.current?.contentWindow?.postMessage({ type: 'studio-select-mode', channel: selectionNonce, enabled: selectMode }, '*');
   useEffect(() => {
+    syncSelection();
     const receive = (event: MessageEvent) => {
-      if (!selectMode || event.source !== iframe.current?.contentWindow || event.origin !== 'null' ||
-          event.data?.type !== 'design-select' || event.data.nonce !== selectionNonce || typeof event.data.testId !== 'string') return;
-      const index = targets.findIndex(item => item.testId === event.data.testId);
+      if (!selectMode || !viewMatches || event.source !== iframe.current?.contentWindow || event.origin !== 'null' ||
+          event.data?.type !== 'studio-element' || event.data.channel !== selectionNonce) return;
+      const selected = readPreviewSelection(event.data.selection);
+      if (!selected) return;
+      const index = targets.findIndex(item => selected.selector === `[data-testid="${CSS.escape(item.testId)}"]` || selected.selector === '#' + CSS.escape(item.testId));
       if (index >= 0) setTarget(String(index));
     };
     window.addEventListener('message', receive); return () => window.removeEventListener('message', receive);
-  }, [selectMode, selectionNonce, targets]);
-  const shownPreview = useMemo(() => {
-    if (!selectMode || !preview) return preview;
-    const script = `<script>document.addEventListener('click',function(e){var n=e.target.closest('[data-testid]');if(n){e.preventDefault();e.stopPropagation();parent.postMessage({type:'design-select',nonce:${JSON.stringify(selectionNonce)},testId:n.getAttribute('data-testid')},'*');}},true);</script>`;
-    return preview.replace('</body>', script + '</body>');
-  }, [preview, selectMode, selectionNonce]);
+  }, [selectMode, selectionNonce, targets, viewMatches]);
+  const shownPreview = useMemo(() => preview ? previewFrameDocument(preview, true, selectionNonce) : '', [preview, selectionNonce]);
   return <section className="ws-procedure-design" aria-label="절차 기반 설계">
-    <div className="ws-design-toolbar"><label className="ws-field">진행 중인 설계<select value={selected} onChange={event => setSelected(event.target.value)}>
+    <div className="ws-design-toolbar"><label className="ws-field">진행 중인 설계<select value={selected} disabled={busy} onChange={event => setSelected(event.target.value)}>
       <option value="">새 설계</option>{designs.map(item => <option key={item.id} value={item.id}>{item.title} · {PHASE[item.status] || item.status}</option>)}
     </select></label><button onClick={() => void refresh().catch(reason => setError(messageOf(reason)))}>새로 조회</button></div>
     {error && <Notice error>{error}</Notice>}{notice && <Notice>{notice}</Notice>}
@@ -202,7 +235,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
         {detail?.prd && <details open={!current.approvals.prd}><summary>PRD · 원문 인용과 수치 확인</summary>
           {detail.prd.issues.map((issue, index) => <p key={index}>{issue.field}: {issue.code}</p>)}
           <textarea aria-label="PRD와 원문 인용" rows={15} value={prd} onChange={e => setPrd(e.target.value)} disabled={!plan || active} />
-          <button disabled={!plan || active} onClick={() => void (async () => {
+          <button disabled={!plan || active || ['approved', 'released'].includes(current.status)} onClick={() => void (async () => {
             try { const value: unknown = JSON.parse(prd); await act(`/designs/${resource(current.id)}/confirm-prd`, { version: current.version, prd: value, hash: await hash(value) }); }
             catch (reason) { setError(messageOf(reason)); }
           })()}>이 PRD 확정</button>
@@ -212,22 +245,22 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
             transitions={detail.flow.flow.transitions.map(item => ({ id: item.id, from: item.src, to: item.dst, condition: item.when }))} />
           {detail.flow.contract?.rules.map(rule => <p key={rule.id}>✓ {rule.title}</p>)}
           {detail.flow.issues.map((issue, index) => <p key={index}>{issue.code || issue.message}</p>)}
-          <button disabled={!designRole || active || !!detail.flow.issues.length} onClick={() => void act(`/designs/${resource(current.id)}/approve-flow`, { version: current.version, hash: detail.flowHash })}>이 흐름과 확인 기준 승인</button>
+          <button disabled={!designRole || active || ['approved', 'released'].includes(current.status) || !!detail.flow.issues.length} onClick={() => void act(`/designs/${resource(current.id)}/approve-flow`, { version: current.version, hash: detail.flowHash })}>이 흐름과 확인 기준 승인</button>
         </details>}
-        {current.approvals.flow && <button className="ws-primary" disabled={!designRole || active || !enabled || current.variants.length >= 5}
+        {current.approvals.flow && <button className="ws-primary" disabled={!designRole || active || !enabled || !['ready', 'review', 'interrupted'].includes(current.status) || current.variants.length >= 5}
           onClick={() => void act(`/designs/${resource(current.id)}/generate`, { version: current.version, variant: current.variants.length, maxRounds: 3 }, true)}>
           {current.variants.length ? '다른 시안 만들기' : '시안 만들기'}</button>}
         <div className="ws-design-variants">{current.variants.map((item, index) => <button key={item.artifactId} aria-pressed={variantId === item.artifactId}
           onClick={() => void show(item.artifactId)}>시안 {index + 1} · {item.passed ? '검증 통과' : '수정 필요'}</button>)}</div>
         {selectedVariant && <>
-          <button disabled={!designRole || active || !selectedVariant.passed} onClick={() => void act(`/designs/${resource(current.id)}/approve`, {
+          <button disabled={!designRole || active || !selectedVariant.passed || !viewMatches} onClick={() => void act(`/designs/${resource(current.id)}/approve`, {
             version: current.version, artifactId: selectedVariant.artifactId, sourceHash: selectedVariant.sourceHash, bundleHash: selectedVariant.bundleHash })}>이 시안 승인</button>
           <details><summary>선택한 부분 수정</summary><label className="ws-field">수정 대상<select value={target} onChange={e => setTarget(e.target.value)}>
             <option value="">요소 선택</option>{targets.map((item, index) => <option key={index} value={String(index)}>{item.label}</option>)}</select></label>
-            <textarea aria-label="수정 지시문" value={instruction} maxLength={4000} onChange={e => setInstruction(e.target.value)} placeholder="선택한 요소에서 바꿀 점을 적으세요." />
+            <textarea aria-label="수정 지시문" value={instruction} maxLength={4000} onChange={e => { setInstruction(e.target.value); setInstructionBinding(null); }} placeholder="선택한 요소에서 바꿀 점을 적으세요." />
             <button disabled={active || !designRole || !instruction.trim()} onClick={() => void act('/designs/instructions', { text: instruction })}>수정 지시문 사용 검토 요청</button>
             {instructionId && <p>{approvedInstruction ? '수정 지시문 승인됨' : '지정된 검토자의 승인이 필요합니다. 승인 후 새로 조회하세요.'}</p>}
-            <button disabled={active || !designRole || target === '' || !approvedInstruction || !enabled} onClick={() => void act(`/designs/${resource(current.id)}/edit`, {
+            <button disabled={active || !designRole || target === '' || !approvedInstruction || !enabled || !viewMatches} onClick={() => void act(`/designs/${resource(current.id)}/edit`, {
               version: current.version, baseArtifactId: selectedVariant.artifactId, instructionDecisionId: instructionId,
               screenId: targets[Number(target)].screenId, state: targets[Number(target)].state, targetId: targets[Number(target)].targetId, variant: selectedVariant.variant, maxRounds: 3 }, true)}>선택 영역 수정·재검증</button>
           </details>
@@ -238,7 +271,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
       </>}
     </aside><main className="ws-design-preview">
       {preview && <button aria-pressed={selectMode} onClick={() => setSelectMode(value => !value)}>{selectMode ? '선택 모드 종료 · 화면 동작 확인' : '화면에서 수정 요소 선택'}</button>}
-      {preview ? <iframe ref={iframe} title="선택한 시안 미리보기" sandbox="allow-scripts" srcDoc={shownPreview} /> : <div className="ws-design-empty">
+      {preview ? <iframe ref={iframe} title="선택한 시안 미리보기" sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={syncSelection} srcDoc={shownPreview} /> : <div className="ws-design-empty">
         <h3>시안을 보며 설계하세요</h3><p>자료와 PRD, 흐름을 확인하면 이곳에서 실제 React 시안을 검토하고 수정할 수 있습니다.</p>
       </div>}
       {findings && <div><strong>{findings.verdict === 'pass' ? '검증 통과' : '확인이 필요합니다'}</strong>

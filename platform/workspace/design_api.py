@@ -7,6 +7,7 @@ import json
 
 from intake import admission, derivative, inspect
 from workbench.service import Service, fields, fail, check_source_deadlines
+from workspace.collaboration import CollaborationError
 from workspace import ontology_schema as schema, storage as storage_module
 from workspace.execution_source import encode
 from workspace.execution_sources import unique
@@ -157,6 +158,8 @@ def decide(ctx, identifier, action, body):
     design = ctx.get("design", identifier)
     if design["version"] != body.get("version") or design["activeJobId"]:
         fail(409, "design-changed", "실행이 끝난 현재 설계 버전을 확인하세요.")
+    if design["status"] in {"approved", "released"}:
+        fail(409, "design-state", "승인된 설계는 새 설계로 수정하세요.")
     admitted, checks, stored = current_inputs(ctx, design)
     from workspace.design_stages import prepare_flow
     from design_loop.prd_extract import validate_prd
@@ -168,7 +171,7 @@ def decide(ctx, identifier, action, body):
         if result["issues"] or schema.digest(result["prd"]) != body.get("hash"):
             fail(409, "design-prd-invalid", "원문 인용과 수치가 확인된 PRD만 확정할 수 있습니다.")
         value["prd"] = _object(ctx, identifier, "prd", result)
-        prepared = prepare_flow(stored["snapshot"], design["procedureId"], result["prd"], catalog_hash=read_catalog()["hash"],
+        prepared = prepare_flow(stored["snapshot"], design["procedureId"], result["prd"], catalog_hash=read_catalog()["hash"], design_id=identifier,
             registry_state=read_object(ctx, design["flow"])["registry"] if design["flow"] else None, document_version=design["revision"] + 1)
         value["flow"] = _object(ctx, identifier, "flow", prepared)
         value.update(status="flow-review", approvals={}, variants=[])
@@ -256,9 +259,10 @@ def _route(ctx, method, parts, body, query):
         items = []
         for value in page["items"]:
             try:
-                current_inputs(ctx, value)
+                probe = Service(ctx.host, ctx.scope, ctx.claims)
+                current_inputs(probe, value)
                 items.append(public(value))
-            except admission.AdmissionError:
+            except (admission.AdmissionError, CollaborationError):
                 continue
         return 200, {"designs": items, "cursor": page.get("cursor")}
     if len(parts) == 1 and method == "GET":
@@ -277,6 +281,13 @@ def variant_authority(ctx, design, artifact_id):
     variant = next((v for v in design["variants"] if v["artifactId"] == artifact_id), None)
     if not variant:
         fail(404, "not-found", "시안을 확인할 수 없습니다.")
+    from workspace.ontology_sources import Sources
+    run = ctx.get("run", variant["runId"])
+    rows = [row for row in run.get("rounds", []) if row.get("number") == 1]
+    if (run.get("designId") != design["id"] or len(rows) != 1
+            or rows[0].get("sourceHash") != variant["sourceHash"] or rows[0].get("bundleHash") != variant["bundleHash"]):
+        fail(404, "not-found", "Resource not found")
+    Sources(ctx)._round_permission(run, rows[0])
     artifact = ctx.get("wb_artifact", artifact_id)
     if artifact.get("designId") != design["id"] or artifact.get("jobId") != variant["jobId"]:
         fail(404, "not-found", "시안을 확인할 수 없습니다.")
@@ -289,7 +300,7 @@ def variant_authority(ctx, design, artifact_id):
         resolved = resolver(ctx.owner, binding, job={"actor": ctx.actor, "projectId": ctx.project_id,
                                                    "authorizationExpiresAt": expiry})
         checks.extend([resolved["check"], *resolved.get("checks", [])]);expiry = min(expiry, resolved["expiresAt"])
-    checks.extend([ctx.check("wb_artifact", artifact), ctx.check("design", design)])
+    checks.extend([ctx.check("wb_artifact", artifact), ctx.check("design", design), ctx.check("run", run)])
     check_source_deadlines(ctx.storage, checks, ctx.claims, expiry)
     observe(ctx, checks, expiry)
     return variant, artifact, unique(checks), expiry
@@ -311,7 +322,13 @@ def approve_variant(ctx, identifier, body):
         "contractHash": run["contractHash"], "artifactId": variant["artifactId"]}
     changed = {**design, "status": "approved", "approvals": {**design["approvals"], "ux": approval}}
     predicates = unique([*checks, *more, ctx.check("project", ctx.scope["project"])])
-    predicates = [check for check in predicates if (check["kind"], check["id"]) != ("design", design["id"])]
+    writes = {("design", design["id"]): design["version"], ("run", run["id"]): run["version"]}
+    for check in predicates:
+        identity = (check["kind"], check["id"])
+        if identity in writes and check["version"] != writes[identity]:
+            fail(409, "design-changed", "승인 대상의 버전이 변경되었습니다.")
+    # The same condition is enforced by each conditional Put; different versions never merge.
+    predicates = [check for check in predicates if (check["kind"], check["id"]) not in writes]
     bound = min(expiry, admitted["expiresAt"])
     ctx.storage.put_many([ctx.write("design", changed, design["version"]),
         ctx.write("run", {**run, "approval": approval}, run["version"])], predicates, retry_conflicts=False,
@@ -429,7 +446,7 @@ def safe_summary(ctx, record):
     return public(value)
 
 
-def route(host, scope, claims, method, parts, body, query):
+def _response(host, scope, claims, method, parts, body, query):
     ctx = Service(host, scope, claims)
     status, result = _route(ctx, method, parts, body, query)
     # Re-collect after writes; the final response must use the saved record, not the pre-write version.
@@ -445,7 +462,17 @@ def route(host, scope, claims, method, parts, body, query):
             fail(409, "design-changed", "응답을 준비하는 중 설계가 변경되었습니다.")
         result["design"] = safe_summary(ctx, record)
     if isinstance(result.get("designs"), list):
-        result["designs"] = [safe_summary(ctx, ctx.get("design", value["id"])) for value in result["designs"]]
+        visible = []
+        for value in result["designs"]:
+            # Failed rows must not poison the retained response observations.
+            probe = Service(host, scope, claims)
+            try:
+                summary = safe_summary(probe, probe.get("design", value["id"]))
+            except (admission.AdmissionError, CollaborationError):
+                continue
+            observe(ctx, probe._design_checks, probe._design_expiry)
+            visible.append(summary)
+        result["designs"] = visible
     if len(parts) == 3 and parts[1] == "artifacts":
         record = ctx.get("design", parts[0]);current_inputs(ctx, record);variant_authority(ctx, record, parts[2])
     if len(parts) >= 3 and parts[1] == "releases":
@@ -515,3 +542,34 @@ def accept_frontend(ctx, identifier, release_id, body):
         ctx.write("design", {**design, "frontendAcceptance": {"releaseId": release_id, **acceptance}}, design["version"])],
         predicates, retry_conflicts=False, before_attempt=lambda: check_source_deadlines(ctx.storage, predicates, ctx.claims, expiry), _writer=HUMAN)
     return public(ctx.get("design", identifier))
+
+
+def criteria_authority(ctx, value):
+    """Resolve a design contract/run against its current canonical and human authority."""
+    from workspace.rules import contract_hash
+    design = ctx.get("design", value["designId"])
+    admitted, checks, _ = current_inputs(ctx, design)
+    if not design.get("flow") or not design.get("approvals", {}).get("flow"):
+        fail(404, "not-found", "Resource not found")
+    prepared = read_object(ctx, design["flow"])
+    expected = prepared["contractHash"]
+    contract = value.get("contract", value)
+    if (value.get("projectId") != ctx.project_id or contract_hash(contract) != expected
+            or value.get("contractHash", expected) != expected
+            or design["approvals"]["flow"]["hash"] != design["flow"]["sha256"]):
+        fail(404, "not-found", "Resource not found")
+    from workspace.component_catalog import read_catalog
+    if prepared["contract"]["catalogHash"] != read_catalog()["hash"]:
+        fail(404, "not-found", "Resource not found")
+    checks = unique([*checks, ctx.check("design", design)])
+    observe(ctx, checks, admitted["expiresAt"])
+    return checks, admitted["expiresAt"]
+
+
+def route(host, scope, claims, method, parts, body, query):
+    try:
+        return _response(host, scope, claims, method, parts, body, query)
+    except (admission.AdmissionError, CollaborationError) as error:
+        if method == "GET" and parts and parts[0] not in {"config", "inputs"} and error.status in {404, 409}:
+            fail(404, "not-found", "Resource not found")
+        raise

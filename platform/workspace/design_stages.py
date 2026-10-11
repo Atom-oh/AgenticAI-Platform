@@ -17,7 +17,7 @@ def knowledge(snapshot):
     return result
 
 
-def prepare_flow(snapshot, procedure_id, prd, *, catalog_hash, registry_state=None, published_pages=(), document_version=1):
+def prepare_flow(snapshot, procedure_id, prd, *, catalog_hash, registry_state=None, published_pages=(), document_version=1, design_id=None):
     k = knowledge(snapshot)
     proposed = flow.build_flow(k, procedure_id)
     expectation = flow.expected(prd, k, published_pages)
@@ -37,6 +37,8 @@ def prepare_flow(snapshot, procedure_id, prd, *, catalog_hash, registry_state=No
     result = contract.derive(prd, proposed, k, registry, published_pages,
         cases=cases["cases"], criteria={"catalogHash": catalog_hash})
     issues.extend(result["findings"])
+    if design_id is not None and result["contract"]:
+        result["contract"].update(designId=design_id, projectId=snapshot["projectId"], designSnapshotHash=schema.digest(snapshot))
     checked = validate_contract(result["contract"]) if result["contract"] else None
     return {"flow": proposed, "expectation": expectation, "cases": cases["cases"], "states": states,
             "registry": registry.to_json(), "convention": convention, "documentVersion": str(document_version), "contract": checked,
@@ -109,3 +111,15 @@ def source_files(snapshot, prepared, prd, screens, registry_state):
         "level2": k.screens[screen]["title"], "level3": state} for (screen, state), composition in screens.items()}
     return react_project.project(prepared["flow"], screens, k, prd_extract.bindings(prd),
                                  cases=prepared["cases"], registry=registry, meta=metadata)
+
+
+def edit_layout(manifest, report):
+    from design_loop.edit import layout_stable, subtree_testids
+    base = manifest["baseResult"]["generated"]
+    k = knowledge(manifest["snapshot"])
+    target = manifest["edit"]
+    key = target["screenId"], target["state"]
+    before = unpacked(base["screens"])[key]
+    excluded = subtree_testids(before, target["targetId"], Registry(k, state=base["registry"]))
+    return layout_stable(manifest["baseBrowser"]["layoutBoxes"], report.get("layoutBoxes"),
+                         excluded_testids=excluded, tolerance_px=1)

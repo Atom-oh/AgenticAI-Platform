@@ -95,5 +95,24 @@ def test_revoked_input_is_not_served_by_design_http(design_state):
     result=admin_handler.handler({'op':'revoke_grant','id':grant['id'],'expectedRevision':grant['revision'],'operator':'fixture-security'},
         SimpleNamespace(invoked_function_arn='arn:aws:lambda:ap-northeast-2:000000000000:function:IntakeAdminFn'))
     assert result['ok']
-    with pytest.raises(admission.AdmissionError):
+    with pytest.raises(CollaborationError) as error:
         route(ctx.host,ctx.scope,ctx.claims,'GET',[design['id']],{}, {})
+    assert error.value.status == 404 and error.value.code == 'not-found'
+
+
+def test_design_cursor_pages_are_complete_and_actor_bound(design_state):
+    from workspace.design_api import route
+    ctx, first, _ = design_state
+    record=ctx.get('design',first['id'])
+    for i in range(6):
+        create(ctx,{'requestId':f'paged-{i}','title':f'Synthetic {i}','procedureId':record['procedureId'],
+                    'decisionIds':record['decisionIds'],'model':record['model']})
+    status, page=route(ctx.host,ctx.scope,ctx.claims,'GET',[],{}, {})
+    assert status==200 and len(page['designs'])==5 and page['cursor']
+    status, last=route(ctx.host,ctx.scope,ctx.claims,'GET',[],{}, {'cursor':page['cursor']})
+    assert status==200 and len(last['designs'])==2 and not last['cursor']
+    assert len({d['id'] for d in page['designs']+last['designs']})==7
+    bob=ctx.collaboration.resolve_scope('bob',ctx.project_id)
+    with pytest.raises(CollaborationError) as error:
+        route(ctx.host,bob,{'sub':'bob','exp':ctx.claims['exp']},'GET',[],{}, {'cursor':page['cursor']})
+    assert error.value.code=='design-cursor-stale'

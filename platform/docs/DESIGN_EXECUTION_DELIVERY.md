@@ -1,9 +1,9 @@
 # Design execution delivery
 
-Implementation plan, 2026-10-11. Owning authorities: SPEC §7-2,
+Implementation design and candidate register, 2026-10-11. Owning authorities: SPEC §7-2,
 AGENTCORE_CONTRACT `platform-execution/1`, `source-admission/1` and
 `publishing-handoff/1`, ONTOLOGY_CONTRACT, and REACT_CONTRACT.
-This document records interfaces before implementation; it is not acceptance.
+This document records implemented candidate interfaces and remaining gates; it is not acceptance.
 
 ## Application and data
 
@@ -32,8 +32,9 @@ from admitted cited spans and deterministic bindings.
 
 ## Single execution writer
 
-Extend the existing B0 ledger transport to `design.extract`, `design.generate`,
-`design.edit`, deterministic `design.compose`, and `design.release`.
+The application uses the existing B0 ledger for `design.extract`, `design.generate`,
+`design.edit`, and `design.release`. The ledger also defines `design.compose`; its
+deterministic application dispatch is still unimplemented and is not an enabled route.
 Design artifacts are marked and created with their reserved job. Only the ledger
 publishes a completed stage, its design pointer and associated run/release
 records in one conditional transaction. Human approval uses the existing
@@ -53,7 +54,16 @@ Interpreter compiles the frozen project with the pinned archive. Browser checks
 the same bundle, including a second large-text pass. Verification combines the
 reviewer, tester and coverage roles; missing evidence cannot approve a result.
 Releases rebuild approved source without generation and repeat the exact-bundle
-checks before download/Git export.
+checks before download/Git export. Release success requires no final verification
+issues, matching the ledger terminal rule; findings cannot become release success.
+Full findings stay in hash-checked private objects. Signed receipt results contain
+bounded summaries/references under 8 KiB, including the large-text Browser call
+and session. A finding-rich generation can complete as inspectable needs-changes.
+
+Partial edits also compare isolated-world Browser checkpoint boxes with the exact
+base bundle. Every element outside the Registry-defined subtree must remain
+within one pixel. Missing/oversized/duplicate checkpoint evidence blocks approval;
+structural stability alone is insufficient. Completion repeats this comparison.
 
 ## Delivery gates and evidence
 
@@ -61,10 +71,10 @@ Cases: ONT-01/04/05/07/09/10, SRC-05/06/07, AUTH-01–09, INT-01–02,
 BROW-01–02, GEN-01–05, MEM-01–03, RUN-01–05, HAND-01–05 and ROLL-01–03.
 The 57-case acceptance template and its fixed denominators remain unchanged.
 
-The current project deployment is `BankPlatformCore` with isolated ontology
-probe stacks in ap-northeast-2. The exact account and temporary role are recorded
-in the private assessment; identity was verified before inventory. Existing samples-account ontology projects are
-separate and are not deployment targets for this repository task.
+The private dated inventory records observed stack names, account and temporary
+role. Those observations do not amend SPEC topology or prove a current deployment
+of this candidate. Inventory and live validation must retain their exact resource
+and revision bindings.
 
 Use the existing isolated probe resources or a separately scoped disposable
 stack before touching shared data. Record exact deployment/code/archive hashes,
@@ -105,7 +115,16 @@ variant retains all consumed admissions, including later edit instructions.
 Registered Git export continues through the existing `/releases/:id/git`
 authority and delivery checks. Design releases additionally require the matching
 frontend acceptance. A missing registered repository/credential remains blocked.
-Legacy generation/approval/release routes refuse design-owned records.
+Legacy generation/approval/release mutation routes refuse design-owned records.
+Existing read/download/Git routes authorize the same canonical design criteria:
+`projectId`, `designId`, `designSnapshotHash` and `catalogHash`, plus the exact
+human-approved flow/contract, current procedure/source admissions and their
+expiry. Product-guideline contracts retain their complete existing criteria.
+Every outgoing Git request rechecks the retained source authority and the original
+request authorization deadline persisted on the export. A refreshed JWT does not
+renew a queued export; its logical retry identity excludes the deadline. Failed
+candidate content remains limited to owner/designer/developer on every chunk;
+missing and inaccessible singular design reads return the same 404.
 
 ## Runtime and publication
 
@@ -168,3 +187,17 @@ in offline integration tests. AWS code/image egress approval and a registered Gi
 destination/credential are pending. No live gate or production activation is
 claimed from these tests. Final review, CI and the private assessment must record
 the exact candidate and remaining gate outcomes.
+
+## Reviewed deployment constraints
+
+Design publication S3 writes add only `design/*` and `release/*` under the existing
+workspace prefix, for tools and reconciler. The watchdog has neither prefix;
+`run/*` writes are unnecessary. Tools/watchdog/reconciler may update only
+`usage#*` and `usage-charge#*` keys in the separate budget table, not workspace
+records through UpdateItem. Design synthesis requires both a private deny-list
+parameter and an intake deployment scope. No DeleteEvent grant is installed.
+
+Changing the deployment cohort changes the backend revision: drain active work
+first. Prior variants from another revision must be regenerated before edit or
+release. Runtime resources are an explicit three-file allowlist; a manifest hash
+is evidence of identity, not a privacy classification.

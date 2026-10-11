@@ -60,6 +60,7 @@ export class OntologyStack extends cdk.Stack {
     if (props.design && (typeof denylistParam !== 'string' || !/^\/[A-Za-z0-9_./-]+$/.test(denylistParam))) {
       throw new Error('Design execution requires its private intake deny-list parameter');
     }
+    if (props.design && !this.intakeDeployment(props)) throw new Error('Design execution requires its intake deployment scope');
     const prefix = props.resourcePrefix ?? 'bankplatform_ontology';
     const workload = `${prefix}_gateway_m2m`;
     // IAM Runtime invocations use a dedicated machine identity. Runtime-managed
@@ -95,7 +96,7 @@ export class OntologyStack extends cdk.Stack {
       description: 'Keyed project and actor namespaces for ontology Memory',
     });
     const registryOwner = createHash('sha256').update('ontology-key-registry').digest('hex');
-    const grantExecutionStore = (fn: lambda.Function, outputWriter: boolean) => {
+    const grantExecutionStore = (fn: lambda.Function, outputWriter: boolean, designPublisher = false) => {
       table.grantReadData(fn);
       sources.grantRead(fn, 'workspace/*');
       fn.addToRolePolicy(new iam.PolicyStatement({
@@ -109,8 +110,8 @@ export class OntologyStack extends cdk.Stack {
       if (outputWriter) fn.addToRolePolicy(new iam.PolicyStatement({
         actions: ['s3:PutObject', 's3:PutObjectTagging'], resources: [
           sources.arnForObjects('workspace/*/job/exec-*/*'), sources.arnForObjects('workspace/*/wb_artifact/*'),
-          sources.arnForObjects('workspace/*/ontology/*'), ...(props.design ? [sources.arnForObjects('workspace/*/design/*'),
-            sources.arnForObjects('workspace/*/run/*'), sources.arnForObjects('workspace/*/release/*')] : [])],
+          sources.arnForObjects('workspace/*/ontology/*'), ...(props.design && designPublisher ? [sources.arnForObjects('workspace/*/design/*'),
+            sources.arnForObjects('workspace/*/release/*')] : [])],
       }));
     };
     const cache = props.cacheTableName ? dynamodb.Table.fromTableName(this, 'SharedBudgetTable', props.cacheTableName) :
@@ -213,7 +214,7 @@ export class OntologyStack extends cdk.Stack {
       environment: { WORKSPACE_TABLE: table.tableName, WORKSPACE_BUCKET: sources.bucketName,
         SOURCE_EXECUTION_CONFIGURATION: this.toJsonString(common) },
     });
-    grantExecutionStore(tools, true);
+    grantExecutionStore(tools, true, true);
     tools.addToRolePolicy(new iam.PolicyStatement({
       actions: ['kms:Verify', 'kms:GetPublicKey', 'kms:DescribeKey'], resources: [capabilities.keyArn, evidence.keyArn],
     }));
@@ -358,7 +359,7 @@ export class OntologyStack extends cdk.Stack {
           SOURCE_EXECUTION_CONFIGURATION: executionConfig, CACHE_TABLE: cache.tableName,
           ...(intakeDeployment ? { INTAKE_DEPLOYMENT: intakeDeployment } : {}) },
       });
-      grantExecutionStore(fn, true);
+      grantExecutionStore(fn, true, id === 'ExecutionReconciler');
       fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['kms:Verify', 'kms:GetPublicKey', 'kms:DescribeKey'],
         resources: [evidence.keyArn] }));
       return fn;

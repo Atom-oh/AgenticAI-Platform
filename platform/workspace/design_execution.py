@@ -115,6 +115,8 @@ def submit(ctx, identifier, stage, body, ledger, configuration, enqueue):
                 checks = unique([*checks, resolved["check"], *resolved.get("checks", [])])
                 admitted["expiresAt"] = min(admitted["expiresAt"], resolved["expiresAt"])
     if stage == "edit":
+        base_browser = read_object(ctx, manifest["baseResult"]["browser"])
+        manifest["baseBrowser"] = {"layoutBoxes": base_browser.get("layoutBoxes", {})}
         from intake import admission
         decision, data, authority_ = admission.authorized(ctx.host, ctx.scope, body.get("instructionDecisionId"), claims=ctx.claims)
         if decision["artifact"]["kind"] != "prompt-text":
@@ -229,7 +231,7 @@ class DesignPublication:
                 or generated_files(read_archive(source, result["sourceHash"])) != expected):
             raise LedgerError("receipt-invalid")
         read_archive(bundle, result["bundleHash"])
-        build_evidence = json.loads(ctx.storage.get_blob(result["build"]["key"]))
+        build_evidence = read_object(ctx, result["build"])
         build = build_evidence["build"]
         cfg = self.configuration["interpreter"]
         observed = build_evidence["execution"]
@@ -240,10 +242,17 @@ class DesignPublication:
                 or observed.get("sessionId") != stages["compile"]["service"]["sessionId"]
                 or build["sourceHash"] != result["sourceHash"] or build["bundleHash"] != result["bundleHash"]):
             raise LedgerError("receipt-invalid")
-        report = json.loads(ctx.storage.get_blob(result["browser"]["key"]))
-        large = json.loads(ctx.storage.get_blob(result["largeText"]["key"]))
+        report = read_object(ctx, result["browser"])
+        large = read_object(ctx, result["largeText"])
         if (report["browserExecution"]["sessionId"] != stages["browser"]["service"]["sessionId"]
-                or report["bundleHash"] != result["bundleHash"]):
+                or report["bundleHash"] != result["bundleHash"]
+                or large["bundleHash"] != result["bundleHash"]
+                or stages["browser"]["result"].get("largeText") != {"report": result["largeText"],
+                    "sessionId": large["browserExecution"]["sessionId"],
+                    "taskId": stages["browser"]["result"].get("largeText", {}).get("taskId")}
+                or not any(call.get("callId") == stages["browser"]["result"]["largeText"]["taskId"]
+                    and call.get("kind") == "browser" and call.get("serviceSessionId") == large["browserExecution"]["sessionId"]
+                    for call in job["calls"])):
             raise LedgerError("receipt-invalid")
         tester, missing = verify_graph._tester({"browser_report": report, "large_text_report": large,
             "build": build, "contract": prepared["contract"]},
@@ -263,7 +272,10 @@ class DesignPublication:
             from workspace.releases import approval_hash
             from design_loop.convention import Convention, layout
             from design_loop.handoff import build as handoff
-            manifest = json.loads(ctx.storage.get_blob(job["manifest"]["ref"]))
+            raw_manifest = ctx.storage.get_blob(job["manifest"]["ref"])
+            if hashlib.sha256(raw_manifest).hexdigest() != job["manifest"]["hash"]:
+                raise LedgerError("receipt-invalid")
+            manifest = json.loads(raw_manifest)
             base = manifest["base"]
             run = ctx.get("run", base["runId"])
             if (design["approvals"].get("ux") != manifest["approved"]["approval"]
@@ -308,7 +320,7 @@ class DesignPublication:
             frozen = {**prepared["contract"], "id": contract_id, "projectId": ctx.project_id,
                 "executionSchemaVersion": 1, "executionId": job["id"], "status": "approved", "designId": design["id"],
                 "approval": {"actor": design["approvals"]["flow"]["actor"], "at": design["approvals"]["flow"]["at"],
-                             "hash": prepared["contractHash"]}, "flowHash": design["flow"]["sha256"]}
+                             "hash": prepared["contractHash"], "version": 1}, "flowHash": design["flow"]["sha256"]}
             extra.append(ctx.write("contract", frozen))
             contract_version = 1
         else:
@@ -317,7 +329,16 @@ class DesignPublication:
             contract_version = existing_contract["version"]
         if job["operation"] == "design.edit":
             from design_loop.edit import stability
-            manifest = json.loads(ctx.storage.get_blob(job["manifest"]["ref"]))
+            raw_manifest = ctx.storage.get_blob(job["manifest"]["ref"])
+            if hashlib.sha256(raw_manifest).hexdigest() != job["manifest"]["hash"]:
+                raise LedgerError("receipt-invalid")
+            manifest = json.loads(raw_manifest)
+            base_report = read_object(ctx, manifest["baseResult"]["browser"])
+            if manifest.get("baseBrowser") != {"layoutBoxes": base_report.get("layoutBoxes", {})}:
+                raise LedgerError("receipt-invalid")
+            measured = delivery.edit_layout(manifest, report)
+            if verification.get("layout") != measured or (job["status"] == "succeeded" and not measured["stable"]):
+                raise LedgerError("design-edit-layout")
             previous = delivery.unpacked(manifest["baseResult"]["generated"]["screens"])
             target = manifest["edit"]
             key = target["screenId"], target["state"]

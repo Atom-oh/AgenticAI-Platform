@@ -243,7 +243,11 @@ test('design cohort adds exact model and private inspection rights without givin
     }
     const runtime = Object.values(resources).find(row => row.Type === 'AWS::BedrockAgentCore::Runtime');
     assert.equal(runtime.Properties.EnvironmentVariables.BEDROCK_READ_TIMEOUT, '180');
-    assert(!JSON.stringify(policy('ExecutionWatchdog')).includes('DeleteEvent'));
+    assert(!JSON.stringify(policy('RuntimeRole')).includes('DeleteEvent'));
+    for (const prefix of ['OntologyTools','ExecutionAuthority','ExecutionWatchdog','ExecutionReconciler'])
+      assert.deepEqual(JSON.parse(_environment(resources,prefix).SOURCE_EXECUTION_CONFIGURATION['Fn::Join'][1].map(value => typeof value === 'string' ? value : 'synthetic-token').join('')).design,design);
+    assert(!JSON.stringify(allow('ExecutionWatchdog')).includes('workspace/*/release/*'));
+    assert(!JSON.stringify(allow('OntologyTools')).includes('workspace/*/run/*'));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -251,4 +255,10 @@ test('design deployment rejects unscoped projects, unsupported models and missin
   assert.throws(() => _ontologyStack({}, { design: { projects: ['*'], models: ['global.anthropic.claude-sonnet-5'] } }), /explicit projects/);
   assert.throws(() => _ontologyStack({}, { design: { projects: ['p-test'], models: ['invented-model'] } }), /exact supported/);
   assert.throws(() => _ontologyStack({}, { design: { projects: ['p-test'], models: ['global.anthropic.claude-sonnet-5'] } }), /deny-list/);
+});
+
+
+test('design requires an intake deployment even when the deny-list is supplied as a property', () => {
+  assert.throws(() => _ontologyStack({}, { ...SHARED, intakeDenylistParam: '/ontology/test/denylist',
+    design: { projects: ['p-test'], models: ['global.anthropic.claude-sonnet-5'] } }), /intake deployment/);
 });

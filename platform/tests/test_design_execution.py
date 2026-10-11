@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import pytest
 from test_design_api import design_state, env, api
 from test_execution_integration import RSAKms
+from test_workspace_git_export import repo, git
 from workspace import ontology_schema as schema
 from workspace.design_api import decide
 from workspace.design_execution import submit
@@ -82,7 +83,7 @@ def pipeline(design_state, monkeypatch):
                         value=copy.deepcopy(prd)
                     else:
                         payload=json.loads(outer.refs.decode(user))
-                        value={'verdicts':{item['id']:{'verdict':'pass','evidence':'synthetic review'} for item in payload['items']}}
+                        value=copy.deepcopy(payload['target']) if 'target' in payload else {'verdicts':{item['id']:{'verdict':'pass','evidence':'synthetic review'} for item in payload['items']}}
                     return outer.refs.encode(json.dumps(value,ensure_ascii=False)),{'inputTokens':12,'outputTokens':24}
             monkeypatch.setattr(gate,'adapter',lambda *a,**kw:Adapter())
             return super().generate(system,user,on_token)
@@ -90,19 +91,19 @@ def pipeline(design_state, monkeypatch):
     return state
 
 
-def execute(state,stage,**fields):
+def execute(pipeline_state,stage,**fields):
     from workbench.service import Service
-    state.ctx=Service(state.ctx.host,state.ctx.scope,state.ctx.claims)
-    current=state.ctx.get('design',state.design['id'])
-    queued=submit(state.ctx,current['id'],stage,{'requestId':'execution-'+stage,'version':current['version'],**fields},
-                  state.ledger,state.config,lambda *a:None)
-    job=state.ledger.dispatcher().allocate(state.ctx.owner,queued['jobId'],operation_id='allocate-'+stage+'a'*24)
-    token,claims,key=state.caps.issue(job)
-    state.ledger.dispatcher().bind_capability(state.ctx.owner,job['id'],job['attempt']['id'],job['fence'],
+    pipeline_state.ctx=Service(pipeline_state.ctx.host,pipeline_state.ctx.scope,pipeline_state.ctx.claims)
+    current=pipeline_state.ctx.get('design',pipeline_state.design['id'])
+    queued=submit(pipeline_state.ctx,current['id'],stage,{'requestId':'execution-'+stage,'version':current['version'],**fields},
+                  pipeline_state.ledger,pipeline_state.config,lambda *a:None)
+    job=pipeline_state.ledger.dispatcher().allocate(pipeline_state.ctx.owner,queued['jobId'],operation_id='allocate-'+stage+'a'*24)
+    token,claims,key=pipeline_state.caps.issue(job)
+    pipeline_state.ledger.dispatcher().bind_capability(pipeline_state.ctx.owner,job['id'],job['attempt']['id'],job['fence'],
         digest=hashlib.sha256(token.encode()).hexdigest(),claims=claims,key_check=key,operation_id='bind-'+stage+'b'*24)
     event={'capability':token,'executionId':job['id'],'runtimeSessionId':job['attempt']['sessionId'],
            'workloadIdentity':'workload','operation':job['operation']}
-    result=state.workflow.run(event,job['attempt']['sessionId'])
+    result=pipeline_state.workflow.run(event,job['attempt']['sessionId'])
     return result,queued
 
 
@@ -132,7 +133,7 @@ def test_approved_flow_generates_actual_verified_react_artifact(pipeline):
     assert run['rounds'][0]['passed'] and run['executionId']==queued['jobId']
 
 
-def test_exact_ux_approval_rebuilds_and_produces_identical_handoff(pipeline):
+def test_exact_ux_approval_rebuilds_and_produces_identical_handoff(pipeline, repo):
     from workspace.design_api import approve_variant
     from design_loop.handoff import read_zip
     from workspace.releases import approved_artifacts
@@ -156,6 +157,37 @@ def test_exact_ux_approval_rebuilds_and_produces_identical_handoff(pipeline):
     assert 'convention/apply.cjs' in package and 'verification-report.json' in package
     run=s.ctx.get('run',variant['runId'])
     approved_artifacts(s.storage,s.ctx.owner,run,1,release['approvalHash'])
+    call = authorized_call
+    from workspace.worker import Worker
+    from workspace.git_service import connection_hash
+    host=s.ctx.host
+    for path in [f"/runs/{run['id']}",f"/releases/{release['id']}"]:
+        status, payload, _=call(host,'GET',path,project=s.ctx.project_id)
+        assert status==200, payload
+    denied=call(host,'POST',f"/releases/{release['id']}/git",{},actor='dana',project=s.ctx.project_id)
+    assert denied[0]==409 and denied[1]['code']=='frontend-acceptance-required', denied
+    status,payload,_=call(host,'POST',f"/designs/{record['id']}/releases/{release['id']}/accept",
+        {'version':release['version'],'sourceHash':release['sourceHash'],'bundleHash':release['bundleHash'],'note':'offline verification'},
+        actor='dana',project=s.ctx.project_id)
+    assert status==200,payload
+    bare,connection,base,_=repo
+    worker=Worker(storage=s.storage)
+    worker.intake_denylist_loader=host.intake_denylist_loader
+    host.git_connections=worker.git_connections=lambda:{connection['id']:connection}
+    body={'confirmPublic':True,'requestId':'design-git-test','connectionId':connection['id'],'connectionHash':connection_hash(connection)}
+    status,payload,_=call(host,'POST',f"/releases/{release['id']}/git",body,actor='dana',project=s.ctx.project_id)
+    assert status==202,payload
+    event={'owner':s.ctx.owner,'jobId':payload['job']['id']}
+    done=worker.handle(event)
+    assert done['status']=='completed',s.storage.get(s.ctx.owner,'job',event['jobId'])
+    exported=s.ctx.get('gitexport',payload['export']['id'])
+    assert exported['status']=='committed' and exported['criteriaCurrent'] is True,exported
+    assert git(bare,'show',f"{exported['commitSha']}:generated/studio/{run['id']}/src/App.tsx")==source['src/App.tsx']
+    assert git(bare,'rev-parse','refs/heads/main').decode().strip()==base
+    repeated=call(host,'POST',f"/releases/{release['id']}/git",body,actor='dana',project=s.ctx.project_id)
+    assert repeated[0]==202 and repeated[1]['export']['commitSha']==exported['commitSha'],repeated
+    for actor in ['bob','carol']:
+        assert call(host,'POST',f"/releases/{release['id']}/git",{**body,'requestId':'denied-'+actor},actor=actor,project=s.ctx.project_id)[0]==403
 
 
 def test_duplicate_design_submission_returns_same_job_and_legacy_worker_refuses(pipeline):
@@ -170,3 +202,115 @@ def test_duplicate_design_submission_returns_same_job_and_legacy_worker_refuses(
     job=s.storage.get(s.ctx.owner,'job',first['jobId'])
     with pytest.raises(ReservedRecord):
         s.storage.put(s.ctx.owner,'job',{**job,'status':'completed'},job['version'])
+
+
+def test_large_failed_browser_evidence_remains_inspectable_only_by_round_editors(pipeline, monkeypatch):
+    call = authorized_call
+    s=pipeline
+    decide(s.ctx,s.design['id'],'prd',{'version':s.design['version'],'prd':s.prd,'hash':schema.digest(s.prd)})
+    record=s.ctx.get('design',s.design['id'])
+    decide(s.ctx,record['id'],'flow',{'version':record['version'],'hash':record['flow']['sha256']})
+    evaluate=s.workflow.browser.evaluate
+    def failing(*args,**kwargs):
+        report=evaluate(*args,**kwargs)
+        report['passed']=False
+        report['accessibility'].update(status='fail',violations=[{'id':'contrast','impact':'serious','description':'x'*1200} for _ in range(30)])
+        return report
+    monkeypatch.setattr(s.workflow.browser,'evaluate',failing)
+    result,_=execute(s,'generate')
+    assert result['status']=='needs_changes'
+    record=s.ctx.get('design',s.design['id']);variant=record['variants'][0]
+    path=f"/designs/{record['id']}/artifacts/{variant['artifactId']}"
+    for actor in ['alice','carol','dana']:
+        for query in [{},{'kind':'source'},{'kind':'bundle'},{'kind':'screenshot'}]:
+            status, payload, _=call(s.ctx.host,'GET',path,actor=actor,project=s.ctx.project_id,query=query)
+            assert status==200,payload
+    for query in [{},{'kind':'source'},{'kind':'bundle'},{'kind':'screenshot'}]:
+        actual=call(s.ctx.host,'GET',path,actor='bob',project=s.ctx.project_id,query=query)
+        missing=call(s.ctx.host,'GET',f"/designs/{record['id']}/artifacts/missing",actor='bob',project=s.ctx.project_id,query=query)
+        assert actual[:2]==missing[:2] and actual[0]==404,(actual,missing)
+    job=s.storage.get(s.ctx.owner,'job',variant['jobId'])
+    assert all(len(json.dumps(stage['result']).encode())<=8192 for stage in job['stages'])
+
+
+def authorized_call(host, method, path, body=None, *, actor="alice", project=None, query=None):
+    import base64
+    event={"rawPath":"/studio-api"+path,"headers":{"X-Workspace-Project":project},
+        "requestContext":{"http":{"method":method},"authorizer":{"jwt":{"claims":{
+            "sub":actor,"token_use":"access","exp":host.storage.clock()//1000+3600}}}},
+        "queryStringParameters":query or {}}
+    if body is not None:event["body"]=json.dumps(body)
+    response=host.handle(event)
+    payload=base64.b64decode(response["body"]) if response.get("isBase64Encoded") else json.loads(response["body"])
+    return response["statusCode"],payload,response.get("headers",{})
+
+
+@pytest.mark.parametrize("move_neighbour", [False, True])
+def test_edit_rechecks_layout_outside_the_exact_selected_subtree(pipeline, monkeypatch, move_neighbour):
+    from intake import prompts, review
+    from workspace.design_api import read_object
+    from workspace.design_stages import unpacked, knowledge
+    from design_loop.composition import walk
+    from design_loop.convention import Registry
+    from design_loop.edit import subtree_testids
+    s=pipeline
+    decide(s.ctx,s.design['id'],'prd',{'version':s.design['version'],'prd':s.prd,'hash':schema.digest(s.prd)})
+    record=s.ctx.get('design',s.design['id'])
+    decide(s.ctx,record['id'],'flow',{'version':record['version'],'hash':record['flow']['sha256']})
+    assert execute(s,'generate')[0]['status']=='succeeded'
+    record=s.ctx.get('design',s.design['id']);variant=record['variants'][0]
+    artifact=s.ctx.get('wb_artifact',variant['artifactId'])
+    generated=read_object(s.ctx,artifact['result'])['generated']
+    key,composition=next(iter(unpacked(generated['screens']).items()))
+    target=next(node['id'] for _,node,_ in walk(composition))
+    k=knowledge(read_object(s.ctx,record['input'])['snapshot'])
+    excluded=subtree_testids(composition,target,Registry(k,state=generated['registry']))
+    if move_neighbour:
+        evaluate=s.workflow.browser.evaluate
+        def shifted(*args,**kwargs):
+            report=evaluate(*args,**kwargs)
+            for boxes in report['layoutBoxes'].values():
+                other=next((identifier for identifier in boxes if identifier not in excluded),None)
+                if other is not None:
+                    boxes[other][0]+=2
+                    break
+            return report
+        monkeypatch.setattr(s.workflow.browser,'evaluate',shifted)
+    decision=prompts.admit_prompt_text(s.ctx.host,s.ctx.scope,'선택한 요소를 유지하세요.',purpose='edit-instruction',claims=s.ctx.claims)
+    review.decide(s.ctx.host,s.ctx.collaboration.resolve_scope('bob',s.ctx.project_id),decision['id'],approve=True,reason='synthetic instruction')
+    result,_=execute(s,'edit',baseArtifactId=variant['artifactId'],instructionDecisionId=decision['id'],
+        screenId=key[0],state=key[1],targetId=target)
+    assert result['status']==('needs_changes' if move_neighbour else 'succeeded')
+    edited=s.ctx.get('design',s.design['id'])['variants'][-1]
+    assert edited['verification']['layout']['stable'] is not move_neighbour
+
+
+def test_design_cancel_rejects_other_requester_and_clears_active_pointer(pipeline, monkeypatch):
+    from ontology_runtime import execution_entrypoints
+    s=pipeline;record=s.ctx.get('design',s.design['id'])
+    queued=submit(s.ctx,record['id'],'extract',{'requestId':'cancel-test','version':record['version']},
+                  s.ledger,s.config,lambda *a:None)
+    monkeypatch.setattr(execution_entrypoints,'dependencies',lambda:(s.ctx.host,s.config,s.ledger,None,None,None,None))
+    path=f"/designs/{record['id']}/cancel"
+    denied=authorized_call(s.ctx.host,'POST',path,{},actor='bob',project=s.ctx.project_id)
+    assert denied[0]==403 and denied[1]['code']=='forbidden',denied
+    done=authorized_call(s.ctx.host,'POST',path,{},project=s.ctx.project_id)
+    assert done[0]==200,done
+    assert done[1]['design']['activeJobId'] is None
+    assert s.storage.get(s.ctx.owner,'job',queued['jobId'])['status']=='cancelled'
+
+
+def test_pre_model_boundary_refusal_records_known_zero_usage(monkeypatch):
+    from workspace.execution_source import encode
+    class Session:
+        job={'executionId':'test'}
+        outcomes=[]
+        def call(self,name,payload):return {'clean':True,'sha256':hashlib.sha256(encode(payload)).hexdigest()}
+        def intent(self,*args,**kwargs):return 'model-call'
+        def outcome(self,call_id,**kwargs):self.outcomes.append((call_id,kwargs))
+    monkeypatch.setenv('BEDROCK_READ_TIMEOUT','180')
+    def refuse(*args,**kwargs):raise gate.GateRefused(['PHONE'],1,{},'design.execute')
+    monkeypatch.setattr(gate,'generate',refuse)
+    session=Session();model=DesignModel(session,{'model':'global.anthropic.claude-sonnet-5'})
+    with pytest.raises(gate.GateRefused):model.generate('system','synthetic content')
+    assert session.outcomes==[('model-call',{'status':'failed','usage':{'inputTokens':0,'outputTokens':0}})]

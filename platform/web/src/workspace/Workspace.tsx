@@ -159,9 +159,15 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   const editingNow = useRef(editing);
   const planningNow = useRef(planningDirty);
   const composeNow = useRef(false);
+  const procedureNow = useRef(false);
+  const canvasNow = useRef(false);
   const onCompose = useCallback((dirty: boolean) => {
-    composeNow.current = dirty;
-    onDirty(dirty || editingNow.current.dirty || planningNow.current);
+    canvasNow.current = dirty; composeNow.current = dirty || procedureNow.current;
+    onDirty(composeNow.current || editingNow.current.dirty || planningNow.current);
+  }, [onDirty]);
+  const onProcedure = useCallback((dirty: boolean) => {
+    procedureNow.current = dirty; composeNow.current = dirty || canvasNow.current;
+    onDirty(composeNow.current || editingNow.current.dirty || planningNow.current);
   }, [onDirty]);
   const [criteriaPending, setCriteriaPending] = useState(false);
   const [error, setError] = useState('');
@@ -331,7 +337,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
           <button aria-pressed={designMode === 'canvas'} onClick={() => setDesignMode('canvas')}>요청에서 시작</button>
           <button aria-pressed={designMode === 'procedure'} onClick={() => setDesignMode('procedure')}>절차·자료에서 시작</button>
         </nav>}
-        {project && designMode === 'procedure' && <DesignPanel config={config} onDirty={onCompose} />}
+        {project && <div hidden={designMode !== 'procedure'}><DesignPanel config={config} onDirty={onProcedure} /></div>}
         <div hidden={designMode !== 'canvas'}><RunsPanel key={productId || 'unbound'} config={config} assets={assets}
         contracts={scopedContracts} runs={scopedRuns} initialRunId={requestedRun.id} initialRound={requestedRun.round}
         refresh={() => void refresh()} preferredContract={preferredContract} preferredSelection={preferredSelection} editing={editing} onSelection={reviewSelection} product={product}
