@@ -72,6 +72,11 @@ def submit(ctx, identifier, stage, body, ledger, configuration, enqueue):
         raise LedgerError("design-changed")
     if design.get("unknownOutcome") and body.get("acknowledgeUnknownOutcome") is not True:
         raise LedgerError("unknown-outcome-ack-required")
+    from workspace.storage import MAX_RECORD_BYTES
+    # Fixed-size candidate summaries add only a few KiB. Reserve ample headroom
+    # before dispatch so accumulated history cannot fail publication after paid work.
+    if len(encode(design)) > MAX_RECORD_BYTES - 65536:
+        raise LedgerError("design-history-limit")
     variant = body.get("variant", 0)
     rounds = body.get("maxRounds", 3)
     if type(variant) is not int or not 0 <= variant < 5 or type(rounds) is not int or not 1 <= rounds <= 5:
@@ -156,6 +161,19 @@ def submit(ctx, identifier, stage, body, ledger, configuration, enqueue):
             "name": "design-" + stage, "sourceRefs": admitted["sourceRefs"], "requestHash": request_hash})
     enqueue(ctx.owner, job["id"])
     return {"design": public(ctx.get("design", identifier)), "jobId": job["id"], "artifactId": artifact_id}
+
+
+def verification_summary(value):
+    """Bounded metadata only. Full roles/findings/geometry stay in design.json."""
+    findings = value.get("findings") or value.get("issues") or []
+    summary = {"verdict": value.get("verdict") if value.get("verdict") in ("pass", "fail", "blocked") else "blocked", "approvable": value.get("approvable") is True,
+               "findingCount": len(findings),
+               "criticalCount": sum(item.get("severity") == "critical" for item in findings)}
+    layout = value.get("layout")
+    if isinstance(layout, dict):
+        summary["layout"] = {"stable": layout.get("stable") is True,
+            **{name + "Count": len(layout.get(name, [])) for name in ("moved", "missing", "blocked")}}
+    return summary
 
 
 class DesignPublication:
@@ -251,7 +269,9 @@ class DesignPublication:
                     "sessionId": large["browserExecution"]["sessionId"],
                     "taskId": stages["browser"]["result"].get("largeText", {}).get("taskId")}
                 or not any(call.get("callId") == stages["browser"]["result"]["largeText"]["taskId"]
-                    and call.get("kind") == "browser" and call.get("serviceSessionId") == large["browserExecution"]["sessionId"]
+                    and call.get("kind") == "browser" and call.get("status") == "completed"
+                    and call.get("attemptId") == job["attempt"]["id"] and call.get("stage") == "browser"
+                    and call.get("serviceSessionId") == large["browserExecution"]["sessionId"]
                     for call in job["calls"])):
             raise LedgerError("receipt-invalid")
         tester, missing = verify_graph._tester({"browser_report": report, "large_text_report": large,
@@ -266,7 +286,7 @@ class DesignPublication:
         compact = {"artifactId": job["artifact"]["id"], "jobId": job["id"], "variant": result["variant"],
                    "sourceHash": result["sourceHash"], "bundleHash": result["bundleHash"],
                    "source": result["source"], "bundle": result["bundle"], "screenshot": result["screenshot"],
-                   "passed": job["status"] == "succeeded", "verification": verification,
+                   "passed": job["status"] == "succeeded", "verification": verification_summary(verification),
                    "designRevision": value["revision"]}
         if job["operation"] == "design.release":
             from workspace.releases import approval_hash

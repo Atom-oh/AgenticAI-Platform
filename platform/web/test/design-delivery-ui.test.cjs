@@ -5,7 +5,7 @@ const {createHash}=require('node:crypto');
 const {build}=require('esbuild');
 const {chromium}=require('playwright');
 
-async function panelBundle(root,model){return build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import DesignPanel from './src/workspace/DesignPanel';import {WorkspaceScope} from './src/workspace/WorkspaceScope';import {createWorkspaceClient} from './src/workspace/client';const client=createWorkspaceClient({projectId:'p-test'});createRoot(document.getElementById('root')).render(<WorkspaceScope.Provider value={{client,project:{id:'p-test',name:'합성',version:1,members:{alice:{role:'owner'}}},role:'owner',actorId:'alice'}}><DesignPanel config={{models:[{id:'${model}',label:'Claude Sonnet 5'}],defaultModel:'${model}'}} onDirty={()=>{}}/></WorkspaceScope.Provider>);`,resolveDir:root,loader:'tsx'},bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.css':'empty'},define:{'process.env.NODE_ENV':'"development"'},plugins:[{name:'auth',setup(b){b.onResolve({filter:/(^|\/)lib$/},()=>({path:'auth',namespace:'stub'}));b.onLoad({filter:/.*/,namespace:'stub'},()=>({contents:`export const auth={token:'synthetic-token',studioToken:null};`,loader:'js'}));}}]});}
+async function panelBundle(root,model,handoff=false){return build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import DesignPanel from './src/workspace/DesignPanel';import DesignHandoff from './src/workspace/DesignHandoff';import {WorkspaceScope} from './src/workspace/WorkspaceScope';import {createWorkspaceClient} from './src/workspace/client';const client=createWorkspaceClient({projectId:'p-test'});createRoot(document.getElementById('root')).render(<WorkspaceScope.Provider value={{client,project:{id:'p-test',name:'합성',version:1,members:{alice:{role:'owner'}}},role:'owner',actorId:'alice'}}>${handoff ? '<DesignHandoff designId="design-1" releaseIds={["release-1"]}/>' : `<DesignPanel config={{models:[{id:'${model}',label:'Claude Sonnet 5'}],defaultModel:'${model}'}} onDirty={()=>{}}/>`}</WorkspaceScope.Provider>);`,resolveDir:root,loader:'tsx'},bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.css':'empty'},define:{'process.env.NODE_ENV':'"development"'},plugins:[{name:'auth',setup(b){b.onResolve({filter:/(^|\/)lib$/},()=>({path:'auth',namespace:'stub'}));b.onLoad({filter:/.*/,namespace:'stub'},()=>({contents:`export const auth={token:'synthetic-token',studioToken:null};`,loader:'js'}));}}]});}
 
 test('procedure canvas retains request identity, exact approvals, sandboxed selection and verified handoff', {timeout:120000}, async()=>{
  const root=path.resolve(__dirname,'..');
@@ -85,7 +85,7 @@ test('paginated designs keep preview and instruction approval bound to the viewe
  const b={...a,artifactId:'b',variant:1,sourceHash:'c'.repeat(64),bundleHash:'d'.repeat(64)};
  const design={id:'design-6',title:'여섯째 설계',version:1,revision:1,status:'review',model,variants:[a,b],approvals:{flow:{}}};
  let finishA,startedA,wrong=false,admitted=false;const waitingA=new Promise(resolve=>startedA=resolve),held=new Promise(resolve=>finishA=resolve);
- const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const browser=await chromium.launch({executablePath:process.env.WORKSPACE_CHROMIUM,headless:true,args:['--no-sandbox']});
  try{
   const context=await browser.newContext({offline:true});
   await context.route('**/*',async r=>{
@@ -127,4 +127,40 @@ test('paginated designs keep preview and instruction approval bound to the viewe
   assert(await page.getByRole('button',{name:'이 시안 승인',exact:true}).isDisabled());
   assert.equal(await page.locator('iframe[title="선택한 시안 미리보기"]').count(),0);
  }finally{finishA?.();await browser.close();}
+});
+
+
+test('design Git delivery displays queued, verified and delivered-unverified receipts in place', {timeout:60000}, async()=>{
+ const bundle=await panelBundle(path.resolve(__dirname,'..'),'global.anthropic.claude-sonnet-5',true);
+ const sourceHash='a'.repeat(64),commitSha='f'.repeat(40),branch='feature/release-1';
+ const release={id:'release-1',version:1,status:'ready',sourceHash,bundleHash:'b'.repeat(64),approvalHash:'c'.repeat(64),frontendAcceptance:{actor:'alice',sourceHash,bundleHash:'b'.repeat(64)}};
+ let exported=false,finished=false,unverified=false,posts=0;
+ const receipt=()=>({status:unverified?'delivered-unverified':finished?'committed':'queued',sourceHash,
+   ...(finished?{commitSha,branch,baseSha:'e'.repeat(40),criteriaCurrent:true}:{})});
+ const browser=await chromium.launch({executablePath:process.env.WORKSPACE_CHROMIUM,headless:true,args:['--no-sandbox']});
+ try{
+  const context=await browser.newContext({offline:true});
+  await context.route('**/*',r=>{
+   const p=new URL(r.request().url()).pathname.replace(/^\/studio-api/,'');
+   const send=value=>r.fulfill({contentType:'application/json',body:JSON.stringify(value)});
+   if(p==='/')return r.fulfill({contentType:'text/html; charset=utf-8',body:'<meta charset="utf-8"><div id="root"></div><script src="/app.js"></script>'});
+   if(p==='/app.js')return r.fulfill({contentType:'application/javascript; charset=utf-8',body:bundle.outputFiles[0].text});
+   if(p==='/git-connections')return send({connections:[{id:'registered',label:'합성 저장소',repository:'synthetic/delivery',visibility:'private',connectionHash:'d'.repeat(64)}]});
+   if(p==='/designs/design-1/releases/release-1')return send({release:{...release,...(exported?{git:receipt()}:{})}});
+   if(p==='/releases/release-1/git'){
+    const body=r.request().postDataJSON();assert.equal(body.connectionHash,'d'.repeat(64));assert.equal(body.confirmPublic,false);
+    posts++;exported=true;return send({job:{id:'git-job',status:'queued'},release:{...release,git:receipt()},export:{id:'export-1'}});
+   }
+   if(p==='/jobs/git-job')return send({job:{id:'git-job',status:finished?'completed':'queued'}});
+   throw new Error('Unexpected route '+p);
+  });
+  const page=await context.newPage();await page.goto('https://git-delivery.test/');
+  await page.getByLabel('등록된 Git 전달 대상').selectOption('registered');
+  await page.getByRole('button',{name:'등록된 저장소로 전달'}).click();await page.getByText('Git 전달 대기',{exact:true}).waitFor();
+  finished=true;await page.getByText('Git 커밋 확인됨',{exact:true}).waitFor();
+  assert.equal(await page.getByText(commitSha,{exact:true}).count(),1);assert.equal(await page.getByText(branch,{exact:true}).count(),1);
+  unverified=true;await page.getByRole('button',{name:'Git 결과 새로 조회'}).click();await page.getByText('Git 전달 결과 확인 필요',{exact:true}).waitFor();
+  assert.equal(await page.getByText('Git 커밋 확인됨',{exact:true}).count(),0);
+  assert.equal(await page.getByText(commitSha,{exact:true}).count(),1);assert.equal(posts,1);
+ }finally{await browser.close();}
 });

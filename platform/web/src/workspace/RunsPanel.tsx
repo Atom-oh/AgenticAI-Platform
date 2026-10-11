@@ -372,7 +372,7 @@ export default function RunsPanel({ config, assets, contracts, runs, refresh, pr
           {slots.map((slot, index) => {
             const id = slot.runId;
             const item = runs.find(value => value.id === id) || batchRuns.find(value => value.id === id) || attempts.find(value => value.run?.id === id)?.run;
-            const round = item?.rounds.find(value => value.number === item.bestRound);
+            const round = item?.rounds?.find(value => value.number === item.bestRound);
             const title = slot.role === 'baseline' ? '엄격 기준안 · 고정' : `시안 ${index + (batch.mode === 'guided' ? 0 : 1)}`;
             return <article className={`ws-comparison-card ${slot.role === 'baseline' ? 'ws-baseline' : ''}`} key={slot.index}>
               <h4>{title}</h4><p>{item ? stateLabel(item.status) : '기록 미확인'}{round ? ` · ${round.number}라운드` : ''}</p>

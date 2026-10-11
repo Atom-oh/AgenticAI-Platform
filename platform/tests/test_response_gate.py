@@ -74,6 +74,11 @@ _ALLOWED_READS = {
     # The design module owns an independent final response fence over design/variant
     # source admissions, current project authority and every delivered record.
     ("workspace/design_api.py", "approve_variant"), ("workspace/design_api.py", "release_authority"),
+    # variant_authority enforces the existing round-state role gate and retains the run
+    # version; release_view verifies export/release/source identity and retains the export.
+    # design_api.route rechecks all observations after the last read. Negative delivery
+    # tests in test_design_execution cover failed rounds, roles, hashes and exact Git state.
+    ("workspace/design_api.py", "variant_authority"), ("workspace/design_api.py", "release_view"),
 }
 
 

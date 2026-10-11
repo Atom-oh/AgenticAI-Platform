@@ -11,7 +11,7 @@ import type { WorkspaceConfig } from './types';
 type Variant = { artifactId: string; jobId: string; variant: number; passed: boolean; sourceHash: string; bundleHash: string;
   verification: { verdict: string; findings?: { code: string; severity: string; message?: string }[] } };
 type Design = { id: string; title: string; version: number; revision: number; status: string; model: string;
-  activeJobId?: string | null; unknownOutcome?: boolean; variants: Variant[]; approvals: { prd?: unknown; flow?: unknown;
+  activeJobId?: string | null; error?: { code?: string }; unknownOutcome?: boolean; variants: Variant[]; approvals: { prd?: unknown; flow?: unknown;
     ux?: { artifactId: string } }; releases?: { id: string; sourceHash: string; bundleHash: string }[] };
 type Input = { id: string; sourceId: string; kind: string; pageCount: number };
 type Doc = { id: string; title: string; approvedRevisionId?: string };
@@ -72,6 +72,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   const designRole = role === 'owner' || role === 'designer';
   const developer = role === 'owner' || role === 'developer';
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    setInputs([]);
     const [settings, records, docs, graph] = await Promise.all([
       client.get<{ enabled: boolean; models: string[] }>('/designs/config', signal),
       (async () => {
@@ -79,7 +80,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
         do {
           const page = await client.get<{ designs: Design[]; cursor?: string }>(`/designs${cursor ? '?cursor=' + encodeURIComponent(cursor) : ''}`, signal);
           designs.push(...page.designs); cursor = page.cursor;
-          if (cursor && seen.has(cursor)) throw new Error('설계 목록 페이지가 반복되었습니다. 새로 조회하세요.');
+          if (cursor && (seen.has(cursor) || seen.size >= 100)) throw new Error('설계 목록 페이지가 반복되었습니다. 새로 조회하세요.');
           if (cursor) seen.add(cursor);
         } while (cursor && !signal?.aborted);
         return { designs };
@@ -91,11 +92,13 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
     setEnabled(settings.enabled); setModels(settings.models); setDesigns(records.designs);
     setDocuments(docs.documents); setProcedures(graph.nodes.filter(n => n.type === 'Procedure' && n.reviewState === 'approved'));
     const all: Input[] = [];
-    let cursor: string | undefined;
+    let cursor: string | undefined; const inputPages = new Set<string>();
     do {
       const page = await client.get<{ inputs: Input[]; cursor?: string }>(`/designs/inputs${cursor ? '?cursor=' + encodeURIComponent(cursor) : ''}`, signal);
       all.push(...page.inputs); cursor = page.cursor;
-    } while (cursor && all.length < 100 && !signal?.aborted);
+      if (cursor && (inputPages.has(cursor) || inputPages.size >= 100)) throw new Error('자료 목록 범위를 나누어 조회하세요. 현재 승인 상태를 확인하지 못했습니다.');
+      if (cursor) inputPages.add(cursor);
+    } while (cursor && !signal?.aborted);
     if (!signal?.aborted) setInputs(all);
   }, [client]);
   useEffect(() => {
@@ -228,7 +231,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
         <button className="ws-primary" disabled={busy || !(plan || designRole) || !title.trim() || !procedure || !decisions.length}
           onClick={() => void act('/designs', { title: title.trim(), procedureId: procedure, decisionIds: decisions, model }, true)}>설계 시작</button>
       </> : <>
-        <h3>{current.title}</h3><p role="status">{PHASE[current.status] || current.status}</p>
+        <h3>{current.title}</h3><p role="status">{PHASE[current.status] || current.status}</p>{current.error?.code && <Notice error>실행을 완료하지 못했습니다: {current.error.code}</Notice>}
         {current.unknownOutcome && <label><input type="checkbox" checked={acknowledge} onChange={e => setAcknowledge(e.target.checked)} />이전 실행 여부가 확정되지 않았으며, 재실행 시 추가 비용이 발생할 수 있음을 확인했습니다.</label>}
         {current.activeJobId && <button disabled={busy} onClick={() => void act(`/designs/${resource(current.id)}/cancel`, {})}>실행 중단</button>}
         {!detail?.prd && <button disabled={active || !enabled || !(plan || designRole)} onClick={() => void act(`/designs/${resource(current.id)}/extract`, { version: current.version }, true)}>문서에서 PRD 정리</button>}

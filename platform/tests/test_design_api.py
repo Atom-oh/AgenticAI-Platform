@@ -116,3 +116,28 @@ def test_design_cursor_pages_are_complete_and_actor_bound(design_state):
     with pytest.raises(CollaborationError) as error:
         route(ctx.host,bob,{'sub':'bob','exp':ctx.claims['exp']},'GET',[],{}, {'cursor':page['cursor']})
     assert error.value.code=='design-cursor-stale'
+
+
+def test_admitted_edit_instruction_is_not_a_financial_document_source(design_state):
+    from intake import prompts
+    ctx,design,_=design_state
+    pending=prompts.admit_prompt_text(ctx.host,ctx.scope,'안내 버튼을 유지하세요.',purpose='edit-instruction',claims=ctx.claims)
+    review.decide(ctx.host,ctx.collaboration.resolve_scope('bob',ctx.project_id),pending['id'],approve=True,reason='synthetic review')
+    record=ctx.get('design',design['id'])
+    with pytest.raises(CollaborationError) as error:
+        create(ctx,{'requestId':'wrong-source-purpose','title':'Synthetic','procedureId':record['procedureId'],
+            'decisionIds':[*record['decisionIds'],pending['id']],'model':record['model']})
+    assert error.value.code=='design-input-kind' and error.value.status==422
+
+
+def test_source_race_value_error_has_the_same_singular_404(design_state,monkeypatch):
+    from workspace import design_api
+    ctx,design,_=design_state
+    def changed(*args):raise ValueError('Source authority changed')
+    monkeypatch.setattr(design_api,'current_inputs',changed)
+    responses=[]
+    for identifier in [design['id'],'missing']:
+        with pytest.raises(CollaborationError) as error:
+            design_api.route(ctx.host,ctx.scope,ctx.claims,'GET',[identifier],{}, {})
+        responses.append((error.value.status,error.value.code,str(error.value)))
+    assert responses[0]==responses[1] and responses[0][:2]==(404,'not-found')

@@ -4,8 +4,10 @@ import { messageOf, resource } from './client';
 import { JobProgress, Notice } from './shared';
 import type { Job } from './types';
 
+type GitReceipt = { status: string; sourceHash: string; branch?: string; commitSha?: string; baseSha?: string;
+  commitUrl?: string; criteriaCurrent?: boolean | null; criteriaStatus?: string; error?: string };
 type Release = { id: string; version: number; status: string; sourceHash: string; bundleHash: string;
-  approvalHash: string; frontendAcceptance?: { actor: string; sourceHash: string; bundleHash: string } };
+  approvalHash: string; git?: GitReceipt; frontendAcceptance?: { actor: string; sourceHash: string; bundleHash: string } };
 type Connection = { id: string; label: string; repository: string; visibility: string; connectionHash: string };
 const digest = async (bytes: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))].map(v => v.toString(16).padStart(2, '0')).join('');
 export default function DesignHandoff({ designId, releaseIds }: { designId: string; releaseIds: string[] }) {
@@ -22,15 +24,21 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
   const [note, setNote] = useState('');
   const [job, setJob] = useState<Job | null>(null);
   const operation = useRef<AbortController | null>(null);
+  const receiptRequest = useRef<AbortController | null>(null);
+  const loadVersion = useRef(0);
   const pending = useRef<{ key: string; requestId: string } | null>(null);
   const allowed = role === 'owner' || role === 'developer';
   const load = async (id: string, signal?: AbortSignal) => {
+    const version = ++loadVersion.current;
     const result = await client.get<{ release: Release }>(`/designs/${resource(designId)}/releases/${resource(id)}`, signal);
-    if (!signal?.aborted && current.current.designId === designId && current.current.selected === id) setRelease(result.release);
+    if (!signal?.aborted && version === loadVersion.current && current.current.designId === designId && current.current.selected === id) {
+      setRelease(result.release); return result.release;
+    }
+    return null;
   };
   useEffect(() => { if (!releaseIds.includes(selected)) setSelected(releaseIds.at(-1) || ''); }, [releaseIds.join(','), selected]);
   useEffect(() => {
-    operation.current?.abort(); setBusy(false); setJob(null); setNote(''); setRelease(null); setError('');
+    operation.current?.abort(); receiptRequest.current?.abort(); setBusy(false); setJob(null); setNote(''); setRelease(null); setError('');
     if (!selected) return;
     const abort = new AbortController();
     void load(selected, abort.signal).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
@@ -43,7 +51,22 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
     }).catch(reason => { if (!abort.signal.aborted) { setConnections([]); setConnectionError(messageOf(reason)); } });
     return () => abort.abort();
   }, [client]);
-  useEffect(() => () => operation.current?.abort(), []);
+  useEffect(() => () => { operation.current?.abort(); receiptRequest.current?.abort(); }, []);
+  useEffect(() => {
+    if (!release?.git || !['queued', 'running'].includes(release.git.status)) return;
+    const abort = new AbortController();
+    const timer = setInterval(() => void load(release.id, abort.signal).catch(reason => {
+      if (!abort.signal.aborted) setError(messageOf(reason));
+    }), 2000);
+    return () => { clearInterval(timer); abort.abort(); };
+  }, [release?.id, release?.git?.status, designId, client]);
+  const refreshReceipt = () => {
+    if (!selected) return;
+    const abort = new AbortController(); receiptRequest.current?.abort(); receiptRequest.current = abort;
+    void load(selected, abort.signal).then(value => {
+      if (value?.git?.status === 'committed' && value.git.sourceHash === value.sourceHash && /^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(value.git.commitSha || '')) pending.current = null;
+    }).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
+  };
   const download = async (kind: 'handoff' | 'source') => {
     if (!release || busy) return;
     const abort = new AbortController(); operation.current = abort; setBusy(true); setError('');
@@ -91,10 +114,18 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
       const result = await client.post<{ job: Job }>(`/releases/${resource(release.id)}/git`, {
         requestId: pending.current.requestId, connectionId: connection.id, connectionHash: connection.connectionHash, confirmPublic,
       }, abort.signal);
-      if (!abort.signal.aborted) setJob(result.job);
+      if (!abort.signal.aborted) {
+        setJob(result.job); await load(release.id, abort.signal);
+      }
     } catch (reason) { if (!abort.signal.aborted) setError(messageOf(reason)); }
     finally { if (!abort.signal.aborted) setBusy(false); }
   };
+  const git = release?.git;
+  const verifiedCommit = !!git && git.status === 'committed' && git.sourceHash === release?.sourceHash && /^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(git.commitSha || '');
+  let commitUrl: string | undefined;
+  try { const url = new URL(git?.commitUrl || ''); if (url.protocol === 'https:' && !url.username && !url.password) commitUrl = url.href; } catch {}
+  const gitLabel = !git ? '' : verifiedCommit ? 'Git 커밋 확인됨' : ({ queued: 'Git 전달 대기', running: 'Git 전달 중',
+    failed: 'Git 전달 실패', 'delivered-unverified': 'Git 전달 결과 확인 필요' }[git.status] || 'Git 전달 상태 확인 필요');
   if (!releaseIds.length) return null;
   return <section aria-label="검증된 개발 전달" className="ws-section">
     <h3>검증된 개발 전달</h3><label className="ws-field">전달 버전<select value={selected} onChange={e => setSelected(e.target.value)}>
@@ -112,7 +143,17 @@ export default function DesignHandoff({ designId, releaseIds }: { designId: stri
       {connection && requiresPublic && <label><input type="checkbox" checked={confirmPublic} onChange={e => setConfirmPublic(e.target.checked)} />대상의 공개 범위를 확인했습니다.</label>}
       <button disabled={busy || !allowed || !release.frontendAcceptance || !connection || (requiresPublic && !confirmPublic)} onClick={() => void exportGit()}>등록된 저장소로 전달</button>
     </>}
-    {job && <JobProgress job={job} label="Git 전달" onComplete={() => { setNote('Git 전달이 완료되었습니다. 개발 전달 이력에서 커밋을 확인하세요.'); pending.current = null; }} />}
+    {git && <section aria-label="Git 전달 결과"><p role="status">{gitLabel}</p>
+      {git.branch && <p>브랜치: <code>{git.branch}</code></p>}
+      {git.commitSha && <p>커밋: <code>{git.commitSha}</code></p>}
+      {commitUrl && <a href={commitUrl} target="_blank" rel="noopener noreferrer">기록된 Git 커밋 열기</a>}
+      {git.baseSha && <p>기준 커밋: <code>{git.baseSha}</code></p>}
+      {git.criteriaCurrent === false && <Notice error>커밋 이후 설계 기준이 변경되었습니다.</Notice>}
+      {git.criteriaCurrent === null && <Notice>현재 설계 기준 상태를 확인 중입니다.</Notice>}
+      {git.error && <Notice error>{git.error}</Notice>}
+      <button onClick={refreshReceipt}>Git 결과 새로 조회</button>
+    </section>}
+    {job && <JobProgress job={job} label="Git 전달" onComplete={refreshReceipt} onFailure={refreshReceipt} />}
     {error && <Notice error>{error}</Notice>}{note && <Notice>{note}</Notice>}
   </section>;
 }

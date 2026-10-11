@@ -201,3 +201,15 @@ Changing the deployment cohort changes the backend revision: drain active work
 first. Prior variants from another revision must be regenerated before edit or
 release. Runtime resources are an explicit three-file allowlist; a manifest hash
 is evidence of identity, not a privacy classification.
+
+Design handoff displays the authorized export receipt in the same panel, including
+queue/failure/unverified state and actual branch/base/commit SHA. Release-view
+reads retain the export record version through the final response fence. Model
+boundary artifacts retain field counts rather than prompt-derived field labels.
+
+Design records retain only fixed-shape verification summaries (verdict, approval
+flag, finding/critical counts and layout counts). Full findings, role evidence and
+geometry remain in the hash-checked private artifact returned by artifact view.
+Admission reserves 64 KiB of metadata headroom before dispatch; a design whose
+history reaches that bound requires a new design rather than spending on a job
+that cannot publish. Existing idempotent requests still return their durable result.

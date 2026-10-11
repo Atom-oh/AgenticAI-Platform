@@ -131,6 +131,10 @@ def test_approved_flow_generates_actual_verified_react_artifact(pipeline):
     assert s.compiles==1 and s.browsers==2 and s.models
     run=s.ctx.get('run',design['variants'][0]['runId'])
     assert run['rounds'][0]['passed'] and run['executionId']==queued['jobId']
+    from workspace.ontology_sources import Sources, run_round_reference
+    reusable=Sources(s.ctx).release_source(run_round_reference(run,1))
+    assert reusable['sourceHash']==design['variants'][0]['sourceHash']
+    assert reusable['bytes']==s.storage.get_blob(design['variants'][0]['source']['key'])
 
 
 def test_exact_ux_approval_rebuilds_and_produces_identical_handoff(pipeline, repo):
@@ -182,6 +186,8 @@ def test_exact_ux_approval_rebuilds_and_produces_identical_handoff(pipeline, rep
     assert done['status']=='completed',s.storage.get(s.ctx.owner,'job',event['jobId'])
     exported=s.ctx.get('gitexport',payload['export']['id'])
     assert exported['status']=='committed' and exported['criteriaCurrent'] is True,exported
+    delivered=call(host,'GET',f"/designs/{record['id']}/releases/{release['id']}",actor='dana',project=s.ctx.project_id)
+    assert delivered[0]==200 and delivered[1]['release']['git']['commitSha']==exported['commitSha'],delivered
     assert git(bare,'show',f"{exported['commitSha']}:generated/studio/{run['id']}/src/App.tsx")==source['src/App.tsx']
     assert git(bare,'rev-parse','refs/heads/main').decode().strip()==base
     repeated=call(host,'POST',f"/releases/{release['id']}/git",body,actor='dana',project=s.ctx.project_id)
@@ -217,9 +223,18 @@ def test_large_failed_browser_evidence_remains_inspectable_only_by_round_editors
         report['accessibility'].update(status='fail',violations=[{'id':'contrast','impact':'serious','description':'x'*1200} for _ in range(30)])
         return report
     monkeypatch.setattr(s.workflow.browser,'evaluate',failing)
+    from design_loop import verify_graph
+    verify = verify_graph.verify
+    def finding_rich(*args, **kwargs):
+        value = verify(*args, **kwargs)
+        value['findings'].extend({'code':'synthetic-detail','severity':'warning','message':'x'*400} for _ in range(1000))
+        return value
+    monkeypatch.setattr(verify_graph,'verify',finding_rich)
     result,_=execute(s,'generate')
     assert result['status']=='needs_changes'
     record=s.ctx.get('design',s.design['id']);variant=record['variants'][0]
+    assert variant['verification']['findingCount'] >= 1000
+    assert 'findings' not in variant['verification'] and len(json.dumps(record).encode()) < 40000
     path=f"/designs/{record['id']}/artifacts/{variant['artifactId']}"
     for actor in ['alice','carol','dana']:
         for query in [{},{'kind':'source'},{'kind':'bundle'},{'kind':'screenshot'}]:
@@ -314,3 +329,20 @@ def test_pre_model_boundary_refusal_records_known_zero_usage(monkeypatch):
     session=Session();model=DesignModel(session,{'model':'global.anthropic.claude-sonnet-5'})
     with pytest.raises(gate.GateRefused):model.generate('system','synthetic content')
     assert session.outcomes==[('model-call',{'status':'failed','usage':{'inputTokens':0,'outputTokens':0}})]
+
+
+def test_metadata_capacity_is_refused_before_dispatch_or_reservation(pipeline, monkeypatch):
+    from workspace.execution_ledger import LedgerError
+    s=pipeline;record=s.ctx.get('design',s.design['id']);get=s.storage.get
+    def history(owner,kind,identifier):
+        value=get(owner,kind,identifier)
+        if owner==s.ctx.owner and kind=='design' and identifier==record['id']:
+            value={**value,'artifacts':[f"artifact-{i:064d}" for i in range(4000)]}
+        return value
+    monkeypatch.setattr(s.storage,'get',history)
+    dispatched=[]
+    with pytest.raises(LedgerError) as error:
+        submit(s.ctx,record['id'],'extract',{'requestId':'capacity','version':record['version']},
+               s.ledger,s.config,lambda *args:dispatched.append(args))
+    assert error.value.code=='design-history-limit'
+    assert not dispatched and not s.models and not s.charges

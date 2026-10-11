@@ -840,7 +840,8 @@ class Sources:
             if self._rules().contract_hash(run.get("contract") or {}) != run["contractHash"]:
                 fail(409, "source-changed", "라운드의 규칙 사본이 승인본과 다릅니다.")
             self._fence_criteria(run)
-            resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read")
+            resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read",
+                **({"host": self.ctx.host, "claims": self.ctx.claims} if run.get("designId") else {}))
             self._fence_criteria(run)
             self._inputs(self._snapshot_refs(run), historical=False)
             self._base_lineage(run)

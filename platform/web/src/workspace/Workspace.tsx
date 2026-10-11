@@ -214,7 +214,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   useEffect(() => { onDirty(editingNow.current.dirty || planningNow.current || composeNow.current); }, [editing.dirty, planningDirty, onDirty, route]);
   useEffect(() => {
     if (activeProduct.current !== route.productId) {
-      editingNow.current = { id: '', dirty: false }; planningNow.current = false; composeNow.current = false; onDirty(false);
+      editingNow.current = { id: '', dirty: false }; planningNow.current = false; canvasNow.current = false; composeNow.current = procedureNow.current; onDirty(procedureNow.current);
       setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
       setSelected([]); setGuideRefs([]);
     }
@@ -262,7 +262,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
   };
   const chooseProduct = (id: string) => {
     if (id !== productId && (editingNow.current.dirty || planningNow.current || composeNow.current) && !confirm('저장하지 않은 설계 변경을 닫고 다른 상품을 선택할까요?')) return;
-    activeProduct.current = id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; composeNow.current = false; onDirty(false);
+    activeProduct.current = id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; canvasNow.current = false; composeNow.current = procedureNow.current; onDirty(procedureNow.current);
     setProductId(id); setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setRequestedRun({ id: '', round: undefined });
     setPlanningDirty(false);
     setSelected([]); setGuideRefs([]);
@@ -275,7 +275,7 @@ function ProjectWorkspace({ config, initialStep, route, onDirty, onProjectRefres
     setProducts(items => [value, ...items.filter(item => item.id !== value.id)]);
     if (!sameProduct && (editingNow.current.dirty || composeNow.current) && !confirm('저장하지 않은 UX 설계 변경을 닫고 저장한 상품으로 이동할까요?')) return;
     if (!sameProduct) {
-      activeProduct.current = value.id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; composeNow.current = false; onDirty(false);
+      activeProduct.current = value.id; editingNow.current = { id: '', dirty: false }; planningNow.current = false; canvasNow.current = false; composeNow.current = procedureNow.current; onDirty(procedureNow.current);
       setSelection(null); setPreferredContract(''); setEditing({ id: '', dirty: false }); setPlanningDirty(false);
       setRequestedRun({ id: '', round: undefined }); setSelected([]); setGuideRefs([]);
     }

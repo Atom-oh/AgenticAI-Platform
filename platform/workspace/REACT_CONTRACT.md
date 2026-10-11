@@ -377,3 +377,9 @@ Partial edit approval requires both structural stability and Browser checkpoint
 layout stability within one pixel outside the selected subtree. Missing or
 incomplete geometry fails verification. Full findings remain private downloadable
 evidence; bounded stage receipts carry summaries and exact object references.
+
+Design release views include the recorded Git status, branch, base SHA, commit SHA,
+source hash and available commit URL under the same final source/export fence.
+The design handoff panel polls queued/running exports and displays committed,
+failed and delivered-unverified outcomes in place. A job completion flag alone
+never supplies the commit receipt; missing or mismatched SHA evidence stays unknown.

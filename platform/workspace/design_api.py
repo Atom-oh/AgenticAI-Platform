@@ -49,8 +49,8 @@ def inputs(ctx, decision_ids):
     pages, refs, decisions, checks, bounds = [], [], [], [], []
     for identifier in decision_ids:
         decision, data, authority = admission.authorized(ctx.host, ctx.scope, identifier, claims=ctx.claims)
-        if decision["artifact"]["kind"] not in {"document-pages", "diagram-transcription", "prompt-text"}:
-            fail(422, "design-input-kind", "설계에는 반입 승인된 문서 또는 지시문이 필요합니다.")
+        if decision["artifact"]["kind"] not in {"document-pages", "diagram-transcription"}:
+            fail(422, "design-input-kind", "설계 원본에는 반입 승인된 문서나 도해가 필요합니다.")
         value = json.loads(data)
         if decision["artifact"]["kind"] == "diagram-transcription":
             value = [{"page": 1, "text": value["text"]}]
@@ -386,7 +386,10 @@ def artifact_view(ctx, identifier, artifact_id, query):
         data = ctx.storage.get_blob(ref["key"])
         if hashlib.sha256(data).hexdigest() != ref["sha256"]:
             fail(409, "design-evidence-changed", "검증한 파일이 변경되었습니다.")
-        offset = int(query.get("offset", 0))
+        try:
+            offset = int(query.get("offset", 0))
+        except (TypeError, ValueError):
+            fail(400, "design-range", "파일 범위를 확인하세요.")
         if not 0 <= offset < len(data):
             fail(400, "design-range", "파일 범위를 확인하세요.")
         chunk = data[offset:offset + 256 * 1024]
@@ -509,8 +512,17 @@ def release_view(ctx, identifier, release_id, query):
     _, release, _, _ = release_authority(ctx, identifier, release_id)
     kind = query.get("kind", "view")
     if kind == "view":
-        return {"release": {k: release[k] for k in ("id", "status", "sourceHash", "bundleHash", "approvalHash", "version",
-                "rebuiltAt", "verification", "frontendAcceptance") if k in release}}
+        value = {k: release[k] for k in ("id", "status", "sourceHash", "bundleHash", "approvalHash", "version",
+                 "rebuiltAt", "verification", "frontendAcceptance") if k in release}
+        export_id = (release.get("git") or {}).get("exportId")
+        if export_id:
+            exported = ctx.get("gitexport", export_id)
+            if exported.get("releaseId") != release_id or exported.get("sourceHash") != release["sourceHash"]:
+                fail(404, "not-found", "Resource not found")
+            value["git"] = {key: exported[key] for key in ("status", "branch", "baseSha", "commitSha", "commitUrl", "filesUrl",
+                "sourceHash", "connectionId", "jobId", "criteriaCurrent", "criteriaStatus", "error") if key in exported}
+            observe(ctx, [ctx.check("gitexport", exported)], ctx.authorization()["authorizationExpiresAt"])
+        return {"release": value}
     names = {"handoff": ("handoffKey", "handoffHash"), "source": ("sourceKey", "sourceArchiveSha256"),
              "bundle": ("distKey", "distArchiveSha256")}
     if kind not in names:
@@ -519,7 +531,10 @@ def release_view(ctx, identifier, release_id, query):
     raw = ctx.storage.get_blob(release[key])
     if hashlib.sha256(raw).hexdigest() != release[digest]:
         fail(409, "design-evidence-changed", "검증된 전달 파일이 변경되었습니다.")
-    offset = int(query.get("offset", 0))
+    try:
+        offset = int(query.get("offset", 0))
+    except (TypeError, ValueError):
+        fail(400, "design-range", "파일 범위를 확인하세요.")
     if not 0 <= offset < len(raw):
         fail(400, "design-range", "파일 범위를 확인하세요.")
     data = raw[offset:offset + 256 * 1024]
@@ -571,5 +586,9 @@ def route(host, scope, claims, method, parts, body, query):
         return _response(host, scope, claims, method, parts, body, query)
     except (admission.AdmissionError, CollaborationError) as error:
         if method == "GET" and parts and parts[0] not in {"config", "inputs"} and error.status in {404, 409}:
+            fail(404, "not-found", "Resource not found")
+        raise
+    except ValueError:
+        if method == "GET" and parts and parts[0] not in {"config", "inputs"}:
             fail(404, "not-found", "Resource not found")
         raise

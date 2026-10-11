@@ -5,7 +5,7 @@ export default function ComparisonTray({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   return <section className="ws-comparison-tray" aria-label="시안 나란히 비교">
-    <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
+    <button type="button" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)}>
       {open ? '나란히 비교 닫기' : '시안 나란히 비교'}
     </button>
     {open && <>

@@ -40,8 +40,10 @@ class DesignModel:
             raise
         self.execution.outcome(call_id, usage={key: usage[key] for key in ("inputTokens", "outputTokens")})
         self.calls.append(call_id)
+        boundary = {key: value for key, value in info["boundary"].items() if key != "fieldsPassed"}
+        boundary["fieldCount"] = len(info["boundary"].get("fieldsPassed", []))
         self.boundaries.append({"callId": call_id, "modelId": info["modelId"], "usage": usage,
-                                "boundary": info["boundary"], "payloadHash": inspected["sha256"], "requestId": info.get("requestId")})
+                                "boundary": boundary, "payloadHash": inspected["sha256"], "requestId": info.get("requestId")})
         return self.refs.decode(text)
 
     def dependencies(self):
