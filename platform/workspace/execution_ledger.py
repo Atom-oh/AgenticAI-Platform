@@ -415,7 +415,7 @@ class Ledger:
                 change = {"executionStatus": job["status"]}
                 if job["status"] in TERMINAL:
                     change.update(activeJobId=None, activeArtifactId=None, status="interrupted", error=job.get("error"),
-                                  unknownOutcome=bool(job.get("unknownOutcome")))
+                                  lastExecutionId=job["id"], unknownOutcome=bool(job.get("unknownOutcome")))
                 writes.append({"owner": owner, "kind": "design", "expected_version": design["version"],
                                "item": {**design, **change}})
         return writes

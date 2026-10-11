@@ -73,6 +73,12 @@ steps 5–7, service gates, independent acceptance or the complete design UI flo
 
 ## Design delivery candidate (2026-10-11)
 
+Review follow-up: compiler refusals retain private diagnostics and candidate
+source without generating a bundle/approval. Stale procedure rows cannot poison
+design listings. Design Git receipts use the same module-authorized writer at
+completion as at admission. These changes require GEN-05/HAND-01–03 regressions;
+their offline tests do not close any live service gate.
+
 The candidate branch adds persistent design records, exact PRD/flow/UX/frontend
 decisions, design operations through the B0 Runtime, compiler/Browser/large-text
 verification, source-preserving release/handoff, recent-session Memory indexing

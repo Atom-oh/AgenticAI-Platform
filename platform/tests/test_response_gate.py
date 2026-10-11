@@ -79,6 +79,8 @@ _ALLOWED_READS = {
     # design_api.route rechecks all observations after the last read. Negative delivery
     # tests in test_design_execution cover failed rounds, roles, hashes and exact Git state.
     ("workspace/design_api.py", "variant_authority"), ("workspace/design_api.py", "release_view"),
+    # Failed diagnostics re-resolve job admissions and retain their final _response authority fence.
+    ("workspace/design_api.py", "compile_failure"),
 }
 
 

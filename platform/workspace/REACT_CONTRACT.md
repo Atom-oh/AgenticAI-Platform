@@ -331,6 +331,20 @@ not certify the current deployment or a customer's package/Git integration.
 
 ## Persistent procedure design (2026-10-11 candidate)
 
+A compiler rejection is an interrupted execution with no bundle, Browser result
+or UX approval. The completed Interpreter observation and hash-bound private
+compiler diagnostics/candidate source are retained. The design detail's optional
+`failure` contains those diagnostics only for a currently authorized owner,
+designer or developer; all consumed admissions and the final response fence are
+rechecked. The UI exposes the failed source for repair and explicit regeneration
+under the frozen criteria. It does not fabricate a Browser pass to produce a
+`needs_changes` bundle. Findings on a successfully compiled/inspected candidate
+continue to use the existing `needs_changes` publication path.
+
+An incomplete or newly rejected procedure makes its design inaccessible; design
+listings omit that row without breaking the rest of the page. Invalid pagination
+limits return `400 design-page-limit`.
+
 The flow review UI projects the current screens and directed transitions into a
 read-only diagram. Selecting a transition highlights its endpoints and retains
 its full condition/retention text; missing or removed endpoints remain warnings.

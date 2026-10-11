@@ -141,3 +141,45 @@ def test_source_race_value_error_has_the_same_singular_404(design_state,monkeypa
             design_api.route(ctx.host,ctx.scope,ctx.claims,'GET',[identifier],{}, {})
         responses.append((error.value.status,error.value.code,str(error.value)))
     assert responses[0]==responses[1] and responses[0][:2]==(404,'not-found')
+
+
+def test_rejected_procedure_member_does_not_break_design_listing(design_state):
+    from workspace.design_api import route
+    ctx, design, _ = design_state
+    store = Ontology(ctx)
+    graph = store.procedure_snapshot(design['procedureId'])
+    screen = next(node for node in graph['nodes'] if node['type'] == 'Screen')
+    store.review_node(screen['id'], expected_generation=store.current()['generation'],
+        revision=screen['revision'], decision='rejected', reason='No longer approved', request_id='reject-screen')
+    status, result = route(ctx.host, ctx.scope, ctx.claims, 'GET', [], {}, {})
+    assert status == 200 and result['designs'] == []
+    with pytest.raises(CollaborationError) as error:
+        route(ctx.host, ctx.scope, ctx.claims, 'GET', [design['id']], {}, {})
+    assert error.value.status == 404
+
+
+@pytest.mark.parametrize('failed_read', [1, 2])
+def test_invalid_design_is_omitted_at_each_listing_fence(design_state, monkeypatch, failed_read):
+    from workspace import design_api
+    ctx, design, _ = design_state
+    original = design_api.current_inputs
+    calls = []
+    def incomplete(probe, record):
+        calls.append(record['id'])
+        if len(calls) == failed_read:
+            raise ValueError('knowledge-incomplete')
+        return original(probe, record)
+    monkeypatch.setattr(design_api, 'current_inputs', incomplete)
+    status, result = design_api.route(ctx.host, ctx.scope, ctx.claims, 'GET', [], {}, {})
+    assert status == 200 and result['designs'] == []
+    assert calls == [design['id']] * failed_read
+
+
+@pytest.mark.parametrize('parts', [[], ['inputs']])
+@pytest.mark.parametrize('limit', ['abc', '1.5', '0', '11', None])
+def test_invalid_design_page_limits_are_explicit_client_errors(design_state, parts, limit):
+    from workspace.design_api import route
+    ctx, _, _ = design_state
+    with pytest.raises(CollaborationError) as error:
+        route(ctx.host, ctx.scope, ctx.claims, 'GET', parts, {}, {'limit': limit})
+    assert (error.value.status, error.value.code) == (400, 'design-page-limit')

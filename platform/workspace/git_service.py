@@ -248,7 +248,10 @@ def process_export(worker, owner, job):
         if (latest.get("git") or {}).get("exportId") != exported["id"]:
             break
         try:
-            worker.storage.put(owner, "release", {**latest, "git": result}, latest["version"])
+            # This is the same module-authorized export mutation as create_export, not a legacy writer.
+            from workspace import storage as storage_module
+            worker.storage.put(owner, "release", {**latest, "git": result}, latest["version"],
+                               **({"_writer": storage_module._human_writer()} if latest.get("designId") else {}))
             break
         except Conflict:
             continue

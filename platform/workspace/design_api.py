@@ -262,17 +262,55 @@ def _route(ctx, method, parts, body, query):
                 probe = Service(ctx.host, ctx.scope, ctx.claims)
                 current_inputs(probe, value)
                 items.append(public(value))
-            except (admission.AdmissionError, CollaborationError):
+            except (admission.AdmissionError, CollaborationError, ValueError):
                 continue
         return 200, {"designs": items, "cursor": page.get("cursor")}
     if len(parts) == 1 and method == "GET":
         value = ctx.get("design", parts[0]);current_inputs(ctx, value)
         return 200, {"design": public(value), "prd": read_object(ctx, value["prd"]) if value["prd"] else None,
                      "flow": read_object(ctx, value["flow"]) if value["flow"] else None,
-                     "flowHash": value["flow"]["sha256"] if value["flow"] else None}
+                     "flowHash": value["flow"]["sha256"] if value["flow"] else None,
+                     "failure": compile_failure(ctx, value)}
     if len(parts) == 2 and method == "POST" and parts[1] in {"confirm-prd", "approve-flow"}:
         return 200, {"design": decide(ctx, parts[0], "prd" if parts[1] == "confirm-prd" else "flow", body)}
     fail(404, "not-found", "설계 경로를 찾을 수 없습니다.")
+
+
+def compile_failure(ctx, design):
+    """Private diagnostics for a failed attempt, never a bundle or approval receipt."""
+    from workspace.execution_sources import ExecutionSources
+    if (ctx.scope['role'] not in {'owner', 'designer', 'developer'} or design.get('status') != 'interrupted'
+            or not design.get('lastExecutionId')):
+        return None
+    job = ctx.get('job', design['lastExecutionId'])
+    descriptor = job.get('artifact') or {}
+    if (job.get('status') != 'failed' or (job.get('error') or {}).get('code') != 'design-compile-failed'
+            or descriptor.get('designId') != design['id'] or descriptor.get('designRevision') != design['revision']):
+        return None
+    checks = [ctx.check('job', job), ctx.check('design', design)]
+    expiry = ctx.authorization()['authorizationExpiresAt']
+    resolver = ExecutionSources(ctx.host)
+    if not job.get('admissions'):
+        fail(404, 'not-found', 'Resource not found')
+    for binding in job['admissions']:
+        resolved = resolver(ctx.owner, binding, job={'actor': ctx.actor, 'projectId': ctx.project_id,
+                                                   'authorizationExpiresAt': expiry})
+        checks.extend([resolved['check'], *resolved.get('checks', [])])
+        expiry = min(expiry, resolved['expiresAt'])
+    observe(ctx, checks, expiry)
+    attempt = job['attempt']['id']
+    def output(stage, name):
+        key = ctx.storage.key_for(ctx.owner, 'job', job['id'], f'out/{attempt}/{stage}/{name}')
+        rows = [row for row in job['transfers'] if row['attemptId'] == attempt and row['key'] == key and row['stage'] == stage]
+        if len(rows) != 1 or rows[0]['size'] > 2 * 1024 * 1024:
+            fail(404, 'not-found', 'Resource not found')
+        return read_object(ctx, rows[0])
+    build = output('compile', 'build.json')['build']
+    source = output('generate', 'sources.json') if job['operation'] != 'design.release' else {'files': {}}
+    if build.get('ok') is not False:
+        fail(404, 'not-found', 'Resource not found')
+    return {'stage': 'compile', 'status': 'failed', 'diagnostics': build.get('diagnostics', []),
+            'gates': build.get('gates', {}), 'files': source['files'], 'approved': False}
 
 
 def variant_authority(ctx, design, artifact_id):
@@ -411,7 +449,10 @@ def observe(ctx, checks, expiry):
 
 def page_for(ctx, kind, query):
     import secrets
-    limit = int(query.get("limit", 5))
+    try:
+        limit = int(query.get("limit", 5))
+    except (TypeError, ValueError, OverflowError):
+        fail(400, "design-page-limit", "한 번에 1~10개 항목을 조회하세요.")
     if not 1 <= limit <= 10:
         fail(400, "design-page-limit", "한 번에 1~10개 항목을 조회하세요.")
     fingerprint = schema.digest([ctx.actor, ctx.scope["role"], ctx.scope["project"]["authorityRevision"], kind, limit])
@@ -471,7 +512,7 @@ def _response(host, scope, claims, method, parts, body, query):
             probe = Service(host, scope, claims)
             try:
                 summary = safe_summary(probe, probe.get("design", value["id"]))
-            except (admission.AdmissionError, CollaborationError):
+            except (admission.AdmissionError, CollaborationError, ValueError):
                 continue
             observe(ctx, probe._design_checks, probe._design_expiry)
             visible.append(summary)

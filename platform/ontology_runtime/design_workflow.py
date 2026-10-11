@@ -130,20 +130,20 @@ class DesignWorkflow:
         call_id = execution.intent("compile", "interpreter", 300000)
         result = self.interpreter.execute("compile", compile_request(generated["files"], catalog_hash=contract["catalogHash"], contract=contract))
         build, observed = result["build"], result["execution"]
-        execution.outcome(call_id, session_id=observed["sessionId"], status="completed" if build.get("ok") else "failed")
+        # The Interpreter command returned an observation, even when the compiler rejected the source.
+        execution.outcome(call_id, session_id=observed["sessionId"])
+        build_copy = {key: value for key, value in build.items() if key not in {"projectZipBase64", "distZipBase64"}}
+        build_ref = execution.upload("compile", "build.json", {"build": build_copy, "execution": observed})
         if not build.get("ok"):
             execution.call("fail", {"code": "design-compile-failed"})
             return {"status": "failed"}
         source_zip = execution.upload("compile", "source.zip", base64.b64decode(build["projectZipBase64"], validate=True), binary=True)
         dist_zip = execution.upload("compile", "bundle.zip", base64.b64decode(build["distZipBase64"], validate=True), binary=True, role="bundle")
-        build_copy = {key: value for key, value in build.items() if key not in {"projectZipBase64", "distZipBase64"}}
-        build_ref = execution.upload("compile", "build.json", {"build": build_copy, "execution": observed})
         execution.stage("compile", [source_files, candidate], [source_zip, dist_zip, build_ref],
             {"sourceHash": source_zip["sha256"], "bundleHash": dist_zip["sha256"],
              "reactSourceHash": build["sourceHash"], "reactBundleHash": build["bundleHash"]},
             {"kind": "interpreter", "sessionId": observed["sessionId"], "taskId": call_id,
              "exitCode": 0, "profile": execution.job["toolProfiles"]["interpreter"]})
-        browser_call = execution.intent("browser", "browser", 180000)
         reference = None
         baseline = None
         if manifest["operation"] == "design.release":
@@ -155,6 +155,7 @@ class DesignWorkflow:
                     or dist_zip["sha256"] != manifest["approved"]["bundleHash"]):
                 execution.call("fail", {"code": "design-release-source-changed"})
                 return {"status": "failed"}
+        browser_call = execution.intent("browser", "browser", 180000)
         report = self.browser.evaluate(build, contract, reference=reference,
                                        visual_tolerance=0.02 if baseline else 0.15)
         execution.outcome(browser_call, session_id=report["browserExecution"]["sessionId"])

@@ -18,7 +18,8 @@ type Doc = { id: string; title: string; approvedRevisionId?: string };
 type Procedure = { id: string; title: string; type: string; reviewState: string };
 type Flow = { flow: { screens: string[]; transitions: { id: string; src: string; dst: string; when?: string | null }[] };
   issues: { code?: string; message?: string }[]; contract: { rules: { id: string; title: string }[] } | null };
-type Detail = { design: Design; prd?: { prd: Record<string, unknown>; issues: { field: string; code: string }[] }; flow?: Flow; flowHash?: string };
+type Detail = { design: Design; prd?: { prd: Record<string, unknown>; issues: { field: string; code: string }[] }; flow?: Flow; flowHash?: string;
+  failure?: { stage: string; status: string; diagnostics: string[]; files: Record<string, string>; approved: false } | null };
 const PHASE: Record<string, string> = { draft: '자료 선택 완료', executing: '생성·검증 중', 'prd-review': 'PRD 확인 필요',
   'flow-review': '흐름 확인 필요', ready: '시안 생성 가능', review: '시안 검토', approved: '시안 승인됨', released: '개발 전달 준비됨',
   interrupted: '실행 중단 · 결과 확인 필요', cancelled: '취소됨' };
@@ -210,6 +211,12 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
       <option value="">새 설계</option>{designs.map(item => <option key={item.id} value={item.id}>{item.title} · {PHASE[item.status] || item.status}</option>)}
     </select></label><button onClick={() => void refresh().catch(reason => setError(messageOf(reason)))}>새로 조회</button></div>
     {error && <Notice error>{error}</Notice>}{notice && <Notice>{notice}</Notice>}
+    {detail?.failure && <section aria-label="컴파일 실패 근거" className="ws-section">
+      <h3>생성 소스가 컴파일 검사를 통과하지 못했습니다</h3>
+      <p>아래 진단과 소스를 확인한 뒤 같은 승인 기준으로 다시 생성하세요. 실행·승인된 시안은 아닙니다.</p>
+      <ul>{detail.failure.diagnostics.map((message, index) => <li key={index}>{message}</li>)}</ul>
+      {Object.entries(detail.failure.files).map(([path, source]) => <details key={path}><summary>{path} · 미검증 소스</summary><pre>{source}</pre></details>)}
+    </section>}
     {!enabled && <Notice>이 작업 공간의 실제 설계 실행은 아직 활성화되지 않았습니다. 자료와 승인 흐름을 먼저 준비할 수 있습니다.</Notice>}
     <div className="ws-design-canvas-grid"><aside className="ws-design-control">
       {!current ? <>
