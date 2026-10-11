@@ -24,6 +24,7 @@ COPY workbench ./workbench
 COPY documents ./documents
 COPY intake ./intake
 COPY ontology_runtime ./ontology_runtime
+COPY design_loop ./design_loop
 COPY engine ./engine
 COPY studio ./studio
 COPY api/common ./common

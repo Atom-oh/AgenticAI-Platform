@@ -182,7 +182,7 @@ ROUTES = (
 # Their routes that return run, round or other source-derived workspace metadata are
 # registered in ROUTES above and served through the response gate instead.
 DELEGATED = {"projects": "workspace.collaboration", "products": "workspace.collaboration",
-             "comments": "workspace.collaboration", "ontology": "workspace.ontology_api",
+             "comments": "workspace.collaboration", "ontology": "workspace.ontology_api", "designs": "workspace.design_api",
              "intake": "intake.review", "workbench": "workbench.api", "documents": "documents.api",
              "impact-analyses": "documents.analysis"}
 
@@ -739,6 +739,19 @@ class WorkspaceAPI:
                 if response is not None:
                     return _json(response[0], response[1])
             scope = self.collaboration.resolve_scope(owner, project_id)
+            if segments[0] == "designs":
+                from workspace.design_api import route
+                from workspace.execution_ledger import LedgerError
+                from intake.admission import AdmissionError
+                scope = self.collaboration.require(scope, "read")
+                try:
+                    result = route(self, scope, claims, method, segments[1:],
+                                   _body(event) if method in ("POST", "PUT", "PATCH") else {}, query)
+                    return _json(result[0], result[1])
+                except AdmissionError as error:
+                    raise HTTPError(error.status, error.code, "자료의 현재 반입 승인이 필요합니다.") from None
+                except LedgerError as error:
+                    raise HTTPError(403 if error.code == "forbidden" else 503 if error.code == "design-execution-unavailable" else 409, error.code, "설계의 현재 승인 조건과 실행 상태를 확인하세요.") from None
             if segments[0] == "ontology":
                 from workspace.ontology_api import route
                 scope = self.collaboration.require(scope, "read")
@@ -1855,6 +1868,8 @@ class WorkspaceAPI:
                             "The operational job expired. Open the stored run or start a new request.")
         self._worker_ready()
         contract = self._authorized_contract(owner, data["contractId"], gate)
+        if contract.get("designId"):
+            raise HTTPError(409, "design-route-required", "절차 기반 설계에서 생성·검증을 진행하세요.")
         output_type = "html" if mode == "verify" else data.get("outputType", "react" if contract.get("catalogHash") else "html")
         if output_type == "react":
             if not contract.get("catalogHash"):
@@ -2001,6 +2016,8 @@ class WorkspaceAPI:
                    or by_id[rule["id"]]["status"] == "pass") for rule in rules)
 
     def _run_approve(self, owner, run, body, scope=None, gate=None):
+        if run.get("designId"):
+            raise HTTPError(409, "design-route-required", "절차 기반 설계에서 정확한 시안을 승인하세요.")
         version = _integer(body.get("contractVersion"), "Contract version", 1, 2**53 - 1)
         number = _integer(body.get("round"), "Round", 1, 5)
         selected = next((row for row in run.get("rounds", []) if row.get("number") == number), None)

@@ -80,6 +80,10 @@ def secret_token(connection):
 
 def create_export(api, owner, release, body, scope, gate=None):
     from workspace.http import HTTPError, _json
+    if release.get("designId"):
+        accepted = release.get("frontendAcceptance") or {}
+        if any(accepted.get(key) != release.get(key) for key in ("sourceHash", "bundleHash", "approvalHash")):
+            raise HTTPError(409, "frontend-acceptance-required", "개발자의 정확한 전달 자료 확인이 필요합니다.")
     connections = api.git_connections()
     connection = connections.get(body.get("connectionId"))
     if connection is None:
@@ -92,16 +96,26 @@ def create_export(api, owner, release, body, scope, gate=None):
     if release.get("status") != "ready":
         raise HTTPError(409, "release-not-ready", "승인 후 재빌드·검증을 마친 React 릴리스가 필요합니다.")
     run = api._get(owner, "run", release["runId"])
-    api._criteria(owner, {}, scope, api._get(owner, "contract", run["contractId"]))
+    authorization = {}
+    if run.get("designId"):
+        if gate is None or gate.context is None:
+            raise HTTPError(401, "authorization-required", "만료 시간이 있는 인증이 필요합니다.")
+        authorization = {"authorizationExpiresAt": gate.context.authorization()["authorizationExpiresAt"]}
+        try:
+            resolve_generation_context(api.storage, owner, {**run, "actor": scope["actor"]}, "export", host=api, claims=gate.context.claims)
+        except ValueError as error:
+            raise HTTPError(409, "design-source-changed", str(error)) from None
+    else:
+        api._criteria(owner, {}, scope, api._get(owner, "contract", run["contractId"]))
     try:
         approved_artifacts(api.storage, owner, run, release["round"], release["approvalHash"], gate=gate)
     except ValueError as error:
         raise HTTPError(409, "release-approval-changed", str(error)) from error
     identifier = api._request_id(body, "git")
-    data = {"releaseId": release["id"], "connectionId": connection["id"], "connectionHash": digest,
+    data = {**authorization, "releaseId": release["id"], "connectionId": connection["id"], "connectionHash": digest,
             "sourceHash": release["sourceHash"], "actor": scope["actor"],
             **({"projectId": scope["project"]["id"]} if scope.get("project") else {})}
-    fingerprint = api._fingerprint(data)
+    fingerprint = api._fingerprint({key: value for key, value in data.items() if key != "authorizationExpiresAt"})
     exported = api.storage.get(owner, "gitexport", identifier)
     if exported is not None and gate is not None:
         # Authorize the SAME export (its own round-delivery lineage) before
@@ -175,7 +189,7 @@ def process_export(worker, owner, job):
     # Reauthorize the complete lineage at execution time (the request-time gate is not enough):
     # the recorded actor's current export authority, round-state permission and every upstream.
     reader = _export_lineage(worker, owner, exported, release)
-    resolve_generation_context(worker.storage, owner, {**run, "actor": exported["actor"]}, "export")
+    resolve_generation_context(worker.storage, owner, {**run, "actor": exported["actor"]}, "export", **({"host": worker, "claims": {"sub": exported["actor"], "exp": exported["authorizationExpiresAt"] // 1000}} if run.get("designId") else {}))
     approved_artifacts(worker.storage, owner, run, release["round"], release["approvalHash"])
     source = worker._read(owner, release["sourceKey"])
     files = read_archive(source, release["sourceHash"])
@@ -219,7 +233,7 @@ def process_export(worker, owner, job):
     current, criteria_status = True, "current"
     try:
         latest_run = worker.storage.get(owner, "run", run["id"])
-        resolve_generation_context(worker.storage, owner, {**latest_run, "actor": exported["actor"]}, "export")
+        resolve_generation_context(worker.storage, owner, {**latest_run, "actor": exported["actor"]}, "export", **({"host": worker, "claims": {"sub": exported["actor"], "exp": exported["authorizationExpiresAt"] // 1000}} if run.get("designId") else {}))
         approved_artifacts(worker.storage, owner, latest_run, release["round"], release["approvalHash"])
     except ValueError:
         current, criteria_status = False, "changed"
@@ -234,7 +248,10 @@ def process_export(worker, owner, job):
         if (latest.get("git") or {}).get("exportId") != exported["id"]:
             break
         try:
-            worker.storage.put(owner, "release", {**latest, "git": result}, latest["version"])
+            # This is the same module-authorized export mutation as create_export, not a legacy writer.
+            from workspace import storage as storage_module
+            worker.storage.put(owner, "release", {**latest, "git": result}, latest["version"],
+                               **({"_writer": storage_module._human_writer()} if latest.get("designId") else {}))
             break
         except Conflict:
             continue
@@ -245,7 +262,10 @@ def _export_lineage(worker, owner, exported, release):
     from workspace.collaboration import CollaborationError
     from workspace.ontology_sources import job_reader
     try:
-        reader = job_reader(worker, owner, exported.get("actor"), "export")
+        expiry = exported.get("authorizationExpiresAt") if release.get("designId") else None
+        if release.get("designId") and (type(expiry) is not int or expiry <= worker.storage.clock()):
+            raise ValueError("설계 전달 인증이 만료되었습니다.")
+        reader = job_reader(worker, owner, exported.get("actor"), "export", **({"authorization_expires_at": expiry} if expiry is not None else {}))
         if reader is not None:
             reader.round_delivery(release["runId"], release["round"])
         return reader

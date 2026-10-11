@@ -81,6 +81,9 @@ def test_worker_image_copies_intake_and_imports_it(tmp_path):
                 (target if destination.endswith("/") else target.parent).mkdir(parents=True, exist_ok=True)
                 shutil.copy2(origin, target / origin.name if destination.endswith("/") else target)
     result = _isolated(task, "import intake.images, intake.admission, intake.worker, workspace.worker\n"
+                             "import workspace.design_stages, design_loop.knowledge\n"
+                             "from pathlib import Path\n"
+                             "assert (Path(design_loop.knowledge.__file__).parent / 'resources/checklists.json').is_file()\n"
                              "assert intake.images.__file__.startswith(%r)\nprint('ok')" % str(task))
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.strip() == "ok"
@@ -143,8 +146,8 @@ def test_worker_docker_image_imports_intake():
     build = subprocess.run(["docker", "build", "-f", "workspace/Dockerfile", "-t", tag, "."], cwd=PLATFORM,
                            capture_output=True, text=True, timeout=3600)
     assert build.returncode == 0, build.stderr[-2000:]
-    result = subprocess.run(["docker", "run", "--rm", "--entrypoint", "python", tag, "-c",
-                             "import intake.images, intake.admission"], capture_output=True, text=True, timeout=300)
+    result = subprocess.run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "python", tag, "-c",
+                             "import intake.images, intake.admission, workspace.design_stages, design_loop.knowledge"], capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, result.stderr[-2000:]
 
 

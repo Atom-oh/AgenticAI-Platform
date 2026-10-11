@@ -62,6 +62,7 @@ export type EditableContract = {
   changeRequest?: ChangeRequest;
 };
 export type Contract = EditableContract & {
+  designId?: string;
   id: string; version: number; status: string; hash?: string; approval?: unknown;
 };
 export type BuildEvidence = {
@@ -79,6 +80,7 @@ export type Round = BuildEvidence & {
   releaseId?: string;
 };
 export type Run = {
+  designId?: string;
   projectId?: string; productId?: string; guidelineId?: string; guidelineAssetId?: string; ontologyHash?: string; catalogHash?: string;
   outputType?: 'react' | 'html'; batchId?: string; needsRevalidation?: boolean;
   visualPolicy?: 'exact' | 'variation-review';

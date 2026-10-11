@@ -4,7 +4,6 @@ export type MenuGroup = { id: string; label: string; items: MenuItem[]; operator
 export const MENU_GROUPS: MenuGroup[] = [
   { id: 'planning', label: '기획자', items: [
     { id: 'wb-planning', label: '상품기획서' }, { id: 'wb-changes', label: '변경 요청 · 영향 분석' },
-    { id: 'wb-knowledge', label: '업무 흐름 · 가이드' },
     { id: 's1', label: '규정 영향 검토' },
   ] },
   { id: 'design', label: '디자이너', items: [
@@ -12,7 +11,7 @@ export const MENU_GROUPS: MenuGroup[] = [
     { id: 'portal', label: '디자인 시스템 · 자산' },
   ] },
   { id: 'development', label: '개발자', items: [
-    { id: 'wb-components', label: 'React 컴포넌트' }, { id: 'wb-development', label: '개발 작업 · 검증' },
+    { id: 'wb-components', label: 'React 컴포넌트' },
     { id: 'agents', label: 'AgentCore 에이전트 빌더' },
   ] },
   { id: 'business', label: '업무 담당자', items: [

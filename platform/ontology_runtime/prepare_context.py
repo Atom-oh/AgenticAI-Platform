@@ -10,9 +10,10 @@ def prepare(platform, destination, axe):
         raise ValueError("Use a new empty directory for each Runtime context")
     destination.mkdir(parents=True, exist_ok=True)
     files = []
-    for module in ("ontology_runtime", "intake", "workspace", "workbench", "documents", "engine", "studio", "graph"):
+    for module in ("ontology_runtime", "design_loop", "intake", "workspace", "workbench", "documents", "engine", "studio", "graph"):
         files.extend(platform.glob(module + "/*.py"))
     files.extend(path for path in (platform / "react-kit/ui").rglob("*") if path.is_file())
+    files.extend(platform / "design_loop/resources" / name for name in ("checklists.json", "convention-apply.cjs", "manifest.json"))
     files.extend(platform / "react-kit" / name for name in ("catalog.json", "package.json", "package-lock.json"))
     planned = [(source, "code/" + source.relative_to(platform).as_posix(),
                 source.relative_to(platform).as_posix()) for source in sorted(files)]

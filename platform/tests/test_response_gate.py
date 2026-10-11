@@ -42,7 +42,7 @@ def test_every_project_scoped_route_is_registered_with_the_gate():
 def test_every_top_level_prefix_is_gated_or_explicitly_delegated():
     # Delegated modules own their authority and are listed by name, never by fallthrough.
     assert set(http.DELEGATED) == {"projects", "products", "comments", "ontology", "intake", "workbench",
-                                   "documents", "impact-analyses"}
+                                   "documents", "impact-analyses", "designs"}
     # Delegated routes that return run/round-derived metadata are registered with the gate.
     registered = {(route.method, route.pattern): route for route in http.ROUTES}
     for key, view in ((("GET", ("products", ":id", "impact")), "affectedRuns"),
@@ -71,6 +71,16 @@ _ALLOWED_READS = {
     # an HTTP caller.
     ("documents/analysis.py", "_create"), ("documents/analysis.py", "_publish"),
     ("documents/analysis.py", "process_analysis"),
+    # The design module owns an independent final response fence over design/variant
+    # source admissions, current project authority and every delivered record.
+    ("workspace/design_api.py", "approve_variant"), ("workspace/design_api.py", "release_authority"),
+    # variant_authority enforces the existing round-state role gate and retains the run
+    # version; release_view verifies export/release/source identity and retains the export.
+    # design_api.route rechecks all observations after the last read. Negative delivery
+    # tests in test_design_execution cover failed rounds, roles, hashes and exact Git state.
+    ("workspace/design_api.py", "variant_authority"), ("workspace/design_api.py", "release_view"),
+    # Failed diagnostics re-resolve job admissions and retain their final _response authority fence.
+    ("workspace/design_api.py", "compile_failure"),
 }
 
 
@@ -109,7 +119,7 @@ def _kind_reads(path):
 def test_delegated_modules_read_run_derived_records_only_through_gated_routes():
     root = Path(__file__).resolve().parents[1]
     modules = {"workspace/collaboration.py", "workspace/ontology_api.py", "intake/review.py", "workbench/api.py",
-               "workbench/business.py", "documents/api.py", "documents/analysis.py"}
+               "workbench/business.py", "documents/api.py", "documents/analysis.py", "workspace/design_api.py"}
     for module in sorted(modules):
         for function in sorted(_kind_reads(root / module)):
             assert (module, function) in _ALLOWED_READS, (

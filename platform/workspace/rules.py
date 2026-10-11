@@ -106,7 +106,15 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
         if not isinstance(data["designSnapshotHash"], str) or not re.fullmatch(r"[a-f0-9]{64}", data["designSnapshotHash"]):
             raise ValueError("designSnapshotHash: 설계 스냅샷 해시가 올바르지 않습니다.")
         normalized["designSnapshotHash"] = data["designSnapshotHash"]
-    if any(name in normalized for name in CRITERIA_IDS):
+    if "designId" in data:
+        design_id = data["designId"]
+        if not isinstance(design_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", design_id):
+            raise ValueError("설계 기준 식별자가 올바르지 않습니다.")
+        if (not all(name in normalized for name in ("projectId", "catalogHash", "designSnapshotHash"))
+                or any(name in normalized for name in ("productId", "guidelineId", "guidelineAssetId", "ontologyHash"))):
+            raise ValueError("설계·프로젝트·절차 스냅샷·컴포넌트 기준을 함께 고정해야 합니다.")
+        normalized["designId"] = design_id
+    elif any(name in normalized for name in CRITERIA_IDS):
         if not all(name in normalized for name in (*CRITERIA_IDS, *CRITERIA_HASHES)):
             raise ValueError("프로젝트·상품·가이드·컴포넌트 기준을 함께 고정해야 합니다.")
         if normalized["guidelineAssetId"] not in asset_ids:

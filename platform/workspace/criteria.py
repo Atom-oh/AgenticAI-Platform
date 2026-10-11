@@ -29,7 +29,7 @@ def notice_coverage_issues(contract, pages):
     return issues
 
 
-def resolve_generation_context(storage, owner, value, action):
+def resolve_generation_context(storage, owner, value, action, *, host=None, claims=None):
     if value.get("catalogHash") and value["catalogHash"] != read_catalog()["hash"]:
         raise ValueError("React 컴포넌트 코드 기준이 바뀌었습니다. 새 규칙으로 확인·승인하세요.")
     project_id = value.get("projectId")
@@ -38,6 +38,22 @@ def resolve_generation_context(storage, owner, value, action):
             raise ValueError("공동 작업의 작성자와 프로젝트 기준이 없습니다.")
         return {"prompt": "", "pages": [], "identifiers": []}
     collaboration = Collaboration(storage)
+    if value.get("designId"):
+        from types import SimpleNamespace
+        from workbench.service import Service
+        from workspace.ontology_sources import Sources
+        from intake.admission import AdmissionError
+        try:
+            scope = collaboration.require(collaboration.resolve_scope(value.get("actor"), project_id), action)
+            if scope["owner"] != owner:
+                raise ValueError("설계 작업 범위가 일치하지 않습니다.")
+            ctx = Service(host or SimpleNamespace(storage=storage, collaboration=collaboration), scope, claims or {})
+            reader = Sources(ctx)
+            reader._design_criteria(value)
+            reader.recheck()
+            return {"prompt": "", "pages": [], "identifiers": [], "designId": value["designId"]}
+        except (CollaborationError, AdmissionError) as error:
+            raise ValueError("현재 설계 원본과 승인 기준을 확인하세요.") from error
     try:
         scope = collaboration.require(collaboration.resolve_scope(value.get("actor"), project_id), action)
         if scope["owner"] != owner or not collaboration.is_current(scope, value):

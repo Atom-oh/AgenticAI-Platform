@@ -218,10 +218,11 @@ def _model_loop(deps, user_base, letter, validate_one, retries):
     return {"variant": letter, "composition": None, "findings": findings, "attempts": attempts}
 
 
-def generate_screen(screen_id, k, flow, deps, *, strategy, binding_paths, variants=3, retries=1, axes=None):
+def generate_screen(screen_id, k, flow, deps, *, strategy, binding_paths, variants=3, retries=1, axes=None, variant_offset=0):
     if not isinstance(strategy, dict) or strategy.get("mode") not in comp.MODES:
         raise ValueError("A generation strategy from route.strategy is required")
-    if not 1 <= variants <= MAX_VARIANTS or not 0 <= retries <= MAX_RETRIES:
+    if (type(variant_offset) is not int or not 0 <= variant_offset < MAX_VARIANTS
+            or not 1 <= variants <= MAX_VARIANTS - variant_offset or not 0 <= retries <= MAX_RETRIES):
         raise ValueError("variants or retries out of range")
     if not k.complete:
         return {"screenId": screen_id, "blocked": "knowledge-incomplete"}
@@ -237,7 +238,7 @@ def generate_screen(screen_id, k, flow, deps, *, strategy, binding_paths, varian
         axes = kit_axes() if axes is None else axes
         base = fill(k, flow, screen_id, binding_paths)
         out, seen = [], set()
-        for index, letter in enumerate(LETTERS[:variants]):
+        for index, letter in enumerate(LETTERS[variant_offset:variant_offset + variants], start=variant_offset):
             c = base if index == 0 else _axis_variant(base, k, letter, index, axes)
             key = _layout_key(c)
             if key in seen:
@@ -252,7 +253,7 @@ def generate_screen(screen_id, k, flow, deps, *, strategy, binding_paths, varian
     base = fill(k, flow, screen_id, binding_paths) if mode == "adapt" else None
     catalog = _catalog(k, screen_id, flow, binding_paths)
     out, calls = [], 0
-    for letter in LETTERS[:variants]:
+    for letter in LETTERS[variant_offset:variant_offset + variants]:
         user = {"task": mode, "catalog": catalog}
         variant_base = None
         if base is not None:

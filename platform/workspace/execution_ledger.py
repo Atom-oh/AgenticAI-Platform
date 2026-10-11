@@ -345,8 +345,8 @@ class Ledger:
     def dispatcher(self): return _Facade(self, ("allocate", "bind_capability", "dispatch_uncertain"))
     def tool(self): return _Facade(self, ("claim", "heartbeat", "intent", "outcome", "stage", "finish", "fail",
                                           "open_manifest", "open_prior", "open_input", "read_chunk",
-                                          "open_output", "write_chunk", "close_output"))
-    def reconciler(self): return _Facade(self, ("sweep", "reconcile", "settle", "resolve_orphan", "run_due"))
+                                          "open_output", "write_chunk", "close_output", "model_inspection"))
+    def reconciler(self): return _Facade(self, ("sweep", "reconcile", "settle", "resolve_orphan", "run_due", "retire_memory"))
 
     # --- storage helpers ---------------------------------------------------
     def _get(self, owner, job_id):
@@ -361,12 +361,26 @@ class Ledger:
     def _put(self, owner, job, expected, *, extra_writes=(), checks=None, before_attempt=None):
         writes = [{"owner": owner, "kind": "job", "item": job, "expected_version": expected}, *extra_writes]
         checks, before_attempt = self._access_guard(owner, job, checks or [], before_attempt)
+        checks = self._write_predicates(writes, checks)
         try:
             saved = self.storage.put_many(writes, checks or [], retry_conflicts=False, _writer=_WRITER,
                                           before_attempt=before_attempt)
         except Conflict as error:
             raise LedgerError("conflict") from error
         return saved[0]
+
+    @staticmethod
+    def _write_predicates(writes, checks):
+        """A conditional Put enforces its own identical version predicate; never drop a different fence."""
+        versions = {(w["owner"], w["kind"], w["item"]["id"]): w.get("expected_version") for w in writes}
+        result = []
+        for check in checks:
+            identity = check["owner"], check["kind"], check["id"]
+            if identity not in versions:
+                result.append(check)
+            elif versions[identity] != check["version"]:
+                raise LedgerError("conflict")
+        return result
 
     def _access_guard(self, owner, job, checks, guard):
         if self.access is None:
@@ -393,8 +407,18 @@ class Ledger:
         if (not record or record.get("executionId") != job["id"] or record.get("jobId") != job["id"]
                 or record.get("executionSchemaVersion") != SCHEMA_VERSION):
             raise LedgerError("artifact-changed")
-        return [{"owner": owner, "kind": "wb_artifact", "expected_version": record["version"],
-                 "item": {**record, "status": job["status"], "error": job.get("error")}}]
+        writes = [{"owner": owner, "kind": "wb_artifact", "expected_version": record["version"],
+                   "item": {**record, "status": job["status"], "error": job.get("error")}}]
+        if descriptor.get("kind") == "design-stage":
+            design = self.storage.get(owner, "design", descriptor["designId"])
+            if design and design.get("activeJobId") == job["id"] and design.get("revision") == descriptor["designRevision"]:
+                change = {"executionStatus": job["status"]}
+                if job["status"] in TERMINAL:
+                    change.update(activeJobId=None, activeArtifactId=None, status="interrupted", error=job.get("error"),
+                                  lastExecutionId=job["id"], unknownOutcome=bool(job.get("unknownOutcome")))
+                writes.append({"owner": owner, "kind": "design", "expected_version": design["version"],
+                               "item": {**design, **change}})
+        return writes
 
     def _quota_writes(self, owner, actor, project_id, *, add=None, remove=None):
         """Per-actor (global) and per-project active lists, written in the caller's transaction."""
@@ -667,14 +691,25 @@ class Ledger:
         now = self.storage.clock()
         if authorization_expires_at <= now:
             raise LedgerError("authorization-expired")
+        design_write = None
         if artifact is not None:
-            if (operation != "source.analyze" or not isinstance(artifact, dict)
-                    or set(artifact) != {"id", "name", "expectedGeneration", "sourceRefs", "requestHash"}
+            is_design = isinstance(artifact, dict) and artifact.get("kind") == "design-stage"
+            allowed = ({"id", "kind", "designId", "designRevision", "designVersion", "stage", "name", "sourceRefs", "requestHash"}
+                       if is_design else {"id", "name", "expectedGeneration", "sourceRefs", "requestHash"})
+            if (not isinstance(artifact, dict) or set(artifact) != allowed
                     or not _is_ident(artifact["id"]) or not _is_ident(artifact["name"])
-                    or not _is_sha(artifact["requestHash"]) or not isinstance(artifact["sourceRefs"], list)):
+                    or not _is_sha(artifact["requestHash"]) or not isinstance(artifact["sourceRefs"], list)
+                    or (not is_design and operation != "source.analyze")):
                 raise LedgerError("artifact-invalid")
+            if is_design:
+                if operation not in {"design.extract", "design.generate", "design.edit", "design.compose", "design.release"}:
+                    raise LedgerError("artifact-invalid")
+                from workspace.design_execution import admission_write
+                design_write = admission_write(self.storage, owner, artifact, actor, operation)
             for reference in artifact["sourceRefs"]:
-                schema.source_ref(reference)
+                # Intake prompt-text is not an ontology reference and never becomes a graph node.
+                if reference.get("sourceKind") != "prompt-text":
+                    schema.source_ref(reference)
         ref = {"id": profile["id"], "revision": profile["revision"], "hash": profile_hash(profile)}
         input_hash = schema.digest({"actor": actor, "operation": operation, "model": model, "manifest": manifest,
                                     "admissions": admissions, "backendConfigRevision": backend_config_revision,
@@ -718,6 +753,7 @@ class Ledger:
                "authorizationExpiresAt": authorization_expires_at, "result": None, "error": None,
                "unknownOutcome": False, "authority": project_authority, "completionScope": scope,
                "obligations": obligations, "releaseBaseline": baseline,
+               "memoryContextHash": schema.digest({"admissions": admissions, "obligations": obligations, "authority": project_authority, "profile": ref, "backend": backend_config_revision, "model": model}),
                **({"artifact": copy.deepcopy(artifact)} if artifact else {}),
                "supersedes": supersedes, "ops": {}, "clock": now, "dueId": None}
         marker_write = {"owner": owner, "kind": "exec_request",
@@ -725,9 +761,12 @@ class Ledger:
         artifact_writes = []
         if artifact:
             artifact_writes.append({"owner": owner, "kind": "wb_artifact", "expected_version": None,
-                "item": {**copy.deepcopy(artifact), "kind": "ontology-analysis", "projectId": project_id,
+                "item": {**copy.deepcopy(artifact), "kind": artifact.get("kind", "ontology-analysis"), "projectId": project_id,
                     "executionSchemaVersion": SCHEMA_VERSION, "executionId": job_id, "jobId": job_id,
                     "createdBy": actor, "requestId": request_key, "status": "queued"}})
+        if design_write is not None:
+            design_write["item"].update(activeJobId=job_id, activeArtifactId=artifact["id"], executionStatus="queued")
+            artifact_writes.append(design_write)
         due = self._due_writes(owner, None, job)
         expiry = authorization_expires_at
         if not self.offline:
@@ -1257,6 +1296,30 @@ class Ledger:
                  "consumedPriors": self._merge_consumed_priors(job, [entry])}
         return self._commit(owner, job, after, checks=checks, before_attempt=guard, op=op, reindex=False)
 
+    def _model_inspection(self, owner, job_id, attempt_id, fence, *, payload_hash, size, operation_id):
+        job = self._get(owner, job_id)
+        self._current(job, attempt_id, fence, statuses=("running",))
+        if (not job["operation"].startswith("design.") or not _is_sha(payload_hash) or type(size) is not int
+                or not 0 < size <= 512 * 1024 or not isinstance(operation_id, str)
+                or not _OPERATION_ID.fullmatch(operation_id)):
+            raise LedgerError("model-payload-invalid")
+        inspections = dict(job.get("modelInspections") or {})
+        entry = {"hash": payload_hash, "size": size, "attemptId": attempt_id}
+        prior = inspections.get(operation_id)
+        checks, guard = self._protect(owner, job)
+        if prior is not None:
+            if prior != entry:
+                raise LedgerError("operation-changed")
+            self._fence(owner, job, checks, guard)
+        else:
+            total = job.get("modelTextBytes", 0) + size
+            if total > 4 * 1024 * 1024 or len(inspections) >= job["budget"]["maxCalls"]:
+                raise LedgerError("model-context-budget")
+            inspections[operation_id] = entry
+            self._commit(owner, job, {**job, "modelTextBytes": total, "modelInspections": inspections},
+                         checks=checks, before_attempt=guard, reindex=False)
+        return {"sha256": payload_hash, "size": size, "clean": True}
+
     # --- tool role: per-call intent and outcome (RUN-03) -----------------------
     def _intent(self, owner, job_id, attempt_id, fence, *, stage, kind, min_remaining_ms, max_tokens=None,
                 operation_id=None):
@@ -1556,6 +1619,17 @@ class Ledger:
         their transactional predicates, and every time bound alongside a grant (review 8, #2) for the final
         guard to recheck against a fresh clock immediately before delivery or submission."""
         checks, expiries = [], []
+        if (job.get("artifact") or {}).get("kind") == "design-stage":
+            from workspace.design_execution import authority
+            check = authority(self.storage, owner, job)
+            if check is None:
+                self._source_revoked(owner, job, {"designId": job["artifact"]["designId"]})
+            checks.append(check)
+            for frozen in job["obligations"]["sourceChecks"]:
+                record = self.storage.get(frozen["owner"], frozen["kind"], frozen["id"])
+                if not record or record.get("version") != frozen["version"]:
+                    self._source_revoked(owner, job, {"designId": job["artifact"]["designId"]})
+            checks = self._merge_checks(checks, job["obligations"]["sourceChecks"])
         for admission in job["admissions"]:
             blob = self._resolve_admitted(owner, admission, job)
             if blob is None or blob.get("sha256") != admission.get("artifactHash"):
@@ -2332,6 +2406,9 @@ class Ledger:
                                      ("recovery_required",) if recovery else ("dispatched", "running"))
             raise LedgerError("completion-contention")
         from workspace.execution_source import SourcePublication
+        from workspace.design_execution import DesignPublication
+        if (job.get("artifact") or {}).get("kind") == "design-stage" and type(stage_completion) is not DesignPublication:
+            raise LedgerError("completion-unavailable", reason="design-staging-adapter")
         if job["operation"] in _COMPLETION_UNAVAILABLE and type(stage_completion) is not SourcePublication:
             # ontology-tools/1: source analysis publishes ontology/artifact state only through the staging adapter
             # (publish_candidate(_stage=True)), which B0 does not provide. Refuse rather than complete without it.
@@ -2381,6 +2458,18 @@ class Ledger:
         prepared_job, ledger_writes = self._prepare(owner, before, after, extra_writes=quotas, op=op)
         writes = [{"owner": owner, "kind": "job", "item": prepared_job, "expected_version": before["version"]},
                   *ledger_writes]
+        if not self.offline:
+            memory = next((row["result"]["memory"] for row in reversed(stages) if isinstance(row.get("result", {}).get("memory"), dict)), None)
+            if memory is not None:
+                if (memory.get("backend") != "agentcore-memory" or memory.get("extraction") != "SKIP"
+                        or not _is_ident(memory.get("eventId")) or not _is_sha(memory.get("eventHash"))):
+                    raise LedgerError("receipt-invalid")
+                writes.append({"owner": owner, "kind": "exec_memory", "expected_version": None, "item": {
+                    "id": "mem-" + hashlib.sha256(job["actor"].encode()).hexdigest()[:32] + f"-{999999999999999 - self.storage.clock():015d}-" + job["id"][-32:], "executionSchemaVersion": SCHEMA_VERSION,
+                    "executionId": job["id"], "attemptId": attempt["id"], "projectId": job["projectId"],
+                    "actor": job["actor"], "actorRole": job["actorRole"], "authority": job["authority"],
+                    "sourceChecks": job["obligations"]["sourceChecks"], "resourcesHash": job["memoryContextHash"], "event": memory,
+                    "createdAt": self.storage.clock(), "expiresAt": self.storage.clock() + 3 * 86400000}})
         checks = list(protected)
         staged = {}
         if stage_completion is not None:
@@ -2390,13 +2479,14 @@ class Ledger:
                     or not all(isinstance(staged.get(name, []), list)
                                for name in ("writes", "checks", "sourceChecks", "sourceBindings"))):
                 raise LedgerError("completion-invalid")
-            if "expiresAt" in staged and (type(stage_completion) is not SourcePublication or type(staged["expiresAt"]) is not int):
+            if "expiresAt" in staged and (type(stage_completion) not in {SourcePublication, DesignPublication} or type(staged["expiresAt"]) is not int):
                 raise LedgerError("completion-invalid")
             writes.extend(staged.get("writes", []))
             checks.extend(staged.get("checks", []))
         checks = self._merge_checks([], checks)
         checks, guard = self._access_guard(owner, before, checks, guard)
         checks = self._check_obligations(job, writes, checks, staged)
+        checks = self._write_predicates(writes, checks)
         if len(writes) + len(checks) > TRANSACTION_LIMIT:
             raise LedgerError("execution-completion-scope", limits={"transaction": TRANSACTION_LIMIT})
         # Count this submission durably BEFORE it is sent, so no later failure (even of the contention
@@ -2517,6 +2607,13 @@ class Ledger:
         return None
 
     # --- reconciler role -----------------------------------------------------
+    def _retire_memory(self, owner, identifier, version):
+        record = self.storage.get(owner, "exec_memory", identifier)
+        if not record or record.get("version") != version or record.get("executionSchemaVersion") != SCHEMA_VERSION:
+            raise LedgerError("conflict")
+        self.storage.put_many([{"owner": owner, "kind": "exec_memory", "expected_version": version,
+            "item": {**record, "status": "retired", "deletedAt": self.storage.clock()}}], retry_conflicts=False, _writer=_WRITER)
+
     def _resolve_orphan(self, due):
         return _resolve_orphan(self.storage, due)
 

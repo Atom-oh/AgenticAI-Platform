@@ -191,3 +191,8 @@ opaque project/product/change/target context. Navigation is not authorization.
 All new business copy is Korean. Render useful loading/empty/error/not-configured
 states. Show actual provenance and readiness. Filter multiple artifact types rather
 than adding a menu for every scenario. No made-up live counts or static-success UI.
+
+The common navigation contains one entry each for `wb-development` (내 할 일 ·
+진행 현황) and `wb-knowledge` (규정집 · 위키 검색). They remain visible across
+work-area filters. Page titles use the same labels; route IDs and project context
+are unchanged. A work-area preference does not grant or change a project role.

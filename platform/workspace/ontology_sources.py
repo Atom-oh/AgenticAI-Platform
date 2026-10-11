@@ -179,7 +179,7 @@ def authorized_page(ctx, query, view_name, owner, kind, prefix, include, *, purp
     return result
 
 
-def job_reader(host, owner, actor, action):
+def job_reader(host, owner, actor, action, *, authorization_expires_at=None):
     """The lineage reader for queued work: the recorded actor's current authority in the owner project.
 
     Workers have no request JWT; they rebuild the scope from current membership
@@ -194,7 +194,12 @@ def job_reader(host, owner, actor, action):
     scope = collaboration.require(collaboration.resolve_scope(actor, owner.split(":", 1)[1]), action)
     if scope["owner"] != owner:
         fail(403, "forbidden", "작업 범위가 일치하지 않습니다.")
-    return Sources(Service(host, scope, {"sub": actor}))
+    claims = {"sub": actor}
+    if authorization_expires_at is not None:
+        if type(authorization_expires_at) is not int or authorization_expires_at <= host.storage.clock():
+            fail(401, "authorization-expired", "작업 인증이 만료되었습니다.")
+        claims["exp"] = authorization_expires_at // 1000
+    return Sources(Service(host, scope, claims))
 
 
 def job_lineage(host, owner, job):
@@ -835,7 +840,8 @@ class Sources:
             if self._rules().contract_hash(run.get("contract") or {}) != run["contractHash"]:
                 fail(409, "source-changed", "라운드의 규칙 사본이 승인본과 다릅니다.")
             self._fence_criteria(run)
-            resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read")
+            resolve_generation_context(self.storage, self.ctx.owner, {**run, "actor": self.ctx.actor}, "read",
+                **({"host": self.ctx.host, "claims": self.ctx.claims} if run.get("designId") else {}))
             self._fence_criteria(run)
             self._inputs(self._snapshot_refs(run), historical=False)
             self._base_lineage(run)
@@ -954,6 +960,8 @@ class Sources:
         """
         self._fresh()
         try:
+            if contract.get("designId"):
+                self._design_criteria(contract)
             self._inputs(self._contract_asset_refs(contract, True), historical=True)
             self._base_lineage(contract)
         except CollaborationError as error:
@@ -1149,6 +1157,8 @@ class Sources:
             bound = contract
         else:
             bound = self._retained_contract(contract, version, ref["sha256"])
+        if bound.get("designId"):
+            self._design_criteria(bound)
         # Supplied inputs are lineage: every bound asset is reauthorized (AGENTCORE_CONTRACT).
         self._inputs(self._contract_asset_refs(bound, historical), historical=historical)
         try:
@@ -1174,6 +1184,17 @@ class Sources:
         self._fence_criteria(contract)
         return contract, current
 
+    def _design_criteria(self, value):
+        from workspace.design_api import criteria_authority
+        from intake.admission import AdmissionError
+        try:
+            checks, _ = criteria_authority(self.ctx, value)
+        except AdmissionError:
+            _not_found()
+        for check in checks:
+            self._remember_owned(check["owner"], check["kind"], check)
+        self.package_hashes.add(value["catalogHash"])
+
     def _fence_criteria(self, value):
         """Retain every consulted criteria record and catalog hash for the final recheck/commit.
 
@@ -1183,6 +1204,8 @@ class Sources:
         fence before validating and call again afterwards; a changed version
         between the two reads fails `ontology-source-changed`.
         """
+        if value.get("designId"):
+            self._design_criteria(value)
         if value.get("productId"):
             self._remember("product", self.ctx.get("product", value["productId"]))
             if value.get("guidelineId"):

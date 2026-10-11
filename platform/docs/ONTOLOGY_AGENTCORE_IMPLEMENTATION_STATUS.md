@@ -1,6 +1,6 @@
 # Ontology/AgentCore implementation register
 
-Date: 2026-10-09. Scope: unified source-execution follow-up to source integration of ontology branch `c234292` and main
+Date: 2026-10-11. Scope: source/design execution follow-up to source integration of ontology branch `c234292` and main
 `f5157c7`. This register is subordinate to SPEC, the [architecture](ARCHITECTURE.md)
 and the owning contracts. It records implementation and gaps, not deployment.
 Final review/CI evidence belongs to the exact integration PR HEAD.
@@ -10,11 +10,11 @@ Final review/CI evidence belongs to the exact integration PR HEAD.
 | Area | Concrete implementation and focused tests | Remaining requirement |
 |---|---|---|
 | Canonical ontology | `workspace/ontology_store.py`, `ontology_sources.py`, `ontology_ux.py`, `source-analyzer/`; `test_ontology_*` | Preserve old parser-edge/tombstone capacity limits; run the independent bounded oracle and current-source/revocation cases |
-| B0 execution | `workspace/execution_ledger.py`, `workspace/storage.py`, legacy worker/expiry/repair guards; `test_execution_ledger.py`, `test_execution_guards.py` | The production verifier, real admission/prior adapters, queue dispatcher and atomic source publication now have a unified caller path; live probes and later design-stage wiring remain |
+| B0 execution | `workspace/execution_ledger.py`, `workspace/storage.py`, legacy worker/expiry/repair guards; `test_execution_ledger.py`, `test_execution_guards.py` | The production verifier, real admission/prior adapters, queue dispatcher and atomic source publication now have a unified caller path; design-stage API/Runtime wiring is present; live probes remain |
 | Private intake | `intake/{records,admin_handler,inspect,derivative,admission,review,collection,prompts,images,imaging,transcription,worker,audit}.py`; `test_intake_*`; `documents/library.py` | Configure and verify private policy/deny-list/reviewer administration, source bindings and any required redaction service; no customer-data admission from project ownership alone |
 | Sharing and derivative reads | `workspace/publications.py`, `ontology_sources.py`, `http.py`, `batches.py`, `releases.py`, `git_service.py`; `test_publications.py`, `test_sources_adapters.py`, project React-flow tests | Deployed cross-project grant/withdrawal checks, source-bound UI acceptance and prospective cleanup/recall evidence |
 | Dedicated service adapters | `ontology_runtime/{authority,authorization,capability,dispatch,tools,workflow,interpreter,browser,identity,memory}.py`; `test_agentcore_*`; `infra/lib/ontology-stack.ts` | Dedicated Runtime/IaC now select B0 through `execution_{entrypoints,protocol,tools,workflow}.py`; `ac_*` adapters remain isolated compatibility code. Service gates and production activation remain unverified |
-| Offline design engine | `design_loop/{knowledge,derive,guide_rules,prd_extract,flow,composition,gui,edit,contract,coverage,verify_graph,react_project,handoff,benchmark}.py`; `test_design_*`, synthetic seed and golden fixtures | No completed persisted application-stage API/dispatcher wiring. Legacy process generation remains a distinct caller |
+| Offline design engine | `design_loop/{knowledge,derive,guide_rules,prd_extract,flow,composition,gui,edit,contract,coverage,verify_graph,react_project,handoff,benchmark}.py`; `test_design_*`, synthetic seed and golden fixtures | Persisted API/Runtime/UI candidate is present in design_api/design_execution/design_workflow. Live vertical acceptance, deterministic compose dispatch and service gates remain; legacy process generation is a distinct caller |
 | Public-output controls | `scripts/check_public_identifiers.py`, `api/common/public_scan.py`, legacy public-writer hooks and CI; `test_public_identifiers.py`, `test_public_scan.py` | Configured deny-list coverage and reviewed media registry remain necessary. CI's inherited allow-missing mode warns when its secret is absent; that result is not evidence that customer identifiers were scanned. A configured runtime SSM deny-list must be readable and nonempty; failures block publication. Only an unset parameter name keeps runtime warning mode. Private intake retains its own blocking checks |
 | Main/IaC compatibility | Existing bank security/privacy checks and dedicated intake/ontology constructs | Bind the reviewed main resource inventory to the actual integration base and inspect every changed resource; retain bank Gateway and MyData isolation |
 
@@ -70,3 +70,27 @@ invocation and IAM recovery. Source-only application status/cancel/retry routes
 are implemented. Main opt-in remains absent by default. See the linked design
 for exact contracts and tests. This advances steps 2–4 in code; it does not close
 steps 5–7, service gates, independent acceptance or the complete design UI flow.
+
+## Design delivery candidate (2026-10-11)
+
+Review follow-up: compiler refusals retain private diagnostics and candidate
+source without generating a bundle/approval. Stale procedure rows cannot poison
+design listings. Design Git receipts use the same module-authorized writer at
+completion as at admission. These changes require GEN-05/HAND-01–03 regressions;
+their offline tests do not close any live service gate.
+
+The candidate branch adds persistent design records, exact PRD/flow/UX/frontend
+decisions, design operations through the B0 Runtime, compiler/Browser/large-text
+verification, source-preserving release/handoff, recent-session Memory indexing
+and the existing-canvas UI extension. See [delivery interfaces](DESIGN_EXECUTION_DELIVERY.md).
+Validation is in progress; this is not a completed live/cutover claim.
+The UI follow-up adds directed flow diagrams to both design editors, on-demand
+side-by-side candidate previews, and single common-menu entries for tasks and
+knowledge. Owning contract: REACT_CONTRACT (persistent procedure design).
+`workspace-visual-review.test.cjs` covers branches, back/self edges, missing
+targets, preview evidence mismatch/retry, scope changes and narrow layouts with
+real Chromium and explicit API doubles. These are U-mode regressions for
+GEN-05/HAND-01–03, not G0-BROWSER or live model/service acceptance.
+AWS payload/destination approval, explicit synthetic Memory deletion authorization
+and the registered Git target/credential are pending. The acceptance template
+retains its fixed cases and unrun live modes.

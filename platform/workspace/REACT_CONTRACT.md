@@ -328,3 +328,72 @@ and `compile.cjs`; approval and release checks are in `workspace/http.py`,
 and `react-kit` tests with the dependencies in CI. Historical test totals and
 live Astra/Fable runs are dated in [the platform README](../README.md); they do
 not certify the current deployment or a customer's package/Git integration.
+
+## Persistent procedure design (2026-10-11 candidate)
+
+A compiler rejection is an interrupted execution with no bundle, Browser result
+or UX approval. The completed Interpreter observation and hash-bound private
+compiler diagnostics/candidate source are retained. The design detail's optional
+`failure` contains those diagnostics only for a currently authorized owner,
+designer or developer; all consumed admissions and the final response fence are
+rechecked. The UI exposes the failed source for repair and explicit regeneration
+under the frozen criteria. It does not fabricate a Browser pass to produce a
+`needs_changes` bundle. Findings on a successfully compiled/inspected candidate
+continue to use the existing `needs_changes` publication path.
+
+An incomplete or newly rejected procedure makes its design inaccessible; design
+listings omit that row without breaking the rest of the page. Invalid pagination
+limits return `400 design-page-limit`.
+
+The flow review UI projects the current screens and directed transitions into a
+read-only diagram. Selecting a transition highlights its endpoints and retains
+its full condition/retention text; missing or removed endpoints remain warnings.
+This display does not evaluate product conditions or add a flow approval.
+
+On-demand side-by-side comparison uses authorized exact-round screenshots for
+legacy batches and isolated React previews for persistent design variants.
+Each candidate retains its own status and evidence identity. Design previews
+reject source/bundle or verdict mismatches and unmount on scope/revision changes;
+failed or unavailable candidates remain visible as failures. Comparison selection
+only opens the existing individual review; it never creates an approval/release.
+
+The [design delivery path](../docs/DESIGN_EXECUTION_DELIVERY.md) adds persisted
+PRD/flow approvals and Runtime-backed generated variants to the existing canvas.
+Its immutable contract records project the exact human-approved flow contract.
+Generated runs and releases are ledger-owned and refuse legacy generation or
+approval routes. The dedicated design UI owns their exact UX decision and
+source-preserving rebuild; it does not weaken existing personal/legacy flows.
+
+Design release download checks every chunk and whole-object hash. Frontend
+package acceptance is a separate developer/owner decision over exact source,
+bundle and approval hashes. Registered Git export requires that acceptance and
+retains its original source/criteria/destination checks. Customer API/auth/deploy
+integration remains explicitly unverified.
+
+### Canonical design criteria and delivery
+
+A persistent design assertion contract binds `projectId`, `designId`,
+`designSnapshotHash` and `catalogHash` as a complete criteria set. It does not
+combine those with product-guideline criteria. The human-approved flow record
+and current canonical/source admissions remain authoritative. Legacy product
+contracts still require their complete original product/guideline/asset/hash set.
+Sources and Git delivery validate these design criteria and retain every observed
+version and admission expiry for their final outgoing-request check. Frozen
+contract approval includes its stored version and exact normalized hash.
+
+Failed design previews and each source/bundle/screenshot chunk apply the same
+owner/designer/developer round-state permission as legacy content. Delayed preview
+responses cannot change the selected evidence; edit instruction approval is bound
+to the exact submitted text, design and variant. Switching canvas/procedure mode
+keeps both editors mounted with independent dirty-state tracking.
+
+Partial edit approval requires both structural stability and Browser checkpoint
+layout stability within one pixel outside the selected subtree. Missing or
+incomplete geometry fails verification. Full findings remain private downloadable
+evidence; bounded stage receipts carry summaries and exact object references.
+
+Design release views include the recorded Git status, branch, base SHA, commit SHA,
+source hash and available commit URL under the same final source/export fence.
+The design handoff panel polls queued/running exports and displays committed,
+failed and delivered-unverified outcomes in place. A job completion flag alone
+never supplies the commit receipt; missing or mismatched SHA evidence stays unknown.

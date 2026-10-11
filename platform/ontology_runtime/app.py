@@ -29,7 +29,7 @@ log.propagate = False
 def invoke(payload, context):
     try:
         configuration = json.loads(os.environ["ONTOLOGY_RUNTIME_CONFIGURATION"])
-        schema._fields(payload, {"capability", "executionId", "runtimeSessionId", "workloadIdentity"})
+        schema._fields(payload, {"capability", "executionId", "runtimeSessionId", "workloadIdentity"}, {"operation"})
         workload = payload["workloadIdentity"]
         if workload != configuration["workloadIdentityArn"]:
             raise ValueError("The registered Gateway machine identity is required")
@@ -49,6 +49,14 @@ def invoke(payload, context):
                               configuration["evidenceKeyArn"], configuration["evidenceKeyId"]),
                 memory=Memory(client, configuration["memoryId"], session.client("kms"),
                               configuration["memoryNamespaceKeyArn"], configuration["organization"]))
+            if payload.get("operation", "source.analyze") != "source.analyze":
+                from ontology_runtime.design_workflow import DesignWorkflow
+                from ontology_runtime.browser import Browser
+                return DesignWorkflow(gateway, Interpreter(client, configuration["interpreter"]),
+                    Browser(session, configuration["browserId"], os.environ["AWS_REGION"]),
+                    ReceiptSigner(session.client("kms", config=Config(retries={"total_max_attempts": 1})),
+                                  configuration["evidenceKeyArn"], configuration["evidenceKeyId"]),
+                    workflow.memory).run(payload, context.session_id)
             return workflow.analyze(payload, context.session_id)
     except Exception as error:
         operation = getattr(error, "operation_name", None)

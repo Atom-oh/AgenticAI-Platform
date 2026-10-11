@@ -326,8 +326,8 @@ See the implementation register for concrete paths, tests and remaining work.
 | B0 sharing | `workspace/publications.py`, source adapters and protected HTTP read/release/export paths exist | Validate cross-project lifecycle and withdrawal through deployed callers and the user flow | ONT-04/09, AUTH-07/08, HAND-02–05; current L/U evidence remains required |
 | B1: execution authority and probes | Dedicated capability/key, Identity and authority adapter code exists in `ontology_runtime/`; isolated transport tests use `ac_execution`/`ac_operation` records | Reconcile adapters with B0's `agentcore-execution` job protocol, verify deployed guards, then run disposable configured service probes | G0-ADMISSION/RUNTIME/IDENTITY and other applicable service receipts; adapter tests do not close B1 |
 | B2: service integration | Runtime, Gateway tools, Interpreter/Browser/Memory adapters and a separate IaC stack exist | Implement the unified dispatcher/finish/reconciler path, production verifier registration, and the design-stage model boundary and telemetry integration | G0 gates, signed compiler/browser evidence, AUTH-05/GEN-03; source-analysis adapter calls no model |
-| Design engine | Offline PRD/flow/composition/edit/verification/handoff modules and synthetic fixtures exist under `design_loop/` | Connect them to admitted, ledger-controlled stages and the application records after applicable gates | Engine unit/E2E checks plus GEN/HAND and independently evidenced vertical acceptance |
-| C: application cutover | Existing React canvas, approval/release/export and source-authority hardening remain; the new design engine is not a completed application workflow | Wire persisted stages and human decisions to the unified execution path, validate the full user flow, and prove rollback for a limited synthetic cohort | Complete positive/negative O/L/U evidence; the 54-case integrated denominator remains fixed |
+| Design engine | Offline PRD/flow/composition/edit/verification/handoff modules and synthetic fixtures exist under `design_loop/` | Persisted design API/Runtime stages and records are implemented as a candidate; validate applicable service gates before activation | Engine unit/E2E checks plus GEN/HAND and independently evidenced vertical acceptance |
+| C: application cutover | Existing React canvas, approval/release/export and source-authority hardening remain; the persistent design API/Runtime/UI candidate is implemented but has no completed live acceptance | Validate persisted stages and human decisions through the full live user flow, and prove rollback for a limited synthetic cohort | Complete positive/negative O/L/U evidence; the 54-case integrated denominator remains fixed |
 | Production admission | Defaults and explicit offline opt-in remain guarded | Enable only the verified cohort/model set after required gates; preserve the admitted backend for in-flight work | Required CI/review, deployment-bound live evidence and explicit remaining gaps |
 
 The Runtime adapter's `ac_execution`/`ac_operation` protocol is not the B0 ledger.
@@ -410,3 +410,11 @@ The prior table's remaining source-wiring items are now implemented in code;
 the deployment/live-gate, complete design-stage application and cohort/rollback
 requirements remain. The main stack retains its default configuration. Preserve
 the existing React canvas while implementing the later persisted design flow.
+
+## Final delivery work (2026-10-11)
+
+[Design execution delivery](DESIGN_EXECUTION_DELIVERY.md) defines the next
+persistent application/Runtime interfaces and final live-gate sequence before
+implementation. It preserves the current canvas and the single execution writer.
+Status remains implementation/validation in progress until the named code,
+service, UI and rollback evidence is recorded against the final revision.

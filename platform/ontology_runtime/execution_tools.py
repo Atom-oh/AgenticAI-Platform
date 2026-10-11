@@ -10,13 +10,15 @@ from workspace.execution_source import SourcePublication
 
 # Exact arguments, including required vs optional fields. Owner/job/attempt/fence always come from the token.
 ACTIONS = {
+    "memory_sessions": (set(), set()),
+    "inspect_model": ({"system", "user"}, set()),
     "claim": (set(), set()), "heartbeat": (set(), set()),
     "open_manifest": (set(), set()), "open_input": ({"decision_id", "stage"}, set()),
     "open_prior": ({"ref"}, set()), "read_chunk": ({"handle_id", "index"}, set()),
     "open_output": ({"stage", "name", "total", "sha256"}, set()),
     "write_chunk": ({"handle_id", "index", "data"}, set()), "close_output": ({"handle_id"}, set()),
-    "intent": ({"stage", "kind", "min_remaining_ms"}, set()),
-    "outcome": ({"call_id", "status", "service_session_id"}, set()),
+    "intent": ({"stage", "kind", "min_remaining_ms"}, {"max_tokens"}),
+    "outcome": ({"call_id", "status"}, {"service_session_id", "usage"}),
     "stage": ({"receipt"}, set()), "finish": ({"status", "result"}, set()), "fail": ({"code"}, set()),
 }
 
@@ -26,13 +28,14 @@ class ExecutionTools:
         self.host, self.verifier, self.capabilities, self.configuration = host, verifier, capabilities, configuration
 
     def invoke(self, event, context):
-        # A failed conditional transaction wrote nothing. Re-read and reauthorize
-        # its exact operation ID; never retry an unknown transport outcome.
+        # Keep every capability, membership, project and source predicate. A changed
+        # observation before submission starts full authorization again with the same
+        # operation ID; it never reuses a denied result or retries an unknown outcome.
         for attempt in range(3):
             try:
                 return self._invoke_once(event, context)
             except LedgerError as error:
-                if error.code != "conflict" or attempt == 2:
+                if error.code not in {"conflict", "execution-not-authorized"} or attempt == 2:
                     raise
 
     def _invoke_once(self, event, context):
@@ -53,13 +56,47 @@ class ExecutionTools:
         ledger._fence(owner, job, checks, guard)
         if action == "claim" and job["status"] != "dispatched":
             raise LedgerError("already-claimed")
-        if action == "intent" and (args["stage"] != "analyze" or args["kind"] != "interpreter"):
+        if action == "intent" and job["operation"] == "source.analyze" and (args["stage"] != "analyze" or args["kind"] != "interpreter"):
             raise LedgerError("call-invalid")
+        if action == "memory_sessions":
+            import hashlib
+            prefix = "mem-" + hashlib.sha256(job["actor"].encode()).hexdigest()[:32] + "-"
+            page = self.host.storage.list_page(owner, "exec_memory", 20, prefix=prefix)
+            selected = [row for row in page["items"] if row.get("status") == "active" and row.get("actor") == job["actor"]
+                and row.get("resourcesHash") == job["memoryContextHash"]
+                and row.get("expiresAt", 0) > self.host.storage.clock()]
+            fences = ledger._merge_checks(checks, [{"owner": owner, "kind": "exec_memory", "id": row["id"], "version": row["version"]} for row in selected])
+            def current():
+                guard()
+                if any(row["expiresAt"] <= self.host.storage.clock() for row in selected):
+                    raise LedgerError("memory-expired")
+            ledger._fence(owner, ledger._get(owner, job["id"]), fences, current)
+            return {"sessions": [{"executionId": row["executionId"], "attemptId": row["attemptId"],
+                "resourcesHash": row["resourcesHash"], "iat": row["createdAt"] // 1000} for row in selected]}
+        if action == "inspect_model":
+            if not job["operation"].startswith("design.") or any(not isinstance(args[k], str) for k in ("system", "user")):
+                raise LedgerError("model-payload-invalid")
+            from intake import admission, derivative
+            from workspace.execution_source import encode
+            import hashlib
+            raw = encode(args)
+            if len(raw) > 512 * 1024:
+                raise LedgerError("model-context-budget")
+            terms = derivative.canonical_entries(admission._denylist(self.host))
+            residual = derivative.residual([{"page": i + 1, "text": args[k]} for i, k in enumerate(("system", "user"))], terms, contiguous=False)
+            if residual["identifiers"] or residual["pii"]:
+                raise LedgerError("model-payload-sensitive")
+            return ledger.tool().model_inspection(owner, job["id"], claims["attemptId"], claims["fence"],
+                payload_hash=hashlib.sha256(raw).hexdigest(), size=len(raw), operation_id=envelope["operationId"])
         kwargs = dict(args)
         if action not in {"heartbeat", "outcome"}:
             kwargs["operation_id"] = envelope["operationId"]
         if action == "finish":
-            kwargs["stage_completion"] = SourcePublication(self.host, self.configuration)
+            if job["operation"] == "source.analyze":
+                kwargs["stage_completion"] = SourcePublication(self.host, self.configuration)
+            else:
+                from workspace.design_execution import DesignPublication
+                kwargs["stage_completion"] = DesignPublication(self.host, self.configuration)
         result = getattr(ledger.tool(), action)(owner, job["id"], claims["attemptId"], claims["fence"], **kwargs)
         if action == "read_chunk":
             return result
@@ -76,6 +113,6 @@ class ExecutionTools:
         if action == "claim":
             return {"actor": job["actor"], "projectId": job["projectId"], "executionId": job["id"], "attemptId": claims["attemptId"], "fence": claims["fence"],
                     "sessionId": claims["runtimeSessionId"], "profileHash": job["profile"]["hash"],
-                    "admissions": job["admissions"], "deadlineAt": job["deadlineAt"],
+                    "admissions": job["admissions"], "deadlineAt": job["deadlineAt"], "operation": job["operation"], "model": job["model"], "memoryContextHash": job["memoryContextHash"],
                     "heartbeatMs": job["profileBody"]["heartbeatMs"], "toolProfiles": job["profileBody"]["toolProfiles"]}
         return {"status": result["status"], "receiptHashes": [row["receiptHash"] for row in result.get("stages", [])]}
