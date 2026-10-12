@@ -103,3 +103,12 @@ and UI. Request and delivery authority are defined in the
 the [execution design](DESIGN_EXECUTION_DELIVERY.md#selected-screen-composition)
 records its receipt chain. Review, exact-HEAD CI and live acceptance remain
 separate evidence requirements.
+
+## Condition-case flow viewer (2026-10-12 candidate)
+
+`web/src/workspace/flowCases.ts` and `FlowDiagram.tsx` expose the frozen
+condition-case paths in the existing design panel (REQUIREMENTS U-02,
+HAND-01). The [owning React interface](../workspace/REACT_CONTRACT.md#persistent-procedure-design-2026-10-11-candidate)
+defines the read-only forecast and its incomplete outcomes. Four grammar/path
+tests and two local Chromium UI checks cover the candidate, including mobile
+layout; independent review/CI and live UI acceptance remain required.
