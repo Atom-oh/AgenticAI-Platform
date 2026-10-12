@@ -95,6 +95,16 @@ def submit(ctx, identifier, stage, body, ledger, configuration, enqueue):
         manifest["prd"] = read_object(ctx, design["prd"])["prd"]
         manifest["prepared"] = read_object(ctx, design["flow"])
         manifest["approvals"] = design["approvals"]
+    if stage in {"generate", "edit"}:
+        from workspace.design_stages import validation_plan
+        from workspace.execution_ledger import PROFILE_DEFAULT
+        try:
+            plan = validation_plan(stored["snapshot"], manifest["prepared"], manifest["prd"], rounds, stage=stage)
+        except ValueError as error:
+            raise LedgerError(str(error)) from None
+        if plan["totalCalls"] > PROFILE_DEFAULT["maxCallsByOperation"][OPERATIONS[stage]]:
+            raise LedgerError("call-budget")
+        manifest["validationPlan"] = plan
     if stage == "compose":
         from workspace import design_stages as delivery
         from workspace.execution_sources import ExecutionSources
@@ -243,6 +253,8 @@ class DesignPublication:
         if len(raw) != output["size"] or hashlib.sha256(raw).hexdigest() != output["sha256"]:
             raise LedgerError("receipt-invalid")
         result = json.loads(raw)
+        if job["operation"] in {"design.generate", "design.edit"}:
+            self._validation_history(ctx, job, result)
         value = {**copy.deepcopy(design), "activeJobId": None, "activeArtifactId": None,
                  "lastExecutionId": job["id"], "revision": design["revision"] + 1,
                  "artifacts": [*design["artifacts"], artifact["id"]]}
@@ -263,6 +275,61 @@ class DesignPublication:
                       artifact["version"]), *extra_writes]
         return {"writes": writes, "checks": checks, "expiresAt": expiry,
                 "sourceChecks": job["obligations"]["sourceChecks"], "sourceBindings": job["obligations"]["sourceBindings"]}
+
+    def _validation_history(self, ctx, job, result):
+        """Every delivered round points to this attempt's independently recorded outputs."""
+        from workspace.design_api import read_object
+        history = result.get("validationHistory")
+        rows = [row for row in job["stages"] if row["attemptId"] == job["attempt"]["id"]]
+        verified = [row for row in rows if row["stage"] == "verify"]
+        count = verified[-1]["result"].get("validationRound") if verified else None
+        manifest_raw = ctx.storage.get_blob(job["manifest"]["ref"])
+        if hashlib.sha256(manifest_raw).hexdigest() != job["manifest"]["hash"]:
+            raise LedgerError("receipt-invalid")
+        manifest = json.loads(manifest_raw)
+        if (not isinstance(history, list) or type(count) is not int or not 1 <= count <= 5
+                or len(history) != count or count > manifest.get("maxRounds", 0)
+                or len(encode(history)) > 8 * 1024 * 1024):
+            raise LedgerError("receipt-invalid")
+        for number, entry in enumerate(history, 1):
+            if not isinstance(entry, dict) or entry.get("round") != number or entry.get("verdict") not in {"pass", "fail", "blocked"}:
+                raise LedgerError("receipt-invalid")
+            stages = {row["stage"]: row for row in rows if row["result"].get("validationRound") == number}
+            for field, stage in (("source", "generate"), ("candidate", "generate"), ("build", "compile")):
+                if stage not in stages or entry.get(field) not in stages[stage]["outputs"]:
+                    raise LedgerError("receipt-invalid")
+                read_object(ctx, entry[field])
+            build = read_object(ctx, entry["build"])["build"]
+            if entry.get("compileStatus") == "failed":
+                if stages["compile"]["status"] != "failed" or build.get("ok") is not False or entry["verdict"] != "fail":
+                    raise LedgerError("receipt-invalid")
+                if any(field in entry for field in ("browser", "largeText", "bundleHash")):
+                    raise LedgerError("receipt-invalid")
+            elif entry.get("compileStatus") == "pass":
+                if stages["compile"]["status"] != "ok" or build.get("ok") is not True:
+                    raise LedgerError("receipt-invalid")
+                for field in ("browser", "largeText"):
+                    if "browser" not in stages or entry.get(field) not in stages["browser"]["outputs"]:
+                        raise LedgerError("receipt-invalid")
+                    read_object(ctx, entry[field])
+                if entry.get("sourceHash") != build["sourceHash"] or entry.get("bundleHash") != build["bundleHash"]:
+                    raise LedgerError("receipt-invalid")
+                if "verify" not in stages or stages["verify"]["result"].get("verdict") != entry["verdict"]:
+                    raise LedgerError("receipt-invalid")
+                previous = read_object(ctx, stages["verify"]["result"]["designResult"])
+                if entry.get("findings") != previous["verification"].get("findings", previous["verification"].get("issues", [])):
+                    raise LedgerError("receipt-invalid")
+            else:
+                raise LedgerError("receipt-invalid")
+            if number < count and entry["verdict"] in {"pass", "blocked"}:
+                raise LedgerError("receipt-invalid")
+        refused = result.get("repairFailure")
+        if refused is not None:
+            if refused not in verified[-1]["outputs"] or verified[-1]["result"].get("repairFailure") != refused:
+                raise LedgerError("receipt-invalid")
+            read_object(ctx, refused)
+            if job["status"] == "succeeded" or result["verification"].get("approvable") is not False:
+                raise LedgerError("receipt-invalid")
 
     def _rendered(self, ctx, job, design, value, result):
         from workspace.design_api import read_object

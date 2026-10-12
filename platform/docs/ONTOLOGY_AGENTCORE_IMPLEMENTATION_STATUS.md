@@ -112,3 +112,19 @@ HAND-01). The [owning React interface](../workspace/REACT_CONTRACT.md#persistent
 defines the read-only forecast and its incomplete outcomes. Four grammar/path
 tests and two local Chromium UI checks cover the candidate, including mobile
 layout; independent review/CI and live UI acceptance remain required.
+
+## Complete validation repair rounds (2026-10-12 candidate)
+
+The Runtime generation/edit path now feeds checker failures into bounded
+composition repairs and repeats compilation, Browser, large-text and coverage
+under the frozen flow and source policy. Round-specific private outputs and
+signed receipts preserve failed and passing evidence. Source-only release and
+selected-screen composition remain deterministic. The
+[owning execution contract](../workspace/AGENTCORE_CONTRACT.md#validation-repair-rounds-2026-10-12-candidate)
+defines failed compile receipts and final-stage selection; the
+[React interface](../workspace/REACT_CONTRACT.md#validation-repair-loop-2026-10-12-candidate)
+defines current-authorized history display and non-approvable outcomes.
+Local defects exercise actual compiler/browser feedback and limit escalation.
+Admission preflights complete validation call plans against existing profile
+limits; full regression, independent review/CI and live acceptance remain
+required before completion of this candidate.

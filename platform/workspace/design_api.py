@@ -305,9 +305,15 @@ def compile_failure(ctx, design):
         if len(rows) != 1 or rows[0]['size'] > 2 * 1024 * 1024:
             fail(404, 'not-found', 'Resource not found')
         return read_object(ctx, rows[0])
-    build = output('compile', 'build.json')['build']
+    failed_compiles = [row for row in job.get('stages', []) if row.get('attemptId') == attempt
+                       and row.get('stage') == 'compile' and row.get('status') == 'failed']
+    round_number = failed_compiles[-1]['result'].get('validationRound', 1) if failed_compiles else 1
+    if type(round_number) is not int or not 1 <= round_number <= 5:
+        fail(404, 'not-found', 'Resource not found')
+    prefix = '' if round_number == 1 else f'round-{round_number}-'
+    build = output('compile', prefix + 'build.json')['build']
     source_stage = 'context' if job['operation'] == 'design.compose' else 'generate'
-    source = output(source_stage, 'sources.json') if job['operation'] != 'design.release' else {'files': {}}
+    source = output(source_stage, prefix + 'sources.json') if job['operation'] != 'design.release' else {'files': {}}
     if build.get('ok') is not False:
         fail(404, 'not-found', 'Resource not found')
     return {'stage': 'compile', 'status': 'failed', 'diagnostics': build.get('diagnostics', []),
@@ -419,6 +425,9 @@ def artifact_view(ctx, identifier, artifact_id, query):
                                 "label": k.screens[screen]["title"] + " · " + k.assets[node["asset"]]["title"]})
         value = {"previewHtml": build["previewHtml"], "verification": result["verification"], "targets": targets,
                  "screens": result["generated"]["screens"], "sourceHash": result["sourceHash"], "bundleHash": result["bundleHash"]}
+        value["validationRounds"] = [{key: row[key] for key in ("round", "verdict", "compileStatus", "sourceHash", "bundleHash", "findings")
+                                     if key in row} for row in result.get("validationHistory", [])
+                                    if ctx.scope["role"] in {"owner", "designer", "developer"} or row.get("verdict") == "pass"]
     elif kind in {"source", "bundle", "screenshot"}:
         import base64
         ref = result[kind]

@@ -23,6 +23,20 @@ def test_prepare_flow_and_generate_serializable_candidate():
     assert value["registry"] == prepared["registry"]
 
 
+def test_validation_call_plan_reserves_full_repairs_without_raising_profile_limits():
+    from workspace.design_stages import validation_plan
+    from workspace.execution_ledger import PROFILE_DEFAULT
+    graph=sealed_graph()
+    prepared=prepare_flow(graph,"savings-signup",GOOD,catalog_hash=kit_catalog_hash())
+    plan=validation_plan(graph,prepared,GOOD,3)
+    assert plan["frames"]==11 and plan["modelCalls"]==102 and plan["serviceCalls"]==9
+    assert plan["totalCalls"]<=PROFILE_DEFAULT["maxCallsByOperation"]["design.generate"]
+    too_large=validation_plan(graph,prepared,GOOD,4)
+    assert too_large["totalCalls"]>PROFILE_DEFAULT["maxCallsByOperation"]["design.generate"]
+    edited=validation_plan(graph,prepared,GOOD,3,stage="edit")
+    assert edited["totalCalls"]<=PROFILE_DEFAULT["maxCallsByOperation"]["design.edit"]
+
+
 def test_reference_aliases_do_not_mask_human_content_or_change_values():
     import json
     from design_loop.references import References

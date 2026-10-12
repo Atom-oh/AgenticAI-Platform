@@ -443,3 +443,21 @@ unavailable or different artifact backend/profile metadata is
 version, role, idempotency, expiry and history limits still apply. Runtime
 revalidation failure leaves an interrupted execution with
 `design-execution-failed`; it cannot produce a reviewable combined round.
+
+### Validation repair loop (2026-10-12 candidate)
+
+`maxRounds` bounds complete generate/edit validation rounds (1–5). Each failure
+feeds the current private checker findings into a repair under the same approved
+flow, component catalog, financial bindings and source/file policy. The repaired
+project receives fresh compilation, Browser, large-text and coverage evidence.
+Missing evidence stops the loop. An uncertain paid call is not automatically
+retried. At the limit, a failed verified candidate stays needs-changes and
+requires human action; it has no effective UX approval.
+
+The private result retains every round's findings and hash-bound source/build/
+Browser references. Artifact preview exposes `validationRounds` with round,
+verdict, compiler status, source/bundle hashes and findings, under the same
+current source/role/expiry fence; object keys remain private. The UI displays
+failed and passing rounds alongside the selected artifact. A compiler refusal
+has no Browser/bundle evidence; its current diagnostic/source view follows the
+existing owner/designer/developer restriction.

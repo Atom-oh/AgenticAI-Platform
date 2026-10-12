@@ -2121,6 +2121,30 @@ def test_browser_receipt_must_verify_the_exact_compiled_bundle(xfer):
         assert error.value.code == "receipt-invalid"
 
 
+def test_failed_compile_diagnostics_cannot_authorize_browser_or_success(xfer):
+    storage,ledger,_,_=xfer
+    job,previous=staged_through(xfer,"compile")
+    diagnostic=put_output(storage,job,"compile","failed-build.json",b'{"ok":false}')
+    service=service_call(ledger,job,"compile","interpreter")
+    failed=chained(job,"compile","failed-compile",previous=previous,status="failed",service=service,
+        inputs=required_inputs(job,"compile"),outputs=[diagnostic],result={"compiled":False,"validationRound":1})
+    job=ledger.tool().stage(*ids(job),failed)
+    assert job["stages"][-1]["status"]=="failed"
+    browser_service=service_call(ledger,job,"browser","browser")
+    forged=chained(job,"browser","no-compiled-bundle",previous=receipt_hash(failed),status="ok",
+        service=browser_service,inputs=[entry_of(diagnostic)],
+        outputs=[put_output(storage,job,"browser","not-verified.png",b"image")],
+        result={"passed":True,"functionalStatus":"pass","accessibility":{"status":"pass","violations":[]}})
+    with pytest.raises(LedgerError) as denied:
+        ledger.tool().stage(*ids(job),forged)
+    assert denied.value.code=="receipt-invalid"
+    current=storage.get(OWNER,"job",job["id"])
+    with pytest.raises(LedgerError):
+        finish(ledger,current,"succeeded",{"manifestRef":diagnostic["key"],"manifestHash":diagnostic["sha256"],
+            "receipts":[row["receiptHash"] for row in current["stages"]]})
+    assert storage.get(OWNER,"job",job["id"])["status"]=="running"
+
+
 @pytest.mark.parametrize("profile", [None, "chromium-unpinned/9"])
 def test_browser_and_compiler_receipts_bind_the_pinned_tool_profile(xfer, profile):
     storage, ledger, _, _ = xfer

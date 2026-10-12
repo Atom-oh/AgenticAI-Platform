@@ -73,12 +73,12 @@ class ExecutionSession:
         result = self.call("close_output", {"handle_id": handle["handleId"]})
         return {**result, **({"role": role} if role else {})}
 
-    def stage(self, stage, inputs, outputs, result, service=None):
+    def stage(self, stage, inputs, outputs, result, service=None, *, status="ok"):
         body = {k: self.job[k] for k in ("executionId", "attemptId", "fence", "sessionId", "profileHash", "admissions")}
         body.update(schemaVersion=1, stage=stage, nonce=secrets.token_hex(24), iat=self.clock(), exp=self.job["deadlineAt"],
                     previous=self.previous, inputs=[{k: x[k] for k in ("key", "sha256", "size")} for x in inputs],
                     outputs=outputs, service=service or {"kind": "runtime", "sessionId": self.job["sessionId"]},
-                    status="ok", result=result)
+                    status=status, result=result)
         receipt = self.signer.sign(body)
         self.call("stage", {"receipt": receipt})
         self.previous = receipt_hash(receipt);self.receipts.append(self.previous)
