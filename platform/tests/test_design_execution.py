@@ -149,6 +149,141 @@ def test_approved_flow_generates_actual_verified_react_artifact(pipeline):
     assert reusable['bytes']==s.storage.get_blob(design['variants'][0]['source']['key'])
 
 
+def ready(s):
+    decide(s.ctx,s.design['id'],'prd',{'version':s.design['version'],'prd':s.prd,'hash':schema.digest(s.prd)})
+    record=s.ctx.get('design',s.design['id'])
+    decide(s.ctx,record['id'],'flow',{'version':record['version'],'hash':record['flow']['sha256']})
+
+
+def test_selected_screen_composition_reuses_reviews_and_rebuilds_without_model(pipeline,monkeypatch):
+    from workspace.design_api import read_object
+    from workspace.design_stages import unpacked
+    from design_loop.handoff import read_zip
+    s=pipeline
+    ready(s)
+    assert execute(s,'generate')[0]['status']=='succeeded'
+    assert execute(s,'generate',requestId='second-design',variant=1)[0]['status']=='succeeded'
+    record=s.ctx.get('design',s.design['id'])
+    prepared=read_object(s.ctx,record['flow'])
+    variants=record['variants']
+    choices=[{'screenId':screen,'artifactId':variants[index%2]['artifactId']}
+             for index,screen in enumerate(prepared['flow']['screens'])]
+    # Job retention/accounting must not become an additional source permission.
+    # Verified artifacts still carry their exact current source/profile bindings.
+    retained={variant['jobId'] for variant in variants}
+    original_get=s.storage.get
+    monkeypatch.setattr(s.storage,'get',lambda owner,kind,identifier:
+        None if kind=='job' and identifier in retained else original_get(owner,kind,identifier))
+    calls=len(s.models)
+    def model_not_allowed(*args):
+        raise AssertionError('Deterministic composition and release cannot construct a model adapter')
+    s.workflow.model_factory=model_not_allowed
+    result,queued=execute(s,'compose',selections=choices)
+    assert result['status']=='succeeded'
+    assert len(s.models)==calls and s.compiles==3 and s.browsers==6
+    composed=s.ctx.get('wb_artifact',queued['artifactId'])
+    value=read_object(s.ctx,composed['result'])
+    pages=unpacked(value['generated']['screens'])
+    for choice in choices:
+        base=read_object(s.ctx,s.ctx.get('wb_artifact',choice['artifactId'])['result'])
+        selected=unpacked(base['generated']['screens'])
+        assert {key:page for key,page in pages.items() if key[0]==choice['screenId']}=={
+            key:page for key,page in selected.items() if key[0]==choice['screenId']}
+    job=s.ctx.get('job',queued['jobId'])
+    assert all(call['kind']!='model' for call in job['calls'])
+    assert [row['stage'] for row in job['stages']]==['context','compile','browser','verify']
+    assert value['verification']['reviewer']=='deterministic' and value['verification']['judgeEvidence']
+    record=s.ctx.get('design',s.design['id']);variant=record['variants'][-1]
+    # A human approval is a new HTTP request with its own observation scope.
+    status,payload,_=authorized_call(s.ctx.host,'POST',f"/designs/{record['id']}/approve",
+        {'version':record['version'],'artifactId':variant['artifactId'],
+         'sourceHash':variant['sourceHash'],'bundleHash':variant['bundleHash']},project=s.ctx.project_id)
+    assert status==200,payload
+    assert execute(s,'release',baseArtifactId=variant['artifactId'])[0]['status']=='succeeded'
+    release=s.ctx.get('release',s.ctx.get('design',s.design['id'])['releases'][0]['id'])
+    package=read_zip(s.storage.get_blob(release['handoffKey']))
+    source=read_zip(s.storage.get_blob(release['sourceKey']))
+    assert {name.removeprefix('project/'):data for name,data in package.items() if name.startswith('project/')}==source
+    assert len(s.models)==calls
+
+
+@pytest.mark.parametrize('invalid',['missing','duplicate','failed','planner'])
+def test_composition_admission_refuses_incomplete_or_unauthorized_selection(pipeline,monkeypatch,invalid):
+    from workspace.execution_ledger import LedgerError
+    from workspace.collaboration import CollaborationError
+    from workspace.design_api import read_object
+    from workbench.service import Service
+    s=pipeline
+    ready(s)
+    assert execute(s,'generate')[0]['status']=='succeeded'
+    record=s.ctx.get('design',s.design['id']);variant=record['variants'][0]
+    screens=read_object(s.ctx,record['flow'])['flow']['screens']
+    choices=[{'screenId':screen,'artifactId':variant['artifactId']} for screen in screens]
+    if invalid=='missing':
+        choices.pop()
+    elif invalid=='duplicate':
+        choices[-1]=choices[0]
+    elif invalid=='failed':
+        # Refusal before admission when the current trusted variant is not reviewable.
+        record['variants'][0]['passed']=False
+        original=s.ctx.host.storage.get
+        monkeypatch.setattr(s.ctx.host.storage,'get',lambda owner,kind,identifier:
+            copy.deepcopy(record) if kind=='design' and identifier==record['id'] else original(owner,kind,identifier))
+    else:
+        s.ctx=Service(s.ctx.host,s.ctx.collaboration.resolve_scope('bob',s.ctx.project_id),
+                      {'sub':'bob','exp':s.ctx.claims['exp']})
+    before=s.compiles
+    error_type=CollaborationError if invalid=='planner' else LedgerError
+    expected={'missing':'design-selection-incomplete','duplicate':'design-selection-invalid',
+              'failed':'design-compose-review-required','planner':'forbidden'}[invalid]
+    with pytest.raises(error_type) as refused:
+        execute(s,'compose',selections=choices)
+    assert refused.value.code==expected
+    if invalid=='planner':
+        assert refused.value.status==403
+    assert s.compiles==before
+    assert not any(job.get('operation')=='design.compose' for job in s.storage.list(s.ctx.owner,'job'))
+
+
+@pytest.mark.parametrize('fault',['review-bytes','revoked-admission','backend-profile'])
+def test_composition_refuses_changed_evidence_authority_or_profile_before_paid_work(pipeline,monkeypatch,fault):
+    from intake.records import INTAKE_OWNER
+    from intake import admin_handler
+    from intake.admission import AdmissionError
+    from workspace.execution_ledger import LedgerError
+    from workspace.collaboration import CollaborationError
+    from workspace.design_api import read_object
+    from workspace import execution_ledger
+    s=pipeline;ready(s)
+    assert execute(s,'generate')[0]['status']=='succeeded'
+    record=s.ctx.get('design',s.design['id']);variant=record['variants'][0]
+    screens=read_object(s.ctx,record['flow'])['flow']['screens']
+    choices=[{'screenId':screen,'artifactId':variant['artifactId']} for screen in screens]
+    if fault=='review-bytes':
+        artifact=s.ctx.get('wb_artifact',variant['artifactId'])
+        value=read_object(s.ctx,artifact['result'])
+        next(iter(value['judgments'].values()))['verdicts']['injected']={'verdict':'pass','evidence':'changed'}
+        s.storage.put_blob(artifact['result']['key'],json.dumps(value).encode(),'application/json')
+        error_type,code=CollaborationError,'design-evidence-changed'
+    elif fault=='revoked-admission':
+        grant=s.storage.get(INTAKE_OWNER,'adm_grant','grant-1')
+        assert admin_handler.handler({'op':'revoke_grant','id':grant['id'],'expectedRevision':grant['revision'],
+            'operator':'fixture-security'},SimpleNamespace(
+            invoked_function_arn='arn:aws:lambda:ap-northeast-2:000000000000:function:IntakeAdminFn'))['ok']
+        error_type,code=AdmissionError,'grant-revoked'
+    else:
+        changed=copy.deepcopy(execution_ledger.PROFILE_DEFAULT)
+        changed['leaseMs']+=1000
+        monkeypatch.setattr(execution_ledger,'PROFILE_DEFAULT',changed)
+        error_type,code=LedgerError,'design-profile-changed'
+    calls,compiles=s.browsers,s.compiles
+    with pytest.raises(error_type) as refused:
+        execute(s,'compose',selections=choices)
+    assert refused.value.code==code
+    assert s.browsers==calls and s.compiles==compiles
+    assert not any(job.get('operation')=='design.compose' for job in s.storage.list(s.ctx.owner,'job'))
+
+
 def test_exact_ux_approval_rebuilds_and_produces_identical_handoff(pipeline, repo):
     from workspace.design_api import approve_variant
     from design_loop.handoff import read_zip

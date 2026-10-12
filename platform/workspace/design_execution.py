@@ -10,11 +10,14 @@ from workspace.execution_ledger import LedgerError
 from workspace.execution_source import encode
 from workspace.execution_sources import context, unique
 
-OPERATIONS = {"extract": "design.extract", "generate": "design.generate", "edit": "design.edit", "release": "design.release"}
+OPERATIONS = {"extract": "design.extract", "generate": "design.generate", "edit": "design.edit",
+              "compose": "design.compose", "release": "design.release"}
 STATES = {"extract": {"draft", "prd-review", "interrupted"}, "generate": {"ready", "review", "interrupted"},
-          "edit": {"review", "approved", "interrupted"}, "release": {"approved", "released", "interrupted"}}
+          "edit": {"review", "approved", "interrupted"}, "compose": {"review", "interrupted"},
+          "release": {"approved", "released", "interrupted"}}
 ROLES = {"extract": {"owner", "planner", "designer"}, "generate": {"owner", "designer"},
-         "edit": {"owner", "designer"}, "release": {"owner", "designer", "developer"}}
+         "edit": {"owner", "designer"}, "compose": {"owner", "designer"},
+         "release": {"owner", "designer", "developer"}}
 
 
 def admission_write(storage, owner, descriptor, actor, operation):
@@ -52,7 +55,7 @@ def authority(storage, owner, job):
 def submit(ctx, identifier, stage, body, ledger, configuration, enqueue):
     from workspace.design_api import current_inputs, public, read_object
     from workbench.service import fields
-    fields(body, {"requestId", "version", "variant", "maxRounds", "instructionDecisionId", "baseArtifactId", "screenId", "state", "targetId", "acknowledgeUnknownOutcome"})
+    fields(body, {"requestId", "version", "variant", "maxRounds", "instructionDecisionId", "baseArtifactId", "screenId", "state", "targetId", "acknowledgeUnknownOutcome", "selections"})
     if stage not in OPERATIONS:
         raise LedgerError("unknown-operation")
     ctx.fresh(ROLES[stage])
@@ -92,6 +95,44 @@ def submit(ctx, identifier, stage, body, ledger, configuration, enqueue):
         manifest["prd"] = read_object(ctx, design["prd"])["prd"]
         manifest["prepared"] = read_object(ctx, design["flow"])
         manifest["approvals"] = design["approvals"]
+    if stage == "compose":
+        from workspace import design_stages as delivery
+        from workspace.execution_sources import ExecutionSources
+        from workspace.design_api import variant_authority
+        try:
+            choices = delivery.selected_screens(body.get("selections"), manifest["prepared"]["flow"]["screens"])
+        except ValueError as error:
+            raise LedgerError(str(error)) from None
+        retained = {}
+        resolver = ExecutionSources(ctx.host)
+        from workspace.execution_ledger import PROFILE_DEFAULT, profile_hash
+        expected_profile = profile_hash(PROFILE_DEFAULT)
+        for choice in choices:
+            identifier_ = choice["artifactId"]
+            if identifier_ in retained:
+                continue
+            base, artifact, observed, expiry = variant_authority(ctx, design, identifier_)
+            if not base["passed"] or artifact.get("status") != "completed":
+                raise LedgerError("design-compose-review-required")
+            # The immutable completed artifact survives job accounting updates and
+            # retention. The job row is execution metadata, not source authority.
+            if (artifact.get("backendConfigRevision") != configuration["revision"]
+                    or artifact.get("profileHash") != expected_profile):
+                raise LedgerError("design-profile-changed")
+            result = read_object(ctx, artifact["result"])
+            if result.get("reviewProfile") != {"model": design["model"], "profileHash": expected_profile}:
+                raise LedgerError("design-compose-review-required")
+            retained[identifier_] = result
+            checks = unique([*checks, *[check for check in observed if check["kind"] != "design"]])
+            admitted["expiresAt"] = min(admitted["expiresAt"], expiry)
+            for bound in artifact["admissions"]:
+                if bound not in manifest["admissions"]:
+                    resolved = resolver(ctx.owner, bound, job={"actor": ctx.actor, "projectId": ctx.project_id,
+                        "authorizationExpiresAt": ctx.authorization()["authorizationExpiresAt"]})
+                    manifest["admissions"].append(bound)
+                    checks = unique([*checks, resolved["check"], *resolved.get("checks", [])])
+                    admitted["expiresAt"] = min(admitted["expiresAt"], resolved["expiresAt"])
+        manifest["selections"] = [{**choice, "result": retained[choice["artifactId"]]} for choice in choices]
     if stage in {"edit", "release"}:
         # Finalized variants must be selected exactly; these are never caller-supplied files.
         base = next((row for row in design["variants"] if row["artifactId"] == body.get("baseArtifactId")), None)
@@ -213,10 +254,14 @@ class DesignPublication:
             value.update(prd=_object(ctx, design["id"], "prd", verified), status="prd-review", approvals={}, variants=[])
         else:
             value, extra_writes = self._rendered(ctx, job, design, value, result)
+        checks = unique([*checks, *getattr(ctx, "_design_checks", [])])
+        expiry = min(admitted["expiresAt"], getattr(ctx, "_design_expiry", admitted["expiresAt"]))
         writes = [ctx.write("design", value, design["version"]),
                   ctx.write("wb_artifact", {**artifact, "status": "completed", "result": output,
-                      "receiptHashes": job["result"]["receipts"], "admissions": job["admissions"]}, artifact["version"]), *extra_writes]
-        return {"writes": writes, "checks": unique(checks), "expiresAt": admitted["expiresAt"],
+                      "receiptHashes": job["result"]["receipts"], "admissions": job["admissions"],
+                      "backendConfigRevision": job["backendConfigRevision"], "profileHash": job["profile"]["hash"]},
+                      artifact["version"]), *extra_writes]
+        return {"writes": writes, "checks": checks, "expiresAt": expiry,
                 "sourceChecks": job["obligations"]["sourceChecks"], "sourceBindings": job["obligations"]["sourceBindings"]}
 
     def _rendered(self, ctx, job, design, value, result):
@@ -232,6 +277,35 @@ class DesignPublication:
         prd = read_object(ctx, design["prd"])["prd"]
         k = delivery.knowledge(stored["snapshot"])
         candidate = result["generated"]
+        if job["operation"] == "design.compose":
+            from workspace.design_api import variant_authority
+            raw_manifest = ctx.storage.get_blob(job["manifest"]["ref"])
+            if hashlib.sha256(raw_manifest).hexdigest() != job["manifest"]["hash"]:
+                raise LedgerError("receipt-invalid")
+            manifest = json.loads(raw_manifest)
+            selected = []
+            for row in manifest["selections"]:
+                _, artifact, observed, expiry = variant_authority(ctx, design, row["artifactId"])
+                original = read_object(ctx, artifact["result"])
+                if original != row["result"]:
+                    raise LedgerError("receipt-invalid")
+                selected.append({**row, "result": original})
+            def current_judgment(record):
+                return bool(record.get("admissions")) and all(bound in job["admissions"] for bound in record["admissions"])
+            try:
+                composed, judgments, evidence = delivery.compose(stored["snapshot"], prepared, prd, selected,
+                    {"model": job["model"], "profileHash": job["profile"]["hash"]}, current_judgment)
+            except ValueError:
+                raise LedgerError("design-compose-review-required") from None
+            recorded = next(row["result"] for row in job["stages"]
+                            if row["stage"] == "verify" and row["attemptId"] == job["attempt"]["id"])
+            if (candidate != composed or result.get("judgments") != judgments
+                    or result.get("reviewProfile") != {"model": job["model"], "profileHash": job["profile"]["hash"]}
+                    or result["verification"].get("judgeEvidence") != evidence
+                    or result["verification"].get("compositionHashes") != composed["compositionHashes"]
+                    or recorded.get("judgeEvidence") != evidence
+                    or recorded.get("compositionHashes") != composed["compositionHashes"]):
+                raise LedgerError("receipt-invalid")
         screens = delivery.unpacked(candidate["screens"])
         registry = Registry(k, state=candidate["registry"])
         expected = delivery.source_files(stored["snapshot"], prepared, prd, screens, registry.to_json())

@@ -1,6 +1,6 @@
 # Design execution delivery
 
-Implementation design and candidate register, 2026-10-11. Owning authorities: SPEC §7-2,
+Implementation design and candidate register, 2026-10-12. Owning authorities: SPEC §7-2,
 AGENTCORE_CONTRACT `platform-execution/1`, `source-admission/1` and
 `publishing-handoff/1`, ONTOLOGY_CONTRACT, and REACT_CONTRACT.
 This document records implemented candidate interfaces and remaining gates; it is not acceptance.
@@ -33,8 +33,10 @@ from admitted cited spans and deterministic bindings.
 ## Single execution writer
 
 The application uses the existing B0 ledger for `design.extract`, `design.generate`,
-`design.edit`, and `design.release`. The ledger also defines `design.compose`; its
-deterministic application dispatch is still unimplemented and is not an enabled route.
+`design.edit`, `design.compose` and `design.release`. Composition rebuilds the
+selected React project without a model call. Compiler, Browser, large-text,
+deterministic composition/rule and coverage checks run again; model-judged items
+reuse only their exact current context-bound judgments.
 Design artifacts are marked and created with their reserved job. Only the ledger
 publishes a completed stage, its design pointer and associated run/release
 records in one conditional transaction. Human approval uses the existing
@@ -106,6 +108,7 @@ variant retains all consumed admissions, including later edit instructions.
 | `POST /designs/:id/confirm-prd` | Planner/owner confirms exact cited values; changed financial spans fail |
 | `POST /designs/:id/approve-flow` | Designer/owner approves the exact flow/contract hash |
 | `POST /designs/:id/extract`, `generate`, `edit`, `release` | Creates the corresponding reserved execution and marked artifact |
+| `POST /designs/:id/compose` | Designer/owner selects `{screenId, artifactId}` for every screen; creates a reserved deterministic execution with no model call |
 | `POST /designs/:id/approve` | Designer/owner approves the exact verified source/bundle pair |
 | `POST /designs/:id/cancel` | Stops the active ledger execution; no legacy worker fallback |
 | `GET /designs/:id/artifacts/:artifactId` | Authorized preview/element targets or hash-checked chunks |
@@ -125,6 +128,20 @@ request authorization deadline persisted on the export. A refreshed JWT does not
 renew a queued export; its logical retry identity excludes the deadline. Failed
 candidate content remains limited to owner/designer/developer on every chunk;
 missing and inaccessible singular design reads return the same 404.
+
+### Selected screen composition
+
+The [owning React interface](../workspace/REACT_CONTRACT.md#selected-screen-assembly-2026-10-12-candidate)
+defines request fields, exact selection/state obligations, review reuse,
+refusals and the human delivery lifecycle. The execution-side distinction is
+the context → compile → browser → verify chain with no model stage.
+The completion adapter independently reconstructs the selected project and
+judgment evidence from authorized private results before atomic publication;
+request/model fields cannot supply either.
+
+Acceptance scope: REQUIREMENTS G-02/G-03, V-01–04, A-01, R-01–03;
+GEN-01/04/05 and HAND-01–04. Offline compiler/Browser tests do not establish
+live Interpreter/Browser gates or production admission.
 
 ## Runtime and publication
 

@@ -7,6 +7,51 @@ const {chromium}=require('playwright');
 
 async function panelBundle(root,model,handoff=false){return build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import DesignPanel from './src/workspace/DesignPanel';import DesignHandoff from './src/workspace/DesignHandoff';import {WorkspaceScope} from './src/workspace/WorkspaceScope';import {createWorkspaceClient} from './src/workspace/client';const client=createWorkspaceClient({projectId:'p-test'});createRoot(document.getElementById('root')).render(<WorkspaceScope.Provider value={{client,project:{id:'p-test',name:'합성',version:1,members:{alice:{role:'owner'}}},role:'owner',actorId:'alice'}}>${handoff ? '<DesignHandoff designId="design-1" releaseIds={["release-1"]}/>' : `<DesignPanel config={{models:[{id:'${model}',label:'Claude Sonnet 5'}],defaultModel:'${model}'}} onDirty={()=>{}}/>`}</WorkspaceScope.Provider>);`,resolveDir:root,loader:'tsx'},bundle:true,write:false,format:'iife',jsx:'automatic',loader:{'.css':'empty'},define:{'process.env.NODE_ENV':'"development"'},plugins:[{name:'auth',setup(b){b.onResolve({filter:/(^|\/)lib$/},()=>({path:'auth',namespace:'stub'}));b.onLoad({filter:/.*/,namespace:'stub'},()=>({contents:`export const auth={token:'synthetic-token',studioToken:null};`,loader:'js'}));}}]});}
 
+test('screen composition requires every selection, retains retry identity and never grants approval', {timeout:60000}, async()=>{
+ const model='global.anthropic.claude-sonnet-5', bundle=await panelBundle(path.resolve(__dirname,'..'),model);
+ const variants=['a','b'].map((id,index)=>({artifactId:id,jobId:'job-'+id,variant:index,passed:true,
+   sourceHash:(index?'c':'a').repeat(64),bundleHash:(index?'d':'b').repeat(64),verification:{verdict:'pass'}}));
+ let design={id:'design-choices',title:'화면별 선택',version:1,revision:1,status:'review',model,variants,approvals:{flow:{}}};
+ const submissions=[],unexpected=[];let first=true;
+ const browser=await chromium.launch({executablePath:process.env.WORKSPACE_CHROMIUM,headless:true,args:['--no-sandbox']});
+ try{
+  const context=await browser.newContext({offline:true});
+  await context.route('**/*',async route=>{
+   const request=route.request(),url=new URL(request.url()),p=url.pathname.replace(/^\/studio-api/,'');
+   const send=(value,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(value)});
+   if(p==='/')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<meta charset="utf-8"><div id="root"></div><script src="/app.js"></script>'});
+   if(p==='/app.js')return route.fulfill({contentType:'application/javascript',body:bundle.outputFiles[0].text});
+   if(p==='/designs/config')return send({enabled:true,models:[model]});
+   if(p==='/designs')return send({designs:[design]});
+   if(p==='/designs/inputs')return send({inputs:[]});
+   if(p==='/documents')return send({documents:[]});
+   if(p==='/ontology')return send({nodes:[]});
+   if(p==='/git-connections')return send({connections:[]});
+   if(p==='/designs/design-choices')return send({design,flow:{flow:{screens:['screen-1','screen-2'],transitions:[]},issues:[],contract:{rules:[]}}});
+   if(p==='/designs/design-choices/compose'){
+    assert.equal(request.headers()['x-workspace-project'],'p-test');
+    const body=request.postDataJSON();submissions.push(body);
+    assert.deepEqual(body.selections,[{screenId:'screen-1',artifactId:'a'},{screenId:'screen-2',artifactId:'b'}]);
+    if(first){first=false;return send({error:'구성 요청을 다시 확인하세요.'},503);}
+    design={...design,version:2,revision:2,variants:[...variants,{...variants[0],artifactId:'composed',jobId:'combined-job'}]};
+    return send({design},202);
+   }
+   unexpected.push(p);return send({error:'unexpected'},404);
+  });
+  const page=await context.newPage();await page.goto('https://design.test/');
+  await page.getByLabel('진행 중인 설계').selectOption('design-choices');
+  await page.getByText('화면별 시안 조합',{exact:true}).click();
+  const compose=page.getByRole('button',{name:'선택한 화면 조합·재검증'});
+  assert(await compose.isDisabled());
+  await page.getByLabel('화면 1의 시안').selectOption('a');assert(await compose.isDisabled());
+  await page.getByLabel('화면 2의 시안').selectOption('b');
+  await compose.click();await page.getByText('구성 요청을 다시 확인하세요.').waitFor();
+  await compose.click();await page.getByRole('button',{name:'시안 3 · 검증 통과'}).waitFor();
+  assert.equal(submissions.length,2);assert.equal(submissions[0].requestId,submissions[1].requestId);
+  assert.equal(design.approvals.ux,undefined);assert.deepEqual(unexpected,[]);
+ }finally{await browser.close();}
+});
+
 test('procedure canvas retains request identity, exact approvals, sandboxed selection and verified handoff', {timeout:120000}, async()=>{
  const root=path.resolve(__dirname,'..');
  const model='global.anthropic.claude-sonnet-5';

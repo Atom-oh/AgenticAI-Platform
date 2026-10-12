@@ -223,7 +223,7 @@ def _route(ctx, method, parts, body, query):
         from intake.prompts import admit_prompt_text
         decision = admit_prompt_text(host, ctx.scope, body.get("text"), purpose="edit-instruction", claims=claims)
         return 202, {"decision": {k: decision[k] for k in ("id", "revision", "status", "blocking") if k in decision}}
-    if len(parts) == 2 and method == "POST" and parts[1] in {"extract", "generate", "edit", "release"}:
+    if len(parts) == 2 and method == "POST" and parts[1] in {"extract", "generate", "edit", "compose", "release"}:
         from ontology_runtime.execution_entrypoints import dependencies
         from workspace.design_execution import submit
         import os
@@ -306,7 +306,8 @@ def compile_failure(ctx, design):
             fail(404, 'not-found', 'Resource not found')
         return read_object(ctx, rows[0])
     build = output('compile', 'build.json')['build']
-    source = output('generate', 'sources.json') if job['operation'] != 'design.release' else {'files': {}}
+    source_stage = 'context' if job['operation'] == 'design.compose' else 'generate'
+    source = output(source_stage, 'sources.json') if job['operation'] != 'design.release' else {'files': {}}
     if build.get('ok') is not False:
         fail(404, 'not-found', 'Resource not found')
     return {'stage': 'compile', 'status': 'failed', 'diagnostics': build.get('diagnostics', []),
