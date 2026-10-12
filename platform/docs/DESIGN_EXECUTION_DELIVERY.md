@@ -33,10 +33,10 @@ from admitted cited spans and deterministic bindings.
 ## Single execution writer
 
 The application uses the existing B0 ledger for `design.extract`, `design.generate`,
-`design.edit`, `design.compose` and `design.release`. Composition takes one exact
-previously verified variant for each flow screen, including all of that screen's
-required states. It rebuilds the combined React project without a model call and
-repeats Browser, large-text, reviewer and coverage checks.
+`design.edit`, `design.compose` and `design.release`. Composition rebuilds the
+selected React project without a model call. Compiler, Browser, large-text,
+deterministic composition/rule and coverage checks run again; model-judged items
+reuse only their exact current context-bound judgments.
 Design artifacts are marked and created with their reserved job. Only the ledger
 publishes a completed stage, its design pointer and associated run/release
 records in one conditional transaction. Human approval uses the existing
@@ -131,20 +131,13 @@ missing and inaccessible singular design reads return the same 404.
 
 ### Selected screen composition
 
-Composition requires a verified current variant for every screen, an approved
-flow, complete required state sets and the same component registry. The server
-loads the selected private results; a request cannot provide compositions, files
-or review verdicts. Every selected variant's source admissions, including edit
-instructions, remain obligations of the combined job.
-
-Generation retains its context-bound judgments in the signed, hash-checked
-private result. Composition reuses them only for each exact applicable rendered
-context, model, rule revision and execution profile, with current source
-authority. Missing, failed, tampered or incomplete judgments require fresh
-generation. It never substitutes a deterministic pass for an unreviewed item.
-The completion adapter reconstructs the selected project and judgment evidence
-independently before the atomic publication. The UI offers per-screen selection;
-the new verified round still requires its own exact human UX approval.
+The [owning React interface](../workspace/REACT_CONTRACT.md#selected-screen-assembly-2026-10-12-candidate)
+defines request fields, exact selection/state obligations, review reuse,
+refusals and the human delivery lifecycle. The execution-side distinction is
+the context → compile → browser → verify chain with no model stage.
+The completion adapter independently reconstructs the selected project and
+judgment evidence from authorized private results before atomic publication;
+request/model fields cannot supply either.
 
 Acceptance scope: REQUIREMENTS G-02/G-03, V-01–04, A-01, R-01–03;
 GEN-01/04/05 and HAND-01–04. Offline compiler/Browser tests do not establish

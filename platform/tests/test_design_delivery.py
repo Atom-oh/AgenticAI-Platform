@@ -73,5 +73,6 @@ def test_selected_compositions_require_complete_current_review_evidence(fault):
     elif fault=="truncated-cases":
         prepared=copy.deepcopy(prepared)
         prepared["expectation"]["conditions"]=[f"condition-{i}" for i in range(10)]
-    with pytest.raises(ValueError):
+    expected='design-compose-states-required' if fault=='missing-state' else 'design-compose-review-required'
+    with pytest.raises(ValueError,match='^'+expected+'$'):
         delivery.compose(graph,prepared,GOOD,rows,deps,lambda stored:fault!="revoked-lineage")

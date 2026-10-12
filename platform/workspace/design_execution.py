@@ -105,24 +105,27 @@ def submit(ctx, identifier, stage, body, ledger, configuration, enqueue):
             raise LedgerError(str(error)) from None
         retained = {}
         resolver = ExecutionSources(ctx.host)
+        from workspace.execution_ledger import PROFILE_DEFAULT, profile_hash
+        expected_profile = profile_hash(PROFILE_DEFAULT)
         for choice in choices:
             identifier_ = choice["artifactId"]
             if identifier_ in retained:
                 continue
             base, artifact, observed, expiry = variant_authority(ctx, design, identifier_)
-            base_job = ctx.get("job", base["jobId"])
-            if not base["passed"] or base_job["status"] != "succeeded":
+            if not base["passed"] or artifact.get("status") != "completed":
                 raise LedgerError("design-compose-review-required")
-            if base_job["backendConfigRevision"] != configuration["revision"]:
+            # The immutable completed artifact survives job accounting updates and
+            # retention. The job row is execution metadata, not source authority.
+            if (artifact.get("backendConfigRevision") != configuration["revision"]
+                    or artifact.get("profileHash") != expected_profile):
                 raise LedgerError("design-profile-changed")
             result = read_object(ctx, artifact["result"])
-            if result.get("reviewProfile") != {"model": design["model"], "profileHash": base_job["profile"]["hash"]}:
+            if result.get("reviewProfile") != {"model": design["model"], "profileHash": expected_profile}:
                 raise LedgerError("design-compose-review-required")
             retained[identifier_] = result
-            checks = unique([*checks, *[check for check in observed if check["kind"] != "design"],
-                             ctx.check("job", base_job)])
+            checks = unique([*checks, *[check for check in observed if check["kind"] != "design"]])
             admitted["expiresAt"] = min(admitted["expiresAt"], expiry)
-            for bound in base_job["admissions"]:
+            for bound in artifact["admissions"]:
                 if bound not in manifest["admissions"]:
                     resolved = resolver(ctx.owner, bound, job={"actor": ctx.actor, "projectId": ctx.project_id,
                         "authorizationExpiresAt": ctx.authorization()["authorizationExpiresAt"]})
@@ -251,10 +254,14 @@ class DesignPublication:
             value.update(prd=_object(ctx, design["id"], "prd", verified), status="prd-review", approvals={}, variants=[])
         else:
             value, extra_writes = self._rendered(ctx, job, design, value, result)
+        checks = unique([*checks, *getattr(ctx, "_design_checks", [])])
+        expiry = min(admitted["expiresAt"], getattr(ctx, "_design_expiry", admitted["expiresAt"]))
         writes = [ctx.write("design", value, design["version"]),
                   ctx.write("wb_artifact", {**artifact, "status": "completed", "result": output,
-                      "receiptHashes": job["result"]["receipts"], "admissions": job["admissions"]}, artifact["version"]), *extra_writes]
-        return {"writes": writes, "checks": unique(checks), "expiresAt": admitted["expiresAt"],
+                      "receiptHashes": job["result"]["receipts"], "admissions": job["admissions"],
+                      "backendConfigRevision": job["backendConfigRevision"], "profileHash": job["profile"]["hash"]},
+                      artifact["version"]), *extra_writes]
+        return {"writes": writes, "checks": checks, "expiresAt": expiry,
                 "sourceChecks": job["obligations"]["sourceChecks"], "sourceBindings": job["obligations"]["sourceBindings"]}
 
     def _rendered(self, ctx, job, design, value, result):

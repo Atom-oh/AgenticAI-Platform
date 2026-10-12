@@ -95,9 +95,11 @@ AWS payload/destination approval, explicit synthetic Memory deletion authorizati
 and the registered Git target/credential are pending. The acceptance template
 retains its fixed cases and unrun live modes.
 
-The 2026-10-12 candidate connects selected-screen composition through the
-authenticated API, B0 admission, Runtime, independent completion and UI. All
-selected required states and current source/review obligations are retained;
-the combined bundle receives fresh compiler/Browser/large-text/coverage checks
-without a model call. Review, exact-HEAD CI and live acceptance of this follow-up
-remain separate evidence requirements.
+## Selected-screen composition (2026-10-12 candidate)
+
+The candidate connects the authenticated API, B0, Runtime, independent completion
+and UI. Request and delivery authority are defined in the
+[owning React interface](../workspace/REACT_CONTRACT.md#selected-screen-assembly-2026-10-12-candidate);
+the [execution design](DESIGN_EXECUTION_DELIVERY.md#selected-screen-composition)
+records its receipt chain. Review, exact-HEAD CI and live acceptance remain
+separate evidence requirements.

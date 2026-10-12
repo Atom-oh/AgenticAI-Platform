@@ -1,6 +1,7 @@
 # React workspace implementation interfaces
 
-Current code audit: 2026-09-13. Follow [root instructions](../../AGENTS.md),
+Baseline code audit: 2026-09-13. Candidate interface amendments: 2026-10-11 and
+2026-10-12; their validation and live gates remain separate. Follow [root instructions](../../AGENTS.md),
 [review context](../../docs/REVIEW_CONTEXT.md), and [SPEC.md](../../SPEC.md) §7-1.
 Extends [CONTRACT.md](CONTRACT.md); older personal HTML runs remain prototypes.
 Current React deliverables use the pinned package and verified release path.
@@ -401,16 +402,39 @@ never supplies the commit receipt; missing or mismatched SHA evidence stays unkn
 ### Selected screen assembly (2026-10-12 candidate)
 
 Designer/owner `POST /designs/:id/compose` accepts `{requestId, version,
-selections: [{screenId, artifactId}]}`. Selections cover every frozen flow screen
+selections: [{screenId, artifactId}], variant?, maxRounds?,
+acknowledgeUnknownOutcome?}`. `variant` is a bounded label (0–4, default 0).
+The common request validator accepts `maxRounds` (1–5, default 3), but
+composition uses the exact selected sources and does not call a generator or
+repair them. An uncertain prior execution requires explicit
+`acknowledgeUnknownOutcome: true`. Selections cover every frozen flow screen
 exactly once; each selected verified variant supplies that screen's default and
 all required states. The server loads their immutable source and reviewed
 judgments, retains every consumed admission and admits `design.compose`.
+Completed artifacts retain their backend revision and execution profile hash.
+Admission compares those immutable bindings with the current configuration;
+unrelated job accounting changes or job retention do not replace source
+authorization. Current artifact/run/admission versions and deadlines remain
+predicates of the final publication transaction.
 The operation has no model stage or invocation. It independently rechecks all
 applicable cached judgments and rebuilds/tests the combined project, including
-large text and coverage. Missing/stale review or source evidence fails closed.
+large text and coverage. Generation retains these judgments in its signed,
+hash-checked private result. Reuse requires a passing judgment for every
+applicable rendered context with the exact model, rule revisions and execution
+profile, plus current source admission. Missing, failed, tampered, incomplete
+or stale review/source evidence blocks the combined round.
 
 The composed result is a new round with its own source/bundle/evidence hashes.
 Selection has no approval effect. Exact human UX approval, model-free release
 rebuild, source-preserving ZIP and separate frontend acceptance remain required.
 The public UI provides per-screen selectors and displays the new round through
 the existing individual review and handoff path.
+
+Admission refuses an incomplete/duplicate/unknown screen selection with
+`design-selection-incomplete` or `design-selection-invalid`. An unverified
+variant or missing review profile in the retained result is `design-compose-review-required`;
+unavailable or different artifact backend/profile metadata is
+`design-profile-changed`. The common exact
+version, role, idempotency, expiry and history limits still apply. Runtime
+revalidation failure leaves an interrupted execution with
+`design-execution-failed`; it cannot produce a reviewable combined round.
