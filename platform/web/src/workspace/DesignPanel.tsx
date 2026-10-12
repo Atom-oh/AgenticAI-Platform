@@ -16,7 +16,9 @@ type Design = { id: string; title: string; version: number; revision: number; st
 type Input = { id: string; sourceId: string; kind: string; pageCount: number };
 type Doc = { id: string; title: string; approvedRevisionId?: string };
 type Procedure = { id: string; title: string; type: string; reviewState: string };
-type Flow = { flow: { screens: string[]; transitions: { id: string; src: string; dst: string; when?: string | null }[] };
+type Flow = { flow: { screens: string[]; entry?: string; terminals?: string[];
+  transitions: { id: string; src: string; dst: string; when?: string | null; navigation?: string }[] };
+  cases?: Record<string, boolean>[];
   issues: { code?: string; message?: string }[]; contract: { rules: { id: string; title: string }[] } | null };
 type Detail = { design: Design; prd?: { prd: Record<string, unknown>; issues: { field: string; code: string }[] }; flow?: Flow; flowHash?: string;
   failure?: { stage: string; status: string; diagnostics: string[]; files: Record<string, string>; approved: false } | null };
@@ -254,7 +256,9 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
         </details>}
         {detail?.flow && <details open={!current.approvals.flow}><summary>흐름과 필수 확인 기준</summary>
           <FlowDiagram key={`${current.id}:${detail.flowHash}`} screens={detail.flow.flow.screens.map((id, index) => ({ id, title: `화면 ${index + 1} · ${id}` }))}
-            transitions={detail.flow.flow.transitions.map(item => ({ id: item.id, from: item.src, to: item.dst, condition: item.when }))} />
+            transitions={detail.flow.flow.transitions.map(item => ({ id: item.id, from: item.src, to: item.dst, condition: item.when, navigation: item.navigation }))}
+            entry={detail.flow.flow.entry} terminals={detail.flow.flow.terminals} conditionCases={detail.flow.cases}
+            caseCoverage={detail.flow.issues.some(item => ['case-capacity', 'case-enumeration-truncated'].includes(item.code || '')) ? 'incomplete' : 'complete'} />
           {detail.flow.contract?.rules.map(rule => <p key={rule.id}>✓ {rule.title}</p>)}
           {detail.flow.issues.map((issue, index) => <p key={index}>{issue.code || issue.message}</p>)}
           <button disabled={!designRole || active || ['approved', 'released'].includes(current.status) || !!detail.flow.issues.length} onClick={() => void act(`/designs/${resource(current.id)}/approve-flow`, { version: current.version, hash: detail.flowHash })}>이 흐름과 확인 기준 승인</button>

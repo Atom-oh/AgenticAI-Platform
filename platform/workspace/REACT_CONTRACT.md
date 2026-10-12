@@ -349,7 +349,12 @@ limits return `400 design-page-limit`.
 The flow review UI projects the current screens and directed transitions into a
 read-only diagram. Selecting a transition highlights its endpoints and retains
 its full condition/retention text; missing or removed endpoints remain warnings.
-This display does not evaluate product conditions or add a flow approval.
+The condition-case view uses only the frozen boolean case assignments and the
+same closed conjunction grammar as `ontology_ux.evaluate`. It follows forward
+transitions from the recorded entry to a declared terminal, highlights the
+chosen path and shows missing/ambiguous/looping outcomes. Incomplete case coverage
+or missing entry/terminal information blocks that view. This read-only forecast
+does not add a flow approval or replace actual Browser interaction evidence.
 
 On-demand side-by-side comparison uses authorized exact-round screenshots for
 legacy batches and isolated React previews for persistent design variants.
