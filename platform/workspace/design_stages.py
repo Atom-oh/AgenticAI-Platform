@@ -113,6 +113,99 @@ def source_files(snapshot, prepared, prd, screens, registry_state):
                                  cases=prepared["cases"], registry=registry, meta=metadata)
 
 
+class RepairRefused(ValueError):
+    """Bounded non-content evidence for a rejected model repair."""
+    def __init__(self, code, text=None, findings=()):
+        import hashlib
+        super().__init__(code)
+        raw = text.encode() if isinstance(text, str) else b""
+        self.evidence = {"code": code, "responseHash": hashlib.sha256(raw).hexdigest(), "responseBytes": len(raw),
+                         "findings": [{key: item[key] for key in ("code", "severity", "path") if key in item}
+                                      for item in findings[:100]]}
+
+
+def repair(snapshot, prepared, prd, previous, findings, deps):
+    """One feedback-driven repair of the permitted compositions under frozen criteria."""
+    from design_loop.model_call import call
+    import json
+    k = knowledge(snapshot)
+    values = prd_extract.bindings(prd)
+    screens = unpacked(previous["screens"])
+    addressed = {item.get("screen") or item.get("screenId") for item in findings}
+    targets = [(screen, state) for screen, state in screens if screen in addressed] if addressed and None not in addressed else list(screens)
+    if not targets:
+        targets = list(screens)
+    requests = []
+    for screen, state in targets:
+        base = screens[screen, state]
+        requests.append({"screenId": screen, "state": state, "base": base,
+                         "catalog": gui._catalog(k, screen, prepared["flow"], values)})
+    feedback = [{key: item[key] for key in ("role", "severity", "code", "message", "path", "item", "screen", "state")
+                 if key in item} for item in findings][:100]
+    request = {"task": "repair-project", "targets": requests, "previousFindings": feedback}
+    system = (gui._SYSTEM + " Repair every requested screen/state under its catalog and frozen criteria. "
+              "Keep each screenId, state and variant. Reply with exactly {\"screens\": ["
+              "{\"screenId\": \"...\", \"state\": \"...\", \"composition\": COMPOSITION}]} for the requested targets only.")
+    text, blocked = call(deps, system, json.dumps(request, ensure_ascii=False, sort_keys=True))
+    if blocked:
+        raise RepairRefused(blocked)
+    try:
+        payload = json.loads(text)
+        schema._fields(payload, {"screens"})
+        replacements = unpacked(payload["screens"])
+    except (ValueError, TypeError, KeyError):
+        raise RepairRefused("design-repair-invalid", text) from None
+    if set(replacements) != set(targets):
+        raise RepairRefused("design-repair-targets", text)
+    for key, candidate in replacements.items():
+        if candidate.get("screenId") != key[0] or candidate.get("state") != key[1] or candidate.get("variant") != screens[key]["variant"]:
+            raise RepairRefused("design-repair-page-changed", text)
+        checked = composition.validate(candidate, k, flow=prepared["flow"], binding_paths=frozenset(values), mode=previous["mode"])
+        if any(finding["severity"] == "critical" for finding in checked):
+            raise RepairRefused("design-repair-invalid", text, checked)
+    screens.update(replacements)
+    output = copy.deepcopy(previous)
+    output.update(screens=packed(screens),
+                  files=source_files(snapshot, prepared, prd, screens, previous["registry"]),
+                  compositionHashes=[composition.digest(value) for value in screens.values()])
+    output.setdefault("repairs", []).append({"findings": copy.deepcopy(findings), "targets": copy.deepcopy(targets)})
+    return output
+
+
+def validation_plan(snapshot, prepared, prd, max_rounds, *, stage="generate"):
+    """Conservative service/model call ceiling before admitting paid validation work."""
+    from design_loop import verify_graph
+    from design_loop.rules_v2 import RULES
+    k = knowledge(snapshot)
+    frames = sum(len(set(["default", *prepared["states"][screen]])) for screen in prepared["flow"]["screens"])
+    if not 1 <= frames <= 19 or not prepared["cases"] or len(prepared["cases"]) > 64:
+        raise ValueError("design-validation-scope")
+    checklist = verify_graph.design_checklist(prd, k)
+    judged = [item for item in checklist if item.get("method") != "rule"
+              or (item.get("rule") or {}).get("fn") not in RULES]
+    reviewer_max = frames * len(prepared["cases"]) if judged else 0
+    structured = all(value.get("mode") == "fill" for value in (
+        route.strategy(route.classify(k, prepared["flow"], screen)["route"]) for screen in prepared["flow"]["screens"]))
+    if structured:
+        generated = generate(snapshot, prepared, prd, {}, max_rounds=1)
+        bundle = {"prd": prd, "flow": prepared["flow"], "expectation": prepared["expectation"],
+                  "screens": unpacked(generated["screens"]), "binding_values": prd_extract.bindings(prd),
+                  "registry": Registry(k, state=generated["registry"])}
+        review, incomplete = verify_graph.review_plan(bundle, k, judged)
+        if incomplete:
+            raise ValueError("design-validation-scope")
+        initial = len(review) + (2 + len(prepared["cases"]) if stage == "edit" else 0)
+    else:
+        # Generation's bounded composition attempts; scoped edit has one parse retry.
+        initial = (2 if stage == "edit" else frames * min(max_rounds, gui.MAX_RETRIES + 1)) + reviewer_max
+    repair_calls = 2 if stage == "edit" else 1  # one bounded project repair batch
+    if stage == "edit":
+        reviewer_max = len(prepared["cases"]) if judged else 0
+    models = initial + (max_rounds - 1) * (repair_calls + reviewer_max)
+    return {"schemaVersion": 1, "rounds": max_rounds, "frames": frames, "modelCalls": models,
+            "serviceCalls": 3 * max_rounds, "totalCalls": models + 3 * max_rounds}
+
+
 def selected_screens(rows, flow_screens):
     """One exact existing artifact for every screen; its required states travel together."""
     if not isinstance(rows, list) or len(rows) != len(flow_screens) or not 1 <= len(rows) <= 19:

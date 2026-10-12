@@ -150,6 +150,28 @@ def test_real_admission_to_signed_runtime_to_one_publication(integrated):
     assert node["sourceRefs"][0]["sourceKind"] == "admitted-code"
 
 
+def test_reconciler_uses_only_the_latest_validation_round_result(monkeypatch):
+    from ontology_runtime import execution_entrypoints as entries
+    first={"key":"private/job/out/a1/verify/result.json","sha256":"1"*64}
+    latest={"key":"private/job/out/a1/verify/round-2-result.json","sha256":"2"*64}
+    job={"id":"exec-recovery","status":"recovery_required","operation":"design.generate","attempt":{"id":"a1"},
+         "stages":[{"stage":"verify","attemptId":"a1","outputs":[first],"receiptHash":"old-receipt"},
+                   {"stage":"verify","attemptId":"a1","outputs":[latest],"receiptHash":"new-receipt"}]}
+    seen={}
+    class Reconciler:
+        def reconcile(self,*args,**kwargs):
+            seen.update(kwargs)
+            return {"status":"needs_changes"}
+    ledger=SimpleNamespace(_get=lambda owner,identifier:job,
+        _terminal_status=lambda actual,stages:"needs_changes",reconciler=lambda:Reconciler())
+    monkeypatch.setattr(entries,"dependencies",lambda:(SimpleNamespace(),{},ledger,None,None,None,None))
+    monkeypatch.setattr(entries,"view_job",lambda result:result)
+    result=entries.reconcile_handler({"owner":"project:p1","jobId":job["id"]},None)
+    assert result["status"]=="needs_changes"
+    assert seen["result"]=={"manifestRef":latest["key"],"manifestHash":latest["sha256"],
+                           "receipts":["old-receipt","new-receipt"]}
+
+
 def test_linked_artifact_cancellation_uses_same_writer(integrated):
     s = integrated
     s.ledger.api().cancel(s.owner, s.job_id, actor="alice")

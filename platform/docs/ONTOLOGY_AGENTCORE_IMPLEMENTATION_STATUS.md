@@ -103,3 +103,25 @@ and UI. Request and delivery authority are defined in the
 the [execution design](DESIGN_EXECUTION_DELIVERY.md#selected-screen-composition)
 records its receipt chain. Review, exact-HEAD CI and live acceptance remain
 separate evidence requirements.
+
+## Condition-case flow viewer (2026-10-12 candidate)
+
+`web/src/workspace/flowCases.ts` and `FlowDiagram.tsx` expose the frozen
+condition-case paths in the existing design panel (REQUIREMENTS U-02,
+HAND-01). The [owning React interface](../workspace/REACT_CONTRACT.md#persistent-procedure-design-2026-10-11-candidate)
+defines the read-only forecast and its incomplete outcomes. Four grammar/path
+tests and one local Chromium UI check cover the candidate at desktop and
+375-pixel mobile viewports; independent review/CI and live UI acceptance remain required.
+
+## Complete validation repair rounds (2026-10-12 candidate)
+
+Implementation is in `ontology_runtime/design_workflow.py`,
+`workspace/design_stages.py`, `design_execution.py` and the design panel.
+`test_design_execution.py` exercises real local compiler/Browser feedback,
+failed-round retention, source integrity, authority refusal and bounded call plans.
+The
+[owning execution contract](../workspace/AGENTCORE_CONTRACT.md#validation-repair-rounds-2026-10-12-candidate)
+defines failed compile receipts and final-stage selection; the
+[React interface](../workspace/REACT_CONTRACT.md#validation-repair-loop-2026-10-12-candidate)
+defines the UI and role-dependent history projection. Exact-HEAD regression,
+independent review/CI and deployment-bound live acceptance remain separate gates.

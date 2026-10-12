@@ -1435,3 +1435,33 @@ call and session. Design release succeeds only with no final issues and the exis
 exact rebuild/baseline checks. Failed generated candidates use needs_changes and
 retain their full private findings. Partial edit completion independently checks
 structural and one-pixel outside-subtree layout stability.
+
+### Validation repair rounds (2026-10-12 candidate)
+
+`design.generate` and `design.edit` may repeat generate → compile → browser →
+verify within the same authorized attempt and frozen human-approved contract,
+bounded by requested 1–5 rounds, call/token/transfer budgets and deadlines.
+Admission retains a conservative `validationPlan` with frame, round, model and
+service call ceilings and refuses `call-budget` before dispatch when it exceeds
+the existing operation profile. Generate repair is one bounded project request;
+edit remains restricted to its selected subtree. Passing cached judgments
+reuses only exact current source/context/profile evidence, never a model pass
+for a changed rendering. Call/profile limits are not raised to fit a request.
+Every new call and publication repeats current source/attempt authority.
+Uncertain calls are never automatically reissued. Compose and approved-source
+release keep their deterministic input and never use this repair path.
+
+Round outputs have distinct immutable names. Signed receipts retain the full
+previous chain; terminal completion uses the latest required stages and their
+exact source/bundle. Earlier failures remain private review evidence.
+For these two operations only, a failed compiler observation may be recorded
+with `status: failed`, current Interpreter call/session and diagnostic outputs,
+with zero bundle outputs. It cannot satisfy Browser input or successful
+completion; a later successful compile must independently produce its one
+verified bundle. Successful compile's exact-one-bundle requirement is unchanged.
+
+Missing reviewer/tester/coverage evidence blocks further repair. Exhausting a
+validation limit retains a non-approvable needs-changes candidate; an exhausted
+compiler refusal remains a failed execution with no fabricated Browser/bundle.
+Partial edit repairs retain the original approved instruction, subtree and
+outside-subtree structural/layout obligations on every round.

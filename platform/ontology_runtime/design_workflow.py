@@ -90,22 +90,69 @@ class DesignWorkflow:
         else:
             generated = delivery.generate(manifest["snapshot"], manifest["prepared"], manifest["prd"],
                                          model.dependencies(), variant=manifest["variant"], max_rounds=manifest["maxRounds"])
-        bundle = self._bundle(manifest, generated)
-        judgments = {}
-        # Judge composition before compilation. Results are reused only with the exact same
-        # composition/context/profile keys; tester and coverage still run after Browser.
-        deps = {**model.dependencies(), "react_report_passes": react_report_passes, "contract_hash": contract_hash}
-        verify_graph._reviewer(bundle, k, deps, generated["mode"], judgments)
-        if not model.calls:
-            # A fully deterministic checklist still needs no invented model observation.
-            raise ValueError("design-deterministic-operation-required")
-        source_files = execution.upload("generate", "sources.json", {"files": generated["files"]}, role="source")
-        candidate = execution.upload("generate", "candidate.json", generated)
-        boundary = execution.upload("generate", "model-boundary.json", model.boundaries)
-        execution.stage("generate", [source, context], [source_files, candidate, boundary], {"boundary": boundary}, model.service())
-        return self._compile_and_verify(execution, manifest, source_files, candidate, generated, bundle, deps, judgments)
+        history = []
+        judgments = copy.deepcopy(manifest.get("baseResult", {}).get("judgments", {})) if manifest["operation"] == "design.edit" else {}
+        def current_judgment(stored):
+            if not stored.get("admissions") or any(bound not in execution.job["admissions"] for bound in stored["admissions"]):
+                return False
+            execution.call("heartbeat", {})
+            return True
+        for number in range(1, manifest["maxRounds"] + 1):
+            bundle = self._bundle(manifest, generated)
+            deps = {**model.dependencies(), "react_report_passes": react_report_passes,
+                    "contract_hash": contract_hash, "verify_lineage": current_judgment}
+            verify_graph._reviewer(bundle, k, deps, generated["mode"], judgments)
+            if not model.calls:
+                raise ValueError("design-deterministic-operation-required")
+            source_files = execution.upload("generate", self._round_name(number, "sources.json"), {"files": generated["files"]}, role="source")
+            candidate = execution.upload("generate", self._round_name(number, "candidate.json"), generated)
+            boundary = execution.upload("generate", self._round_name(number, "model-boundary.json"), model.boundaries)
+            execution.stage("generate", [source, context], [source_files, candidate, boundary],
+                {"boundary": boundary, "validationRound": number}, model.service())
+            observed = self._compile_and_verify(execution, manifest, source_files, candidate, generated, bundle,
+                deps, judgments, defer=True, validation_round=number, history=history)
+            history = observed["history"]
+            judgments = observed.get("judgments", judgments)
+            verified = observed["verification"]
+            stop = verified["verdict"] == "blocked" or (verified["verdict"] == "pass" and verified["approvable"])
+            if stop or number == manifest["maxRounds"]:
+                if observed.get("compileFailed"):
+                    execution.call("fail", {"code": "design-compile-failed"})
+                    return {"status": "failed"}
+                return execution.finish(observed["final"], "succeeded" if verified["verdict"] == "pass" and verified["approvable"] else "needs_changes")
+            # Every subsequent paid call repeats current admission and attempt checks.
+            # Repair changes only permitted compositions; the approved contract stays frozen.
+            try:
+                if manifest["operation"] == "design.edit":
+                    generated = self._edit(manifest, model, feedback=verified["findings"])
+                else:
+                    generated = delivery.repair(manifest["snapshot"], manifest["prepared"], manifest["prd"],
+                                                generated, verified["findings"], model.dependencies())
+            except delivery.RepairRefused as error:
+                return self._repair_stopped(execution, observed, number, error.evidence)
+        raise ValueError("design-validation-rounds")
 
-    def _edit(self, manifest, model):
+    def _repair_stopped(self, execution, observed, number, evidence):
+        rejected = execution.upload("verify", self._round_name(number + 1, "repair-refusal.json"), evidence)
+        if observed.get("compileFailed"):
+            execution.call("fail", {"code": "design-compile-failed"})
+            return {"status": "failed"}
+        value = copy.deepcopy(observed["value"])
+        value["verification"].update(verdict="fail", approvable=False, escalated=True, stopReason="repair-refused")
+        value["repairFailure"] = rejected
+        output = execution.upload("verify", self._round_name(number + 1, "repair-stopped-design.json"), value)
+        final = execution.upload("verify", self._round_name(number + 1, "result.json"),
+            {"objects": [value["source"], value["bundle"], output, rejected]})
+        execution.stage("verify", [value["bundle"], value["browser"], value["largeText"]], [output, final, rejected],
+            {"verdict": "fail", "approvable": False, "validationRound": number,
+             "designResult": output, "repairFailure": rejected})
+        return execution.finish(final, "needs_changes")
+
+    @staticmethod
+    def _round_name(number, name):
+        return name if number == 1 else f"round-{number}-{name}"
+
+    def _edit(self, manifest, model, *, feedback=None):
         from design_loop import edit, react_project
         generated = copy.deepcopy(manifest["baseResult"]["generated"])
         screens = delivery.unpacked(generated["screens"])
@@ -114,12 +161,19 @@ class DesignWorkflow:
         if key not in screens:
             raise ValueError("design-edit-target")
         k = delivery.knowledge(manifest["snapshot"])
-        changed = edit.edit(screens[key], target["targetId"], target["instruction"], k, model.dependencies(),
+        instruction = target["instruction"]
+        if feedback:
+            instruction += "\n\n검증기가 확인한 수정 필요 사항:\n" + json.dumps(feedback[:100], ensure_ascii=False)
+        changed = edit.edit(screens[key], target["targetId"], instruction, k, model.dependencies(),
             flow=manifest["prepared"]["flow"], binding_paths=prd_extract.bindings(manifest["prd"]), mode=generated["mode"])
         if changed.get("blocked") or not changed.get("composition"):
+            if feedback:
+                raise delivery.RepairRefused("design-edit-failed", json.dumps(changed, ensure_ascii=False))
             raise ValueError("design-edit-failed")
         stable = edit.stability(screens[key], changed["composition"], target["targetId"])
         if not stable["stable"]:
+            if feedback:
+                raise delivery.RepairRefused("design-edit-scope", json.dumps(changed, ensure_ascii=False))
             raise ValueError("design-edit-scope")
         screens[key] = changed["composition"]
         registry = Registry(k, state=generated["registry"])
@@ -145,8 +199,10 @@ class DesignWorkflow:
                                        self._bundle(manifest, generated), deps, judgments, evidence)
 
     def _compile_and_verify(self, execution, manifest, source_files, candidate, generated, bundle, deps, judgments,
-                            compose_evidence=None):
+                            compose_evidence=None, *, defer=False, validation_round=1, history=()):
         from design_loop.react_project import compile_request
+        def upload(stage, name, value, **options):
+            return execution.upload(stage, self._round_name(validation_round, name), value, **options)
         contract = manifest["prepared"]["contract"]
         call_id = execution.intent("compile", "interpreter", 300000)
         result = self.interpreter.execute("compile", compile_request(generated["files"], catalog_hash=contract["catalogHash"], contract=contract))
@@ -154,15 +210,27 @@ class DesignWorkflow:
         # The Interpreter command returned an observation, even when the compiler rejected the source.
         execution.outcome(call_id, session_id=observed["sessionId"])
         build_copy = {key: value for key, value in build.items() if key not in {"projectZipBase64", "distZipBase64"}}
-        build_ref = execution.upload("compile", "build.json", {"build": build_copy, "execution": observed})
+        build_ref = upload("compile", "build.json", {"build": build_copy, "execution": observed})
         if not build.get("ok"):
+            if defer:
+                execution.stage("compile", [source_files, candidate], [build_ref],
+                    {"compiled": False, "build": build_ref, "validationRound": validation_round},
+                    {"kind": "interpreter", "sessionId": observed["sessionId"], "taskId": call_id,
+                     "exitCode": 0, "profile": execution.job["toolProfiles"]["interpreter"]}, status="failed")
+                verification = {"verdict": "fail", "approvable": False, "findings": [
+                    {"role": "tester", "severity": "critical", "code": "compile-failed",
+                     "message": str(message)[:500]} for message in (build.get("diagnostics") or ["Compilation failed"])[:20]]}
+                rounds = [*history, {"round": validation_round, "verdict": "fail", "approvable": False, "compileStatus": "failed",
+                    "source": source_files, "candidate": candidate, "build": build_ref,
+                    "findings": verification["findings"]}]
+                return {"compileFailed": True, "verification": verification, "history": rounds}
             execution.call("fail", {"code": "design-compile-failed"})
             return {"status": "failed"}
-        source_zip = execution.upload("compile", "source.zip", base64.b64decode(build["projectZipBase64"], validate=True), binary=True)
-        dist_zip = execution.upload("compile", "bundle.zip", base64.b64decode(build["distZipBase64"], validate=True), binary=True, role="bundle")
+        source_zip = upload("compile", "source.zip", base64.b64decode(build["projectZipBase64"], validate=True), binary=True)
+        dist_zip = upload("compile", "bundle.zip", base64.b64decode(build["distZipBase64"], validate=True), binary=True, role="bundle")
         execution.stage("compile", [source_files, candidate], [source_zip, dist_zip, build_ref],
             {"sourceHash": source_zip["sha256"], "bundleHash": dist_zip["sha256"],
-             "reactSourceHash": build["sourceHash"], "reactBundleHash": build["bundleHash"]},
+             "reactSourceHash": build["sourceHash"], "reactBundleHash": build["bundleHash"], "validationRound": validation_round},
             {"kind": "interpreter", "sessionId": observed["sessionId"], "taskId": call_id,
              "exitCode": 0, "profile": execution.job["toolProfiles"]["interpreter"]})
         reference = None
@@ -186,14 +254,15 @@ class DesignWorkflow:
         large = self.browser.evaluate(build, contract, text_scale=2.0)
         large = assemble(build_copy, large, contract=contract, contract_hash_fn=contract_hash)
         execution.outcome(large_call, session_id=large["browserExecution"]["sessionId"])
-        report_ref = execution.upload("browser", "browser.json", report)
-        large_ref = execution.upload("browser", "large-text.json", large)
-        shot = execution.upload("browser", "screenshot.png", base64.b64decode(report["screenshotBase64"], validate=True), binary=True)
+        report_ref = upload("browser", "browser.json", report)
+        large_ref = upload("browser", "large-text.json", large)
+        shot = upload("browser", "screenshot.png", base64.b64decode(report["screenshotBase64"], validate=True), binary=True)
         browser_result = {"passed": report["passed"], "functionalStatus": report["functionalStatus"],
                           "accessibility": {"status": report["accessibility"].get("status"),
                               "violations": [{"count": len(report["accessibility"].get("violations", []))}] if report["accessibility"].get("violations") else []},
                           "blockingFindings": [{"count": len(report.get("blockingFindings", []))}] if report.get("blockingFindings") else [],
-                          "report": report_ref, "largeText": {"report": large_ref, "sessionId": large["browserExecution"]["sessionId"], "taskId": large_call}}
+                          "report": report_ref, "validationRound": validation_round,
+                          "largeText": {"report": large_ref, "sessionId": large["browserExecution"]["sessionId"], "taskId": large_call}}
         if baseline:
             browser_result.update(comparison=manifest["approved"]["screenshot"], visualDiff=report["visual"].get("changedRatio"))
         execution.stage("browser", [dist_zip, *([baseline] if baseline else [])], [report_ref, large_ref, shot], browser_result,
@@ -242,15 +311,27 @@ class DesignWorkflow:
                  "sourceHash": build["sourceHash"], "bundleHash": build["bundleHash"]}
         if manifest["operation"] != "design.release":
             value.update(judgments=judgments, reviewProfile={key: deps[key] for key in ("model", "profileHash")})
-        output = execution.upload("verify", "design.json", value)
-        final = execution.upload("verify", "result.json", {"objects": [*([source_files] if manifest["operation"] != "design.release" else []), source_zip, dist_zip, output]})
-        memory = self.memory.append(execution.memory_scope, "verified", output["sha256"]) if self.memory else None
+        rounds = [*history, {"round": validation_round, "verdict": verified["verdict"], "approvable": verified["approvable"], "compileStatus": "pass",
+            "source": source_files, "candidate": candidate, "build": build_ref, "browser": report_ref, "largeText": large_ref,
+            "sourceHash": build["sourceHash"], "bundleHash": build["bundleHash"], "findings": verified.get("findings", verified.get("issues", []))}]
+        if defer:
+            value["validationHistory"] = rounds
+            verified.update(rounds=validation_round,
+                escalated=not (verified["verdict"] == "pass" and verified["approvable"]) and validation_round == manifest["maxRounds"])
+        output = upload("verify", "design.json", value)
+        final = upload("verify", "result.json", {"objects": [*([source_files] if manifest["operation"] != "design.release" else []), source_zip, dist_zip, output]})
+        continuing = defer and verified["verdict"] != "blocked" and not (
+            verified["verdict"] == "pass" and verified["approvable"]) and validation_round < manifest["maxRounds"]
+        memory = self.memory.append(execution.memory_scope, "verified", output["sha256"]) if self.memory and not continuing else None
         summary = {key: verified[key] for key in ("verdict", "passed", "approvable", "reviewer") if key in verified}
         if manifest["operation"] == "design.compose":
             summary.update(compositionHashes=generated["compositionHashes"], judgeEvidence=compose_evidence)
         if "issues" in verified:
             summary["issues"] = [{"code": "verification-issues", "count": len(verified["issues"])}] if verified["issues"] else []
-        execution.stage("verify", [dist_zip, report_ref, large_ref], [output, final], {**summary, "designResult": output, **({"memory": memory} if memory else {})})
+        execution.stage("verify", [dist_zip, report_ref, large_ref], [output, final],
+            {**summary, "validationRound": validation_round, "designResult": output, **({"memory": memory} if memory else {})})
+        if defer:
+            return {"verification": verified, "history": rounds, "final": final, "judgments": judgments, "value": value}
         if manifest["operation"] == "design.release" and not verified["passed"]:
             execution.call("fail", {"code": "design-release-verification-failed"})
             return {"status": "failed"}

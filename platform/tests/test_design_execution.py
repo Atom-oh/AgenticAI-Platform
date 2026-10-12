@@ -51,7 +51,7 @@ def pipeline(design_state, monkeypatch):
     metadata=SimpleNamespace(client_context=SimpleNamespace(custom={'bedrockAgentCoreGatewayId':'gateway',
         'bedrockAgentCoreTargetId':'target','bedrockAgentCoreToolName':'ontology___execution'}))
     state=SimpleNamespace(ctx=ctx,design=design,prd=prd,storage=storage,ledger=ledger,caps=caps,config=config,
-                          models=[],charges=charges,compiles=0,browsers=0)
+                          models=[],charges=charges,compiles=0,browsers=0,repair_requests=[],repair=None)
     class Gateway:
         def call(self,name,arguments,*,capability,operation_id):
             assert name=='ontology___execution'
@@ -95,7 +95,13 @@ def pipeline(design_state, monkeypatch):
                         value=copy.deepcopy(prd)
                     else:
                         payload=json.loads(outer.refs.decode(user))
-                        value=copy.deepcopy(payload['target']) if 'target' in payload else {'verdicts':{item['id']:{'verdict':'pass','evidence':'synthetic review'} for item in payload['items']}}
+                        if payload.get('task')=='repair-project':
+                            state.repair_requests.append(payload)
+                            value={'screens':[{'screenId':target['screenId'],'state':target['state'],
+                                'composition':state.repair(target) if callable(state.repair) else copy.deepcopy(target['base'])}
+                                for target in payload['targets']]}
+                        else:
+                            value=copy.deepcopy(payload['target']) if 'target' in payload else {'verdicts':{item['id']:{'verdict':'pass','evidence':'synthetic review'} for item in payload['items']}}
                     return outer.refs.encode(json.dumps(value,ensure_ascii=False)),{'inputTokens':12,'outputTokens':24}
             monkeypatch.setattr(gate,'adapter',lambda *a,**kw:Adapter())
             return super().generate(system,user,on_token)
@@ -153,6 +159,177 @@ def ready(s):
     decide(s.ctx,s.design['id'],'prd',{'version':s.design['version'],'prd':s.prd,'hash':schema.digest(s.prd)})
     record=s.ctx.get('design',s.design['id'])
     decide(s.ctx,record['id'],'flow',{'version':record['version'],'hash':record['flow']['sha256']})
+
+
+def test_compiler_feedback_repairs_actual_source_and_retains_failed_round(pipeline,monkeypatch):
+    from workspace import design_stages as delivery
+    from workspace.design_api import read_object
+    s=pipeline;ready(s)
+    original=delivery.generate
+    clean={}
+    def broken(*args,**kwargs):
+        generated=original(*args,**kwargs)
+        clean.update({(row['screenId'],row['state']):copy.deepcopy(row['composition']) for row in generated['screens']})
+        pages=delivery.unpacked(generated['screens'])
+        first=args[1]['flow']['entry']
+        pages[first,'default']['slots']={name:[] for name in pages[first,'default']['slots']}
+        generated['screens']=delivery.packed(pages)
+        generated['files']=delivery.source_files(args[0],args[1],args[2],pages,generated['registry'])
+        return generated
+    monkeypatch.setattr(delivery,'generate',broken)
+    s.repair=lambda request:copy.deepcopy(clean[request['base']['screenId'],request['state']])
+    result,queued=execute(s,'generate',maxRounds=2)
+    assert result['status']=='succeeded'
+    assert s.compiles==2 and s.browsers==2 and s.repair_requests
+    assert all(request['previousFindings'] for request in s.repair_requests)
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',queued['artifactId'])['result'])
+    rounds=value['validationHistory']
+    assert [r['verdict'] for r in rounds]==['fail','pass']
+    assert rounds[0]['compileStatus']=='failed' and rounds[0]['findings']
+    assert rounds[0]['source']['sha256']!=rounds[1]['source']['sha256']
+    assert value['verification']['rounds']==2 and not value['verification']['escalated']
+    job=s.ctx.get('job',queued['jobId'])
+    assert [r['result']['validationRound'] for r in job['stages'] if r['stage']=='verify']==[2]
+    assert [r['status'] for r in job['stages'] if r['stage']=='compile']==['failed','ok']
+
+
+def test_browser_feedback_repairs_the_compiled_source_under_the_original_contract(pipeline,monkeypatch):
+    from workspace import design_stages as delivery
+    from workspace.design_api import read_object
+    s=pipeline;ready(s)
+    original=delivery.generate
+    def wrong_rate(*args,**kwargs):
+        generated=original(*args,**kwargs)
+        changed=0
+        for name,source in generated['files'].items():
+            if '연 2.0%' in source:
+                generated['files'][name]=source.replace('연 2.0%','연 9.0%')
+                changed+=1
+        assert changed
+        return generated
+    monkeypatch.setattr(delivery,'generate',wrong_rate)
+    result,queued=execute(s,'generate',maxRounds=2)
+    assert result['status']=='succeeded' and s.compiles==2 and s.browsers==4
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',queued['artifactId'])['result'])
+    rounds=value['validationHistory']
+    assert [r['verdict'] for r in rounds]==['fail','pass']
+    assert rounds[0]['sourceHash']!=rounds[1]['sourceHash']
+    assert s.repair_requests and all(request['previousFindings'] for request in s.repair_requests)
+    assert all('연 9.0%' not in source for source in value['generated']['files'].values())
+    path=f"/designs/{s.design['id']}/artifacts/{queued['artifactId']}"
+    own=authorized_call(s.ctx.host,'GET',path,project=s.ctx.project_id)
+    planning=authorized_call(s.ctx.host,'GET',path,actor='bob',project=s.ctx.project_id)
+    assert own[0]==planning[0]==200
+    assert [row['round'] for row in own[1]['validationRounds']]==[1,2]
+    assert [row['round'] for row in planning[1]['validationRounds']]==[2]
+
+
+def test_validation_limit_preserves_failure_and_requires_human_repair(pipeline,monkeypatch):
+    from workspace.design_api import read_object
+    from workspace import design_stages as delivery
+    s=pipeline;ready(s)
+    evaluate=s.workflow.browser.evaluate
+    def missing(*args,**kwargs):
+        report=evaluate(*args,**kwargs)
+        report.update(passed=False,functionalStatus='fail',
+            blockingFindings=[{'severity':'critical','code':'required-action-missing','message':'Synthetic missing required action'}])
+        return report
+    monkeypatch.setattr(s.workflow.browser,'evaluate',missing)
+    result,queued=execute(s,'generate',maxRounds=2)
+    assert result['status']=='needs_changes' and s.compiles==2 and s.browsers==4
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',queued['artifactId'])['result'])
+    assert value['verification']['escalated'] and not value['verification']['approvable']
+    assert [r['verdict'] for r in value['validationHistory']]==['fail','fail']
+    assert s.ctx.get('design',s.design['id'])['variants'][0]['passed'] is False
+    assert len(s.repair_requests)==1
+    assert len(s.repair_requests[0]['targets'])==len(delivery.unpacked(value['generated']['screens']))
+
+
+def test_pass_without_approval_can_continue_then_publish_a_repaired_round(pipeline,monkeypatch):
+    from design_loop import verify_graph
+    from workspace.design_api import read_object
+    s=pipeline;ready(s)
+    original=verify_graph.verify
+    observed=[]
+    def needs_review(*args,**kwargs):
+        result=original(*args,**kwargs)
+        if not observed:
+            result.update(verdict='pass',approvable=False)
+            result['findings'].append({'severity':'major','role':'reviewer','code':'new-asset-candidate',
+                                      'message':'Synthetic candidate requires repair'})
+        observed.append(result)
+        return result
+    monkeypatch.setattr(verify_graph,'verify',needs_review)
+    result,queued=execute(s,'generate',maxRounds=2)
+    assert result['status']=='succeeded' and s.compiles==2 and s.browsers==4
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',queued['artifactId'])['result'])
+    assert [(r['verdict'],r['approvable']) for r in value['validationHistory']]==[('pass',False),('pass',True)]
+    assert not value['verification']['escalated']
+    assert s.ctx.get('design',s.design['id'])['variants'][0]['passed'] is True
+
+
+def test_round_history_rejects_cross_round_attempt_status_findings_and_count(pipeline,monkeypatch):
+    from workspace.design_execution import DesignPublication
+    from workspace.execution_ledger import LedgerError
+    from workspace.design_api import read_object
+    # Reuse the real two-round compiler-repair flow as positive signed evidence.
+    test_compiler_feedback_repairs_actual_source_and_retains_failed_round(pipeline,monkeypatch)
+    s=pipeline
+    design=s.ctx.get('design',s.design['id']);variant=design['variants'][0]
+    job=s.ctx.get('job',variant['jobId'])
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',variant['artifactId'])['result'])
+    validate=DesignPublication(s.ctx.host,s.config)._validation_history
+    validate(s.ctx,job,value)
+    for fault in ['other-round-build','other-attempt-source','compile-status','findings','repair-on-success','count','approvable']:
+        bad=copy.deepcopy(value)
+        if fault=='other-round-build':
+            bad['validationHistory'][0]['build']=bad['validationHistory'][1]['build']
+        elif fault=='other-attempt-source':
+            bad['validationHistory'][0]['source']['key']+='/foreign-attempt'
+        elif fault=='compile-status':
+            bad['validationHistory'][0]['compileStatus']='pass'
+        elif fault=='findings':
+            bad['validationHistory'][1]['findings'].append({'severity':'critical','code':'invented'})
+        elif fault=='repair-on-success':
+            bad['repairFailure']=bad['build']
+        elif fault=='count':
+            bad['validationHistory'].append(copy.deepcopy(bad['validationHistory'][-1]))
+        else:
+            bad['validationHistory'][1]['approvable']=False
+        with pytest.raises(LedgerError) as rejected:
+            validate(s.ctx,job,bad)
+        assert rejected.value.code=='receipt-invalid',fault
+
+
+def test_validation_plan_refuses_unfunded_rounds_before_dispatch(pipeline):
+    from workspace.execution_ledger import LedgerError
+    s=pipeline;ready(s)
+    with pytest.raises(LedgerError) as error:
+        execute(s,'generate',maxRounds=4)
+    assert error.value.code=='call-budget'
+    assert s.models==[] and s.compiles==0 and s.browsers==0
+    assert not any(job.get('operation')=='design.generate' for job in s.storage.list(s.ctx.owner,'job'))
+
+
+def test_invalid_model_repair_retains_failed_candidate_and_noncontent_refusal_evidence(pipeline,monkeypatch):
+    from workspace.design_api import read_object
+    s=pipeline;ready(s)
+    evaluate=s.workflow.browser.evaluate
+    def failed(*args,**kwargs):
+        report=evaluate(*args,**kwargs)
+        report.update(passed=False,functionalStatus='fail',
+            blockingFindings=[{'severity':'critical','code':'repair-needed','message':'Synthetic repair needed'}])
+        return report
+    monkeypatch.setattr(s.workflow.browser,'evaluate',failed)
+    s.repair=lambda target:{'unexpected':'untrusted repair text'}
+    result,queued=execute(s,'generate',maxRounds=2)
+    assert result['status']=='needs_changes' and s.compiles==1 and s.browsers==2
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',queued['artifactId'])['result'])
+    assert value['verification']['stopReason']=='repair-refused' and not value['verification']['approvable']
+    refusal=read_object(s.ctx,value['repairFailure'])
+    assert refusal['code']=='design-repair-page-changed' and len(refusal['responseHash'])==64
+    assert 'untrusted repair text' not in json.dumps(refusal)
+    assert len(value['validationHistory'])==1 and value['validationHistory'][0]['verdict']=='fail'
 
 
 def test_selected_screen_composition_reuses_reviews_and_rebuilds_without_model(pipeline,monkeypatch):

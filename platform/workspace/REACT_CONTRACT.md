@@ -349,7 +349,12 @@ limits return `400 design-page-limit`.
 The flow review UI projects the current screens and directed transitions into a
 read-only diagram. Selecting a transition highlights its endpoints and retains
 its full condition/retention text; missing or removed endpoints remain warnings.
-This display does not evaluate product conditions or add a flow approval.
+The condition-case view uses only the frozen boolean case assignments and the
+same closed conjunction grammar as `ontology_ux.evaluate`. It follows forward
+transitions from the recorded entry to a declared terminal, highlights the
+chosen path and shows missing/ambiguous/looping outcomes. Incomplete case coverage
+or missing entry/terminal information blocks that view. This read-only forecast
+does not add a flow approval or replace actual Browser interaction evidence.
 
 On-demand side-by-side comparison uses authorized exact-round screenshots for
 legacy batches and isolated React previews for persistent design variants.
@@ -438,3 +443,23 @@ unavailable or different artifact backend/profile metadata is
 version, role, idempotency, expiry and history limits still apply. Runtime
 revalidation failure leaves an interrupted execution with
 `design-execution-failed`; it cannot produce a reviewable combined round.
+
+### Validation repair loop (2026-10-12 candidate)
+
+`maxRounds` bounds complete generate/edit validation rounds (1–5). Each failure
+feeds the current private checker findings into a repair under the same approved
+flow, component catalog, financial bindings and source/file policy. The repaired
+project receives fresh compilation, Browser, large-text and coverage evidence.
+Missing evidence stops the loop. An uncertain paid call is not automatically
+retried. At the limit, a failed verified candidate stays needs-changes and
+requires human action; it has no effective UX approval.
+
+The private result retains every round's findings and hash-bound source/build/
+Browser references. Artifact preview exposes `validationRounds` with round,
+verdict, compiler status, source/bundle hashes and findings, under the same
+current source/role/expiry fence; object keys remain private. The UI displays
+failed and passing rounds alongside the selected artifact.
+Failed/blocked round details are returned only to owner, designer and developer;
+other members receive passing rounds only. A compiler refusal
+has no Browser/bundle evidence; its current diagnostic/source view follows the
+existing owner/designer/developer restriction.

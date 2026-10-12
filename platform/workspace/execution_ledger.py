@@ -1148,7 +1148,7 @@ class Ledger:
                     or entry.get("role") == "source" and "compile" not in OPERATIONS[job["operation"]]
                     or not self._verify_object(owner, entry, ("key", "sha256", "size", "role"))):
                 raise LedgerError("receipt-invalid")
-        self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages)
+        self._check_evidence_graph(job, receipt["stage"], inputs, outputs, stages, status=receipt.get("status", "ok"))
         # Freeze the full descriptor of every consumed prior now, while the manifest (or its handle) is
         # necessarily still readable (review 8, #1): later revalidation reads this, never the manifest again.
         # Uses the SAME keyed_priors mapping as the authorization check above (review 9/10, #1).
@@ -1247,10 +1247,13 @@ class Ledger:
             verified.append(receipt)
         return verified
 
-    def _check_evidence_graph(self, job, stage, inputs, outputs, stages):
+    def _check_evidence_graph(self, job, stage, inputs, outputs, stages, *, status="ok"):
         """Stage-specific input/output relationships (review 2): no stage verifies an unrelated object."""
-        if stage == "compile" and len([entry for entry in outputs if entry.get("role") == "bundle"]) != 1:
-            raise LedgerError("receipt-invalid")            # a compile receipt produces exactly one bundle
+        if stage == "compile":
+            bundles = len([entry for entry in outputs if entry.get("role") == "bundle"])
+            failed_design = status == "failed" and job["operation"] in {"design.generate", "design.edit"}
+            if bundles != (0 if failed_design else 1):
+                raise LedgerError("receipt-invalid")
         predecessor = STAGE_INPUTS.get(job["operation"], {}).get(stage)
         if predecessor is None:
             return

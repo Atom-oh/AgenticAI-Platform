@@ -140,8 +140,10 @@ def reconcile_handler(event, context):
         return {"status": "evidence-incomplete"}
     stages = [row for row in job.get("stages", []) if row.get("attemptId") == job["attempt"]["id"]]
     final_stage = "analyze" if job["operation"] == "source.analyze" else "verify"
-    outputs = [output for row in stages if row["stage"] == final_stage for output in row["outputs"]
-               if output["key"].endswith("/" + final_stage + "/result.json")]
+    final_rows = [row for row in stages if row["stage"] == final_stage]
+    outputs = [output for row in final_rows[-1:] for output in row["outputs"]
+               if output["key"].rsplit("/", 1)[-1] == "result.json"
+               or output["key"].rsplit("/", 1)[-1] in {f"round-{number}-result.json" for number in range(2, 6)}]
     if len(outputs) != 1:
         return {"status": "evidence-incomplete"}
     result = {"manifestRef": outputs[0]["key"], "manifestHash": outputs[0]["sha256"],

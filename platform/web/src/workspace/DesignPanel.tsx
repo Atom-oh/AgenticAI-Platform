@@ -16,7 +16,9 @@ type Design = { id: string; title: string; version: number; revision: number; st
 type Input = { id: string; sourceId: string; kind: string; pageCount: number };
 type Doc = { id: string; title: string; approvedRevisionId?: string };
 type Procedure = { id: string; title: string; type: string; reviewState: string };
-type Flow = { flow: { screens: string[]; transitions: { id: string; src: string; dst: string; when?: string | null }[] };
+type Flow = { flow: { screens: string[]; entry?: string; terminals?: string[];
+  transitions: { id: string; src: string; dst: string; when?: string | null; navigation?: string }[] };
+  cases?: Record<string, boolean>[];
   issues: { code?: string; message?: string }[]; contract: { rules: { id: string; title: string }[] } | null };
 type Detail = { design: Design; prd?: { prd: Record<string, unknown>; issues: { field: string; code: string }[] }; flow?: Flow; flowHash?: string;
   failure?: { stage: string; status: string; diagnostics: string[]; files: Record<string, string>; approved: false } | null };
@@ -51,6 +53,8 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   const [variantId, setVariantId] = useState('');
   const [preview, setPreview] = useState('');
   const [findings, setFindings] = useState<Variant['verification'] | null>(null);
+  const [validationRounds, setValidationRounds] = useState<{ round: number; verdict: string; compileStatus: string;
+    findings: { code: string; severity: string; message?: string }[] }[]>([]);
   const [instruction, setInstruction] = useState('');
   const [instructionBinding, setInstructionBinding] = useState<{ id: string; text: string; designId: string; artifactId: string } | null>(null);
   const instructionId = instructionBinding?.id || '';
@@ -117,7 +121,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   }, [client]);
   useEffect(() => {
     previewRequest.current?.abort(); operation.current?.abort(); setBusy(false);
-    setDetail(null); setPreview(''); setViewed(null); setVariantId(''); setFindings(null); setTargets([]); setTarget(''); setAcknowledge(false);
+    setDetail(null); setPreview(''); setViewed(null); setVariantId(''); setFindings(null); setValidationRounds([]); setTargets([]); setTarget(''); setAcknowledge(false);
     setInstruction(''); setInstructionBinding(null);
     setScreenChoices({});
     if (!selected) return;
@@ -174,15 +178,17 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
     const expected = subject.variants.find(item => item.artifactId === id);
     if (!expected) return;
     const controller = new AbortController(); previewRequest.current?.abort(); previewRequest.current = controller;
-    setError(''); setPreview(''); setViewed(null); setFindings(null); setVariantId(id); setTargets([]); setTarget('');
+    setError(''); setPreview(''); setViewed(null); setFindings(null); setValidationRounds([]); setVariantId(id); setTargets([]); setTarget('');
     setInstructionBinding(null); setInstruction('');
     try {
-      const value = await client.get<{ previewHtml: string; verification: Variant['verification']; targets: typeof targets; sourceHash: string; bundleHash: string }>(
+      const value = await client.get<{ previewHtml: string; verification: Variant['verification']; targets: typeof targets;
+        validationRounds?: typeof validationRounds; sourceHash: string; bundleHash: string }>(
         `/designs/${resource(subject.id)}/artifacts/${resource(id)}`, controller.signal);
       if (controller.signal.aborted || previewRequest.current !== controller || selection.current.designId !== subject.id) return;
       if (value.sourceHash !== expected.sourceHash || value.bundleHash !== expected.bundleHash ||
           (expected.passed && value.verification.verdict !== 'pass')) throw new Error('선택한 시안과 표시할 검증 근거가 다릅니다.');
       setPreview(value.previewHtml); setFindings(value.verification); setTargets(value.targets);
+      setValidationRounds(value.validationRounds || []);
       setViewed({ designId: subject.id, artifactId: id, sourceHash: value.sourceHash, bundleHash: value.bundleHash });
     } catch (reason) { if (!controller.signal.aborted) setError(messageOf(reason)); }
   };
@@ -254,7 +260,9 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
         </details>}
         {detail?.flow && <details open={!current.approvals.flow}><summary>흐름과 필수 확인 기준</summary>
           <FlowDiagram key={`${current.id}:${detail.flowHash}`} screens={detail.flow.flow.screens.map((id, index) => ({ id, title: `화면 ${index + 1} · ${id}` }))}
-            transitions={detail.flow.flow.transitions.map(item => ({ id: item.id, from: item.src, to: item.dst, condition: item.when }))} />
+            transitions={detail.flow.flow.transitions.map(item => ({ id: item.id, from: item.src, to: item.dst, condition: item.when, navigation: item.navigation }))}
+            entry={detail.flow.flow.entry} terminals={detail.flow.flow.terminals} conditionCases={detail.flow.cases}
+            caseCoverage={detail.flow.issues.some(item => ['case-capacity', 'case-enumeration-truncated'].includes(item.code || '')) ? 'incomplete' : 'complete'} />
           {detail.flow.contract?.rules.map(rule => <p key={rule.id}>✓ {rule.title}</p>)}
           {detail.flow.issues.map((issue, index) => <p key={index}>{issue.code || issue.message}</p>)}
           <button disabled={!designRole || active || ['approved', 'released'].includes(current.status) || !!detail.flow.issues.length} onClick={() => void act(`/designs/${resource(current.id)}/approve-flow`, { version: current.version, hash: detail.flowHash })}>이 흐름과 확인 기준 승인</button>
@@ -305,6 +313,13 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
       </div>}
       {findings && <div><strong>{findings.verdict === 'pass' ? '검증 통과' : '확인이 필요합니다'}</strong>
         {(findings.findings || []).map((item, index) => <p key={index}>{item.severity} · {item.message || item.code}</p>)}</div>}
+      {!!validationRounds.length && <details aria-label="검증·수정 라운드"><summary>검증·수정 라운드 {validationRounds.length}회</summary>
+        {validationRounds.map(item => <section key={item.round}>
+          <h4>{item.round}회차 · {item.verdict === 'pass' ? '검증 통과' : item.verdict === 'blocked' ? '검증 근거 부족' : '수정 필요'}</h4>
+          {item.compileStatus === 'failed' && <p>컴파일 검사에서 중단됐습니다.</p>}
+          {item.findings.map((finding, index) => <p key={index}>{finding.severity} · {finding.message || finding.code}</p>)}
+        </section>)}
+      </details>}
     </main></div>
     {!!current?.variants.length && <DesignComparison designId={current.id} variants={current.variants} selected={variantId} onSelect={id => void show(id)} />}
   </section>;

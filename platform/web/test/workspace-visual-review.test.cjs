@@ -6,6 +6,58 @@ const fs = require('node:fs');
 const { build } = require('esbuild');
 const { chromium } = require('playwright');
 
+test('condition cases highlight the exact branch and disclose incomplete routes without mutations', { timeout: 60000 }, async () => {
+  const root = path.resolve(__dirname, '..');
+  const compiled = await build({ stdin: { resolveDir: root, loader: 'tsx', contents: `
+    import React from 'react';import {createRoot} from 'react-dom/client';
+    import FlowDiagram from './src/workspace/FlowDiagram';
+    const screens=[{id:'start',title:'가입 조건 확인'},{id:'yes',title:'약관 동의'},{id:'no',title:'미자격 안내'}];
+    const normal=[{id:'eligible',from:'start',to:'yes',condition:'cond:eligible'},
+      {id:'declined',from:'start',to:'no',condition:'!cond:eligible'},
+      {id:'back',from:'yes',to:'start',navigation:'back'}];
+    function App(){const [mode,setMode]=React.useState('normal');
+      const links=mode==='ambiguous'?[...normal,{id:'extra',from:'start',to:'no'}]:normal;
+      const cases=mode==='incomplete'?[{eligible:true},{eligible:true}]:[{eligible:true},{eligible:false}];
+      return <main><button onClick={()=>setMode('ambiguous')}>분기 오류 확인</button>
+        <button onClick={()=>setMode('incomplete')}>조건 범위 오류 확인</button>
+        <FlowDiagram key={mode} screens={screens} transitions={links} entry="start"
+          terminals={['yes','no']} conditionCases={cases}/></main>;
+    }createRoot(document.getElementById('root')).render(<App/>);` },
+    bundle:true,write:false,format:'iife',jsx:'automatic',define:{'process.env.NODE_ENV':'"development"'},
+  });
+  const css=fs.readFileSync(path.join(root,'src/workspace/workspace.css'),'utf8');
+  const browser=await chromium.launch({executablePath:process.env.WORKSPACE_CHROMIUM,headless:true,
+    args:['--no-sandbox','--disable-background-networking']});
+  try{
+    const context=await browser.newContext({viewport:{width:1440,height:1000},offline:true});
+    const unexpected=[],errors=[];
+    await context.route('**/*',route=>{
+      const u=new URL(route.request().url());
+      if(u.origin==='https://cases.invalid'&&u.pathname==='/')return route.fulfill({contentType:'text/html',
+        body:`<html lang="ko"><head><meta charset="utf-8"><style>body{margin:0;padding:16px}*{box-sizing:border-box}${css}</style></head><body><div id="root"></div><script src="/app.js"></script></body></html>`});
+      if(u.origin==='https://cases.invalid'&&u.pathname==='/app.js')return route.fulfill({contentType:'application/javascript',body:compiled.outputFiles[0].text});
+      unexpected.push(u.pathname);return route.abort();
+    });
+    const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+    await page.goto('https://cases.invalid/');
+    const cases=page.getByLabel('조건 조합');
+    await cases.selectOption('0');await page.getByRole('status').getByText('선택한 경로: 가입 조건 확인 → 약관 동의',{exact:true}).waitFor();
+    assert.equal(await page.locator('g[data-case-active="true"]').count(),3);
+    assert.equal(await page.locator('g[data-case-active="false"]').count(),3);
+    const artifact=path.resolve(root,'../../.local/platform-completion-20261012');fs.mkdirSync(artifact,{recursive:true});
+    await page.screenshot({path:path.join(artifact,'flow-cases-desktop.png'),fullPage:true});
+    await page.setViewportSize({width:375,height:900});await cases.selectOption('1');
+    await page.getByRole('status').getByText('선택한 경로: 가입 조건 확인 → 미자격 안내',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>document.body.scrollWidth<=innerWidth),true);
+    await page.screenshot({path:path.join(artifact,'flow-cases-mobile.png'),fullPage:true});
+    await page.getByRole('button',{name:'분기 오류 확인'}).click();assert.equal(await cases.inputValue(),'');
+    await cases.selectOption('0');await page.getByRole('alert').getByText('조건 또는 분기 선택이 불명확합니다.',{exact:false}).waitFor();
+    await page.getByRole('button',{name:'조건 범위 오류 확인'}).click();
+    await page.getByRole('alert').getByText('검증 범위가 불완전',{exact:false}).waitFor();
+    assert.equal(await cases.count(),0);assert.deepEqual(unexpected,[]);assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
+});
+
 test('flow branches, scoped side-by-side previews and role menus remain usable and independent of approval', { timeout: 90000 }, async () => {
   const root = path.resolve(__dirname, '..');
   const compiled = await build({ stdin: { resolveDir: root, loader: 'tsx', contents: `

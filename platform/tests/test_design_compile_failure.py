@@ -41,7 +41,8 @@ def test_compile_failure_retains_diagnostics_and_candidate_with_current_role_fen
     assert authorized_call(s.ctx.host, 'POST', path+'/approve', {'version': record['version'],
         'artifactId': queued['artifactId'], 'sourceHash': 'a'*64, 'bundleHash': 'b'*64}, project=s.ctx.project_id)[0] == 404
     # The final response check still fences the bytes: changing a stored output hash cannot return diagnostics.
-    transfer = next(row for row in job['transfers'] if row['key'].endswith('/compile/build.json'))
+    last_failed=next(row for row in reversed(job['stages']) if row['stage']=='compile' and row['status']=='failed')
+    transfer = next(row for row in job['transfers'] if row['key']==last_failed['result']['build']['key'])
     original = s.storage.get_blob
     clock = s.storage.clock
     now = clock()

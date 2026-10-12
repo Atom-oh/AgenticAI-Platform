@@ -87,7 +87,9 @@ test('procedure canvas retains request identity, exact approvals, sandboxed sele
    if(p==='/designs/design-1/confirm-prd'){assert.equal(body.hash,'d524bd8abdb2f9512e6772787ca4e71488dd5eb1aa443f51131609606723d17d');design={...design,version:3,status:'flow-review',approvals:{prd:{}}};return send({design});}
    if(p==='/designs/design-1/approve-flow'){assert.equal(body.hash,'d'.repeat(64));design={...design,version:4,status:'ready',approvals:{prd:{},flow:{}}};return send({design});}
    if(p==='/designs/design-1/generate'){design={...design,version:5,status:'review',variants:[variant]};return send({design});}
-   if(p==='/designs/design-1/artifacts/artifact-1')return send({previewHtml:'<html><body><button data-testid="cta">신청</button></body></html>',verification:variant.verification,targets:[{screenId:'s1',state:'default',targetId:'node-1',testId:'cta',label:'신청 버튼'}],sourceHash:variant.sourceHash,bundleHash:variant.bundleHash});
+   if(p==='/designs/design-1/artifacts/artifact-1')return send({previewHtml:'<html><body><button data-testid="cta">신청</button></body></html>',verification:variant.verification,targets:[{screenId:'s1',state:'default',targetId:'node-1',testId:'cta',label:'신청 버튼'}],sourceHash:variant.sourceHash,bundleHash:variant.bundleHash,
+    validationRounds:[{round:1,verdict:'fail',compileStatus:'pass',findings:[{severity:'critical',code:'notice-missing',message:'필수 고지가 누락됐습니다.'}]},
+      {round:2,verdict:'pass',compileStatus:'pass',findings:[]}]});
    if(p==='/designs/design-1/approve'){assert.equal(body.sourceHash,variant.sourceHash);assert.equal(body.bundleHash,variant.bundleHash);design={...design,version:6,status:'approved',approvals:{...design.approvals,ux:{artifactId:'artifact-1'}}};return send({design});}
    if(p==='/designs/design-1/release'){design={...design,version:7,status:'released',releases:[{id:'release-1',sourceHash:variant.sourceHash,bundleHash:variant.bundleHash}]};return send({design});}
    if(p==='/designs/design-1/releases/release-1'){
@@ -105,6 +107,10 @@ test('procedure canvas retains request identity, exact approvals, sandboxed sele
   await page.getByRole('button',{name:'이 PRD 확정'}).click();await page.getByRole('button',{name:'이 흐름과 확인 기준 승인'}).click();
   await page.getByRole('button',{name:'시안 만들기',exact:true}).click();await page.getByRole('button',{name:'시안 1 · 검증 통과'}).click();
   const outer=page.frameLocator('iframe[title="선택한 시안 미리보기"]');const frame=outer.frameLocator('iframe[data-workspace-preview-content]');await frame.getByRole('button',{name:'신청'}).waitFor();
+  await page.getByText('검증·수정 라운드 2회',{exact:true}).click();
+  await page.getByRole('heading',{name:'1회차 · 수정 필요',exact:true}).waitFor();
+  await page.getByText('critical · 필수 고지가 누락됐습니다.',{exact:true}).waitFor();
+  await page.getByRole('heading',{name:'2회차 · 검증 통과',exact:true}).waitFor();
   assert.equal(await page.locator('iframe').getAttribute('sandbox'),'allow-scripts');
   await page.getByRole('button',{name:'화면에서 수정 요소 선택'}).click();
   assert.equal(await outer.locator('iframe').getAttribute('sandbox'),'allow-scripts');
