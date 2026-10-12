@@ -200,6 +200,9 @@ def public(design):
 
 def _route(ctx, method, parts, body, query):
     host, scope, claims = ctx.host, ctx.scope, ctx.claims
+    if len(parts) == 2 and parts[1] == "comments" and method in {"GET", "POST"}:
+        from workspace.design_discussions import handle
+        return handle(ctx, parts[0], method, body, query)
     if parts == ["config"] and method == "GET":
         import os
         from ontology_runtime.execution_entrypoints import configuration
@@ -268,6 +271,7 @@ def _route(ctx, method, parts, body, query):
     if len(parts) == 1 and method == "GET":
         value = ctx.get("design", parts[0]);current_inputs(ctx, value)
         return 200, {"design": public(value), "prd": read_object(ctx, value["prd"]) if value["prd"] else None,
+                     "prdHash": value["prd"]["sha256"] if value["prd"] else None,
                      "flow": read_object(ctx, value["flow"]) if value["flow"] else None,
                      "flowHash": value["flow"]["sha256"] if value["flow"] else None,
                      "failure": compile_failure(ctx, value)}
@@ -457,7 +461,7 @@ def observe(ctx, checks, expiry):
     ctx._design_expiry = min(getattr(ctx, "_design_expiry", expiry), expiry)
 
 
-def page_for(ctx, kind, query):
+def page_for(ctx, kind, query, *, selection=None):
     import secrets
     try:
         limit = int(query.get("limit", 5))
@@ -465,7 +469,8 @@ def page_for(ctx, kind, query):
         fail(400, "design-page-limit", "한 번에 1~10개 항목을 조회하세요.")
     if not 1 <= limit <= 10:
         fail(400, "design-page-limit", "한 번에 1~10개 항목을 조회하세요.")
-    fingerprint = schema.digest([ctx.actor, ctx.scope["role"], ctx.scope["project"]["authorityRevision"], kind, limit])
+    scope = [ctx.actor, ctx.scope["role"], ctx.scope["project"]["authorityRevision"], kind, limit]
+    fingerprint = schema.digest(scope if selection is None else [*scope, selection])
     token = query.get("cursor")
     cursor = None
     if token:
@@ -529,6 +534,13 @@ def _response(host, scope, claims, method, parts, body, query):
         result["designs"] = visible
     if len(parts) == 3 and parts[1] == "artifacts":
         record = ctx.get("design", parts[0]);current_inputs(ctx, record);variant_authority(ctx, record, parts[2])
+    if len(parts) == 2 and parts[1] == "comments":
+        from workspace.design_discussions import authorize
+        record = ctx.get("design", parts[0])
+        anchor = result["comment"]["anchor"] if method == "POST" else json.loads(query["anchor"])
+        authorize(ctx, record, {key: value for key, value in anchor.items() if key != "designId"})
+        for item in [result["comment"]] if method == "POST" else result["comments"]:
+            observe(ctx, [ctx.check("comment", ctx.get("comment", item["id"]))], ctx._design_expiry)
     if len(parts) >= 3 and parts[1] == "releases":
         release_authority(ctx, parts[0], parts[2])
     ctx.fresh()

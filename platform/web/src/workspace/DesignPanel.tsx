@@ -6,6 +6,7 @@ import { readPreviewSelection } from './previewSelection';
 import DesignHandoff from './DesignHandoff';
 import FlowDiagram from './FlowDiagram';
 import DesignComparison from './DesignComparison';
+import DesignDiscussion from './DesignDiscussion';
 import type { WorkspaceConfig } from './types';
 
 type Variant = { artifactId: string; jobId: string; variant: number; passed: boolean; sourceHash: string; bundleHash: string;
@@ -20,7 +21,7 @@ type Flow = { flow: { screens: string[]; entry?: string; terminals?: string[];
   transitions: { id: string; src: string; dst: string; when?: string | null; navigation?: string }[] };
   cases?: Record<string, boolean>[];
   issues: { code?: string; message?: string }[]; contract: { rules: { id: string; title: string }[] } | null };
-type Detail = { design: Design; prd?: { prd: Record<string, unknown>; issues: { field: string; code: string }[] }; flow?: Flow; flowHash?: string;
+type Detail = { design: Design; prd?: { prd: Record<string, unknown>; issues: { field: string; code: string }[] }; prdHash?: string; flow?: Flow; flowHash?: string;
   failure?: { stage: string; status: string; diagnostics: string[]; files: Record<string, string>; approved: false } | null };
 const PHASE: Record<string, string> = { draft: '자료 선택 완료', executing: '생성·검증 중', 'prd-review': 'PRD 확인 필요',
   'flow-review': '흐름 확인 필요', ready: '시안 생성 가능', review: '시안 검토', approved: '시안 승인됨', released: '개발 전달 준비됨',
@@ -70,6 +71,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [discussionDirty, setDiscussionDirty] = useState(false);
   const [acknowledge, setAcknowledge] = useState(false);
   const [screenChoices, setScreenChoices] = useState<Record<string, string>>({});
   const request = useRef<{ key: string; body: Record<string, unknown> } | null>(null);
@@ -139,8 +141,8 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   }, [detail?.design.id, detail?.design.activeJobId, load]);
   useEffect(() => {
     const dirty = !!instruction.trim() || (!!detail?.prd && prd !== JSON.stringify(detail.prd.prd, null, 2));
-    onDirty(dirty || busy);
-  }, [instruction, prd, detail?.prd, busy, onDirty]);
+    onDirty(dirty || busy || discussionDirty);
+  }, [instruction, prd, detail?.prd, busy, discussionDirty, onDirty]);
   useEffect(() => () => { operation.current?.abort(); previewRequest.current?.abort(); onDirty(false); }, [onDirty]);
   const act = async (path: string, body: Record<string, unknown>, idempotent = false) => {
     if (busy) return;
@@ -305,6 +307,11 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
             onClick={() => void act(`/designs/${resource(current.id)}/release`, { version: current.version, baseArtifactId: selectedVariant.artifactId }, true)}>승인 소스 재빌드·전달 준비</button>}
         </>}
         <DesignHandoff designId={current.id} releaseIds={(current.releases || []).map(item => item.id)} />
+        <DesignDiscussion key={`${current.id}:${detail?.prdHash || ''}:${detail?.flowHash || ''}:${viewMatches ? selectedVariant?.artifactId || '' : ''}`}
+          designId={current.id} prdHash={detail?.prdHash} flowHash={detail?.flowHash} flow={detail?.flow}
+          variant={viewMatches && selectedVariant ? { artifactId: selectedVariant.artifactId,
+            sourceHash: selectedVariant.sourceHash, bundleHash: selectedVariant.bundleHash } : undefined}
+          screenIds={[...new Set(targets.map(item => item.screenId))]} onDirty={setDiscussionDirty} />
       </>}
     </aside><main className="ws-design-preview">
       {preview && <button aria-pressed={selectMode} onClick={() => setSelectMode(value => !value)}>{selectMode ? '선택 모드 종료 · 화면 동작 확인' : '화면에서 수정 요소 선택'}</button>}

@@ -141,6 +141,8 @@ Project/member/product/comment routes:
 - GET `/products/:id/impact` -> `{currentGuidelineId,affectedRuns}`.
 - GET/POST `/comments` -> `{comments}` / `{comment}`; anchors `{productId?,guidelineId?,runId?,round?,pageId?}`.
   POST includes `{requestId,text,anchor}`; text <=4000, immutable authorship, retry idempotent.
+  Persistent design discussions use the dedicated route below; legacy comment
+  listings do not return those records.
 
 Guideline field arrays are `{id,text}` for conditions, `{id,title,description}` for steps,
 and `{id,title,content,required:boolean}` for notices. IDs are safe identifiers and stable across edits.
@@ -463,3 +465,41 @@ Failed/blocked round details are returned only to owner, designer and developer;
 other members receive passing rounds only. A compiler refusal
 has no Browser/bundle evidence; its current diagnostic/source view follows the
 existing owner/designer/developer restriction.
+
+### Discussion on design evidence (2026-10-12 candidate)
+
+All current project members can discuss the exact evidence they may read.
+`GET/POST /designs/:id/comments` returns `{comments, cursor?}` / `{comment}`.
+POST accepts `{requestId, text, anchor}` with text up to 4000 characters and
+immutable authorship from the authenticated actor. An identical retry returns
+the same comment; changing the text, design or anchor under that request ID
+is `request-changed`.
+
+Anchors have one of these closed shapes:
+
+- PRD: `{kind: "prd", id: "prd", sha256}` uses the stored PRD object's hash.
+- Flow node: `{kind: "flow-node", id, sha256}` uses a screen in the exact stored
+  flow and that flow object's hash.
+- Rule: `{kind: "rule", id, sha256}` uses a rule in that flow's validation
+  contract and the same flow object's hash.
+- Actual screen: `{kind: "screen", id, artifactId, sourceHash, bundleHash}`
+  uses a generated screen in the selected immutable artifact and its exact
+  source/bundle hashes.
+
+The design detail supplies `prdHash` and `flowHash` for these selections.
+GET accepts the JSON-encoded `anchor` query field, optional `limit` (1–10,
+default 5), and opaque `cursor`. Cursors bind actor, role, project authority,
+design and exact anchor, expire within five minutes, and cannot switch targets.
+Pages may be empty when other comments occupy the storage page; follow the
+cursor until it is absent. Current membership, source admission, canonical
+context, selected variant visibility and expiry are rechecked for admission,
+idempotent replay and the final response. Unknown targets/hashes do not accept
+comments; inaccessible reads return not-found.
+
+Discussion writes are separately fenced comment records. They do not mutate
+design/run/job versions, approve a candidate or change the project authority
+epoch. The design panel offers the four anchor choices alongside the current
+PRD, flow and verified preview. It preserves request identity on retry, shows
+persisted comments on reopening, and aborts stale reads when the target changes.
+Local API/compiler/Browser/UI checks remain separate from deployment-bound
+HAND-01 and AUTH-01/08 acceptance.

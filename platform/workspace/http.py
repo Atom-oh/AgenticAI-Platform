@@ -573,6 +573,10 @@ class ResponseGate:
             if not isinstance(item, dict):
                 raise self._unavailable()
             anchor = item.get("anchor") if isinstance(item.get("anchor"), dict) else {}
+            if "designId" in anchor:
+                # Dedicated design discussion reads recheck admitted source and exact
+                # PRD/flow/variant authority; the legacy comment route cannot do that.
+                return None
             if "runId" in anchor and not self._run_visible(anchor["runId"], anchor.get("round"), anchor.get("pageId")):
                 return None
             return item
