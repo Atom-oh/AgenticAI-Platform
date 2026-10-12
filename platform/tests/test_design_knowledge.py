@@ -74,7 +74,7 @@ def _mini(entry=True, extra=()):
     keep = {"intro", "amount", "done", "savings-signup", "single-task", "title", "product-summary", "cta-next",
             "amount-field", "amount-input", "body-text", "rate-summary", "next-button", "color-brand", "space-m",
             "step-bar", "eligibility-check", "terms-consent", "auto-transfer", "branch-select", "notice-alert",
-            "consent-row", "consent-check"}
+            "consent-row", "consent-check", "ineligible-reason-copy"}
     nodes = [n for n in g["nodes"] if n["id"] in keep]
     if not entry:
         nodes = [schema.seal({**n, "properties": {}}) if n["id"] == "savings-signup" else n for n in nodes]

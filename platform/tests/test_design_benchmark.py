@@ -29,7 +29,14 @@ def generate(k):
     screens = {s: fill(k, flow, s, VALUES) for s in flow["screens"]}
     rule = k.rules.get("r-ineligible-reason")
     if rule and rule["required"] and rule.get("reviewState", "approved") == "approved":
-        screens["ineligible"]["slots"]["body"].append({"id": "why", "asset": "body-text", "props": {"children": REASON}})
+        # Reviewed seed copy now arrives through its declared asset. This fake
+        # generator still deliberately loses that copy when its rule is removed,
+        # so the independent-oracle mutation remains meaningful.
+        if not any(node["asset"] == "ineligible-reason-copy" for node in screens["ineligible"]["slots"]["body"]):
+            screens["ineligible"]["slots"]["body"].append({"id": "why", "asset": "body-text", "props": {"children": REASON}})
+    else:
+        screens["ineligible"]["slots"]["body"] = [
+            node for node in screens["ineligible"]["slots"]["body"] if node["asset"] != "ineligible-reason-copy"]
     return flow, screens
 
 

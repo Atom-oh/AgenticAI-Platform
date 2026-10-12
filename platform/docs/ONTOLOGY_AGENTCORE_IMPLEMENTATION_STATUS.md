@@ -156,7 +156,8 @@ and deployment-bound GEN/HAND/AUTH evidence remain required.
 reason and alternative action, the template's permitted body placement and the
 Screen's composition edge (O-02/V-02). It remains candidate data until human
 review; existing literal-provenance and PRD-binding rules are unchanged.
-`test_design_ineligible_copy.py` verifies candidate blocking, actual publication/
-human review, deterministic copy placement and rendered page-root guidance.
+`test_design_ineligible_copy.py` verifies candidate blocking, in-process
+publication and owner review on test storage, deterministic copy placement and
+rendered page-root guidance.
 GUI/provenance regressions remain distinct from actual model/service/customer
 acceptance.
