@@ -67,6 +67,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [acknowledge, setAcknowledge] = useState(false);
+  const [screenChoices, setScreenChoices] = useState<Record<string, string>>({});
   const request = useRef<{ key: string; body: Record<string, unknown> } | null>(null);
   const operation = useRef<AbortController | null>(null);
   const plan = role === 'owner' || role === 'planner';
@@ -118,6 +119,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
     previewRequest.current?.abort(); operation.current?.abort(); setBusy(false);
     setDetail(null); setPreview(''); setViewed(null); setVariantId(''); setFindings(null); setTargets([]); setTarget(''); setAcknowledge(false);
     setInstruction(''); setInstructionBinding(null);
+    setScreenChoices({});
     if (!selected) return;
     const abort = new AbortController();
     void load(selected, abort.signal).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
@@ -140,7 +142,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
     const abort = new AbortController(); operation.current?.abort(); operation.current = abort;
-    if (detail?.design.unknownOutcome && /\/(extract|generate|edit|release)$/.test(path)) {
+    if (detail?.design.unknownOutcome && /\/(extract|generate|edit|compose|release)$/.test(path)) {
       if (!acknowledge) { setError('이전 실행의 추가 비용 가능성을 먼저 확인하세요.'); setBusy(false); return; }
       body = { ...body, acknowledgeUnknownOutcome: true };
     }
@@ -262,6 +264,23 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
           {current.variants.length ? '다른 시안 만들기' : '시안 만들기'}</button>}
         <div className="ws-design-variants">{current.variants.map((item, index) => <button key={item.artifactId} aria-pressed={variantId === item.artifactId}
           onClick={() => void show(item.artifactId)}>시안 {index + 1} · {item.passed ? '검증 통과' : '수정 필요'}</button>)}</div>
+        {!!current.variants.some(item => item.passed) && detail?.flow && <details>
+          <summary>화면별 시안 조합</summary>
+          <p>각 화면에서 고른 시안과 필수 상태를 한 묶음으로 구성하고, 흐름과 가이드를 다시 검증합니다.</p>
+          {detail.flow.flow.screens.map((screenId, index) => <label className="ws-field" key={screenId}>
+            {`화면 ${index + 1}의 시안`}<select disabled={active || !designRole}
+              value={screenChoices[screenId] || ''}
+              onChange={event => setScreenChoices(values => ({ ...values, [screenId]: event.target.value }))}>
+              <option value="">시안 선택</option>{current.variants.filter(item => item.passed).map(item =>
+                <option key={item.artifactId} value={item.artifactId}>시안 {current.variants.indexOf(item) + 1}</option>)}
+            </select>
+          </label>)}
+          <button disabled={active || !designRole || !enabled || !['review', 'interrupted'].includes(current.status) ||
+            detail.flow.flow.screens.some(screenId => !current.variants.some(item => item.passed && item.artifactId === screenChoices[screenId]))}
+            onClick={() => void act(`/designs/${resource(current.id)}/compose`, { version: current.version,
+              selections: detail.flow!.flow.screens.map(screenId => ({ screenId, artifactId: screenChoices[screenId] })),
+              variant: 0 }, true)}>선택한 화면 조합·재검증</button>
+        </details>}
         {selectedVariant && <>
           <button disabled={!designRole || active || !selectedVariant.passed || !viewMatches} onClick={() => void act(`/designs/${resource(current.id)}/approve`, {
             version: current.version, artifactId: selectedVariant.artifactId, sourceHash: selectedVariant.sourceHash, bundleHash: selectedVariant.bundleHash })}>이 시안 승인</button>

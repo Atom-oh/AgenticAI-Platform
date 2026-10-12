@@ -1,6 +1,6 @@
 # Ontology/AgentCore implementation register
 
-Date: 2026-10-11. Scope: source/design execution follow-up to source integration of ontology branch `c234292` and main
+Date: 2026-10-12. Scope: source/design execution follow-up to source integration of ontology branch `c234292` and main
 `f5157c7`. This register is subordinate to SPEC, the [architecture](ARCHITECTURE.md)
 and the owning contracts. It records implementation and gaps, not deployment.
 Final review/CI evidence belongs to the exact integration PR HEAD.
@@ -14,7 +14,7 @@ Final review/CI evidence belongs to the exact integration PR HEAD.
 | Private intake | `intake/{records,admin_handler,inspect,derivative,admission,review,collection,prompts,images,imaging,transcription,worker,audit}.py`; `test_intake_*`; `documents/library.py` | Configure and verify private policy/deny-list/reviewer administration, source bindings and any required redaction service; no customer-data admission from project ownership alone |
 | Sharing and derivative reads | `workspace/publications.py`, `ontology_sources.py`, `http.py`, `batches.py`, `releases.py`, `git_service.py`; `test_publications.py`, `test_sources_adapters.py`, project React-flow tests | Deployed cross-project grant/withdrawal checks, source-bound UI acceptance and prospective cleanup/recall evidence |
 | Dedicated service adapters | `ontology_runtime/{authority,authorization,capability,dispatch,tools,workflow,interpreter,browser,identity,memory}.py`; `test_agentcore_*`; `infra/lib/ontology-stack.ts` | Dedicated Runtime/IaC now select B0 through `execution_{entrypoints,protocol,tools,workflow}.py`; `ac_*` adapters remain isolated compatibility code. Service gates and production activation remain unverified |
-| Offline design engine | `design_loop/{knowledge,derive,guide_rules,prd_extract,flow,composition,gui,edit,contract,coverage,verify_graph,react_project,handoff,benchmark}.py`; `test_design_*`, synthetic seed and golden fixtures | Persisted API/Runtime/UI candidate is present in design_api/design_execution/design_workflow. Live vertical acceptance, deterministic compose dispatch and service gates remain; legacy process generation is a distinct caller |
+| Offline design engine | `design_loop/{knowledge,derive,guide_rules,prd_extract,flow,composition,gui,edit,contract,coverage,verify_graph,react_project,handoff,benchmark}.py`; `test_design_*`, synthetic seed and golden fixtures | Persisted API/Runtime/UI candidate and selected-screen deterministic compose dispatch are present in design_api/design_execution/design_workflow/design_stages. Live vertical acceptance and service gates remain; legacy process generation is a distinct caller |
 | Public-output controls | `scripts/check_public_identifiers.py`, `api/common/public_scan.py`, legacy public-writer hooks and CI; `test_public_identifiers.py`, `test_public_scan.py` | Configured deny-list coverage and reviewed media registry remain necessary. CI's inherited allow-missing mode warns when its secret is absent; that result is not evidence that customer identifiers were scanned. A configured runtime SSM deny-list must be readable and nonempty; failures block publication. Only an unset parameter name keeps runtime warning mode. Private intake retains its own blocking checks |
 | Main/IaC compatibility | Existing bank security/privacy checks and dedicated intake/ontology constructs | Bind the reviewed main resource inventory to the actual integration base and inspect every changed resource; retain bank Gateway and MyData isolation |
 
@@ -94,3 +94,10 @@ GEN-05/HAND-01–03, not G0-BROWSER or live model/service acceptance.
 AWS payload/destination approval, explicit synthetic Memory deletion authorization
 and the registered Git target/credential are pending. The acceptance template
 retains its fixed cases and unrun live modes.
+
+The 2026-10-12 candidate connects selected-screen composition through the
+authenticated API, B0 admission, Runtime, independent completion and UI. All
+selected required states and current source/review obligations are retained;
+the combined bundle receives fresh compiler/Browser/large-text/coverage checks
+without a model call. Review, exact-HEAD CI and live acceptance of this follow-up
+remain separate evidence requirements.

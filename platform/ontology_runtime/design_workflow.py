@@ -27,7 +27,8 @@ class DesignWorkflow:
             if (manifest["operation"] != execution.job["operation"] or manifest["tool"] != self.interpreter.config
                     or manifest["admissions"] != execution.job["admissions"] or manifest["model"] != execution.job["model"]):
                 raise ValueError("design-manifest-mismatch")
-            model = self.model_factory(execution, manifest)
+            model = self.model_factory(execution, manifest) if manifest["operation"] in {
+                "design.extract", "design.generate", "design.edit"} else None
             execution.memory_scope = {"actor": execution.job["actor"], "projectId": execution.job["projectId"],
                 "executionId": execution.job["executionId"], "attemptId": execution.job["attemptId"],
                 "resourcesHash": execution.job["memoryContextHash"], "iat": execution.clock() // 1000}
@@ -39,6 +40,8 @@ class DesignWorkflow:
                     raise ValueError("memory-authority-changed")
             context = execution.upload("context", "context.json", {"input": source["sha256"], "continuity": continuity,
                 "designId": manifest["designId"], "designRevision": manifest["designRevision"]})
+            if manifest["operation"] == "design.compose":
+                return self._compose(execution, manifest, source, context)
             execution.stage("context", [source], [context], {})
             if manifest["operation"] == "design.extract":
                 return self._extract(execution, manifest, source, context, model)
@@ -124,7 +127,25 @@ class DesignWorkflow:
             edit={"screenId": key[0], "state": key[1], "targetId": target["targetId"], "stability": stable})
         return generated
 
-    def _compile_and_verify(self, execution, manifest, source_files, candidate, generated, bundle, deps, judgments):
+    def _compose(self, execution, manifest, source, context):
+        deps = {"model": manifest["model"], "profileHash": execution.job["profileHash"]}
+        def current(stored):
+            if not stored.get("admissions") or any(bound not in execution.job["admissions"] for bound in stored["admissions"]):
+                return False
+            execution.call("heartbeat", {})
+            return True
+        generated, judgments, evidence = delivery.compose(manifest["snapshot"], manifest["prepared"], manifest["prd"],
+                                                          manifest["selections"], deps, current)
+        # Context outputs are artifact inputs to compilation; source/bundle delivery
+        # is established by the compiler's immutable archives, not a context role.
+        source_files = execution.upload("context", "sources.json", {"files": generated["files"]})
+        candidate = execution.upload("context", "candidate.json", generated)
+        execution.stage("context", [source], [context, source_files, candidate], {})
+        return self._compile_and_verify(execution, manifest, source_files, candidate, generated,
+                                       self._bundle(manifest, generated), deps, judgments, evidence)
+
+    def _compile_and_verify(self, execution, manifest, source_files, candidate, generated, bundle, deps, judgments,
+                            compose_evidence=None):
         from design_loop.react_project import compile_request
         contract = manifest["prepared"]["contract"]
         call_id = execution.intent("compile", "interpreter", 300000)
@@ -180,16 +201,18 @@ class DesignWorkflow:
              "exitCode": 0, "profile": execution.job["toolProfiles"]["browser"]})
         bundle.update(build=build, browser_report=report, large_text_report=large)
         # Judgment cache verification repeats the exact source admission through the Gateway before this stage.
-        judgments = {key: verify_graph.stored_judgment(key, value["verdicts"], execution.job["admissions"])
-                     for key, value in judgments.items()}
+        if manifest["operation"] != "design.compose":
+            judgments = {key: verify_graph.stored_judgment(key, value["verdicts"], execution.job["admissions"])
+                         for key, value in judgments.items()}
         def current(stored):
-            if stored["admissions"] != execution.job["admissions"]:
+            if not stored.get("admissions") or any(bound not in execution.job["admissions"] for bound in stored["admissions"]):
                 return False
             execution.call("heartbeat", {})  # live source/admission/attempt fence before reuse
             return True
         def missing_judgment(*args):
             raise ValueError("current-judgment-required")
         deps = {**deps, "verify_lineage": current, "generate": missing_judgment}
+        deps.update(react_report_passes=react_report_passes, contract_hash=contract_hash)
         if manifest["operation"] == "design.release":
             from design_loop import coverage
             checked, missing = verify_graph._tester(bundle, {"react_report_passes": react_report_passes, "contract_hash": contract_hash})
@@ -202,6 +225,10 @@ class DesignWorkflow:
         else:
             verified = verify_graph.verify(bundle, delivery.knowledge(manifest["snapshot"]), deps,
                                            mode=generated["mode"], judgments=judgments)
+        if manifest["operation"] == "design.compose":
+            verified.update(reviewer="deterministic",
+                passed=verified["verdict"] == "pass" and verified["approvable"] is True,
+                compositionHashes=generated["compositionHashes"], judgeEvidence=compose_evidence)
         if manifest["operation"] == "design.edit":
             measured = delivery.edit_layout(manifest, report)
             verified["layout"] = measured
@@ -213,10 +240,14 @@ class DesignWorkflow:
                  "source": source_zip, "bundle": dist_zip, "browser": report_ref, "largeText": large_ref,
                  "screenshot": shot, "variant": manifest["variant"], "contract": contract,
                  "sourceHash": build["sourceHash"], "bundleHash": build["bundleHash"]}
+        if manifest["operation"] != "design.release":
+            value.update(judgments=judgments, reviewProfile={key: deps[key] for key in ("model", "profileHash")})
         output = execution.upload("verify", "design.json", value)
         final = execution.upload("verify", "result.json", {"objects": [*([source_files] if manifest["operation"] != "design.release" else []), source_zip, dist_zip, output]})
         memory = self.memory.append(execution.memory_scope, "verified", output["sha256"]) if self.memory else None
         summary = {key: verified[key] for key in ("verdict", "passed", "approvable", "reviewer") if key in verified}
+        if manifest["operation"] == "design.compose":
+            summary.update(compositionHashes=generated["compositionHashes"], judgeEvidence=compose_evidence)
         if "issues" in verified:
             summary["issues"] = [{"code": "verification-issues", "count": len(verified["issues"])}] if verified["issues"] else []
         execution.stage("verify", [dist_zip, report_ref, large_ref], [output, final], {**summary, "designResult": output, **({"memory": memory} if memory else {})})

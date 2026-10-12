@@ -113,6 +113,97 @@ def source_files(snapshot, prepared, prd, screens, registry_state):
                                  cases=prepared["cases"], registry=registry, meta=metadata)
 
 
+def selected_screens(rows, flow_screens):
+    """One exact existing artifact for every screen; its required states travel together."""
+    if not isinstance(rows, list) or len(rows) != len(flow_screens) or not 1 <= len(rows) <= 19:
+        raise ValueError("design-selection-incomplete")
+    selected = {}
+    for row in rows:
+        schema._fields(row, {"screenId", "artifactId"})
+        if (row["screenId"] not in flow_screens or row["screenId"] in selected
+                or not isinstance(row["artifactId"], str)):
+            raise ValueError("design-selection-invalid")
+        schema._identifier(row["artifactId"])
+        selected[row["screenId"]] = row["artifactId"]
+    return [{"screenId": screen, "artifactId": selected[screen]} for screen in flow_screens]
+
+
+def compose(snapshot, prepared, prd, selected, deps, verify_lineage):
+    """Reassemble exact selected screens and reuse every applicable reviewed context.
+
+    No generator is used. Missing states, changed review profiles, incomplete cases
+    or unavailable judgments require fresh generation rather than inferred approval.
+    """
+    from design_loop import rules_v2, verify_graph
+    k = knowledge(snapshot)
+    selected_screens([{key: row[key] for key in ("screenId", "artifactId")} for row in selected],
+                     prepared["flow"]["screens"])
+    screens, origins, histories = {}, {}, []
+    profile = {key: deps[key] for key in ("model", "profileHash")}
+    modes = set()
+    for row in selected:
+        result = row["result"]
+        if result.get("reviewProfile") != profile:
+            raise ValueError("design-compose-review-required")
+        source = result["generated"]
+        if source["registry"] != prepared["registry"]:
+            raise ValueError("design-compose-registry-changed")
+        pages = unpacked(source["screens"])
+        screen = row["screenId"]
+        required = {"default", *prepared["states"][screen]}
+        states = {state for sid, state in pages if sid == screen}
+        if states != required:
+            raise ValueError("design-compose-states-required")
+        for state in sorted(states):
+            key = screen, state
+            page = pages[key]
+            if page.get("screenId") != screen or page.get("state") != state:
+                raise ValueError("design-compose-page-mismatch")
+            screens[key] = copy.deepcopy(page)
+            origins[key] = result
+        modes.add(source["mode"])
+        histories.append({"screenId": screen, "artifactId": row["artifactId"],
+                          "generation": copy.deepcopy([item for item in source["history"] if item["screenId"] == screen])})
+    mode = "fill" if modes == {"fill"} else "compose"
+    bundle = {"prd": prd, "flow": prepared["flow"], "expectation": prepared["expectation"],
+              "screens": screens, "binding_values": prd_extract.bindings(prd), "contract": prepared["contract"],
+              "registry": Registry(k, state=prepared["registry"])}
+    checklist = verify_graph.design_checklist(prd, k)
+    if not checklist:
+        raise ValueError("design-compose-review-required")
+    judged = [item for item in checklist if item.get("method") != "rule"
+              or (item.get("rule") or {}).get("fn") not in rules_v2.RULES]
+    judgments, evidence = {}, {}
+    for (screen, state), page in sorted(screens.items()):
+        plan, incomplete = verify_graph.review_plan(bundle, k, judged, pages={(screen, state)})
+        if incomplete:
+            raise ValueError("design-compose-review-required")
+        used = []
+        if plan:
+            stored = origins[screen, state].get("judgments", {})
+            reused = verify_graph.compose_review(stored, bundle, k, deps, screen, state, judged,
+                                                 verify_lineage=verify_lineage)
+            if reused["status"] != "reused":
+                raise ValueError("design-compose-review-required")
+            for _, key in verify_graph.page_review_keys(bundle, k, deps, screen, state, judged):
+                record = stored[key]
+                if key in judgments and judgments[key] != record:
+                    raise ValueError("design-compose-review-conflict")
+                judgments[key] = copy.deepcopy(record)
+                used.append(record["receiptHash"])
+        elif flow.enumerate_cases(prepared["expectation"]["conditions"])["truncated"]:
+            raise ValueError("design-compose-review-required")
+        # Rule-only pages still bind the full frozen checklist and exact composition.
+        digest = composition.digest(page)
+        evidence[digest] = schema.digest({"composition": digest, "checklist": checklist,
+                                         "contractHash": prepared["contractHash"], "judgments": sorted(used)})
+    generated = {"screens": packed(screens),
+                 "files": source_files(snapshot, prepared, prd, screens, prepared["registry"]),
+                 "registry": copy.deepcopy(prepared["registry"]), "history": histories, "mode": mode,
+                 "compositionHashes": [composition.digest(value) for value in screens.values()]}
+    return generated, judgments, evidence
+
+
 def edit_layout(manifest, report):
     from design_loop.edit import layout_stable, subtree_testids
     base = manifest["baseResult"]["generated"]

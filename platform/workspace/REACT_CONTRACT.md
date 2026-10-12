@@ -397,3 +397,20 @@ source hash and available commit URL under the same final source/export fence.
 The design handoff panel polls queued/running exports and displays committed,
 failed and delivered-unverified outcomes in place. A job completion flag alone
 never supplies the commit receipt; missing or mismatched SHA evidence stays unknown.
+
+### Selected screen assembly (2026-10-12 candidate)
+
+Designer/owner `POST /designs/:id/compose` accepts `{requestId, version,
+selections: [{screenId, artifactId}]}`. Selections cover every frozen flow screen
+exactly once; each selected verified variant supplies that screen's default and
+all required states. The server loads their immutable source and reviewed
+judgments, retains every consumed admission and admits `design.compose`.
+The operation has no model stage or invocation. It independently rechecks all
+applicable cached judgments and rebuilds/tests the combined project, including
+large text and coverage. Missing/stale review or source evidence fails closed.
+
+The composed result is a new round with its own source/bundle/evidence hashes.
+Selection has no approval effect. Exact human UX approval, model-free release
+rebuild, source-preserving ZIP and separate frontend acceptance remain required.
+The public UI provides per-screen selectors and displays the new round through
+the existing individual review and handoff path.
