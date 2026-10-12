@@ -125,3 +125,15 @@ defines failed compile receipts and final-stage selection; the
 [React interface](../workspace/REACT_CONTRACT.md#validation-repair-loop-2026-10-12-candidate)
 defines the UI and role-dependent history projection. Exact-HEAD regression,
 independent review/CI and deployment-bound live acceptance remain separate gates.
+
+## Design evidence discussion (2026-10-12 candidate)
+
+`workspace/design_discussions.py`, the design API and `DesignDiscussion.tsx`
+connect persistent discussion to PRD, flow nodes, rules and actual generated
+screens (REQUIREMENTS W-01). The
+[owning React interface](../workspace/REACT_CONTRACT.md#discussion-on-design-evidence-2026-10-12-candidate)
+defines target, permission and pagination bindings. `test_design_discussions.py`
+and `design-discussion-ui.test.cjs` cover persistence, retry, source withdrawal,
+concurrent membership changes, cursor isolation and current React evidence.
+Independent review/CI and deployment-bound HAND-01/AUTH-01/08 acceptance remain
+required.

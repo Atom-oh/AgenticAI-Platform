@@ -314,6 +314,7 @@ class Collaboration:
                 page = self.storage.list_page(scope["owner"], "comment", cursor=query.get("cursor"))
                 comments = [row for row in page["items"]
                             if row.get("projectId") == scope["project"]["id"]
+                            and "designId" not in row.get("anchor", {})
                             and all(row.get("anchor", {}).get(key) == value for key, value in anchor.items())]
                 return 200, {"comments": comments, **self._cursor(page)}
         raise CollaborationError(404, "not-found", "Route not found")
