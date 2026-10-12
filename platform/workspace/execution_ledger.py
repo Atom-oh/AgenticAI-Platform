@@ -416,6 +416,9 @@ class Ledger:
                 if job["status"] in TERMINAL:
                     change.update(activeJobId=None, activeArtifactId=None, status="interrupted", error=job.get("error"),
                                   lastExecutionId=job["id"], unknownOutcome=bool(job.get("unknownOutcome")))
+                    if job["operation"] == "design.edit":
+                        from workspace.design_interventions import terminal_edit
+                        design = terminal_edit(design, descriptor["id"], job["status"])
                 writes.append({"owner": owner, "kind": "design", "expected_version": design["version"],
                                "item": {**design, **change}})
         return writes
@@ -705,7 +708,7 @@ class Ledger:
                 if operation not in {"design.extract", "design.generate", "design.edit", "design.compose", "design.release"}:
                     raise LedgerError("artifact-invalid")
                 from workspace.design_execution import admission_write
-                design_write = admission_write(self.storage, owner, artifact, actor, operation)
+                design_write = admission_write(self.storage, owner, artifact, actor, operation, manifest=manifest)
             for reference in artifact["sourceRefs"]:
                 # Intake prompt-text is not an ontology reference and never becomes a graph node.
                 if reference.get("sourceKind") != "prompt-text":

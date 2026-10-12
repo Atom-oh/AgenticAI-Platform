@@ -7,6 +7,7 @@ import DesignHandoff from './DesignHandoff';
 import FlowDiagram from './FlowDiagram';
 import DesignComparison from './DesignComparison';
 import DesignDiscussion from './DesignDiscussion';
+import DesignInterventions from './DesignInterventions';
 import type { WorkspaceConfig } from './types';
 
 type Variant = { artifactId: string; jobId: string; variant: number; passed: boolean; sourceHash: string; bundleHash: string;
@@ -72,6 +73,8 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [discussionDirty, setDiscussionDirty] = useState(false);
+  const [interventionDirty, setInterventionDirty] = useState(false);
+  const [reviewRefresh, setReviewRefresh] = useState(0);
   const [acknowledge, setAcknowledge] = useState(false);
   const [screenChoices, setScreenChoices] = useState<Record<string, string>>({});
   const request = useRef<{ key: string; body: Record<string, unknown> } | null>(null);
@@ -130,7 +133,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
     const abort = new AbortController();
     void load(selected, abort.signal).catch(reason => { if (!abort.signal.aborted) setError(messageOf(reason)); });
     return () => abort.abort();
-  }, [selected, load]);
+  }, [selected, load, reviewRefresh]);
   useEffect(() => {
     if (!detail?.design.activeJobId) return;
     const abort = new AbortController();
@@ -141,8 +144,8 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
   }, [detail?.design.id, detail?.design.activeJobId, load]);
   useEffect(() => {
     const dirty = !!instruction.trim() || (!!detail?.prd && prd !== JSON.stringify(detail.prd.prd, null, 2));
-    onDirty(dirty || busy || discussionDirty);
-  }, [instruction, prd, detail?.prd, busy, discussionDirty, onDirty]);
+    onDirty(dirty || busy || discussionDirty || interventionDirty);
+  }, [instruction, prd, detail?.prd, busy, discussionDirty, interventionDirty, onDirty]);
   useEffect(() => () => { operation.current?.abort(); previewRequest.current?.abort(); onDirty(false); }, [onDirty]);
   const act = async (path: string, body: Record<string, unknown>, idempotent = false) => {
     if (busy) return;
@@ -307,6 +310,9 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
             onClick={() => void act(`/designs/${resource(current.id)}/release`, { version: current.version, baseArtifactId: selectedVariant.artifactId }, true)}>승인 소스 재빌드·전달 준비</button>}
         </>}
         <DesignHandoff designId={current.id} releaseIds={(current.releases || []).map(item => item.id)} />
+        {viewMatches && selectedVariant && <DesignInterventions key={`${current.id}:${selectedVariant.artifactId}`}
+          designId={current.id} version={current.version} variant={selectedVariant}
+          onDirty={setInterventionDirty} onReviewed={() => setReviewRefresh(value => value + 1)} />}
         <DesignDiscussion key={`${current.id}:${detail?.prdHash || ''}:${detail?.flowHash || ''}:${viewMatches ? selectedVariant?.artifactId || '' : ''}`}
           designId={current.id} prdHash={detail?.prdHash} flowHash={detail?.flowHash} flow={detail?.flow}
           variant={viewMatches && selectedVariant ? { artifactId: selectedVariant.artifactId,

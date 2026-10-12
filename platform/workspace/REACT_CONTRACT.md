@@ -500,6 +500,60 @@ Discussion writes are separately fenced comment records. They do not mutate
 design/run/job versions, approve a candidate or change the project authority
 epoch. The design panel offers the four anchor choices alongside the current
 PRD, flow and verified preview. It preserves request identity on retry, shows
-persisted comments on reopening, and aborts stale reads when the target changes.
+the current storage page of persisted comments on reopening, provides manual
+pagination, and aborts stale reads when the target changes.
 Local API/compiler/Browser/UI checks remain separate from deployment-bound
 HAND-01 and AUTH-01/08 acceptance.
+
+### Human intervention and feedback (2026-10-12 candidate)
+
+Design records retain up to 200 human action entries without silent trimming.
+New records mark coverage `complete`; older records without the field are
+`not-recorded`, and their first new action starts `partial` coverage. Absence of
+old events does not prove that no person changed a result. At the limit, the
+current history stays intact and a new design is required before another action.
+
+A scoped edit request is recorded in the same B0 admission transaction as its
+job/artifact/design. It records actor, timestamp, base/output artifact IDs,
+base source/bundle hashes and exact screen/state/target scope. It retains every
+consumed admission privately, including the instruction, without copying
+instruction text into metadata. An idempotent submission does not add an event.
+Completion or failure updates its outcome atomically with the terminal state.
+`editRequests` measures accepted human requests, including interrupted requests;
+an outcome remains visible separately and is not a claim of an approved change.
+
+Exact UX approval records an `approve` action in the existing design/run
+transaction. Designer/owner `POST /designs/:id/reject` accepts `{requestId,
+version, artifactId, sourceHash, bundleHash, reason}`; reason is 1–1000
+characters. It rechecks current source, role, variant visibility and expiry.
+An identical retry returns the saved decision, while changed input under the
+same actor/request ID is `request-changed`. Rejection atomically clears any
+approval on the target run, making its previous releases ineffective even when
+another variant is now selected. It clears the design's current UX approval
+only if that approval targets the rejected variant, and removes frontend
+acceptance for a rejected release. Rejection does not invoke a model or alter
+the canonical ontology.
+
+`GET /designs/:id/artifacts/:artifactId/interventions` returns exact artifact/
+source/bundle hashes, coverage, events, metrics, `editRequests`, `rejectionCount`,
+`failureChecklist` and `rejectionCandidates`. Edits identify both the base and
+new output; the view includes actions on that artifact and requests targeting
+it. Counts cover only currently readable events. Pending/failed output details
+remain restricted to owner/designer/developer; all consumed admissions and
+deadlines are rechecked even after the original job's retention expires.
+Storage keys, raw instructions and internal admission bindings are omitted.
+The final response is fenced against the design/project/source versions.
+
+The private feedback object retains the exact human reason and source-bound
+declared PolicyRule proposals from the selected run round. They remain
+candidates in the feedback queue, labelled `업무 근거 연결 필요`; they are neither
+canonical active rules nor approved model input. Connecting an authoritative
+business source and human governance review remains required. The checklist
+collects distinct verifier role/code failures and their observed rounds; it
+labels resolution only against the final visible round, without claiming
+that missing/hidden history passed.
+
+The rendered panel shows human request scope/outcome, reasons, checklist and
+feedback candidates. Rejection keeps its request identity on retry and only
+enables after the selected evidence hashes match. These source/API/local UI
+checks do not establish deployment-bound GEN-04/05, HAND-01/02 or AUTH-01/08.

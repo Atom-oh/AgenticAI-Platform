@@ -20,7 +20,7 @@ ROLES = {"extract": {"owner", "planner", "designer"}, "generate": {"owner", "des
          "release": {"owner", "designer", "developer"}}
 
 
-def admission_write(storage, owner, descriptor, actor, operation):
+def admission_write(storage, owner, descriptor, actor, operation, *, manifest=None):
     stage = descriptor.get("stage")
     design = storage.get(owner, "design", descriptor.get("designId"))
     project = storage.get(owner, "project", (design or {}).get("projectId")) if design else None
@@ -32,6 +32,12 @@ def admission_write(storage, owner, descriptor, actor, operation):
         raise LedgerError("design-changed")
     if stage != "extract" and not design.get("approvals", {}).get("flow"):
         raise LedgerError("design-flow-required")
+    if stage == "edit":
+        from workspace.design_interventions import admit_edit
+        try:
+            design = admit_edit(storage, owner, design, descriptor, actor, manifest)
+        except ValueError as error:
+            raise LedgerError(str(error)) from None
     return {"owner": owner, "kind": "design", "expected_version": design["version"],
             "item": {**design, "status": "executing", "activeStage": stage, "error": None, "unknownOutcome": False}}
 
@@ -511,6 +517,9 @@ class DesignPublication:
                 raise LedgerError("design-edit-scope")
             if any(previous[k] != screens[k] for k in previous if k != key):
                 raise LedgerError("design-edit-scope")
+            from workspace.design_interventions import terminal_edit
+            value = terminal_edit(value, job["artifact"]["id"], job["status"],
+                                  source_hash=result["sourceHash"], bundle_hash=result["bundleHash"])
         row = {"number": 1, "status": "reviewable" if compact["passed"] else "needs_changes", "passed": compact["passed"],
             "sourceHash": result["sourceHash"], "bundleHash": result["bundleHash"], "catalogHash": build["catalogHash"],
             "sourceKey": result["source"]["key"], "sourceArchiveSha256": result["source"]["sha256"],
