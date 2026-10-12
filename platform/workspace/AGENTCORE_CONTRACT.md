@@ -1463,5 +1463,26 @@ verified bundle. Successful compile's exact-one-bundle requirement is unchanged.
 Missing reviewer/tester/coverage evidence blocks further repair. Exhausting a
 validation limit retains a non-approvable needs-changes candidate; an exhausted
 compiler refusal remains a failed execution with no fabricated Browser/bundle.
+
+### Human edit accounting (2026-10-12 candidate)
+
+The existing `design.edit` operation's admission composes one bounded human
+action into its design write, using the hash-checked frozen manifest for the
+base artifact and exact screen/state/target scope. The job, artifact, request
+marker, quota and action commit together; a refused transaction or idempotent
+replay cannot record another accepted request. The artifact descriptor and
+Runtime wire shape do not gain caller-writable metric fields.
+
+The trusted design completion adapter updates that action's outcome with the
+new source/bundle hashes in the final transaction. The ledger's existing
+failed/cancelled/expired/revoked artifact writer updates the retained outcome
+without a paid retry or manufactured candidate. Metadata excludes raw edit
+instructions; consumed admission bindings remain private and are revalidated
+on metric reads. A terminal outcome does not approve the candidate.
+
+Human decision writes and response projections belong to the
+[React contract](REACT_CONTRACT.md#human-intervention-and-feedback-2026-10-12-candidate).
+Current actor/source/expiry authority, transaction limits, measured model
+boundary and all applicable live service gates remain mandatory.
 Partial edit repairs retain the original approved instruction, subtree and
 outside-subtree structural/layout obligations on every round.

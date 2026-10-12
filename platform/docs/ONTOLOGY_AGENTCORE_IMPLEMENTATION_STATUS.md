@@ -137,3 +137,15 @@ and `design-discussion-ui.test.cjs` cover persistence, retry, source withdrawal,
 concurrent membership changes, cursor isolation and current React evidence.
 Independent review/CI and deployment-bound HAND-01/AUTH-01/08 acceptance remain
 required.
+
+## Human intervention feedback (2026-10-12 candidate)
+
+`workspace/design_interventions.py`, design admission/completion, the B0
+terminal writer and `DesignInterventions.tsx` connect V-05/P-04 to persisted
+human actions and the existing metrics/proposal/checklist engines. The
+[owning React interface](../workspace/REACT_CONTRACT.md#human-intervention-and-feedback-2026-10-12-candidate)
+and [execution accounting](../workspace/AGENTCORE_CONTRACT.md#human-edit-accounting-2026-10-12-candidate)
+define their boundaries. `test_design_interventions.py` drives actual local
+compiler/Browser artifacts through admission, exact decisions and delivery
+invalidation; its AWS/model transports remain doubles. Independent review/CI
+and deployment-bound GEN/HAND/AUTH evidence remain required.

@@ -134,7 +134,8 @@ def create(ctx, body):
              "input": _object(ctx, identifier, "input", {"snapshot": graph, "pages": admitted["pages"], "inspection": inspection}),
              "status": "draft", "createdBy": ctx.actor, "requestId": body["requestId"],
              "requestHash": schema.digest(body), "prd": None, "flow": None, "approvals": {}, "artifacts": [],
-             "activeJobId": None, "activeArtifactId": None, "variants": []}
+             "activeJobId": None, "activeArtifactId": None, "variants": [],
+             "interventions": [], "interventionCoverage": "complete"}
     return public(_commit(ctx, value, None, checks, admitted["expiresAt"]))
 
 
@@ -242,6 +243,12 @@ def _route(ctx, method, parts, body, query):
         return 202, submit(stage_ctx, parts[0], parts[1], body, ledger, config, enqueue)
     if len(parts) == 2 and method == "POST" and parts[1] == "approve":
         return 200, {"design": approve_variant(ctx, parts[0], body)}
+    if len(parts) == 2 and method == "POST" and parts[1] == "reject":
+        from workspace.design_interventions import reject
+        return 200, {"design": reject(ctx, parts[0], body)}
+    if len(parts) == 4 and parts[1] == "artifacts" and parts[3] == "interventions" and method == "GET":
+        from workspace.design_interventions import view
+        return 200, view(ctx, parts[0], parts[2])
     if len(parts) == 2 and method == "POST" and parts[1] == "cancel":
         from ontology_runtime.execution_entrypoints import dependencies
         _, _, ledger, _, _, _, _ = dependencies()
@@ -369,7 +376,9 @@ def approve_variant(ctx, identifier, body):
     approval = {"actor": ctx.actor, "at": ctx.storage.clock(), "round": 1,
         "sourceHash": variant["sourceHash"], "bundleHash": variant["bundleHash"], "catalogHash": run["catalogHash"],
         "contractHash": run["contractHash"], "artifactId": variant["artifactId"]}
-    changed = {**design, "status": "approved", "approvals": {**design["approvals"], "ux": approval}}
+    from workspace.design_interventions import decision
+    changed = decision(ctx, design, variant, artifact, "approve")
+    changed.update(status="approved", approvals={**design["approvals"], "ux": approval})
     predicates = unique([*checks, *more, ctx.check("project", ctx.scope["project"])])
     writes = {("design", design["id"]): design["version"], ("run", run["id"]): run["version"]}
     for check in predicates:
@@ -533,6 +542,8 @@ def _response(host, scope, claims, method, parts, body, query):
             visible.append(summary)
         result["designs"] = visible
     if len(parts) == 3 and parts[1] == "artifacts":
+        record = ctx.get("design", parts[0]);current_inputs(ctx, record);variant_authority(ctx, record, parts[2])
+    if len(parts) == 4 and parts[1] == "artifacts" and parts[3] == "interventions":
         record = ctx.get("design", parts[0]);current_inputs(ctx, record);variant_authority(ctx, record, parts[2])
     if len(parts) == 2 and parts[1] == "comments":
         from workspace.design_discussions import authorize
