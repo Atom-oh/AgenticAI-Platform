@@ -966,7 +966,8 @@
         "auto-transfer",
         "branch-select",
         "notice-alert",
-        "body-text"
+        "body-text",
+        "ineligible-reason-copy"
        ]
       },
       "footer": {
@@ -1317,6 +1318,50 @@
      "page": 2,
      "quote": "사유와 대체 행동",
      "derivativeHash": "fb036fb8890583b11dd4a80b269a99dba63ad2835f02982f1ae1467f67d944c3"
+    }
+   }
+  },
+  {
+   "id": "ineligible-reason-copy",
+   "scope": {
+    "kind": "project",
+    "projectId": "project-1"
+   },
+   "type": "Atom",
+   "title": "가입 조건을 충족하지 않아 가입할 수 없습니다. 상담을 신청해 주세요.",
+   "revision": 1,
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false,
+   "properties": {
+    "uxModel": {
+     "intent": "미자격 사유와 대체 행동 안내",
+     "layers": {
+      "code": {
+       "importPath": "@studio/approved-ui",
+       "exportName": "Text",
+       "props": {
+        "tone": {
+         "type": "enum",
+         "required": false,
+         "values": [
+          "default",
+          "muted"
+         ]
+        }
+       },
+       "childrenProp": "children"
+      }
+     }
     }
    }
   }
@@ -2586,6 +2631,24 @@
    "type": "GOVERNED_BY",
    "src": "ineligible",
    "dst": "r-ineligible-reason",
+   "sourceRefs": [
+    {
+     "sourceKind": "asset",
+     "sourceId": "seed-design-poc",
+     "revision": "1",
+     "sha256": "d007ae627b48c639a752d29f41622782c8c5a0ab492b2eeb86dfd04e4ea74cb9",
+     "audienceRevision": "1"
+    }
+   ],
+   "provenance": "declared",
+   "reviewState": "candidate",
+   "tombstone": false
+  },
+  {
+   "id": "c-ineligible-reason-copy",
+   "type": "COMPOSES",
+   "src": "ineligible",
+   "dst": "ineligible-reason-copy",
    "sourceRefs": [
     {
      "sourceKind": "asset",
