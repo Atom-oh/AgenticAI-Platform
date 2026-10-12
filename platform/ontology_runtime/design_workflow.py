@@ -220,7 +220,7 @@ class DesignWorkflow:
                 verification = {"verdict": "fail", "approvable": False, "findings": [
                     {"role": "tester", "severity": "critical", "code": "compile-failed",
                      "message": str(message)[:500]} for message in (build.get("diagnostics") or ["Compilation failed"])[:20]]}
-                rounds = [*history, {"round": validation_round, "verdict": "fail", "compileStatus": "failed",
+                rounds = [*history, {"round": validation_round, "verdict": "fail", "approvable": False, "compileStatus": "failed",
                     "source": source_files, "candidate": candidate, "build": build_ref,
                     "findings": verification["findings"]}]
                 return {"compileFailed": True, "verification": verification, "history": rounds}
@@ -311,16 +311,17 @@ class DesignWorkflow:
                  "sourceHash": build["sourceHash"], "bundleHash": build["bundleHash"]}
         if manifest["operation"] != "design.release":
             value.update(judgments=judgments, reviewProfile={key: deps[key] for key in ("model", "profileHash")})
-        rounds = [*history, {"round": validation_round, "verdict": verified["verdict"], "compileStatus": "pass",
+        rounds = [*history, {"round": validation_round, "verdict": verified["verdict"], "approvable": verified["approvable"], "compileStatus": "pass",
             "source": source_files, "candidate": candidate, "build": build_ref, "browser": report_ref, "largeText": large_ref,
             "sourceHash": build["sourceHash"], "bundleHash": build["bundleHash"], "findings": verified.get("findings", verified.get("issues", []))}]
         if defer:
             value["validationHistory"] = rounds
             verified.update(rounds=validation_round,
-                escalated=verified["verdict"] != "pass" and validation_round == manifest["maxRounds"])
+                escalated=not (verified["verdict"] == "pass" and verified["approvable"]) and validation_round == manifest["maxRounds"])
         output = upload("verify", "design.json", value)
         final = upload("verify", "result.json", {"objects": [*([source_files] if manifest["operation"] != "design.release" else []), source_zip, dist_zip, output]})
-        continuing = defer and verified["verdict"] == "fail" and validation_round < manifest["maxRounds"]
+        continuing = defer and verified["verdict"] != "blocked" and not (
+            verified["verdict"] == "pass" and verified["approvable"]) and validation_round < manifest["maxRounds"]
         memory = self.memory.append(execution.memory_scope, "verified", output["sha256"]) if self.memory and not continuing else None
         summary = {key: verified[key] for key in ("verdict", "passed", "approvable", "reviewer") if key in verified}
         if manifest["operation"] == "design.compose":

@@ -458,6 +458,8 @@ The private result retains every round's findings and hash-bound source/build/
 Browser references. Artifact preview exposes `validationRounds` with round,
 verdict, compiler status, source/bundle hashes and findings, under the same
 current source/role/expiry fence; object keys remain private. The UI displays
-failed and passing rounds alongside the selected artifact. A compiler refusal
+failed and passing rounds alongside the selected artifact.
+Failed/blocked round details are returned only to owner, designer and developer;
+other members receive passing rounds only. A compiler refusal
 has no Browser/bundle evidence; its current diagnostic/source view follows the
 existing owner/designer/developer restriction.

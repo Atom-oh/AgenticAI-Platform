@@ -292,16 +292,19 @@ class DesignPublication:
                 or len(encode(history)) > 8 * 1024 * 1024):
             raise LedgerError("receipt-invalid")
         for number, entry in enumerate(history, 1):
-            if not isinstance(entry, dict) or entry.get("round") != number or entry.get("verdict") not in {"pass", "fail", "blocked"}:
+            if (not isinstance(entry, dict) or entry.get("round") != number
+                    or entry.get("verdict") not in {"pass", "fail", "blocked"} or type(entry.get("approvable")) is not bool):
                 raise LedgerError("receipt-invalid")
-            stages = {row["stage"]: row for row in rows if row["result"].get("validationRound") == number}
+            stages = {row["stage"]: row for row in rows if row["result"].get("validationRound") == number
+                      and not (row["stage"] == "verify" and row["result"].get("repairFailure"))}
             for field, stage in (("source", "generate"), ("candidate", "generate"), ("build", "compile")):
                 if stage not in stages or entry.get(field) not in stages[stage]["outputs"]:
                     raise LedgerError("receipt-invalid")
                 read_object(ctx, entry[field])
             build = read_object(ctx, entry["build"])["build"]
             if entry.get("compileStatus") == "failed":
-                if stages["compile"]["status"] != "failed" or build.get("ok") is not False or entry["verdict"] != "fail":
+                if (stages["compile"]["status"] != "failed" or build.get("ok") is not False
+                        or entry["verdict"] != "fail" or entry["approvable"] is not False):
                     raise LedgerError("receipt-invalid")
                 if any(field in entry for field in ("browser", "largeText", "bundleHash")):
                     raise LedgerError("receipt-invalid")
@@ -314,14 +317,15 @@ class DesignPublication:
                     read_object(ctx, entry[field])
                 if entry.get("sourceHash") != build["sourceHash"] or entry.get("bundleHash") != build["bundleHash"]:
                     raise LedgerError("receipt-invalid")
-                if "verify" not in stages or stages["verify"]["result"].get("verdict") != entry["verdict"]:
+                if ("verify" not in stages or stages["verify"]["result"].get("verdict") != entry["verdict"]
+                        or stages["verify"]["result"].get("approvable") is not entry["approvable"]):
                     raise LedgerError("receipt-invalid")
                 previous = read_object(ctx, stages["verify"]["result"]["designResult"])
                 if entry.get("findings") != previous["verification"].get("findings", previous["verification"].get("issues", [])):
                     raise LedgerError("receipt-invalid")
             else:
                 raise LedgerError("receipt-invalid")
-            if number < count and entry["verdict"] in {"pass", "blocked"}:
+            if number < count and (entry["verdict"] == "blocked" or (entry["verdict"] == "pass" and entry["approvable"])):
                 raise LedgerError("receipt-invalid")
         refused = result.get("repairFailure")
         if refused is not None:

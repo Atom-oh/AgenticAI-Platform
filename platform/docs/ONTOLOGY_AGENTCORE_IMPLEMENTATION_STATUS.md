@@ -110,21 +110,18 @@ separate evidence requirements.
 condition-case paths in the existing design panel (REQUIREMENTS U-02,
 HAND-01). The [owning React interface](../workspace/REACT_CONTRACT.md#persistent-procedure-design-2026-10-11-candidate)
 defines the read-only forecast and its incomplete outcomes. Four grammar/path
-tests and two local Chromium UI checks cover the candidate, including mobile
-layout; independent review/CI and live UI acceptance remain required.
+tests and one local Chromium UI check cover the candidate at desktop and
+375-pixel mobile viewports; independent review/CI and live UI acceptance remain required.
 
 ## Complete validation repair rounds (2026-10-12 candidate)
 
-The Runtime generation/edit path now feeds checker failures into bounded
-composition repairs and repeats compilation, Browser, large-text and coverage
-under the frozen flow and source policy. Round-specific private outputs and
-signed receipts preserve failed and passing evidence. Source-only release and
-selected-screen composition remain deterministic. The
+Implementation is in `ontology_runtime/design_workflow.py`,
+`workspace/design_stages.py`, `design_execution.py` and the design panel.
+`test_design_execution.py` exercises real local compiler/Browser feedback,
+failed-round retention, source integrity, authority refusal and bounded call plans.
+The
 [owning execution contract](../workspace/AGENTCORE_CONTRACT.md#validation-repair-rounds-2026-10-12-candidate)
 defines failed compile receipts and final-stage selection; the
 [React interface](../workspace/REACT_CONTRACT.md#validation-repair-loop-2026-10-12-candidate)
-defines current-authorized history display and non-approvable outcomes.
-Local defects exercise actual compiler/browser feedback and limit escalation.
-Admission preflights complete validation call plans against existing profile
-limits; full regression, independent review/CI and live acceptance remain
-required before completion of this candidate.
+defines the UI and role-dependent history projection. Exact-HEAD regression,
+independent review/CI and deployment-bound live acceptance remain separate gates.

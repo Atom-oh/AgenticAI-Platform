@@ -245,6 +245,62 @@ def test_validation_limit_preserves_failure_and_requires_human_repair(pipeline,m
     assert len(s.repair_requests[0]['targets'])==len(delivery.unpacked(value['generated']['screens']))
 
 
+def test_pass_without_approval_can_continue_then_publish_a_repaired_round(pipeline,monkeypatch):
+    from design_loop import verify_graph
+    from workspace.design_api import read_object
+    s=pipeline;ready(s)
+    original=verify_graph.verify
+    observed=[]
+    def needs_review(*args,**kwargs):
+        result=original(*args,**kwargs)
+        if not observed:
+            result.update(verdict='pass',approvable=False)
+            result['findings'].append({'severity':'major','role':'reviewer','code':'new-asset-candidate',
+                                      'message':'Synthetic candidate requires repair'})
+        observed.append(result)
+        return result
+    monkeypatch.setattr(verify_graph,'verify',needs_review)
+    result,queued=execute(s,'generate',maxRounds=2)
+    assert result['status']=='succeeded' and s.compiles==2 and s.browsers==4
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',queued['artifactId'])['result'])
+    assert [(r['verdict'],r['approvable']) for r in value['validationHistory']]==[('pass',False),('pass',True)]
+    assert not value['verification']['escalated']
+    assert s.ctx.get('design',s.design['id'])['variants'][0]['passed'] is True
+
+
+def test_round_history_rejects_cross_round_attempt_status_findings_and_count(pipeline,monkeypatch):
+    from workspace.design_execution import DesignPublication
+    from workspace.execution_ledger import LedgerError
+    from workspace.design_api import read_object
+    # Reuse the real two-round compiler-repair flow as positive signed evidence.
+    test_compiler_feedback_repairs_actual_source_and_retains_failed_round(pipeline,monkeypatch)
+    s=pipeline
+    design=s.ctx.get('design',s.design['id']);variant=design['variants'][0]
+    job=s.ctx.get('job',variant['jobId'])
+    value=read_object(s.ctx,s.ctx.get('wb_artifact',variant['artifactId'])['result'])
+    validate=DesignPublication(s.ctx.host,s.config)._validation_history
+    validate(s.ctx,job,value)
+    for fault in ['other-round-build','other-attempt-source','compile-status','findings','repair-on-success','count','approvable']:
+        bad=copy.deepcopy(value)
+        if fault=='other-round-build':
+            bad['validationHistory'][0]['build']=bad['validationHistory'][1]['build']
+        elif fault=='other-attempt-source':
+            bad['validationHistory'][0]['source']['key']+='/foreign-attempt'
+        elif fault=='compile-status':
+            bad['validationHistory'][0]['compileStatus']='pass'
+        elif fault=='findings':
+            bad['validationHistory'][1]['findings'].append({'severity':'critical','code':'invented'})
+        elif fault=='repair-on-success':
+            bad['repairFailure']=bad['build']
+        elif fault=='count':
+            bad['validationHistory'].append(copy.deepcopy(bad['validationHistory'][-1]))
+        else:
+            bad['validationHistory'][1]['approvable']=False
+        with pytest.raises(LedgerError) as rejected:
+            validate(s.ctx,job,bad)
+        assert rejected.value.code=='receipt-invalid',fault
+
+
 def test_validation_plan_refuses_unfunded_rounds_before_dispatch(pipeline):
     from workspace.execution_ledger import LedgerError
     s=pipeline;ready(s)
