@@ -591,8 +591,11 @@ def _response(host, scope, claims, method, parts, body, query):
     checks = unique([*ctx._design_checks, ctx.check("project", ctx.scope["project"])])
     if len(checks) > 100:
         fail(422, "design-response-scope", "조회 범위를 줄여 다시 요청하세요.")
-    ctx.storage.put_many([], checks, retry_conflicts=False, _writer=HUMAN,
-        before_attempt=lambda: check_source_deadlines(ctx.storage, checks, ctx.claims, ctx._design_expiry))
+    try:
+        ctx.storage.put_many([], checks, retry_conflicts=False, _writer=HUMAN,
+            before_attempt=lambda: check_source_deadlines(ctx.storage, checks, ctx.claims, ctx._design_expiry))
+    except Conflict:
+        fail(409, "design-changed", "응답을 준비하는 중 자료 또는 권한이 변경되었습니다.")
     return status, result
 
 

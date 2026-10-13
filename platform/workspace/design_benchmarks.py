@@ -59,6 +59,8 @@ def artifact(ctx, design_id, artifact_id, *, historical=False):
     if (plan is None or not isinstance(observed, dict) or observed.get("schemaVersion") != 1
             or observed.get("planHash") != schema.digest(plan)
             or observed.get("status") != "complete" or observed.get("incomplete") != []
+            or not isinstance(observed.get("checkpoints"), dict)
+            or not 1 <= len(observed["checkpoints"]) <= 1024
             or len(observed.get("ends", [])) != len(plan["cases"])):
         fail(409, "benchmark-observations-required", "완전한 실제 화면·경로 관찰이 필요합니다.")
     observe(ctx, checks, min(expiry, admitted["expiresAt"]))

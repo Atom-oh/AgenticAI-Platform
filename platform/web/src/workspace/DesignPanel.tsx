@@ -315,7 +315,7 @@ export default function DesignPanel({ config, onDirty }: { config: WorkspaceConf
         {viewMatches && selectedVariant && detail?.flow && <DesignReferencePanel
           key={`${current.id}:${selectedVariant.artifactId}`} designId={current.id} variant={selectedVariant}
           flow={detail.flow.flow} cases={detail.flow.cases || []} onDirty={setReferenceDirty}
-          canRegenerate={!active && enabled && designRole && ['ready', 'review', 'interrupted'].includes(current.status)}
+          canRegenerate={!active && enabled && designRole && current.variants.length < 5 && ['ready', 'review', 'interrupted'].includes(current.status)}
           onRegenerate={() => void act(`/designs/${resource(current.id)}/generate`,
             { version: current.version, variant: selectedVariant.variant, maxRounds: 3 }, true)} />}
         {viewMatches && selectedVariant && <DesignInterventions key={`${current.id}:${selectedVariant.artifactId}`}

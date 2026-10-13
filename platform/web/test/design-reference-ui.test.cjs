@@ -43,7 +43,7 @@ test('independent criteria retain retry identity and compare exact current artif
   await page.getByRole('button',{name:'현재 관찰과 기준 세트 고정'}).click();
   await page.getByLabel('고정한 기준 세트').selectOption('reference-1');
   assert.equal(posts[0].body.requestId,posts[1].body.requestId);
-  await page.getByRole('button',{name:'현재 온톨로지로 시안 재생성'}).click();
+  await page.getByRole('button',{name:'현재 설계 기준으로 시안 재생성'}).click();
   assert.equal(await page.evaluate(()=>window.__regenerated),1);
   await page.getByRole('button',{name:'현재 시안을 같은 기준으로 비교'}).click();
   await page.getByText('개선 0개 · 회귀 1개',{exact:true}).waitFor();

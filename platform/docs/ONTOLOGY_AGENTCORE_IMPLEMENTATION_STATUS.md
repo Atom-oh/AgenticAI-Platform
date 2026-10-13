@@ -164,6 +164,7 @@ publication and owner review on test storage, deterministic copy placement and
 rendered page-root guidance.
 GUI/provenance regressions remain distinct from actual model/service/customer
 acceptance.
+
 ## Independent reference benchmark (2026-10-12 candidate)
 
 `workspace/design_observations.py`, the Browser verifier and frozen design

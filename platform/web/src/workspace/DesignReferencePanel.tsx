@@ -34,6 +34,7 @@ export default function DesignReferencePanel({ designId, variant, flow, cases, c
   const request = useRef<{ key: string; body: Record<string, unknown> } | null>(null);
   const action = useRef<AbortController | null>(null);
   const editable = role === 'owner' || role === 'designer';
+  const selectedReference = references.find(item => item.id === selected);
   useEffect(() => {
     const abort = new AbortController(); setReferences([]); setCursor(''); setError('');
     if (open) client.get<{ references: Reference[]; cursor?: string }>('/designs/reference-sets', abort.signal)
@@ -59,6 +60,7 @@ export default function DesignReferencePanel({ designId, variant, flow, cases, c
         return;
       }
       const reference = references.find(item => item.id === selected);
+      if (kind === 'compare' && !reference) throw new Error('비교할 기준 세트를 다시 선택하세요.');
       const data = kind === 'create' ? { title: title.trim(), golden, designId, ...variant } :
         { designId, ...variant, criteriaHash: reference?.criteriaHash };
       const path = kind === 'create' ? '/designs/reference-sets' : `/designs/reference-sets/${resource(selected)}/compare`;
@@ -77,12 +79,13 @@ export default function DesignReferencePanel({ designId, variant, flow, cases, c
     <summary>기준 화면 세트로 온톨로지 변경 비교</summary>
     <p className="ws-muted">사람이 정한 문구·조건·도착점은 고정됩니다. 실제 화면 관찰이 없거나 권한이 회수되면 비교할 수 없습니다.</p>
     {error && <Notice error>{error} <button onClick={() => setRefresh(value => value + 1)}>기준 다시 조회</button></Notice>}
-    <label className="ws-field">고정한 기준 세트<select value={selected} onChange={event => { setSelected(event.target.value); setComparison(null); }}>
+    <label className="ws-field">고정한 기준 세트<select disabled={busy} value={selected} onChange={event => { setSelected(event.target.value); setComparison(null); }}>
       <option value="">기준 선택</option>{references.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
     </select></label>
     {cursor && <button disabled={busy} onClick={() => void act('more')}>기준 세트 더 보기</button>}
-    {editable && <button disabled={busy || !canRegenerate} onClick={onRegenerate}>현재 온톨로지로 시안 재생성</button>}
-    <button disabled={busy || !editable || !selected} onClick={() => void act('compare')}>현재 시안을 같은 기준으로 비교</button>
+    <p className="ws-muted">온톨로지가 바뀌었다면 변경된 기준으로 새 설계를 만들고 PRD·흐름을 승인한 뒤 이 기준 세트와 비교하세요.</p>
+    {editable && <button disabled={busy || !canRegenerate} onClick={onRegenerate}>현재 설계 기준으로 시안 재생성</button>}
+    <button disabled={busy || !editable || !selectedReference} onClick={() => void act('compare')}>현재 시안을 같은 기준으로 비교</button>
     {comparison && <div role="status">
       <p>통과 비율: {comparison.beforeScore.rate === null ? '미측정' : `${Math.round(comparison.beforeScore.rate * 100)}%`} →
         {comparison.afterScore.rate === null ? '미측정' : `${Math.round(comparison.afterScore.rate * 100)}%`}</p>

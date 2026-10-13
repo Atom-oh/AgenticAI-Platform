@@ -136,12 +136,17 @@ def test_actual_ontology_change_regenerates_new_design_against_unmodified_refere
     assert not state.ctx.get("design", fresh["id"])["approvals"].get("ux")
 
 
-def test_ordinary_verifier_pass_cannot_create_reference_without_complete_observations(pipeline, monkeypatch):
+@pytest.mark.parametrize("missing_field", ["observations", "checkpoints"])
+def test_ordinary_verifier_pass_cannot_create_reference_without_complete_observations(
+        pipeline, monkeypatch, missing_field):
     state = pipeline
     actual = state.workflow.browser.evaluate
     def missing(*args, **kwargs):
         report = actual(*args, **kwargs)
-        report.pop("observations", None)
+        if missing_field == "observations":
+            report.pop("observations", None)
+        else:
+            report["observations"].pop("checkpoints")
         return report
     monkeypatch.setattr(state.workflow.browser, "evaluate", missing)
     ready(state)
@@ -230,7 +235,8 @@ def test_reference_cursor_cannot_switch_actor_and_retains_every_authorized_page(
         assert (error.value.status, error.value.code) == (409, "design-cursor-stale")
 
 
-def test_source_withdrawal_at_final_response_fence_denies_saved_criteria(pipeline, env, monkeypatch):
+@pytest.mark.parametrize("change", ["grant", "version"])
+def test_source_withdrawal_at_final_response_fence_denies_saved_criteria(pipeline, env, monkeypatch, change):
     from intake.records import INTAKE_OWNER
     state = pipeline
     created = call(state, "POST", ["reference-sets"], reference_input(state))["reference"]
@@ -240,8 +246,12 @@ def test_source_withdrawal_at_final_response_fence_denies_saved_criteria(pipelin
         nonlocal revoked
         if not revoked and not writes and any(check["kind"] == "design_reference" for check in checks):
             revoked = True
-            grant = state.storage.get(INTAKE_OWNER, "adm_grant", "grant-1")
-            env.admin({"op": "revoke_grant", "id": grant["id"], "expectedRevision": grant["revision"]})
+            if change == "grant":
+                grant = state.storage.get(INTAKE_OWNER, "adm_grant", "grant-1")
+                env.admin({"op": "revoke_grant", "id": grant["id"], "expectedRevision": grant["revision"]})
+            else:
+                row = state.storage.get(state.ctx.owner, "design_reference", created["id"])
+                state.storage.put(state.ctx.owner, "design_reference", row, expected_version=row["version"])
         return original(writes, checks, **kwargs)
     monkeypatch.setattr(state.storage, "put_many", revoke_before_response)
     with pytest.raises(CollaborationError) as error:

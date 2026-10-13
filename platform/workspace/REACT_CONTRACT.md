@@ -527,7 +527,7 @@ complete benchmark evidence are separate decisions.
 
 Designer/owner `POST /designs/reference-sets` accepts `{requestId, title,
 designId, artifactId, sourceHash, bundleHash, golden}`. `golden` contains 1–64
-independently authored cases, at most 64KiB total. Each entry has `{id, case,
+independently authored criteria entries, at most 64KiB total. Each entry has `{id, case,
 mustShow: [{screen, text}], mustNotShow: [{screen, text}], endsAt}`; `"*"` in
 `mustNotShow.screen` means every observed page in that actual journey. The
 definition/criteria hash and baseline source/observation/model/profile/kit/
@@ -546,7 +546,9 @@ expire within five minutes. A mismatched or expired list cursor returns
 `409 design-cursor-stale`; inaccessible singular references remain `404 not-found`.
 Private object keys are omitted. Missing actual baseline observations refuse
 creation with `benchmark-observations-required`; a locally reconstructed
-checkpoint cannot substitute.
+checkpoint cannot substitute. Missing or empty checkpoint maps likewise refuse
+creation. A version conflict at the final singular-read fence returns the same
+`404 not-found` as an inaccessible reference.
 
 The panel's regeneration action uses the existing source-bound `design.generate`
 admission and complete verification loop. After an ontology change, a new
@@ -557,7 +559,14 @@ designId, artifactId, sourceHash, bundleHash}` and compares the actual regenerat
 observation under the same model, execution profile, kit and PRD criteria.
 It retains before/after source/generation/observation hashes, scores, improved/
 regressed IDs and blocked state in an immutable comparison. Different
-model/profile/kit/product scope is `benchmark-scope-changed`.
+model/profile/kit/PRD scope is `benchmark-scope-changed`.
+
+Changed criteria are `409 benchmark-criteria-changed`; changed source, bundle
+or retained evidence bindings are `409 benchmark-source-changed`. A request
+ID reused with different content is `409 request-changed`. An atomic write
+whose source predicates exceed the transaction budget is
+`422 benchmark-scope-limit`. Format and case/byte bounds use the 422 errors
+defined above; none of these errors authorizes source omission or approval.
 
 `GET /designs/comparisons/:id` rechecks both retained sources before returning
 the recorded comparison. Baseline inspection may label obsolete ontology
@@ -568,7 +577,8 @@ inaccessible baseline blocks rather than being silently omitted.
 
 Comparison has `approvalEffect: false`. The rendered form lets a person select
 conditions/screens, enter exact required/forbidden text and expected arrival,
-then keep those criteria fixed across regeneration. No source/UI assertion here
+then keep those criteria fixed across regeneration. The current form applies
+forbidden text to the whole observed journey. No source/UI assertion here
 certifies G0-BROWSER/RUNTIME or deployment-bound GEN-01/05 and HAND-01.
 
 ### Human intervention and feedback (2026-10-12 candidate)
