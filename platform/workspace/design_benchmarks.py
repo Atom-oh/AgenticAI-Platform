@@ -88,9 +88,27 @@ def create(ctx, body):
     ctx.fresh({"owner", "designer"})
     title = schema._text(body.get("title"), 160)
     golden = body.get("golden")
-    if not isinstance(golden, list) or not 1 <= len(golden) <= 64 or len(schema.canonical(golden)) > 64 * 1024:
+    if not isinstance(golden, list) or not 1 <= len(golden) <= 64:
         fail(422, "benchmark-reference-limit", "독립 기준은 1~64개, 64KiB 이하로 정리하세요.")
-    benchmark._validate_golden(golden)
+    try:
+        for case in golden:
+            schema._fields(case, {"id", "case", "mustShow", "mustNotShow", "endsAt"})
+            schema._identifier(case["id"])
+            schema._identifier(case["endsAt"])
+            for field in ("mustShow", "mustNotShow"):
+                if not isinstance(case[field], list):
+                    raise ValueError("Reference assertions must be arrays")
+                for assertion in case[field]:
+                    schema._fields(assertion, {"screen", "text"})
+                    if field != "mustNotShow" or assertion["screen"] != "*":
+                        schema._identifier(assertion["screen"])
+                    schema._text(assertion["text"], 16000)
+        benchmark._validate_golden(golden)
+        size = len(schema.canonical(golden))
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        fail(422, "benchmark-reference-invalid", "조건·필수 문구·금지 문구·도착 화면의 기준 형식을 확인하세요.")
+    if size > 64 * 1024:
+        fail(422, "benchmark-reference-limit", "독립 기준은 1~64개, 64KiB 이하로 정리하세요.")
     identifier = ctx.identity("reference", body.get("requestId"))
     fingerprint = schema.digest(body)
     old = ctx.storage.get(ctx.owner, "design_reference", identifier)

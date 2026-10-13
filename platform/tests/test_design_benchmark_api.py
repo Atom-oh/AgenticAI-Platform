@@ -248,3 +248,59 @@ def test_source_withdrawal_at_final_response_fence_denies_saved_criteria(pipelin
         call(state, "GET", ["reference-sets", created["id"]])
     assert revoked and error.value.code == "not-found"
     assert len(state.storage.list(state.ctx.owner, "design_reference")) == 1
+
+
+@pytest.mark.parametrize("mutation", [
+    "array-boolean", "array-object", "array-string", "unknown-field",
+    "unknown-assertion-field", "missing-field", "duplicate-id", "text-object",
+])
+def test_malformed_reference_criteria_are_client_errors_without_source_reads_or_writes(
+        design_state, monkeypatch, mutation):
+    from workspace import design_benchmarks
+    ctx, design, _ = design_state
+    golden = [{"id": "criterion-1", "case": {"eligible": True}, "mustShow": [],
+               "mustNotShow": [], "endsAt": "done"}]
+    if mutation.startswith("array-"):
+        golden[0]["mustShow"] = {"array-boolean": True, "array-object": {}, "array-string": "bad"}[mutation]
+    elif mutation == "unknown-field":
+        golden[0]["modelPass"] = True
+    elif mutation == "unknown-assertion-field":
+        golden[0]["mustShow"] = [{"screen": "intro", "text": "안내", "observed": True}]
+    elif mutation == "missing-field":
+        golden[0].pop("mustNotShow")
+    elif mutation == "duplicate-id":
+        golden.append(copy.deepcopy(golden[0]))
+    else:
+        golden[0]["mustShow"] = [{"screen": "intro", "text": {"untrusted": True}}]
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("Malformed criteria must be refused before reading an artifact")
+    monkeypatch.setattr(design_benchmarks, "artifact", unexpected_read)
+    with pytest.raises(CollaborationError) as error:
+        route(ctx.host, ctx.scope, ctx.claims, "POST", ["reference-sets"], {
+            "requestId": "invalid-reference", "title": "입력 형식 검사",
+            "designId": design["id"], "artifactId": "not-read",
+            "sourceHash": "a" * 64, "bundleHash": "b" * 64, "golden": golden,
+        }, {})
+    assert (error.value.status, error.value.code) == (422, "benchmark-reference-invalid")
+    assert ctx.storage.list(ctx.owner, "design_reference") == []
+
+
+@pytest.mark.parametrize("bound", ["cases", "bytes"])
+def test_reference_limits_remain_client_errors_before_artifact_reads(design_state, monkeypatch, bound):
+    from workspace import design_benchmarks
+    ctx, design, _ = design_state
+    golden = [{"id": f"criterion-{index}", "case": {"eligible": True},
+               "mustShow": [{"screen": "intro", "text": "안" * 12000}] if bound == "bytes" else [],
+               "mustNotShow": [], "endsAt": "done"}
+              for index in range(2 if bound == "bytes" else 65)]
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("Over-limit criteria must be refused before reading an artifact")
+    monkeypatch.setattr(design_benchmarks, "artifact", unexpected_read)
+    with pytest.raises(CollaborationError) as error:
+        route(ctx.host, ctx.scope, ctx.claims, "POST", ["reference-sets"], {
+            "requestId": "over-limit-reference", "title": "기준 한도 검사",
+            "designId": design["id"], "artifactId": "not-read",
+            "sourceHash": "a" * 64, "bundleHash": "b" * 64, "golden": golden,
+        }, {})
+    assert (error.value.status, error.value.code) == (422, "benchmark-reference-limit")
+    assert ctx.storage.list(ctx.owner, "design_reference") == []

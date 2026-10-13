@@ -534,6 +534,10 @@ definition/criteria hash and baseline source/observation/model/profile/kit/
 PRD/generation bindings are immutable. Changing a criterion requires a new
 reference set; ontology changes do not rewrite or weaken expected results.
 An identical retry returns the saved reference under current source access.
+Entries and assertions use these closed shapes. Malformed arrays, identifiers,
+text or criterion fields return `422 benchmark-reference-invalid` before source
+reads or reference writes. Exceeding the case/byte bounds remains
+`422 benchmark-reference-limit`.
 
 `GET /designs/reference-sets` returns currently authorized `{references,
 cursor?}` pages, and `GET /designs/reference-sets/:id` returns `{reference}`.
