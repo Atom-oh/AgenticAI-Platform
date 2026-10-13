@@ -294,6 +294,14 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
     result = {"passed": False, "functionalStatus": "incomplete", "checks": [],
               "networkRequests": [], "consoleErrors": [], "accessibility": {"status": "incomplete", "violations": []},
               "visual": {"status": "not-run"}, "blockingFindings": [], "viewport": contract["viewport"]}
+    observation_plan = contract.get("observationPlan")
+    observations = None
+    if observation_plan is not None:
+        from workspace import design_observations
+        observations = {"schemaVersion": 1, "planHash": hashlib.sha256(json.dumps(
+            observation_plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "checkpoints": {}, "ends": [], "incomplete": [], "bytes": 0}
+        result["observations"] = observations
     large = {"status": "incomplete", "overflow": [], "unscaled": [], "measured": 0} if text_scale != 1 else None
     if contract["unresolved"]:
         result["blockingFindings"] = ["미정의 요구사항이 남아 있습니다."]
@@ -317,8 +325,16 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
     context = None
     with sync_playwright() as playwright:
         try:
-            for rule in contract["rules"]:
+            evaluations = [(rule, None) for rule in contract["rules"]]
+            if observation_plan is not None:
+                evaluations += [({"id": f"journey-{index}", "title": "기준 조건의 실제 경로",
+                                  "required": False, "steps": []}, index)
+                                 for index in range(len(observation_plan["cases"]))]
+            for rule, journey_index in evaluations:
                 if time.monotonic() - started > 75:
+                    if journey_index is not None:
+                        observations["incomplete"].append({"caseIndex": journey_index, "code": "observation-timeout"})
+                        continue
                     result["checks"].append({"caseId": rule["id"], "title": rule["title"], "required": rule["required"],
                                               "status": "incomplete", "steps": [], "reason": "실행 시간 상한"})
                     continue
@@ -385,6 +401,10 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                     if _bundle is not None:
                         page.locator('[data-studio-component="Screen"]').first.wait_for(state="attached", timeout=5000)
                     page.wait_for_timeout(100)
+                    if journey_index is not None:
+                        design_observations.journey(page, observation_plan, journey_index, observations,
+                            evaluate=_isolated_eval, deadline=started + 80)
+                        continue
                     if screenshot is None:
                         screenshot = page.screenshot(type="png", timeout=5000)
                     if axe_source and not result["accessibility"].get("checkedStates"):
@@ -452,8 +472,12 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
                     if _engine_failure(error):
                         result["engineError"] = True
                     check.update(status="incomplete", reason=f"브라우저 검증 오류: {type(error).__name__}")
+                    if journey_index is not None:
+                        observations["incomplete"].append({"caseIndex": journey_index, "code": "observation-unavailable",
+                                                           "errorType": type(error).__name__})
                 finally:
-                    result["checks"].append(check)
+                    if journey_index is None:
+                        result["checks"].append(check)
                     context.close()
                     context = None
         except Exception as error:
@@ -495,6 +519,9 @@ def evaluate_html(html: str, contract: dict, reference_png: bytes | None = None,
     if result["visual"]["status"] in ("fail", "incomplete"):
         result["blockingFindings"].append("시각 비교 실패 또는 미판정")
     result["passed"] = not result["blockingFindings"]
+    if observations is not None:
+        observations["status"] = ("complete" if not observations["incomplete"] and
+            len(observations["ends"]) == len(observation_plan["cases"]) else "incomplete")
     result["elapsedMs"] = int((time.monotonic() - started) * 1000)
     _phase("done")
     return result

@@ -149,6 +149,9 @@ define their boundaries. `test_design_interventions.py` drives actual local
 compiler/Browser artifacts through admission, exact decisions and delivery
 invalidation; its AWS/model transports remain doubles. Independent review/CI
 and deployment-bound GEN/HAND/AUTH evidence remain required.
+`test_design_intervention_edges.py` additionally covers older-run approval
+invalidation, cancel/withdrawal and pre-dispatch limits;
+`design-interventions-ui.test.cjs` covers retry and evidence mismatch.
 
 ## Synthetic ineligibility guidance (2026-10-12 candidate)
 
@@ -161,3 +164,13 @@ publication and owner review on test storage, deterministic copy placement and
 rendered page-root guidance.
 GUI/provenance regressions remain distinct from actual model/service/customer
 acceptance.
+## Independent reference benchmark (2026-10-12 candidate)
+
+`workspace/design_observations.py`, the Browser verifier and frozen design
+contract collect real local page/journey observations. `design_benchmarks.py`
+and `DesignReferencePanel.tsx` connect immutable human criteria, source-bound
+regeneration and comparison (O-05). The
+[owning reference interface](../workspace/REACT_CONTRACT.md#independent-reference-sets-and-actual-observations-2026-10-12-candidate)
+and execution evidence contract define their boundaries. Local tests preserve
+the independent golden oracle and report observed GUI defects rather than
+weakening criteria. Review/CI and actual service/user acceptance remain required.

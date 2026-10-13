@@ -505,6 +505,65 @@ pagination, and aborts stale reads when the target changes.
 Local API/compiler/Browser/UI checks remain separate from deployment-bound
 HAND-01 and AUTH-01/08 acceptance.
 
+### Independent reference sets and actual observations (2026-10-12 candidate)
+
+The design assertion contract can retain an `observationPlan` with schema
+version 1, the bounded complete Boolean case product, trusted case-control
+target, entry page, page-target/screen/state/action mappings and terminal
+screens. Flow approval fixes its normalized hash with the ordinary criteria.
+The Browser opens a fresh isolated context for each case, selects only the
+entry, follows the actual rendered action controls and records visible page
+text before navigation plus the observed terminal. It does not use expected
+graph paths, generated composition text or application postMessage results as
+observations. Ordinary per-page assertion tests do not become journey evidence.
+
+The private Browser report retains the plan hash, case/page/state checkpoints,
+explicit text truncation, actual ends and incomplete reasons. Bounds are 64
+cases, 19 page states, 50 hops/case, 16000 characters/checkpoint, 1024 points,
+2MiB observed text and the existing 80-second verifier deadline. Loops,
+missing/ambiguous pages or case controls, unavailable actions, truncation and
+capacity/deadline exhaustion remain incomplete. Ordinary rule approval and
+complete benchmark evidence are separate decisions.
+
+Designer/owner `POST /designs/reference-sets` accepts `{requestId, title,
+designId, artifactId, sourceHash, bundleHash, golden}`. `golden` contains 1–64
+independently authored cases, at most 64KiB total. Each entry has `{id, case,
+mustShow: [{screen, text}], mustNotShow: [{screen, text}], endsAt}`; `"*"` in
+`mustNotShow.screen` means every observed page in that actual journey. The
+definition/criteria hash and baseline source/observation/model/profile/kit/
+PRD/generation bindings are immutable. Changing a criterion requires a new
+reference set; ontology changes do not rewrite or weaken expected results.
+An identical retry returns the saved reference under current source access.
+
+`GET /designs/reference-sets` returns currently authorized `{references,
+cursor?}` pages, and `GET /designs/reference-sets/:id` returns `{reference}`.
+Private object keys are omitted. Missing actual baseline observations refuse
+creation with `benchmark-observations-required`; a locally reconstructed
+checkpoint cannot substitute.
+
+The panel's regeneration action uses the existing source-bound `design.generate`
+admission and complete verification loop. After an ontology change, a new
+design must bind the new source/context and receive exact PRD/flow approval;
+the old context cannot authorize generation or delivery. `POST
+/designs/reference-sets/:id/compare` accepts `{requestId, criteriaHash,
+designId, artifactId, sourceHash, bundleHash}` and compares the actual regenerated
+observation under the same model, execution profile, kit and PRD criteria.
+It retains before/after source/generation/observation hashes, scores, improved/
+regressed IDs and blocked state in an immutable comparison. Different
+model/profile/kit/product scope is `benchmark-scope-changed`.
+
+`GET /designs/comparisons/:id` rechecks both retained sources before returning
+the recorded comparison. Baseline inspection may label obsolete ontology
+context as history only; it still requires current project/role/admission/
+source/expiry authority for every consumed input. This exception grants no
+generation, approval, source reuse, release or export authority. A revoked or
+inaccessible baseline blocks rather than being silently omitted.
+
+Comparison has `approvalEffect: false`. The rendered form lets a person select
+conditions/screens, enter exact required/forbidden text and expected arrival,
+then keep those criteria fixed across regeneration. No source/UI assertion here
+certifies G0-BROWSER/RUNTIME or deployment-bound GEN-01/05 and HAND-01.
+
 ### Human intervention and feedback (2026-10-12 candidate)
 
 Design records retain up to 200 human action entries without silent trimming.

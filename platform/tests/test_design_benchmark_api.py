@@ -1,0 +1,162 @@
+"""Persisted independent criteria and observed local Browser comparisons through the real API."""
+import copy
+from pathlib import Path
+import sys
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent))
+from test_design_execution import pipeline, design_state, env, api, ready, execute
+from workspace.design_api import route, read_object
+from workspace.collaboration import CollaborationError
+
+
+def call(state, method, parts, body=None):
+    return route(state.ctx.host, state.ctx.scope, state.ctx.claims, method, parts, body or {}, {})[1]
+
+
+def test_reference_definition_comparison_and_replay_keep_fixed_human_criteria(pipeline):
+    state = pipeline
+    ready(state)
+    outcome, _ = execute(state, "generate")
+    assert outcome["status"] == "succeeded"
+    design = state.ctx.get("design", state.design["id"])
+    first = design["variants"][0]
+    flow = read_object(state.ctx, design["flow"])
+    snapshot = read_object(state.ctx, design["input"])["snapshot"]
+    from workspace.design_stages import knowledge
+    k = knowledge(snapshot)
+    # Independent human fixture expectations; only identifier aliases are resolved.
+    golden = [{"id": "base-rate", "case": {"eligible": True, "autoTransfer": False},
+               "mustShow": [{"screen": k.aliases["intro"], "text": "연 2.0%"}], "mustNotShow": [],
+               "endsAt": k.aliases["done"]}]
+    body = {"requestId": "independent-reference", "title": "합성 상품 기준 화면",
+            "designId": design["id"], "golden": golden,
+            **{key: first[key] for key in ("artifactId", "sourceHash", "bundleHash")}}
+    calls = len(state.models), state.compiles, state.browsers
+    created = call(state, "POST", ["reference-sets"], body)["reference"]
+    assert created["golden"] == golden and created["baselineScore"]["passed"] == ["base-rate"]
+    assert call(state, "POST", ["reference-sets"], body)["reference"] == created
+    assert (len(state.models), state.compiles, state.browsers) == calls
+    assert created["id"] in [item["id"] for item in call(state, "GET", ["reference-sets"])["references"]]
+    assert execute(state, "generate", requestId="reference-regeneration", variant=1)[0]["status"] == "succeeded"
+    second = state.ctx.get("design", design["id"])["variants"][-1]
+    compared = call(state, "POST", ["reference-sets", created["id"], "compare"], {
+        "requestId": "compare-observed", "criteriaHash": created["criteriaHash"], "designId": design["id"],
+        **{key: second[key] for key in ("artifactId", "sourceHash", "bundleHash")}})["comparison"]
+    assert compared["comparison"] == {"improved": [], "regressed": [], "blocked": False}
+    assert compared["approvalEffect"] is False and compared["before"]["artifactId"] == first["artifactId"]
+    assert compared["after"]["artifactId"] == second["artifactId"]
+    assert call(state, "GET", ["comparisons", compared["id"]])["comparison"] == compared
+    assert not state.ctx.get("design", design["id"])["approvals"].get("ux")
+    with pytest.raises(CollaborationError) as error:
+        call(state, "POST", ["reference-sets", created["id"], "compare"], {
+            "requestId": "wrong-criteria", "criteriaHash": "0" * 64, "designId": design["id"],
+            **{key: second[key] for key in ("artifactId", "sourceHash", "bundleHash")}})
+    assert error.value.code == "benchmark-criteria-changed"
+
+
+def test_revoked_input_denies_saved_reference_and_comparison(pipeline, env):
+    from intake.records import INTAKE_OWNER
+    state = pipeline
+    ready(state)
+    assert execute(state, "generate")[0]["status"] == "succeeded"
+    design = state.ctx.get("design", state.design["id"])
+    first = design["variants"][0]
+    prepared = read_object(state.ctx, design["flow"])
+    case = prepared["cases"][0]
+    # Expected terminal is manually selected from the fixture's ineligible case.
+    from workspace.design_stages import knowledge
+    k = knowledge(read_object(state.ctx, design["input"])["snapshot"])
+    golden = [{"id": "ineligible", "case": copy.deepcopy(case), "mustShow": [], "mustNotShow": [],
+               "endsAt": k.aliases["ineligible"]}]
+    created = call(state, "POST", ["reference-sets"], {
+        "requestId": "revoked-reference", "title": "철회 검증용 기준", "designId": design["id"], "golden": golden,
+        **{key: first[key] for key in ("artifactId", "sourceHash", "bundleHash")}})["reference"]
+    grant = state.storage.get(INTAKE_OWNER, "adm_grant", "grant-1")
+    env.admin({"op": "revoke_grant", "id": grant["id"], "expectedRevision": grant["revision"]})
+    with pytest.raises(CollaborationError) as error:
+        call(state, "GET", ["reference-sets", created["id"]])
+    assert error.value.code == "not-found"
+    assert call(state, "GET", ["reference-sets"])["references"] == []
+
+
+def test_actual_ontology_change_regenerates_new_design_against_unmodified_reference(pipeline):
+    from design_fixtures import raw_graph_with
+    from workspace.ontology_store import Ontology
+    from workspace.design_api import create
+    from workbench.service import Service
+    state = pipeline
+    ready(state)
+    assert execute(state, "generate")[0]["status"] == "succeeded"
+    old = state.ctx.get("design", state.design["id"])
+    variant = old["variants"][0]
+    from workspace.design_stages import knowledge
+    k = knowledge(read_object(state.ctx, old["input"])["snapshot"])
+    reference = call(state, "POST", ["reference-sets"], {
+        "requestId": "title-reference", "title": "입구 문구 기준", "designId": old["id"],
+        **{key: variant[key] for key in ("artifactId", "sourceHash", "bundleHash")},
+        "golden": [{"id": "intro-title", "case": {"eligible": True, "autoTransfer": False},
+                    "mustShow": [{"screen": k.aliases["intro"], "text": "상품 소개"}],
+                    "mustNotShow": [], "endsAt": k.aliases["done"]}]})["reference"]
+    # Change the actual canonical ontology through its reviewed publication API.
+    state.ctx = Service(state.ctx.host, state.ctx.scope, state.ctx.claims)
+    store = Ontology(state.ctx)
+    graph = raw_graph_with(old["sourceRefs"][0], project_id=state.ctx.project_id)
+    node = next(item for item in graph["nodes"] if item["id"] == "intro")
+    node["title"] = "변경된 상품 안내"
+    from workspace import ontology_schema as schema
+    graph["nodes"] = [schema.seal({key: value for key, value in item.items() if key != "contentHash"})
+                      for item in graph["nodes"]]
+    published = store.publish_candidate("design-source", graph,
+        expected_generation=store.current()["generation"], request_id="changed-intro-title")
+    changed_id = published["identities"]["intro"]
+    changed = store.read([changed_id])["nodes"][0]
+    for decision in ("reviewed", "approved"):
+        store.review_node(changed_id, expected_generation=store.current()["generation"],
+            revision=changed["revision"], decision=decision, reason="human synthetic title change",
+            request_id=f"title-{decision}")
+    # Historical comparison cannot authorize the obsolete design for new work.
+    with pytest.raises(CollaborationError) as error:
+        call(state, "GET", [old["id"]])
+    assert error.value.code == "not-found"
+    assert call(state, "GET", ["reference-sets", reference["id"]])["reference"]["criteriaHash"] == reference["criteriaHash"]
+    state.ctx = Service(state.ctx.host, state.ctx.scope, state.ctx.claims)
+    fresh = create(state.ctx, {"requestId": "after-ontology-change", "title": "변경 후 재생성",
+        "procedureId": old["procedureId"], "decisionIds": old["decisionIds"], "model": old["model"]})
+    state.design = fresh
+    ready(state)
+    assert execute(state, "generate", requestId="regenerate-after-change")[0]["status"] == "succeeded"
+    current = state.ctx.get("design", fresh["id"])["variants"][0]
+    result = call(state, "POST", ["reference-sets", reference["id"], "compare"], {
+        "requestId": "changed-title-comparison", "criteriaHash": reference["criteriaHash"],
+        "designId": fresh["id"], **{key: current[key] for key in ("artifactId", "sourceHash", "bundleHash")}})["comparison"]
+    assert result["comparison"]["regressed"] == ["intro-title"] and not result["comparison"]["blocked"]
+    assert result["before"]["generation"] != result["after"]["generation"]
+    assert result["criteriaHash"] == reference["criteriaHash"]
+    assert not state.ctx.get("design", fresh["id"])["approvals"].get("ux")
+
+
+def test_ordinary_verifier_pass_cannot_create_reference_without_complete_observations(pipeline, monkeypatch):
+    state = pipeline
+    actual = state.workflow.browser.evaluate
+    def missing(*args, **kwargs):
+        report = actual(*args, **kwargs)
+        report.pop("observations", None)
+        return report
+    monkeypatch.setattr(state.workflow.browser, "evaluate", missing)
+    ready(state)
+    assert execute(state, "generate")[0]["status"] == "succeeded"
+    design = state.ctx.get("design", state.design["id"])
+    variant = design["variants"][0]
+    from workspace.design_stages import knowledge
+    k = knowledge(read_object(state.ctx, design["input"])["snapshot"])
+    before = len(state.models), state.compiles, state.browsers
+    with pytest.raises(CollaborationError) as error:
+        call(state, "POST", ["reference-sets"], {
+            "requestId": "no-actual-observations", "title": "관찰 없는 기준", "designId": design["id"],
+            **{key: variant[key] for key in ("artifactId", "sourceHash", "bundleHash")},
+            "golden": [{"id": "no-observation", "case": {"eligible": True, "autoTransfer": False},
+                        "mustShow": [], "mustNotShow": [], "endsAt": k.aliases["done"]}]})
+    assert error.value.code == "benchmark-observations-required"
+    assert state.storage.list(state.ctx.owner, "design_reference") == []
+    assert (len(state.models), state.compiles, state.browsers) == before

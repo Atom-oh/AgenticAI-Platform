@@ -1463,6 +1463,8 @@ verified bundle. Successful compile's exact-one-bundle requirement is unchanged.
 Missing reviewer/tester/coverage evidence blocks further repair. Exhausting a
 validation limit retains a non-approvable needs-changes candidate; an exhausted
 compiler refusal remains a failed execution with no fabricated Browser/bundle.
+Partial edit repairs retain the original approved instruction, subtree and
+outside-subtree structural/layout obligations on every round.
 
 ### Human edit accounting (2026-10-12 candidate)
 
@@ -1484,5 +1486,20 @@ Human decision writes and response projections belong to the
 [React contract](REACT_CONTRACT.md#human-intervention-and-feedback-2026-10-12-candidate).
 Current actor/source/expiry authority, transaction limits, measured model
 boundary and all applicable live service gates remain mandatory.
-Partial edit repairs retain the original approved instruction, subtree and
-outside-subtree structural/layout obligations on every round.
+
+### Actual reference observation evidence (2026-10-12 candidate)
+
+The frozen design contract's optional observation plan joins its normal criteria
+hash. The existing registered Browser verifier records actual case journeys
+within the same isolated/no-egress profile and deadline. Its private report
+and signed output hash bind page text, observed ends, truncation and incomplete
+results; Code Interpreter or model output cannot fabricate this evidence.
+No additional model/service dispatch or broader role is introduced.
+
+Independent benchmark decisions require complete observations for both exact
+bundles and the corresponding plan hashes. An ordinary rule pass, memory,
+reconstructed graph path or locally supplied label cannot promote missing
+observations. The [owning reference interface](REACT_CONTRACT.md#independent-reference-sets-and-actual-observations-2026-10-12-candidate)
+keeps historical comparison separate from current generation and approval.
+Actual deployed Browser profile/canary/transport/service evidence remains
+required under BROW-01/02 and G0-BROWSER/RUNTIME.

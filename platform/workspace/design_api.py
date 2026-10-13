@@ -201,6 +201,29 @@ def public(design):
 
 def _route(ctx, method, parts, body, query):
     host, scope, claims = ctx.host, ctx.scope, ctx.claims
+    if parts and parts[0] == "reference-sets":
+        from workspace import design_benchmarks
+        if parts == ["reference-sets"] and method == "POST":
+            return 201, {"reference": design_benchmarks.create(ctx, body)}
+        if parts == ["reference-sets"] and method == "GET":
+            page = page_for(ctx, "design_reference", query)
+            items = []
+            for record in page["items"]:
+                probe = Service(host, scope, claims)
+                try:
+                    item = design_benchmarks.public(probe, record)
+                except (admission.AdmissionError, CollaborationError, ValueError):
+                    continue
+                observe(ctx, probe._design_checks, probe._design_expiry)
+                items.append(item)
+            return 200, {"references": items, "cursor": page.get("cursor")}
+        if len(parts) == 2 and method == "GET":
+            return 200, {"reference": design_benchmarks.public(ctx, ctx.get("design_reference", parts[1]))}
+        if len(parts) == 3 and parts[2] == "compare" and method == "POST":
+            return 201, {"comparison": design_benchmarks.compare(ctx, parts[1], body)}
+    if len(parts) == 2 and parts[0] == "comparisons" and method == "GET":
+        from workspace.design_benchmarks import read_comparison
+        return 200, {"comparison": read_comparison(ctx, ctx.get("design_comparison", parts[1]))}
     if len(parts) == 2 and parts[1] == "comments" and method in {"GET", "POST"}:
         from workspace.design_discussions import handle
         return handle(ctx, parts[0], method, body, query)
@@ -524,6 +547,16 @@ def _response(host, scope, claims, method, parts, body, query):
     elif not hasattr(ctx, "_design_checks"):
         ctx._design_checks = []
         ctx._design_expiry = ctx.authorization()["authorizationExpiresAt"]
+    if isinstance(result.get("reference"), dict):
+        from workspace.design_benchmarks import public as reference_public
+        current = reference_public(ctx, ctx.get("design_reference", result["reference"]["id"]))
+        if current != result["reference"]:
+            fail(409, "benchmark-source-changed", "응답을 준비하는 중 기준이 변경되었습니다.")
+    if isinstance(result.get("comparison"), dict):
+        from workspace.design_benchmarks import read_comparison
+        current = read_comparison(ctx, ctx.get("design_comparison", result["comparison"]["id"]))
+        if current != result["comparison"]:
+            fail(409, "benchmark-source-changed", "응답을 준비하는 중 비교 근거가 변경되었습니다.")
     if isinstance(result.get("design"), dict):
         record = ctx.get("design", result["design"]["id"])
         if record["version"] != result["design"]["version"]:
