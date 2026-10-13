@@ -160,3 +160,91 @@ def test_ordinary_verifier_pass_cannot_create_reference_without_complete_observa
     assert error.value.code == "benchmark-observations-required"
     assert state.storage.list(state.ctx.owner, "design_reference") == []
     assert (len(state.models), state.compiles, state.browsers) == before
+
+
+def reference_input(state, request_id="authority-reference"):
+    ready(state)
+    assert execute(state, "generate")[0]["status"] == "succeeded"
+    design = state.ctx.get("design", state.design["id"])
+    variant = design["variants"][0]
+    from workspace.design_stages import knowledge
+    k = knowledge(read_object(state.ctx, design["input"])["snapshot"])
+    return {"requestId": request_id, "title": "권한 검증용 독립 기준", "designId": design["id"],
+            **{key: variant[key] for key in ("artifactId", "sourceHash", "bundleHash")},
+            "golden": [{"id": "base-rate", "case": {"eligible": True, "autoTransfer": False},
+                        "mustShow": [{"screen": k.aliases["intro"], "text": "연 2.0%"}],
+                        "mustNotShow": [], "endsAt": k.aliases["done"]}]}
+
+
+def test_planner_developer_cannot_freeze_or_compare_and_retries_cannot_replace_criteria(pipeline):
+    state = pipeline
+    body = reference_input(state)
+    created = call(state, "POST", ["reference-sets"], body)["reference"]
+    compared_body = {"requestId": "same-result", "criteriaHash": created["criteriaHash"],
+                     **{key: body[key] for key in ("designId", "artifactId", "sourceHash", "bundleHash")}}
+    compared = call(state, "POST", ["reference-sets", created["id"], "compare"], compared_body)["comparison"]
+    for actor in ("bob", "dana"):
+        scope = state.ctx.collaboration.resolve_scope(actor, state.ctx.project_id)
+        claims = {"sub": actor, "exp": state.ctx.claims["exp"]}
+        for parts, request in ((["reference-sets"], body),
+                               (["reference-sets", created["id"], "compare"], compared_body)):
+            with pytest.raises(CollaborationError) as error:
+                route(state.ctx.host, scope, claims, "POST", parts, request, {})
+            assert (error.value.status, error.value.code) == (403, "forbidden")
+    changed = copy.deepcopy(body)
+    changed["golden"][0]["mustShow"][0]["text"] = "연 9.0%"
+    with pytest.raises(CollaborationError) as error:
+        call(state, "POST", ["reference-sets"], changed)
+    assert error.value.code == "request-changed"
+    assert call(state, "GET", ["reference-sets", created["id"]])["reference"] == created
+    assert call(state, "POST", ["reference-sets", created["id"], "compare"], compared_body)["comparison"] == compared
+    with pytest.raises(CollaborationError) as error:
+        call(state, "POST", ["reference-sets", created["id"], "compare"],
+             {**compared_body, "sourceHash": "0" * 64})
+    assert error.value.code == "benchmark-source-changed"
+    assert call(state, "GET", ["comparisons", compared["id"]])["comparison"] == compared
+
+
+def test_reference_cursor_cannot_switch_actor_and_retains_every_authorized_page(pipeline):
+    state = pipeline
+    body = reference_input(state)
+    expected = set()
+    for index in range(7):
+        reference = call(state, "POST", ["reference-sets"],
+                         {**body, "requestId": f"paged-reference-{index}", "title": f"합성 기준 {index}"})["reference"]
+        expected.add(reference["id"])
+    _, first = route(state.ctx.host, state.ctx.scope, state.ctx.claims, "GET", ["reference-sets"], {}, {})
+    assert len(first["references"]) == 5 and first["cursor"]
+    _, last = route(state.ctx.host, state.ctx.scope, state.ctx.claims, "GET", ["reference-sets"], {},
+                    {"cursor": first["cursor"]})
+    assert not last["cursor"]
+    assert {item["id"] for item in [*first["references"], *last["references"]]} == expected
+    other = state.ctx.collaboration.resolve_scope("bob", state.ctx.project_id)
+    with pytest.raises(CollaborationError) as error:
+        route(state.ctx.host, other, {"sub": "bob", "exp": state.ctx.claims["exp"]}, "GET",
+              ["reference-sets"], {}, {"cursor": first["cursor"]})
+    assert error.value.code == "design-cursor-stale"
+    for query in ({"cursor": first["cursor"], "limit": "1"}, {"cursor": "missing-cursor"}):
+        with pytest.raises(CollaborationError) as error:
+            route(state.ctx.host, state.ctx.scope, state.ctx.claims, "GET", ["reference-sets"], {}, query)
+        assert (error.value.status, error.value.code) == (409, "design-cursor-stale")
+
+
+def test_source_withdrawal_at_final_response_fence_denies_saved_criteria(pipeline, env, monkeypatch):
+    from intake.records import INTAKE_OWNER
+    state = pipeline
+    created = call(state, "POST", ["reference-sets"], reference_input(state))["reference"]
+    original = state.storage.put_many
+    revoked = False
+    def revoke_before_response(writes, checks=(), **kwargs):
+        nonlocal revoked
+        if not revoked and not writes and any(check["kind"] == "design_reference" for check in checks):
+            revoked = True
+            grant = state.storage.get(INTAKE_OWNER, "adm_grant", "grant-1")
+            env.admin({"op": "revoke_grant", "id": grant["id"], "expectedRevision": grant["revision"]})
+        return original(writes, checks, **kwargs)
+    monkeypatch.setattr(state.storage, "put_many", revoke_before_response)
+    with pytest.raises(CollaborationError) as error:
+        call(state, "GET", ["reference-sets", created["id"]])
+    assert revoked and error.value.code == "not-found"
+    assert len(state.storage.list(state.ctx.owner, "design_reference")) == 1

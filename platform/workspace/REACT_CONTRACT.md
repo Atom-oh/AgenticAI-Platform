@@ -537,6 +537,9 @@ An identical retry returns the saved reference under current source access.
 
 `GET /designs/reference-sets` returns currently authorized `{references,
 cursor?}` pages, and `GET /designs/reference-sets/:id` returns `{reference}`.
+List cursors bind actor, role, project authority, listing and page limit, and
+expire within five minutes. A mismatched or expired list cursor returns
+`409 design-cursor-stale`; inaccessible singular references remain `404 not-found`.
 Private object keys are omitted. Missing actual baseline observations refuse
 creation with `benchmark-observations-required`; a locally reconstructed
 checkpoint cannot substitute.

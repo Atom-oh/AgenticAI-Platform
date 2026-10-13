@@ -174,3 +174,10 @@ regeneration and comparison (O-05). The
 and execution evidence contract define their boundaries. Local tests preserve
 the independent golden oracle and report observed GUI defects rather than
 weakening criteria. Review/CI and actual service/user acceptance remain required.
+`test_design_observations.py` uses actual page observations for both the repaired
+synthetic screen and a mutant with its reason removed, against the same golden
+criteria. `test_design_benchmark_api.py` exercises canonical ontology change and
+regeneration, immutable retry identity, missing observations, role denials,
+actor-bound pagination and source withdrawal at the final response fence.
+`design-reference-ui.test.cjs` covers the independent criteria form, retry and
+exact-artifact comparison with API doubles.

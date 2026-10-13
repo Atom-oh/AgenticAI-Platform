@@ -692,6 +692,8 @@ def route(host, scope, claims, method, parts, body, query):
     try:
         return _response(host, scope, claims, method, parts, body, query)
     except (admission.AdmissionError, CollaborationError) as error:
+        if method == "GET" and parts == ["reference-sets"] and error.code == "design-cursor-stale":
+            raise
         if method == "GET" and parts and parts[0] not in {"config", "inputs"} and error.status in {404, 409}:
             fail(404, "not-found", "Resource not found")
         raise
