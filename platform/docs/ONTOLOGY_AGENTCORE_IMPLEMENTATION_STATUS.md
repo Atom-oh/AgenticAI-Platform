@@ -149,3 +149,15 @@ define their boundaries. `test_design_interventions.py` drives actual local
 compiler/Browser artifacts through admission, exact decisions and delivery
 invalidation; its AWS/model transports remain doubles. Independent review/CI
 and deployment-bound GEN/HAND/AUTH evidence remain required.
+
+## Synthetic ineligibility guidance (2026-10-12 candidate)
+
+`seed/design_poc/ontology.json` adds a declared Text Atom for the ineligibility
+reason and alternative action, the template's permitted body placement and the
+Screen's composition edge (O-02/V-02). It remains candidate data until human
+review; existing literal-provenance and PRD-binding rules are unchanged.
+`test_design_ineligible_copy.py` verifies candidate blocking, in-process
+publication and owner review on test storage, deterministic copy placement and
+rendered page-root guidance.
+GUI/provenance regressions remain distinct from actual model/service/customer
+acceptance.
