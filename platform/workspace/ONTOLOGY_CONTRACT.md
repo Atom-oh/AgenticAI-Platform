@@ -347,6 +347,7 @@ owner-only. Analyzer availability and source-authority checks precede dispatch.
 | `GET /ontology/schema` | Declared types, eight levels and analyzer configuration state |
 | `GET /ontology?limit=&cursor=` | Authorized page; opaque actor/role/project/generation-bound cursor |
 | `GET /ontology/nodes/:id` | Readable exact node; hidden/missing nodes are not disclosed |
+| `GET /ontology/nodes/:id/review-context` | Screen's directly owned active `IMPLEMENTS` mappings and current code endpoints; `{generation,nodes,edges,coverage}` with `coverage.complete=true` and scope `owned-direct-screen-implementations`; `404` non-Screen/hidden, `409 ontology-review-unavailable` unreadable mapping, `422 ontology-review-scope` over 50 mappings |
 | `POST /ontology/partitions` | `{requestId,name,graph,expectedGeneration}` creates/replaces a source-bound candidate partition |
 | `POST /ontology/nodes/:id/review` | `{requestId,revision,expectedGeneration,decision,reason}` records an authorized human decision |
 | `POST /ontology/context` | `{nodeIds}` returns a bounded, source-bound context fingerprint |
@@ -461,6 +462,52 @@ uses a new state such as `dispatched`/`recovery_required`. Unknown linkage is
 reported for the new reconciler without changing completion state.
 
 ## Workbench compatibility
+
+### Repeated screen composition proposals (2026-10-14 candidate)
+
+`POST /ontology/knowledge/derive` accepts `{requestId,name,decisionIds,
+analysisId,nodeIds,model,expectedGeneration}`. The first decision is an
+admitted code collection; later decisions admit any document sources of the
+selected approved Screens. `analysisId` must identify a completed B0
+Interpreter analysis with retained immutable input/admission bindings.
+Legacy/local analyses and caller-supplied parser results are not accepted.
+`GET /ontology/knowledge/derive-inputs` lists currently authorized eligible
+analyses with their collection decision; opaque or withdrawn inputs stay hidden.
+
+The configured owner/designer operation freezes parser, resolver, package,
+source analysis and canonical revisions. Deterministic mining provides static
+file support, exact source locations, unresolved coverage and independently
+reviewed Screen bindings through current approved `IMPLEMENTS` relations.
+Distinct files for one Screen count as one Screen. At least two independent
+Screen usages are required for each adoptable proposal. The model supplies
+bounded title/intent metadata only; it cannot change counts, bindings,
+composition, code interfaces or review state. Unmapped composition stays
+inspectable and cannot be adopted as a verified reusable asset.
+
+Approving an exact Screen revision also seals its displayed incident
+`IMPLEMENTS` mapping when the current code endpoint is independently approved
+at the named revision. Code approval alone cannot approve a new Screen
+mapping. Screen rejection/deprecation retires this approval basis. The Screen
+review uses the existing generation, source and role fences and exposes the
+mapping to the human reviewer before approval.
+`GET /ontology/nodes/:id/review-context` reads the Screen's directly owned
+active `IMPLEMENTS` mappings and current code endpoints, separately from its
+bounded dependency closure. It fails closed on unreadable mappings or more
+than 50 direct mappings. Only Screen approval requires this complete view;
+review/rejection and other node approvals do not require a complete closure.
+
+The existing source-fenced knowledge read/adoption routes support these
+`design.derive` proposals. Views identify their operation. Human adoption
+publishes Molecule, Organism or PageTemplate candidates and an exact evidence
+decision; subsequent node approval and reference regeneration remain separate.
+Runtime output never grants approval. Every supplied source stays in lineage.
+See the [execution design](../docs/ONTOLOGY_REVERSE_DERIVATION.md).
+
+The asset details UI displays wireframe, GUI and code declarations separately.
+A matching image source enables navigation to its authenticated original;
+a snapshot hash without such a source remains unverified metadata.
+Missing layers, unresolved block IDs and unbound code declarations are explicit.
+Rendering these fields does not establish actual three-layer O-01 acceptance.
 
 ### Guideline knowledge proposal (2026-10-14 candidate)
 

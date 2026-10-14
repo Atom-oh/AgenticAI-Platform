@@ -4,11 +4,14 @@ import { ActionState, Details, Empty, Field, label, LoadState, Section, useActio
 import { DependencyGraph } from './Knowledge';
 import type { Asset } from '../workspace/types';
 import GuidelineKnowledge from './GuidelineKnowledge';
+import ScreenDerivation from './ScreenDerivation';
+import AssetLayers, { ScreenMappings } from './AssetLayers';
 
 type SourceRef = { sourceKind: string; sourceId: string; revision: string; sha256: string; audienceRevision: string };
-type Node = { id: string; type: string; title: string; revision: number; reviewState: string; provenance: string;
+type Node = { id: string; type: string; title: string; revision: number; reviewState: string; provenance: string; contentHash?: string; tombstone?: boolean;
   sourceRefs: SourceRef[]; properties?: Record<string, unknown> };
-type Edge = { id: string; type: string; src: { id: string }; dst: { id: string }; sourceRefs: SourceRef[]; provenance: string };
+type Edge = { id: string; type: string; src: { id: string; revision?: number }; dst: { id: string; revision?: number };
+  reviewState?: string; tombstone?: boolean; sourceRefs: SourceRef[]; provenance: string };
 type Graph = { nodes: Node[]; edges: Edge[]; generation: string | null; cursor?: string | null; coverage: unknown; backend: string };
 type Impact = { items: { nodeId: string; title: string; type: string; evidenceKind: string; witnessPath: string[];
   revision?: number; snapshotGeneration?: string; witnessEdges?: unknown[]; sourceRefs?: SourceRef[]; staleWitness?: boolean }[];
@@ -54,6 +57,12 @@ export default function OntologyView() {
   const analysis = useAction();
   const query = cursor ? '?cursor=' + resource(cursor) : '';
   const state = useLoad(signal => client.get<Graph>('/ontology' + query, signal), [client, query]);
+  const context = useLoad(async signal => selected ? {
+    ...await client.post<Graph>('/ontology/context', { nodeIds: [selected.id] }, signal), selectionId: selected.id,
+  } : null, [client, selected?.id, state.data?.generation]);
+  const mapping = useLoad(async signal => selected?.type === 'Screen' ? {
+    ...await client.get<Graph>(`/ontology/nodes/${resource(selected.id)}/review-context`, signal), selectionId: selected.id,
+  } : null, [client, selected?.id, state.data?.generation]);
   const configuration = useLoad(signal => client.get<{ analyzerConfigured: boolean }>('/ontology/schema', signal), [client]);
   const assets = useLoad(signal => listPages<Asset>(client, '/assets', 'assets', signal), [client]);
   const accepted = useLoad(signal => client.get<{ items: AnalysisArtifact[]; cursor?: string }>(
@@ -91,7 +100,7 @@ export default function OntologyView() {
     if (operation.busy) operation.cancel();
     setSelected(node); setImpact(null); setReason('');
   };
-  useEffect(() => { choose(null); }, [state.data?.generation, cursor]);
+  useEffect(() => { choose(null); }, [client, state.data?.generation, cursor]);
   const nodes = (state.data?.nodes || []).filter(node => !kind || node.type === kind);
   const ids = new Set(nodes.map(node => node.id));
   const diagram = { nodes: nodes.map(node => ({ id: node.id, label: KIND[node.type] || node.type, title: node.title })),
@@ -101,6 +110,9 @@ export default function OntologyView() {
     selected && ['CodeFile', 'CodeSymbol', 'Test', 'API', 'Skill'].includes(selected.type) ? ['owner', 'developer'] :
       selected?.type === 'Team' ? ['owner'] : ['owner', 'designer'];
   const canReview = roles.includes(overview.role);
+  const canApprove = canReview && (selected?.type !== 'Screen' || (!mapping.loading && !mapping.error &&
+    mapping.data?.selectionId === selected.id && mapping.data.generation === state.data?.generation &&
+    (mapping.data.coverage as { complete?: boolean })?.complete === true));
   const review = (decision: string) => {
     if (!selected || !state.data?.generation) return;
     const target = selected;
@@ -112,8 +124,10 @@ export default function OntologyView() {
   };
   return <div className="wb-stack">
     {['owner', 'designer', 'developer'].includes(overview.role) &&
-      <GuidelineKnowledge target={selected} generation={state.data?.generation || null}
-        onPublished={() => { setCursor(''); setHistory([]); choose(null); state.refresh(); }} />}
+      <><GuidelineKnowledge target={selected} generation={state.data?.generation || null}
+        onPublished={() => { setCursor(''); setHistory([]); choose(null); state.refresh(); }} />
+      <ScreenDerivation nodes={state.data?.nodes || []} generation={state.data?.generation || null}
+        onPublished={() => { setCursor(''); setHistory([]); choose(null); state.refresh(); }} /></>}
     <Section title="자산·상품·규정·코드의 연결" description="워크스페이스 프로젝트 온톨로지를 정본으로 조회합니다. 그림의 연결은 원본 근거와 검토 상태를 함께 확인하세요."
       action={<button onClick={() => navigate('studio', { step: 'assets', tool: undefined })}>디자인 자산 등록</button>}>
       <p className="wb-muted">{LEVELS.map(level => KIND[level]).join(' → ')}</p>
@@ -193,6 +207,22 @@ export default function OntologyView() {
       </>}</LoadState>
     </Section>
     {selected && <Section title={selected.title} description={`${KIND[selected.type] || selected.type} · ${STATUS[selected.reviewState]} · 정확한 원본 버전과 연결을 검토합니다.`}>
+      {selected.type === 'Screen' && <LoadState state={mapping}>{mapping.data &&
+        mapping.data.selectionId === selected.id && mapping.data.generation === state.data?.generation &&
+        <ScreenMappings nodes={mapping.data.nodes} edges={mapping.data.edges} />}</LoadState>}
+      <LoadState state={context}>{context.data && context.data.selectionId === selected.id &&
+        context.data.generation === state.data?.generation &&
+        <><AssetLayers node={selected} nodes={context.data.nodes} edges={context.data.edges} projectId={project.id}
+          onSelect={id => {
+            void operation.run(async signal => {
+              const value = await client.get<{ node: Node; generation: string }>(`/ontology/nodes/${resource(id)}`, signal);
+              if (value.generation !== state.data?.generation) {
+                state.refresh(); throw new Error('정본 기준이 변경되었습니다. 새로 조회한 항목을 확인하세요.');
+              }
+              return value.node;
+            }, value => choose(value), '연결된 자산의 현재 원본 근거를 조회했습니다.');
+          }} />
+        <Details title="레이어·사용 근거 조회 범위" value={context.data.coverage} /></>}</LoadState>
       <Details title="원본 근거·코드 매핑" value={{ id: selected.id, sourceRefs: selected.sourceRefs, properties: selected.properties, provenance: selected.provenance }} />
       <div className="wb-actions">{selected.sourceRefs.filter(ref => ref.sourceKind === 'asset').map(ref =>
         <a key={ref.sourceId} className="wb-link" href={`#/studio?projectId=${resource(project.id)}&step=assets&assetId=${resource(ref.sourceId)}`}>등록 원본 보기</a>)}
@@ -208,7 +238,7 @@ export default function OntologyView() {
       <Field label="검토 근거"><textarea value={reason} maxLength={2000} onChange={event => setReason(event.target.value)} placeholder="원본에서 확인한 내용과 판단 근거" /></Field>
       <div className="wb-actions">
         <button disabled={!canReview || !reason.trim() || operation.busy || selected.reviewState === 'deprecated'} onClick={() => review('reviewed')}>검토 완료 기록</button>
-        <button disabled={!canReview || !reason.trim() || operation.busy || selected.reviewState !== 'reviewed'} onClick={() => review('approved')}>이 버전 승인</button>
+        <button disabled={!canApprove || !reason.trim() || operation.busy || selected.reviewState !== 'reviewed'} onClick={() => review('approved')}>이 버전 승인</button>
         <button disabled={!canReview || !reason.trim() || operation.busy || selected.reviewState === 'deprecated'} onClick={() => review('rejected')}>반려</button>
       </div>
       <p className="wb-muted">온톨로지 매핑 승인은 생성한 React 화면의 동작 검수·퍼블리싱 승인을 대신하지 않습니다.</p>

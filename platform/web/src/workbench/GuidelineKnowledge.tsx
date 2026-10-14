@@ -3,7 +3,7 @@ import { resource, listPages } from './client';
 import { ActionState, Details, Field, LoadState, Section, useAction, useLoad, useWorkbench, label } from './shared';
 
 type Artifact = { id: string; name?: string; status: string; jobId?: string; createdBy?: string };
-type Proposal = { artifact: Artifact; version?: number; generation?: string; resultHash?: string;
+type Proposal = { artifact: Artifact; operation?: string; version?: number; generation?: string; resultHash?: string;
   result?: { rejected: { reason: string }[]; approvalEffect: false; rules: {
     ruleId: string; statement: string; required: boolean; severity: string;
     citation: { sourceId: string; page: number; quote: string; derivativeHash: string };
@@ -39,7 +39,7 @@ export default function GuidelineKnowledge({ target, generation, onPublished }: 
     const timer = window.setTimeout(() => detail.refresh(), 1500);
     return () => window.clearTimeout(timer);
   }, [selected, detail.data]);
-  const result = detail.data?.result;
+  const result = !detail.data?.operation || detail.data.operation === 'design.guidelines' ? detail.data?.result : undefined;
   return <Section title="가이드에서 인용 규칙 후보 만들기"
     description="반입 승인된 원문과 선택한 자산의 정확한 버전을 기준으로 후보를 만듭니다. AI는 규칙을 승인하지 않습니다.">
     <p>{target ? `선택 자산: ${target.title}` : '아래 자산 목록에서 승인된 자산을 선택하세요.'}</p>
@@ -69,7 +69,7 @@ export default function GuidelineKnowledge({ target, generation, onPublished }: 
       }}>가이드 인용 규칙 후보 생성</button>
     <ActionState action={action} />
     <LoadState state={records}>{records.data && <>
-      <div className="wb-record-list">{records.data.items.map(row => <button key={row.artifact.id} className="wb-record"
+      <div className="wb-record-list">{records.data.items.filter(row => !row.operation || row.operation === 'design.guidelines').map(row => <button key={row.artifact.id} className="wb-record"
         onClick={() => setSelected(row.artifact.id)}>{row.artifact.name || row.artifact.id} · {label(row.artifact.status)}</button>)}</div>
       <button disabled={!cursor} onClick={() => setCursor('')}>후보 첫 페이지</button>
       <button disabled={!records.data.cursor} onClick={() => setCursor(records.data?.cursor || '')}>후보 다음 페이지</button>
@@ -81,7 +81,7 @@ export default function GuidelineKnowledge({ target, generation, onPublished }: 
         <button disabled={action.busy} onClick={() => void action.run(signal => client.post(
           `/ontology/executions/${resource(detail.data!.artifact.jobId!)}/cancel`, {}, signal),
           () => detail.refresh(), '본인 작업 중지를 요청했습니다.')}>본인 지식화 작업 중지</button>}
-      {result?.rules.map(rule => <article className="wb-record" key={rule.ruleId}>
+      {result?.rules?.map(rule => <article className="wb-record" key={rule.ruleId}>
         <strong>{rule.statement}</strong><p>{rule.required ? '필수 규칙 후보' : '권고 규칙 후보'} · {rule.severity}</p>
         <p>원문 {rule.citation.page}페이지: {rule.citation.quote}</p>
         <Details title="정확한 원문·추출 근거" value={rule.citation} />

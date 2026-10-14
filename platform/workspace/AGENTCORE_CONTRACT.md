@@ -1504,6 +1504,23 @@ keeps historical comparison separate from current generation and approval.
 Actual deployed Browser profile/canary/transport/service evidence remains
 required under BROW-01/02 and G0-BROWSER/RUNTIME.
 
+### Screen derivation execution (2026-10-14 candidate)
+
+`design.derive` uses the knowledge-stage `context → generate → verify`
+protocol, the configured design project/model cohort, owner/designer writes,
+one measured metadata call and no automatic paid retry. Its closed profile
+permits at most two calls and reserves 20 non-source completion operations.
+The source-analysis artifact, original admitted collection, exact resolver and
+canonical usage bindings are frozen predicates. Accepted source analyses
+retain their manifest/admission bindings for reuse after job TTL.
+The registered knowledge completion adapter independently repeats deterministic
+mining, metadata validation and result verification before atomic completion.
+Human adoption retains the current project-version fence and exact evidence.
+Historical reads recheck current source/admission authority and analysis
+integrity; a current adoption also requires the frozen canonical snapshot.
+Unknown, truncated or unmapped evidence cannot silently become complete.
+The existing Runtime, Identity, admission, model and telemetry gates apply.
+
 ### Guideline knowledge execution (2026-10-14 candidate)
 
 `design.guidelines` has `context → generate → verify` stages, one bounded model

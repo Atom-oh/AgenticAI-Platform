@@ -134,6 +134,18 @@ async function harness() {
       if (target === '/designs/config') return json({ enabled: false, models: [] });
       if (target === '/designs/inputs') return json({ inputs: [] });
       if (target === '/ontology/knowledge') return json({ items: [] });
+      if (target === '/ontology/knowledge/derive-inputs') return json({ items: [] });
+      if (/^\/ontology\/nodes\/[^/]+\/review-context$/.test(target)) {
+        const response = clone(data.ontology);
+        response.coverage = { complete: true, scope: 'owned-direct-screen-implementations', truncated: false };
+        if (fixture.holdOntologyContext) {
+          fixture.heldOntologyContext = () => json(response).catch(() => {}); return;
+        }
+        return json(response);
+      }
+      if (target === '/ontology/context') return json(data.ontology);
+      if (/^\/ontology\/nodes\/[^/]+$/.test(target) && method === 'GET') return json({
+        node: data.ontology.nodes.find(item => item.id === target.split('/')[3]), generation: data.ontology.generation });
       if (target === '/ontology/schema') return json({ analyzerConfigured: Boolean(fixture.analyzerConfigured) });
       if (target === '/ontology/analyses' && method === 'POST') {
         data.jobs['analysis-job'] = { id: 'analysis-job', kind: 'ontology-analysis', status: 'queued' };
@@ -375,8 +387,18 @@ test('canonical ontology shows provenance and unknown coverage, keeps review rev
     await h.page.getByLabel('검토 근거', { exact: true }).fill('원본의 화면 연결을 확인했습니다.');
     await h.page.getByRole('button', { name: '검토 완료 기록', exact: true }).click();
     await h.page.waitForFunction(() => [...document.querySelectorAll('.wb-record-list button')].some(el => el.textContent.includes('검토 완료')));
+    h.fixture.holdOntologyContext = true;
+    h.data('a').ontology.coverage.truncated = true;
     await choose('A 화면');
     await h.page.getByLabel('검토 근거', { exact: true }).fill('현재 버전 승인');
+    assert.equal(await h.page.getByRole('button', { name: '이 버전 승인', exact: true }).isDisabled(), true);
+    assert.equal(await h.page.getByRole('button', { name: '반려', exact: true }).isDisabled(), false);
+    assert.equal(await h.page.getByRole('button', { name: '검토 완료 기록', exact: true }).isDisabled(), false);
+    while (!h.fixture.heldOntologyContext) await new Promise(resolve => setTimeout(resolve, 10));
+    h.fixture.holdOntologyContext = false;
+    await h.fixture.heldOntologyContext();
+    await h.page.waitForFunction(() => [...document.querySelectorAll('button')].some(el =>
+      el.textContent === '이 버전 승인' && !el.disabled));
     assert.equal(await h.page.getByRole('button', { name: '이 버전 승인', exact: true }).isDisabled(), false);
     await h.page.getByLabel('프로젝트', { exact: true }).selectOption('b');
     await h.page.locator('.wb-record-list button').filter({ hasText: 'B 이미지' }).waitFor();

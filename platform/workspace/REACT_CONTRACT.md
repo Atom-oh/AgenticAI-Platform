@@ -1,5 +1,19 @@
 # React workspace implementation interfaces
 
+The 2026-10-14 ontology workbench addition is governed by
+[repeated composition proposals](ONTOLOGY_CONTRACT.md#repeated-screen-composition-proposals-2026-10-14-candidate).
+Its UI selects accepted analyses and exact approved Screens, preserves request
+identity through retry, displays file/Screen support and unknown scope, and
+requires exact evidence for human candidate adoption. Project/client changes
+clear pending selections and abort polling. Current role gates mirror the API;
+only the creator may cancel their queued or running execution.
+Asset details show wireframe, GUI and code declarations with missing/unbound
+states, authenticated original navigation and actual revision-bound usage.
+These views and candidate decisions do not replace UX/frontend release approval.
+Screen approval waits for the complete directly owned mapping review view in
+ONTOLOGY_CONTRACT; review/rejection remain available when the dependency closure
+is truncated.
+
 Baseline code audit: 2026-09-13. Candidate interface amendments: 2026-10-11 and
 2026-10-12; their validation and live gates remain separate. Follow [root instructions](../../AGENTS.md),
 [review context](../../docs/REVIEW_CONTEXT.md), and [SPEC.md](../../SPEC.md) §7-1.

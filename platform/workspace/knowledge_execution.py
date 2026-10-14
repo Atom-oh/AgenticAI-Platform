@@ -17,6 +17,7 @@ from workspace.ontology_store import Ontology
 from workspace.ontology_ux import parse_when
 
 OPERATION = "design.guidelines"
+OPERATIONS = frozenset({OPERATION, "design.derive"})
 KIND = "knowledge-stage"
 ROLES = {"owner", "designer"}
 READ_ROLES = ROLES | {"developer"}
@@ -67,6 +68,9 @@ def condition_ids(snapshot):
 
 def verify_proposal(manifest, response):
     """Pure replay of extraction checks; never calls a provider."""
+    if manifest["operation"] == "design.derive":
+        from workspace.derive_proposals import verify_proposal as verify_derive
+        return verify_derive(manifest, response)
     if not isinstance(response, str) or len(response.encode()) > 512 * 1024:
         raise LedgerError("knowledge-proposal-invalid")
     deps = {"normalize": lambda text: text, "generate": lambda *args: response}
@@ -87,8 +91,18 @@ def verify_proposal(manifest, response):
             "approvalEffect": False}
 
 
-def submit(ctx, body, ledger, configuration, enqueue):
-    fields(body, {"requestId", "name", "decisionIds", "nodeIds", "model", "expectedGeneration"})
+def context_for(ctx, value):
+    if value.get("operation") == "design.derive":
+        from workspace.derive_proposals import selected_context as derive_context
+        return derive_context(ctx, value.get("decisionIds"), value.get("nodeIds"), value.get("analysisId"))
+    return selected_context(ctx, value.get("decisionIds"), value.get("nodeIds"))
+
+
+def submit(ctx, body, ledger, configuration, enqueue, *, operation=OPERATION):
+    if operation not in OPERATIONS:
+        raise LedgerError("profile-invalid")
+    fields(body, {"requestId", "name", "decisionIds", "nodeIds", "model", "expectedGeneration"}
+           | ({"analysisId"} if operation == "design.derive" else set()))
     ctx.fresh(ROLES)
     settings = configuration.get("design") or {}
     model = body.get("model")
@@ -97,7 +111,7 @@ def submit(ctx, body, ledger, configuration, enqueue):
     name = schema._identifier(body.get("name"))
     identifier = ctx.identity("wb_artifact", body.get("requestId"))
     old = ctx.storage.get(ctx.owner, "wb_artifact", identifier)
-    request_hash = schema.digest(body)
+    request_hash = schema.digest(body if operation == OPERATION else {**body, "operation": operation})
     if old:
         if old.get("kind") != KIND or old.get("requestHash") != request_hash or old.get("createdBy") != ctx.actor:
             raise LedgerError("request-changed")
@@ -106,23 +120,25 @@ def submit(ctx, body, ledger, configuration, enqueue):
         if job["status"] == "queued":
             enqueue(ctx.owner, job["id"])
         return {"artifact": view_artifact(old), "job": view_job(job)}
-    admitted, snapshot, checks, inspection = selected_context(ctx, body.get("decisionIds"), body.get("nodeIds"))
+    admitted, snapshot, checks, inspection = context_for(ctx, {**body, "operation": operation})
     if snapshot["generation"] != body.get("expectedGeneration"):
         raise LedgerError("ontology-changed")
-    manifest = {"schemaVersion": 1, "operation": OPERATION, "projectId": ctx.project_id,
+    manifest = {"schemaVersion": 1, "operation": operation, "projectId": ctx.project_id,
         "snapshot": snapshot, "pages": admitted["pages"], "inspection": inspection, "model": model,
         "nodeIds": body["nodeIds"], "decisionIds": body["decisionIds"], "sourceRefs": admitted["sourceRefs"],
         "tool": configuration["interpreter"], "admissions": admitted["admissions"], "sourceChecks": checks,
         "sourceBindings": [{"sourceKind": row["sourceKind"], "sourceId": row["sourceId"],
                            "revision": row["revision"], "audience": row["audienceRevision"]}
                           for row in admitted["sourceRefs"]]}
+    if operation == "design.derive":
+        manifest.update(analysisId=body["analysisId"], derivation=admitted["derivation"])
     raw = encode(manifest)
     digest = hashlib.sha256(raw).hexdigest()
     key = ctx.storage.key_for(ctx.owner, "wb_artifact", identifier, "input-" + digest + ".json")
     ctx.storage.put_blob_once(key, raw, "application/json")
     project = ctx.scope["project"]
     job = ledger.api().admit(ctx.owner, request_key=body["requestId"], actor=ctx.actor, project_id=ctx.project_id,
-        operation=OPERATION, model=model, manifest={"ref": key, "hash": digest}, admissions=admitted["admissions"],
+        operation=operation, model=model, manifest={"ref": key, "hash": digest}, admissions=admitted["admissions"],
         backend_config_revision=configuration["revision"], authorization_expires_at=admitted["expiresAt"],
         project_authority={"authorityRevision": project["authorityRevision"], "membershipDigest": schema.digest(project["members"])},
         completion_scope={"sourceChecks": len(checks), "sourceBindings": len(manifest["sourceBindings"]), "nonSourceOperations": 20},
@@ -136,7 +152,7 @@ def manifest_for(ctx, artifact):
     if artifact.get("kind") != KIND:
         fail(404, "not-found", "지식화 후보를 찾을 수 없습니다.")
     job = ctx.storage.get(ctx.owner, "job", artifact["jobId"])
-    if job and (job.get("operation") != OPERATION or job.get("artifact", {}).get("id") != artifact["id"]):
+    if job and (job.get("operation") not in OPERATIONS or job.get("artifact", {}).get("id") != artifact["id"]):
         fail(404, "not-found", "지식화 후보를 찾을 수 없습니다.")
     pointer = artifact.get("input") or (job or {}).get("manifest")
     if not pointer:
@@ -148,17 +164,24 @@ def manifest_for(ctx, artifact):
     raw = ctx.storage.get_blob(pointer["ref"])
     if hashlib.sha256(raw).hexdigest() != pointer["hash"]:
         fail(409, "knowledge-evidence-changed", "지식화 입력 근거가 변경되었습니다.")
-    return json.loads(raw), job
+    manifest = json.loads(raw)
+    if manifest.get("operation") not in OPERATIONS or job and manifest["operation"] != job["operation"]:
+        fail(409, "knowledge-evidence-changed", "지식화 실행 종류가 변경되었습니다.")
+    return manifest, job
 
 
 def authorized(ctx, artifact, *, require_current=True):
     ctx.fresh(READ_ROLES)
     manifest, job = manifest_for(ctx, artifact)
     if require_current:
-        admitted, snapshot, checks, _ = selected_context(ctx, manifest["decisionIds"], manifest["nodeIds"])
+        admitted, snapshot, checks, _ = context_for(ctx, manifest)
     else:
         from workspace.ontology_sources import Sources
-        admitted = inputs(ctx, manifest["decisionIds"])
+        if manifest["operation"] == "design.derive":
+            from workspace.derive_proposals import source_inputs
+            admitted = source_inputs(ctx, manifest["decisionIds"], manifest["analysisId"])
+        else:
+            admitted = inputs(ctx, manifest["decisionIds"])
         reader = Sources(ctx)
         reader.verify(manifest["snapshot"]["sourceRefs"])
         fences, deadlines = reader.recheck_deadlines()
@@ -167,6 +190,10 @@ def authorized(ctx, artifact, *, require_current=True):
         snapshot = manifest["snapshot"]
     if admitted["admissions"] != manifest["admissions"] or snapshot != manifest["snapshot"]:
         fail(409, "knowledge-source-changed", "지식화 원본 또는 자산 기준이 변경되었습니다.")
+    if manifest["operation"] == "design.derive" and (
+            admitted["analysisEvidence"] != manifest["derivation"]["analysisEvidence"]
+            or require_current and admitted["derivation"] != manifest["derivation"]):
+        fail(409, "knowledge-source-changed", "역도출의 분석·사용 화면 근거가 변경되었습니다.")
     return manifest, unique([*checks, ctx.check("wb_artifact", artifact),
                             *([ctx.check("job", job)] if job else [])]), admitted["expiresAt"]
 
@@ -180,7 +207,7 @@ class KnowledgePublication:
         job = prepared["job"]
         ctx = context(self.host, job)
         artifact = ctx.get("wb_artifact", job["artifact"]["id"])
-        if job["operation"] != OPERATION or job["backendConfigRevision"] != self.configuration["revision"]:
+        if job["operation"] not in OPERATIONS or job["backendConfigRevision"] != self.configuration["revision"]:
             raise LedgerError("profile-invalid")
         manifest, checks, expiry = authorized(ctx, artifact)
         if manifest["tool"] != self.configuration["interpreter"]:
