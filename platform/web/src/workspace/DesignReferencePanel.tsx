@@ -61,8 +61,10 @@ export default function DesignReferencePanel({ designId, variant, flow, cases, c
       }
       const reference = references.find(item => item.id === selected);
       if (kind === 'compare' && !reference) throw new Error('비교할 기준 세트를 다시 선택하세요.');
-      const data = kind === 'create' ? { title: title.trim(), golden, designId, ...variant } :
-        { designId, ...variant, criteriaHash: reference?.criteriaHash };
+      // The API accepts only these variant bindings; full variant rows carry run metadata.
+      const binding = { artifactId: variant.artifactId, sourceHash: variant.sourceHash, bundleHash: variant.bundleHash };
+      const data = kind === 'create' ? { title: title.trim(), golden, designId, ...binding } :
+        { designId, ...binding, criteriaHash: reference?.criteriaHash };
       const path = kind === 'create' ? '/designs/reference-sets' : `/designs/reference-sets/${resource(selected)}/compare`;
       const key = JSON.stringify([path, data]);
       if (request.current?.key !== key) request.current = { key, body: { ...data, requestId: crypto.randomUUID() } };

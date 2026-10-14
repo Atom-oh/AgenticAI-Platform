@@ -262,7 +262,7 @@ def test_source_withdrawal_at_final_response_fence_denies_saved_criteria(pipelin
 
 @pytest.mark.parametrize("mutation", [
     "array-boolean", "array-object", "array-string", "unknown-field",
-    "unknown-assertion-field", "missing-field", "duplicate-id", "text-object",
+    "unknown-assertion-field", "missing-field", "duplicate-id", "text-object", "title-object",
 ])
 def test_malformed_reference_criteria_are_client_errors_without_source_reads_or_writes(
         design_state, monkeypatch, mutation):
@@ -280,14 +280,15 @@ def test_malformed_reference_criteria_are_client_errors_without_source_reads_or_
         golden[0].pop("mustNotShow")
     elif mutation == "duplicate-id":
         golden.append(copy.deepcopy(golden[0]))
-    else:
+    elif mutation == "text-object":
         golden[0]["mustShow"] = [{"screen": "intro", "text": {"untrusted": True}}]
+    title = {"untrusted": True} if mutation == "title-object" else "입력 형식 검사"
     def unexpected_read(*args, **kwargs):
         pytest.fail("Malformed criteria must be refused before reading an artifact")
     monkeypatch.setattr(design_benchmarks, "artifact", unexpected_read)
     with pytest.raises(CollaborationError) as error:
         route(ctx.host, ctx.scope, ctx.claims, "POST", ["reference-sets"], {
-            "requestId": "invalid-reference", "title": "입력 형식 검사",
+            "requestId": "invalid-reference", "title": title,
             "designId": design["id"], "artifactId": "not-read",
             "sourceHash": "a" * 64, "bundleHash": "b" * 64, "golden": golden,
         }, {})

@@ -88,7 +88,10 @@ def create(ctx, body):
     from workspace.design_api import _object
     fields(body, {"requestId", "title", "designId", "artifactId", "sourceHash", "bundleHash", "golden"})
     ctx.fresh({"owner", "designer"})
-    title = schema._text(body.get("title"), 160)
+    try:
+        title = schema._text(body.get("title"), 160)
+    except (ValueError, TypeError, UnicodeError):
+        fail(422, "benchmark-reference-invalid", "기준 세트 제목을 확인하세요.")
     golden = body.get("golden")
     if not isinstance(golden, list) or not 1 <= len(golden) <= 64:
         fail(422, "benchmark-reference-limit", "독립 기준은 1~64개, 64KiB 이하로 정리하세요.")
