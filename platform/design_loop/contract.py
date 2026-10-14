@@ -362,6 +362,13 @@ def derive(prd, flow, k, registry, published_pages, *, cases, criteria, viewport
         return {"contract": None, "findings": findings, "ruleCount": len(rules)}
     contract = {"schemaVersion": 1, "title": f"{k.procedures.get(flow['procedureId'], {}).get('title', '설계')} 동작 검증",
                 "brief": "", "assetIds": [], "viewport": viewport, "rules": rules, "unresolved": [], "bindings": {}}
+    contract["observationPlan"] = {
+        "schemaVersion": 1, "caseControl": CASE_SELECT, "cases": cases,
+        "entry": registry.page_id(flow["entry"]), "terminals": list(flow["terminals"]),
+        "pages": [{"target": registry.state_page_id(screen, state), "screen": screen, "state": state,
+                   "next": registry.test_ids(screen)["cta"] if _has_action(k, screen) else None}
+                  for screen, state in pages],
+    }
     for key in CRITERIA:
         if criteria and criteria.get(key) is not None:
             contract[key] = criteria[key]

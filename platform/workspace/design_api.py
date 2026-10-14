@@ -201,6 +201,29 @@ def public(design):
 
 def _route(ctx, method, parts, body, query):
     host, scope, claims = ctx.host, ctx.scope, ctx.claims
+    if parts and parts[0] == "reference-sets":
+        from workspace import design_benchmarks
+        if parts == ["reference-sets"] and method == "POST":
+            return 201, {"reference": design_benchmarks.create(ctx, body)}
+        if parts == ["reference-sets"] and method == "GET":
+            page = page_for(ctx, "design_reference", query)
+            items = []
+            for record in page["items"]:
+                probe = Service(host, scope, claims)
+                try:
+                    item = design_benchmarks.public(probe, record)
+                except (admission.AdmissionError, CollaborationError, ValueError):
+                    continue
+                observe(ctx, probe._design_checks, probe._design_expiry)
+                items.append(item)
+            return 200, {"references": items, "cursor": page.get("cursor")}
+        if len(parts) == 2 and method == "GET":
+            return 200, {"reference": design_benchmarks.public(ctx, ctx.get("design_reference", parts[1]))}
+        if len(parts) == 3 and parts[2] == "compare" and method == "POST":
+            return 201, {"comparison": design_benchmarks.compare(ctx, parts[1], body)}
+    if len(parts) == 2 and parts[0] == "comparisons" and method == "GET":
+        from workspace.design_benchmarks import read_comparison
+        return 200, {"comparison": read_comparison(ctx, ctx.get("design_comparison", parts[1]))}
     if len(parts) == 2 and parts[1] == "comments" and method in {"GET", "POST"}:
         from workspace.design_discussions import handle
         return handle(ctx, parts[0], method, body, query)
@@ -524,6 +547,16 @@ def _response(host, scope, claims, method, parts, body, query):
     elif not hasattr(ctx, "_design_checks"):
         ctx._design_checks = []
         ctx._design_expiry = ctx.authorization()["authorizationExpiresAt"]
+    if isinstance(result.get("reference"), dict):
+        from workspace.design_benchmarks import public as reference_public
+        current = reference_public(ctx, ctx.get("design_reference", result["reference"]["id"]))
+        if current != result["reference"]:
+            fail(409, "benchmark-source-changed", "응답을 준비하는 중 기준이 변경되었습니다.")
+    if isinstance(result.get("comparison"), dict):
+        from workspace.design_benchmarks import read_comparison
+        current = read_comparison(ctx, ctx.get("design_comparison", result["comparison"]["id"]))
+        if current != result["comparison"]:
+            fail(409, "benchmark-source-changed", "응답을 준비하는 중 비교 근거가 변경되었습니다.")
     if isinstance(result.get("design"), dict):
         record = ctx.get("design", result["design"]["id"])
         if record["version"] != result["design"]["version"]:
@@ -558,8 +591,11 @@ def _response(host, scope, claims, method, parts, body, query):
     checks = unique([*ctx._design_checks, ctx.check("project", ctx.scope["project"])])
     if len(checks) > 100:
         fail(422, "design-response-scope", "조회 범위를 줄여 다시 요청하세요.")
-    ctx.storage.put_many([], checks, retry_conflicts=False, _writer=HUMAN,
-        before_attempt=lambda: check_source_deadlines(ctx.storage, checks, ctx.claims, ctx._design_expiry))
+    try:
+        ctx.storage.put_many([], checks, retry_conflicts=False, _writer=HUMAN,
+            before_attempt=lambda: check_source_deadlines(ctx.storage, checks, ctx.claims, ctx._design_expiry))
+    except Conflict:
+        fail(409, "design-changed", "응답을 준비하는 중 자료 또는 권한이 변경되었습니다.")
     return status, result
 
 
@@ -659,6 +695,8 @@ def route(host, scope, claims, method, parts, body, query):
     try:
         return _response(host, scope, claims, method, parts, body, query)
     except (admission.AdmissionError, CollaborationError) as error:
+        if method == "GET" and parts == ["reference-sets"] and error.code == "design-cursor-stale":
+            raise
         if method == "GET" and parts and parts[0] not in {"config", "inputs"} and error.status in {404, 409}:
             fail(404, "not-found", "Resource not found")
         raise

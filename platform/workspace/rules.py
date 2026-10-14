@@ -75,6 +75,9 @@ def validate_contract(data: dict, asset_texts: dict[str, str] | None = None) -> 
         "unresolved": [],
         "bindings": {},
     }
+    if "observationPlan" in data:
+        from workspace.design_observations import normalize
+        normalized["observationPlan"] = normalize(data["observationPlan"])
     if "changeRequest" in data:
         from workspace.change_requests import normalize_request
         normalized["changeRequest"] = normalize_request(data["changeRequest"])
