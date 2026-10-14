@@ -172,6 +172,7 @@ def test_names_sharing_syllables_with_financial_words_are_still_replaced(context
     "저는 임차인입니다", "저는 임대인입니다", "저는 차주입니다", "저는 채무자예요", "저는 차상위입니다", "저는 고령자입니다",
     "저는 장애인입니다", "저는 신혼이에요", "저는 노인입니다", "저는 승객입니다", "저는 무직인데요",
     "설계사님께", "차주님께", "주임님이", "선임님께", "부사장님", "연구원님", "점장님", "채무자님", "고문님",
+    "저는 연체자인데요", "저는 신규인데요", "저는 현재, 연봉 7천", "저는 장남이고", "저는 전업이고",
 ])
 def test_borrower_tenant_and_role_words_are_not_names(text):
     assert anonymize.anonymize(text)["text"] == text
