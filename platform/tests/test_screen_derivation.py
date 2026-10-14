@@ -25,13 +25,17 @@ from workspace.derive_proposals import aliases
 
 
 @pytest.fixture
-def derivation(integrated, monkeypatch):
+def derivation(integrated, monkeypatch, request):
     state = integrated
     state.ledger.api().cancel(state.owner, state.job_id, actor="alice")
+    mode = getattr(request, "param", "sequence")
+    names = ("Heading", "Body", "Layout") if mode == "template" else ("Heading", "Body")
+    jsx = "<Layout><Heading/><Body/></Layout>" if mode == "template" else "<><Heading/><Body/></>"
+    imports = ", ".join(names)
     decision, _ = admitted_collection(state.env, {
-        "src/parts.tsx": "export const Heading = () => null;\nexport const Body = () => null;\n",
-        "src/First.tsx": 'import { Heading, Body } from "./parts";\nexport const First = () => <><Heading/><Body/></>;\n',
-        "src/Second.tsx": 'import { Heading, Body } from "./parts";\nexport const Second = () => <><Heading/><Body/></>;\n',
+        "src/parts.tsx": "".join(f"export const {name} = () => null;\n" for name in names),
+        "src/First.tsx": f'import {{ {imports} }} from "./parts";\nexport const First = () => {jsx};\n',
+        "src/Second.tsx": f'import {{ {imports} }} from "./parts";\nexport const Second = () => {jsx};\n',
     }, setup=False)
     state.decision = decision
     queued = analyze(state.ctx, {"requestId": "repeat-source", "name": "repeat-source",
@@ -45,9 +49,10 @@ def derivation(integrated, monkeypatch):
     code = {node["properties"]["path"]: node for node in nodes if node["type"] == "CodeFile"}
     base = {"scope": {"kind": "project", "projectId": state.ctx.project_id}, "revision": 1,
         "sourceRefs": [source], "provenance": "declared", "reviewState": "candidate", "tombstone": False}
-    declared = [schema.seal({**base, "id": "part-" + name.lower(), "type": "Atom", "title": name,
+    declared = [schema.seal({**base, "id": "part-" + name.lower(),
+        "type": "Molecule" if mode == "organism" and name == "Heading" else "Atom", "title": name,
         "properties": {"uxModel": {"layers": {"code": {"importPath": "src/parts.tsx",
-            "exportName": name, "props": {}}}}}}) for name in ("Heading", "Body")]
+            "exportName": name, "props": {}}}}}}) for name in names]
     declared += [schema.seal({**base, "id": "screen-" + name.lower(), "type": "Screen", "title": name,
         "properties": {}}) for name in ("First", "Second")]
     edges = [schema.seal({"id": "impl-" + name.lower(), "type": "IMPLEMENTS",
@@ -59,7 +64,7 @@ def derivation(integrated, monkeypatch):
         "src": {"id": "screen-" + screen.lower(), "revision": 1},
         "dst": {"id": "part-" + name.lower(), "revision": 1}, "sourceRefs": [source],
         "provenance": "declared", "reviewState": "candidate", "tombstone": False})
-        for screen in ("First", "Second") for name in ("Heading", "Body")]
+        for screen in ("First", "Second") for name in names]
     state.ids = store.publish_candidate("screen-review", {"schemaVersion": 1, "projectId": state.ctx.project_id,
         "nodes": declared, "edges": edges}, expected_generation=store.current()["generation"],
         request_id="screen-review")["identities"]
@@ -127,6 +132,22 @@ def test_measured_runtime_mines_independent_screens_and_human_adopts_candidates(
     assert status == 201 and publication["approvalEffect"] is False
     created = Ontology(state.ctx).read(list(publication["publication"]["identities"].values()))["nodes"]
     assert created and all(node["reviewState"] == "candidate" for node in created)
+
+
+@pytest.mark.parametrize("derivation", ["template", "organism"], indirect=True)
+def test_template_slots_and_higher_composition_are_mined_without_inventing_code(derivation):
+    state = derivation
+    result, artifact = execute(state)
+    assert result["status"] == "succeeded" and len(state.calls) == 1
+    checked = read_object(state.ctx, artifact["result"])
+    nodes = checked["graph"]["nodes"]
+    templates = [node for node in nodes if node["type"] == "PageTemplate"]
+    if templates:
+        ux = templates[0]["properties"]["uxModel"]
+        assert ux["slots"] and "code" not in ux.get("layers", {})
+        assert all(slot["allowed"] for slot in ux["slots"].values())
+    else:
+        assert any(node["type"] == "Organism" for node in nodes)
 
 
 def test_several_files_for_one_screen_are_not_independent_evidence(derivation):
