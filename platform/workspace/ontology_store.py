@@ -796,6 +796,29 @@ class Ontology:
                 "coverage": {"complete": False, "scope": "authorized-procedure-snapshot",
                              "truncated": truncated, "unknown": sorted(unknown | {"outside-snapshot-not-certified"})}}
 
+    def review_context(self, identifier):
+        """Exact mappings affected by Screen approval; unrelated closure size is irrelevant."""
+        schema._identifier(identifier)
+        current = self.current()
+        node = self._node(current, identifier) if current else None
+        if not node or node["type"] != "Screen" or not self._visible_node(current, node):
+            fail(404, "not-found", "검토할 화면을 조회할 수 없습니다.")
+        location = self._index(current, "nodes", _bucket(identifier))[identifier]
+        part = self._part(current, location["partition"])
+        mappings = [edge for edge in part["graph"]["edges"] if not edge["tombstone"]
+                    and edge["type"] == "IMPLEMENTS" and edge["dst"]["id"] == identifier]
+        if len(mappings) > 50:
+            fail(422, "ontology-review-scope", "화면의 직접 코드 매핑을 50개 이하로 나누세요.")
+        nodes = {identifier: node}
+        for edge in mappings:
+            code = self._node(current, edge["src"]["id"])
+            if not code or not self._visible_node(current, code) or not self._visible(edge["sourceRefs"]):
+                fail(409, "ontology-review-unavailable", "직접 코드 매핑의 현재 원본 권한을 확인하지 못했습니다.")
+            nodes[code["id"]] = code
+        self._recheck(current)
+        return {"generation": current["generation"], "nodes": list(nodes.values()), "edges": mappings,
+                "coverage": {"complete": True, "scope": "owned-direct-screen-implementations", "truncated": False}}
+
     def context(self, node_ids):
         graph = self.closure(node_ids, direction="both", max_nodes=50)
         if set(node_ids) - {node["id"] for node in graph["nodes"]}:

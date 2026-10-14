@@ -214,4 +214,24 @@ uses local Chromium and API doubles for citations, retry identity, rejected
 proposals, role restrictions and project changes. Local results do not pass
 live SRC/AUTH/GEN/RUN cases or G0-ADMISSION/RUNTIME/IDENTITY/MODELS/TELEMETRY.
 Independent latest-HEAD review, CI and live user acceptance remain required.
-O-03 reverse derivation and verified O-01 layer/Pattern mappings remain open.
+Verified O-01 layer/Pattern mappings and live O-03 acceptance remain open.
+
+## Screen derivation and asset evidence (2026-10-14 candidate)
+
+`workspace/derive_proposals.py`, the shared knowledge execution workflow and
+`ScreenDerivation.tsx` connect accepted source analysis to static composition
+proposals and exact human candidate adoption. `AssetLayers.tsx` separates
+registered wireframe/GUI/code declarations and usage witnesses.
+`GET /ontology/nodes/:id/review-context` exposes the directly owned Screen
+implementations without requiring a complete project dependency closure.
+Only Screen approval waits for this view; review and rejection remain available.
+
+`test_screen_derivation.py` exercises actual admission, parsing, RSA receipts,
+measured model boundaries and conditional storage with substituted AWS/model
+transports. Cases distinguish file counts from independent Screens, exercise
+Organism and template proposals, reject malformed metadata and stale authority,
+and retain current authorized evidence after job TTL. Browser tests in
+`screen-derivation-ui.test.cjs` and `workbench-ui.test.cjs` use synthetic APIs
+for retry identity, roles, scope changes and direct-mapping approval.
+Exact-HEAD review/CI remain integration gates. Bound customer three-layer
+assets, Pattern mappings and all eight live service gates remain separate.

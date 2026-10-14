@@ -164,13 +164,37 @@ def test_several_files_for_one_screen_are_not_independent_evidence(derivation):
              "resultHash": artifact["result"]["sha256"], "expectedGeneration": state.body["expectedGeneration"]}, {})
 
 
-@pytest.mark.parametrize("metadata", ["연 9% 특별 구성", "화면 3개 구성"])
-def test_model_cannot_supply_financial_values_or_evidence_counts(derivation, metadata):
+@pytest.mark.parametrize("metadata", ["연 9% 특별 구성", "화면 3개 구성", "안내\x1f구성"])
+def test_model_cannot_supply_invalid_metadata_financial_values_or_evidence_counts(derivation, metadata):
     state = derivation
     state.answer = lambda candidates: {"proposals": [{"id": alias, "title": metadata, "intent": "안내"} for alias in aliases(candidates)]}
     result, artifact = execute(state)
     assert result["status"] == "needs_changes"
     assert not read_object(state.ctx, artifact["result"])["graph"]["nodes"]
+
+
+def test_decoded_lone_surrogate_is_rejected_as_metadata(derivation):
+    from workspace.derive_proposals import verify_proposal
+    from workspace.knowledge_execution import manifest_for
+    state = derivation
+    queued = submit(state.ctx, state.body, state.ledger, state.config, lambda *args: None, operation="design.derive")
+    artifact = state.ctx.get("wb_artifact", queued["artifact"]["id"])
+    manifest, _ = manifest_for(state.ctx, artifact)
+    response = json.dumps({"proposals": [{"id": alias, "title": "안내\ud800", "intent": "안내"}
+        for alias in aliases(manifest["derivation"]["evidence"]["candidates"])]})
+    checked = verify_proposal(manifest, response)
+    assert checked["rejected"][0]["reason"] == "metadata-invalid" and not checked["graph"]["nodes"]
+    assert not state.calls
+
+
+@pytest.mark.parametrize("missing", ["decisionIds", "nodeIds", "analysisId"])
+def test_derive_missing_required_input_fails_before_admission(derivation, missing):
+    state = derivation
+    body = {key: value for key, value in state.body.items() if key != missing}
+    with pytest.raises(CollaborationError) as error:
+        submit(state.ctx, body, state.ledger, state.config, lambda *args: None, operation="design.derive")
+    assert error.value.status == 422 and not state.calls
+    assert not [row for row in state.storage.list(state.owner, "wb_artifact") if row.get("kind") == "knowledge-stage"]
 
 
 def test_retained_source_input_is_required_and_current_analysis_tampering_blocks(derivation, monkeypatch):

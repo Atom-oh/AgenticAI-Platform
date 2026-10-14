@@ -7,13 +7,30 @@ export type AssetNode = { id: string; type: string; title: string; revision: num
 export type AssetEdge = { id: string; type: string; src: { id: string; revision?: number }; dst: { id: string; revision?: number };
   reviewState?: string; tombstone?: boolean; sourceRefs?: unknown };
 
+export function ScreenMappings({ nodes, edges }: { nodes: AssetNode[]; edges: AssetEdge[] }) {
+  const records = new Map(nodes.map(row => [row.id, row]));
+  return <section aria-label="화면 구현 연결 검토"><h3>승인할 화면의 직접 코드 매핑</h3>
+    <p>독립적으로 승인된 정확한 코드 버전과의 직접 구현 연결을 화면 승인 시 함께 승인합니다.</p>
+    {edges.map(edge => {
+      const code = records.get(edge.src.id);
+      const screen = records.get(edge.dst.id);
+      const seal = code?.reviewState === 'approved' && !code.tombstone && ['CodeFile', 'CodeSymbol'].includes(code.type) &&
+        code.revision === edge.src.revision && screen !== undefined && screen.revision === edge.dst.revision && !screen.tombstone;
+      return <article className="wb-artifact" key={edge.id}><strong>{code?.title || edge.src.id}</strong>
+        <p>{seal ? '화면 승인 시 함께 승인됨' : '후보로 유지 · 코드 버전 승인 확인 필요'}</p>
+        <Details title="구현 관계·코드 버전·승인 근거" value={{ edge, code }} />
+      </article>;
+    })}
+    {!edges.length && <p className="wb-muted">이 화면이 소유한 직접 코드 매핑이 없습니다.</p>}
+  </section>;
+}
+
 export default function AssetLayers({ node, nodes, edges, projectId, onSelect }: {
   node: AssetNode; nodes: AssetNode[]; edges: AssetEdge[]; projectId: string; onSelect: (id: string) => void;
 }) {
   const ux = object(node.properties?.uxModel), layers = object(ux.layers);
   const wireframe = object(layers.wireframe), gui = object(layers.gui), code = object(layers.code);
   const originals = node.sourceRefs.filter(ref => ref.sourceKind === 'asset' && ref.sha256 === gui.snapshotHash);
-  const implementsEdges = edges.filter(edge => !edge.tombstone && edge.type === 'IMPLEMENTS' && edge.dst.id === node.id);
   const uses = edges.filter(edge => !edge.tombstone && (
     edge.type === 'COMPOSES' && edge.dst.id === node.id ||
     edge.type === 'REFERENCES' && edge.src.id === node.id));
@@ -42,16 +59,6 @@ export default function AssetLayers({ node, nodes, edges, projectId, onSelect }:
         <p className="wb-muted">등록된 코드 선언입니다. 컴파일·실행 검수 결과는 개별 실행 증거에서 확인하세요.</p>
       </> : <Empty>등록된 코드 인터페이스가 없습니다.</Empty>}
     </section>
-    {!!implementsEdges.length && <section aria-label="화면 구현 연결 검토"><h3>승인할 화면의 코드 매핑</h3>
-      <p>화면 승인 시 아래 연결 중 독립적으로 승인된 정확한 코드 버전과의 구현 연결을 함께 승인합니다.</p>
-      {implementsEdges.map(edge => {
-        const codeNode = records.get(edge.src.id);
-        return <article className="wb-artifact" key={edge.id}>
-          <button onClick={() => onSelect(edge.src.id)}>{codeNode?.title || edge.src.id} · 코드 근거 열기</button>
-          <Details title="구현 관계·코드 버전·승인 근거" value={{ edge, code: codeNode }} />
-        </article>;
-      })}
-    </section>}
     <section><h3>실제 등록된 사용 근거</h3>
       {uses.length ? uses.map(edge => {
         const identifier = edge.src.id === node.id ? edge.dst.id : edge.src.id;

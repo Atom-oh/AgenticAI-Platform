@@ -103,6 +103,8 @@ def route(host, scope, claims, method, parts, body, query):
         return 200, public(ontology.review_node(parts[1], expected_generation=body.get("expectedGeneration"),
             revision=body.get("revision"), decision=body.get("decision"), reason=body.get("reason"),
             request_id=body.get("requestId")))
+    if len(parts) == 3 and parts[0] == "nodes" and parts[2] == "review-context" and method == "GET":
+        return 200, ontology.review_context(parts[1])
     if parts == ["context"] and method == "POST":
         fields(body, {"nodeIds"})
         return 200, ontology.context(body.get("nodeIds"))

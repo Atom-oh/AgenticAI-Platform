@@ -33,8 +33,8 @@ export default function ScreenDerivation({ nodes, generation, onPublished }: {
     setInputId(''); setDecisions([]); setScreenIds([]); setModel(''); setSelected(''); setInputCursor(''); setCursor('');
     action.reset();
   }, [client]);
-  useEffect(() => { setScreenIds([]); action.reset(); }, [generation]);
-  useEffect(() => { pollUntil.current = Date.now() + 30 * 60 * 1000; action.reset(); }, [client, selected]);
+  useEffect(() => { setScreenIds([]); }, [generation]);
+  useEffect(() => { pollUntil.current = Date.now() + 30 * 60 * 1000; }, [client, selected]);
   useEffect(() => {
     if (!selected || !detail.data || Date.now() >= pollUntil.current ||
       !['queued', 'dispatched', 'running'].includes(detail.data.artifact.status)) return;
@@ -66,7 +66,7 @@ export default function ScreenDerivation({ nodes, generation, onPublished }: {
     </fieldset>
     <LoadState state={documents}>{documents.data && <fieldset className="wb-field">
       <legend>선택 화면에 연결된 추가 반입 승인 원문</legend>
-      <div className="wb-source-list">{documents.data.filter(row => row.kind === 'document-pages').map(row =>
+      <div className="wb-source-list">{documents.data.filter(row => ['document-pages', 'diagram-transcription'].includes(row.kind)).map(row =>
         <label key={row.id}><input type="checkbox" disabled={!editable || action.busy} checked={decisions.includes(row.id)}
           onChange={event => setDecisions(old => event.target.checked ? [...old, row.id] : old.filter(id => id !== row.id))} />
           {row.title || row.id}</label>)}</div>

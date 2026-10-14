@@ -88,6 +88,10 @@ def selected_context(ctx, decision_ids, node_ids, analysis_id):
         fail(422, "derivation-screen-limit", "승인된 화면을 1~20개 선택하세요.")
     for identifier in node_ids:
         schema._identifier(identifier)
+    try:
+        schema._identifier(analysis_id)
+    except ValueError:
+        fail(422, "derivation-analysis-required", "분석 실행을 선택하세요.")
     admitted = source_inputs(ctx, decision_ids, analysis_id)
     store = Ontology(ctx)
     snapshot = store.context(node_ids)
@@ -174,6 +178,17 @@ def aliases(candidates):
     return {"proposal-" + chr(97 + index): item["id"] for index, item in enumerate(candidates)}
 
 
+def valid_metadata(metadata):
+    try:
+        for key, limit in (("title", 300), ("intent", 500)):
+            value = schema._text(metadata[key], limit)
+            if re.search(r"[0-9%₩$€¥]", value):
+                return False
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def verify_proposal(manifest, response):
     if not isinstance(response, str) or len(response.encode()) > 512 * 1024:
         raise LedgerError("derivation-proposal-invalid")
@@ -202,9 +217,7 @@ def verify_proposal(manifest, response):
         reason = None
         if not metadata:
             reason = "metadata-missing"
-        elif any(not isinstance(metadata[key], str) or not 1 <= len(metadata[key].strip()) <= limit
-                 or re.search(r"[0-9%₩$€¥]", metadata[key])
-                 for key, limit in (("title", 300), ("intent", 500))):
+        elif not valid_metadata(metadata):
             reason = "metadata-invalid"
         elif candidate["screenSupport"] < 2:
             reason = "independent-screen-support-required"
@@ -242,14 +255,25 @@ def verify_proposal(manifest, response):
                      description=f"정적 파일 {candidate['fileSupport']}개 · 독립 검토 화면 {candidate['screenSupport']}개")
         node.update(title=metadata["title"].strip(), provenance="model-inferred",
                     sourceRefs=unique_refs([*node["sourceRefs"], *manifest["sourceRefs"]]))
-        graph["nodes"].append(schema.seal(node))
+        mined["nodes"] = [schema.seal(node)]
+        mined["edges"] = []
         if selected["level"] != "PageTemplate":
             for child in sorted({identities[identity] for identity in selected["identities"]}):
-                graph["edges"].append(schema.seal({"id": schema.identity("derive-compose", identifier, child),
+                mined["edges"].append(schema.seal({"id": schema.identity("derive-compose", identifier, child),
                     "type": "COMPOSES", "src": {"id": identifier, "revision": 1},
                     "dst": {"id": child, "revision": all_nodes[child]["revision"]},
                     "sourceRefs": manifest["sourceRefs"], "provenance": "parser-extracted",
                     "reviewState": "candidate", "tombstone": False}))
+        try:
+            schema.validate_graph({"schemaVersion": 1, "projectId": manifest["projectId"],
+                "nodes": mined["nodes"], "edges": mined["edges"]}, external_nodes=[
+                value for key, value in all_nodes.items() if key != identifier])
+        except ValueError:
+            rejected.append({"id": identifier, "reason": "candidate-schema-invalid"})
+            records.append({**candidate, "metadata": metadata, "eligible": False})
+            continue
+        graph["nodes"].extend(mined["nodes"])
+        graph["edges"].extend(mined["edges"])
         records.append({**selected, "metadata": metadata, "eligible": True})
     if not known:
         rejected.append({"reason": "no-repeated-composition"})

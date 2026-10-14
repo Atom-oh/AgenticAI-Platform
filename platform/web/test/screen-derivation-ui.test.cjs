@@ -48,7 +48,7 @@ test('reverse proposals show independent evidence, preserve retries and respect 
     });
     const browser = await chromium.launch({ executablePath: process.env.WORKSPACE_CHROMIUM,
       headless: true, args: ['--no-sandbox'] });
-    let createFirst = true, adoptFirst = true;
+    let createFirst = true, adoptFirst = true, polling = 0, cancelled = false;
     const proposal = (id = 'good') => ({
       operation: 'design.derive', artifact: { id, name: id === 'good' ? '반복 안내' : '근거 부족', status: 'completed' },
       version: 3, resultHash, result: { approvalEffect: false,
@@ -77,7 +77,11 @@ test('reverse proposals show independent evidence, preserve retries and respect 
           [{ analysisId: 'analysis-1', name: '코드 분석', collectionDecisionId: 'code-decision',
             backend: 'agentcore-code-interpreter' }] : [] });
         if (endpoint === '/ontology/knowledge' && method === 'GET') return send({
-          items: project === 'p-test' ? [proposal(), proposal('bad'), { operation: 'design.guidelines',
+          items: project === 'p-test' ? [proposal(), proposal('bad'),
+            { operation: 'design.derive', artifact: { id: 'own-job', name: '진행 중 내 후보', status: 'queued',
+              jobId: 'own-execution', createdBy: 'alice' } },
+            { operation: 'design.derive', artifact: { id: 'other-job', name: '다른 참여자 후보', status: 'running',
+              jobId: 'other-execution', createdBy: 'bob' } }, { operation: 'design.guidelines',
             artifact: { id: 'guide', name: '다른 종류 후보', status: 'completed' } }] : [] });
         if (endpoint === '/ontology/knowledge/derive' && method === 'POST') {
           submissions.push({ kind: 'create', body: route.request().postDataJSON() });
@@ -91,6 +95,16 @@ test('reverse proposals show independent evidence, preserve retries and respect 
         }
         if (endpoint === '/ontology/knowledge/good') return send(proposal());
         if (endpoint === '/ontology/knowledge/bad') return send(proposal('bad'));
+        if (endpoint === '/ontology/knowledge/own-job') {
+          polling++;
+          return send({ operation: 'design.derive', artifact: { id: 'own-job', status: cancelled ? 'cancelled' : 'running',
+            jobId: 'own-execution', createdBy: 'alice' } });
+        }
+        if (endpoint === '/ontology/knowledge/other-job') return send({ operation: 'design.derive',
+          artifact: { id: 'other-job', status: 'running', jobId: 'other-execution', createdBy: 'bob' } });
+        if (endpoint === '/ontology/executions/own-execution/cancel' && method === 'POST') {
+          cancelled = true; return send({ status: 'cancelled' });
+        }
         assert.fail(`Unexpected request: ${method} ${endpoint}`);
       });
       const page = await context.newPage();
@@ -107,6 +121,7 @@ test('reverse proposals show independent evidence, preserve retries and respect 
       await page.getByLabel('반복 구성 설명 모델').selectOption('global.anthropic.claude-sonnet-5');
       await create.click(); await page.getByText('접수 재확인', { exact: true }).waitFor();
       await create.click(); await page.getByText('정적 파일 3개 · 독립 승인 화면 2개', { exact: true }).waitFor();
+      await page.getByText('반복 구성 분석을 접수했습니다. 파일 반복과 독립 화면 근거를 구분해 검토하세요.', { exact: true }).waitFor();
       assert.deepEqual(submissions[0].body, submissions[1].body);
       assert.deepEqual(submissions[1].body.decisionIds, ['code-decision', 'doc']);
       assert.deepEqual(submissions[1].body.nodeIds, ['first', 'second']);
@@ -115,9 +130,22 @@ test('reverse proposals show independent evidence, preserve retries and respect 
       await adopt.click(); await page.waitForFunction(() => window.adoptions === 1);
       assert.deepEqual(submissions[2].body, submissions[3].body);
       assert.equal(submissions[3].body.resultHash, resultHash);
+      await page.getByText('검토한 반복 구성 후보를 정본 초안에 연결했습니다. 자산 승인은 별도로 기록하세요.', { exact: true }).waitFor();
       await page.getByRole('button', { name: '근거 부족 · 완료', exact: true }).click();
       await page.getByText('정적 파일 3개 · 독립 승인 화면 1개', { exact: true }).waitFor();
       assert(await adopt.isDisabled());
+      await page.getByRole('button', { name: '진행 중 내 후보 · 대기 중', exact: true }).click();
+      await page.getByRole('button', { name: '본인 반복 구성 작업 중지', exact: true }).waitFor();
+      const initialPolls = polling;
+      const deadline = Date.now() + 10000;
+      while (polling === initialPolls && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+      assert(polling > initialPolls);
+      await page.getByRole('button', { name: '본인 반복 구성 작업 중지', exact: true }).click();
+      await page.getByText('반복 구성 작업 상태: 취소됨', { exact: true }).waitFor();
+      assert(cancelled);
+      await page.getByRole('button', { name: '다른 참여자 후보 · 처리 중', exact: true }).click();
+      await page.getByText('반복 구성 작업 상태: 처리 중', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('button', { name: '본인 반복 구성 작업 중지', exact: true }).count(), 0);
       assert.equal(await page.getByRole('link', { name: '해시가 일치하는 등록 GUI 원본 보기' }).count(), 0);
       await page.getByText('해시가 일치하는 등록 원본이 연결되지 않았습니다.', { exact: false }).waitFor();
       await page.getByRole('button', { name: 'lower-asset · 연결 자산 열기', exact: true }).click();

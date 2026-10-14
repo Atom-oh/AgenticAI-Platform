@@ -5,7 +5,7 @@ import { DependencyGraph } from './Knowledge';
 import type { Asset } from '../workspace/types';
 import GuidelineKnowledge from './GuidelineKnowledge';
 import ScreenDerivation from './ScreenDerivation';
-import AssetLayers from './AssetLayers';
+import AssetLayers, { ScreenMappings } from './AssetLayers';
 
 type SourceRef = { sourceKind: string; sourceId: string; revision: string; sha256: string; audienceRevision: string };
 type Node = { id: string; type: string; title: string; revision: number; reviewState: string; provenance: string; contentHash?: string; tombstone?: boolean;
@@ -60,6 +60,9 @@ export default function OntologyView() {
   const context = useLoad(async signal => selected ? {
     ...await client.post<Graph>('/ontology/context', { nodeIds: [selected.id] }, signal), selectionId: selected.id,
   } : null, [client, selected?.id, state.data?.generation]);
+  const mapping = useLoad(async signal => selected?.type === 'Screen' ? {
+    ...await client.get<Graph>(`/ontology/nodes/${resource(selected.id)}/review-context`, signal), selectionId: selected.id,
+  } : null, [client, selected?.id, state.data?.generation]);
   const configuration = useLoad(signal => client.get<{ analyzerConfigured: boolean }>('/ontology/schema', signal), [client]);
   const assets = useLoad(signal => listPages<Asset>(client, '/assets', 'assets', signal), [client]);
   const accepted = useLoad(signal => client.get<{ items: AnalysisArtifact[]; cursor?: string }>(
@@ -106,9 +109,10 @@ export default function OntologyView() {
   const roles = selected && ['Product', 'PolicyRule', 'Procedure'].includes(selected.type) ? ['owner', 'planner'] :
     selected && ['CodeFile', 'CodeSymbol', 'Test', 'API', 'Skill'].includes(selected.type) ? ['owner', 'developer'] :
       selected?.type === 'Team' ? ['owner'] : ['owner', 'designer'];
-  const canReview = roles.includes(overview.role) && !context.loading && !context.error &&
-    context.data?.selectionId === selected?.id &&
-    context.data?.generation === state.data?.generation && !Boolean((context.data?.coverage as { truncated?: boolean })?.truncated);
+  const canReview = roles.includes(overview.role);
+  const canApprove = canReview && (selected?.type !== 'Screen' || (!mapping.loading && !mapping.error &&
+    mapping.data?.selectionId === selected.id && mapping.data.generation === state.data?.generation &&
+    (mapping.data.coverage as { complete?: boolean })?.complete === true));
   const review = (decision: string) => {
     if (!selected || !state.data?.generation) return;
     const target = selected;
@@ -203,6 +207,9 @@ export default function OntologyView() {
       </>}</LoadState>
     </Section>
     {selected && <Section title={selected.title} description={`${KIND[selected.type] || selected.type} · ${STATUS[selected.reviewState]} · 정확한 원본 버전과 연결을 검토합니다.`}>
+      {selected.type === 'Screen' && <LoadState state={mapping}>{mapping.data &&
+        mapping.data.selectionId === selected.id && mapping.data.generation === state.data?.generation &&
+        <ScreenMappings nodes={mapping.data.nodes} edges={mapping.data.edges} />}</LoadState>}
       <LoadState state={context}>{context.data && context.data.selectionId === selected.id &&
         context.data.generation === state.data?.generation &&
         <><AssetLayers node={selected} nodes={context.data.nodes} edges={context.data.edges} projectId={project.id}
@@ -231,7 +238,7 @@ export default function OntologyView() {
       <Field label="검토 근거"><textarea value={reason} maxLength={2000} onChange={event => setReason(event.target.value)} placeholder="원본에서 확인한 내용과 판단 근거" /></Field>
       <div className="wb-actions">
         <button disabled={!canReview || !reason.trim() || operation.busy || selected.reviewState === 'deprecated'} onClick={() => review('reviewed')}>검토 완료 기록</button>
-        <button disabled={!canReview || !reason.trim() || operation.busy || selected.reviewState !== 'reviewed'} onClick={() => review('approved')}>이 버전 승인</button>
+        <button disabled={!canApprove || !reason.trim() || operation.busy || selected.reviewState !== 'reviewed'} onClick={() => review('approved')}>이 버전 승인</button>
         <button disabled={!canReview || !reason.trim() || operation.busy || selected.reviewState === 'deprecated'} onClick={() => review('rejected')}>반려</button>
       </div>
       <p className="wb-muted">온톨로지 매핑 승인은 생성한 React 화면의 동작 검수·퍼블리싱 승인을 대신하지 않습니다.</p>

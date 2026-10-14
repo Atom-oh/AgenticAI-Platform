@@ -489,6 +489,11 @@ at the named revision. Code approval alone cannot approve a new Screen
 mapping. Screen rejection/deprecation retires this approval basis. The Screen
 review uses the existing generation, source and role fences and exposes the
 mapping to the human reviewer before approval.
+`GET /ontology/nodes/:id/review-context` reads the Screen's directly owned
+active `IMPLEMENTS` mappings and current code endpoints, separately from its
+bounded dependency closure. It fails closed on unreadable mappings or more
+than 50 direct mappings. Only Screen approval requires this complete view;
+review/rejection and other node approvals do not require a complete closure.
 
 The existing source-fenced knowledge read/adoption routes support these
 `design.derive` proposals. Views identify their operation. Human adoption

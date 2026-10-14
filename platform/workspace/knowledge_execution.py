@@ -94,7 +94,7 @@ def verify_proposal(manifest, response):
 def context_for(ctx, value):
     if value.get("operation") == "design.derive":
         from workspace.derive_proposals import selected_context as derive_context
-        return derive_context(ctx, value["decisionIds"], value["nodeIds"], value["analysisId"])
+        return derive_context(ctx, value.get("decisionIds"), value.get("nodeIds"), value.get("analysisId"))
     return selected_context(ctx, value.get("decisionIds"), value.get("nodeIds"))
 
 
