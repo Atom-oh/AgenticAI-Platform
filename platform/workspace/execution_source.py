@@ -120,7 +120,8 @@ class SourcePublication:
             raise LedgerError("receipt-invalid")
         ref = reference(decision)
         bindings = {file["path"]: {"ref": {**ref, "location": {"path": file["path"]}},
-                                    "record": {"id": decision["id"]}} for file in payload["files"]}
+                                    "record": {"id": decision["id"]}, "kind": file["kind"]}
+                    for file in payload["files"]}
         graph = project_analysis(ctx, artifact["name"], payload, bindings, result["analysis"])
         graph_key, graph_hash = ctx.put_json("wb_artifact", artifact["id"], "candidate/" + job["attempt"]["id"] + ".json", graph)
         store = Ontology(ctx)
@@ -130,6 +131,8 @@ class SourcePublication:
         published = plan["result"]
         write = ctx.write("wb_artifact", {**artifact, "status": "completed", "analysisKey": output["key"],
             "analysisHash": output["sha256"], "graphKey": graph_key, "graphHash": graph_hash,
+            "input": job["manifest"], "admissions": job["admissions"],
+            "backendConfigRevision": job["backendConfigRevision"], "profileHash": job["profile"]["hash"],
             "execution": execution, "coverage": result["analysis"]["coverage"],
             "generation": published["generation"], "partitionId": published["partitionId"],
             "identities": published["identities"], "receiptHashes": job["result"]["receipts"]}, artifact["version"])

@@ -29,13 +29,14 @@ PROFILE_DEFAULT = {"id": "agentcore-default", "revision": "1", "deadlineMs": 14 
                    # rejects a request whose worst-case plan exceeds its ceiling with "call-budget"
                    "maxCallsByOperation": {"design.extract": 12, "design.generate": 120, "design.edit": 40,
                                            "design.compose": 20, "design.release": 10, "source.analyze": 10,
-                                           "intake.transcribe": 6, "design.guidelines": 2},
+                                           "intake.transcribe": 6, "design.guidelines": 2, "design.derive": 2},
                    # Spend and cleanup reservations (N7; AGENTCORE_CONTRACT.md:712-716).
                    "tokenBudget": 400_000, "cleanupReserveMs": 60_000,
                    "toolProfiles": dict(TOOL_PROFILES)}
 
 OPERATIONS = {"design.extract": ("context", "generate", "verify"),
               "design.guidelines": ("context", "generate", "verify"),
+              "design.derive": ("context", "generate", "verify"),
               "design.generate": ("context", "generate", "compile", "browser", "verify"),
               "design.edit": ("context", "generate", "compile", "browser", "verify"),
               "design.compose": ("context", "compile", "browser", "verify"),
@@ -49,6 +50,7 @@ _DESIGN_BUILD = {"generate": "context", "compile": "generate", "browser": "compi
 _BUNDLE_CHECK = {"compile": "context", "browser": "compile", "verify": "browser"}
 STAGE_INPUTS = {"design.extract": {"generate": "context", "verify": "generate"},
                 "design.guidelines": {"generate": "context", "verify": "generate"},
+                "design.derive": {"generate": "context", "verify": "generate"},
                 "intake.transcribe": {"generate": "context", "verify": "generate"},
                 "design.generate": _DESIGN_BUILD, "design.edit": _DESIGN_BUILD,
                 "design.compose": _BUNDLE_CHECK, "design.release": _BUNDLE_CHECK,
@@ -706,7 +708,7 @@ class Ledger:
                     or not _is_ident(artifact["id"]) or not _is_ident(artifact["name"])
                     or not _is_sha(artifact["requestHash"]) or not isinstance(artifact["sourceRefs"], list)
                     or (not is_design and not is_knowledge and operation != "source.analyze")
-                    or (is_knowledge and operation != "design.guidelines")):
+                    or (is_knowledge and operation not in {"design.guidelines", "design.derive"})):
                 raise LedgerError("artifact-invalid")
             if is_design:
                 if operation not in {"design.extract", "design.generate", "design.edit", "design.compose", "design.release"}:
@@ -738,7 +740,7 @@ class Ledger:
                 or project.get("authorityRevision") != project_authority.get("authorityRevision")
                 or schema.digest(members) != project_authority.get("membershipDigest")):
             raise LedgerError("authority-changed")
-        if operation == "design.guidelines" and (not artifact or artifact.get("kind") != "knowledge-stage"
+        if operation in {"design.guidelines", "design.derive"} and (not artifact or artifact.get("kind") != "knowledge-stage"
                                                   or member.get("role") not in {"owner", "designer"}):
             raise LedgerError("artifact-invalid")
         obligations, source_checks = self._admitted_manifest(owner, manifest, admissions, scope)
@@ -2184,7 +2186,7 @@ class Ledger:
         operation = job["operation"]
         if operation == "source.analyze":
             return "succeeded" if "coverage" in result["analyze"] else None
-        if operation in ("design.extract", "intake.transcribe", "design.guidelines"):
+        if operation in ("design.extract", "intake.transcribe", "design.guidelines", "design.derive"):
             issues = result["verify"].get("issues")
             if issues == []:
                 return "succeeded"
@@ -2427,7 +2429,7 @@ class Ledger:
         from workspace.execution_source import SourcePublication
         from workspace.design_execution import DesignPublication
         from workspace.knowledge_execution import KnowledgePublication
-        if job["operation"] == "design.guidelines" and type(stage_completion) is not KnowledgePublication:
+        if job["operation"] in {"design.guidelines", "design.derive"} and type(stage_completion) is not KnowledgePublication:
             raise LedgerError("completion-unavailable", reason="knowledge-staging-adapter")
         if (job.get("artifact") or {}).get("kind") == "design-stage" and type(stage_completion) is not DesignPublication:
             raise LedgerError("completion-unavailable", reason="design-staging-adapter")

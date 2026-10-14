@@ -954,6 +954,13 @@ class Ontology:
                     externals[external["id"]] = external
             if decision in {"rejected", "deprecated"} and identifier in (edge["src"]["id"], edge["dst"]["id"]):
                 edge["reviewState"] = "candidate"
+            if (target["type"] == "Screen" and decision == "approved" and edge["type"] == "IMPLEMENTS"
+                    and edge["dst"]["id"] == identifier and edge["dst"]["revision"] == revision):
+                code = next((node for node in graph["nodes"] if node["id"] == edge["src"]["id"]), None)
+                code = code or externals.get(edge["src"]["id"])
+                if (code and code["type"] in {"CodeFile", "CodeSymbol"} and code["reviewState"] == "approved"
+                        and not code["tombstone"] and code["revision"] == edge["src"]["revision"]):
+                    edge["reviewState"] = "approved"
             graph["edges"][i] = schema.seal(edge)
         # Tombstoned witnesses can retain inaccessible historical endpoints.
         # Validate active relationships separately; history remains immutable.

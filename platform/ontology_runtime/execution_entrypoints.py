@@ -152,7 +152,7 @@ def reconcile_handler(event, context):
     if status not in {"succeeded", "needs_changes"}:
         return {"status": "evidence-incomplete"}
     completion = SourcePublication(host, config)
-    if job["operation"] == "design.guidelines":
+    if job["operation"] in {"design.guidelines", "design.derive"}:
         from workspace.knowledge_execution import KnowledgePublication
         completion = KnowledgePublication(host, config)
     elif job["operation"].startswith("design."):
@@ -198,7 +198,7 @@ def api_operation(ctx, action, body=None, identifier=None):
     return {"job": view_job(job)}
 
 
-def knowledge_operation(ctx, body):
+def knowledge_operation(ctx, body, *, operation="design.guidelines"):
     """The public API admits an existing configured operation, never signs it."""
     if not os.environ.get("SOURCE_EXECUTION_CONFIGURATION") or not os.environ.get("SOURCE_EXECUTION_QUEUE_URL"):
         from workbench.service import fail
@@ -211,4 +211,4 @@ def knowledge_operation(ctx, body):
     def enqueue(owner, identifier):
         queue.send_message(QueueUrl=os.environ["SOURCE_EXECUTION_QUEUE_URL"],
                            MessageBody=json.dumps({"owner": owner, "jobId": identifier}))
-    return knowledge_submit(request, body, ledger, config, enqueue)
+    return knowledge_submit(request, body, ledger, config, enqueue, operation=operation)

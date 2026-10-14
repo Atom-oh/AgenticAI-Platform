@@ -6,7 +6,7 @@ import json
 from design_loop import guide_rules
 from ontology_runtime.design_model import DesignModel
 from ontology_runtime.execution_session import ExecutionSession
-from workspace.knowledge_execution import OPERATION, verify_proposal, condition_ids
+from workspace.knowledge_execution import OPERATIONS, verify_proposal, condition_ids
 
 
 class KnowledgeWorkflow:
@@ -18,7 +18,7 @@ class KnowledgeWorkflow:
         try:
             raw, source = execution.read()
             manifest = json.loads(raw)
-            if (manifest["operation"] != OPERATION or execution.job["operation"] != OPERATION
+            if (manifest["operation"] not in OPERATIONS or execution.job["operation"] != manifest["operation"]
                     or manifest["tool"] != self.configuration["interpreter"]
                     or manifest["admissions"] != execution.job["admissions"] or manifest["model"] != execution.job["model"]):
                 raise ValueError("knowledge-manifest-mismatch")
@@ -26,8 +26,12 @@ class KnowledgeWorkflow:
                                       "snapshot": manifest["snapshot"]["hash"], "approvalEffect": False})
             execution.stage("context", [source], [context], {})
             model = self.model_factory(execution, manifest)
-            response = model.generate(guide_rules._SYSTEM,
-                guide_rules._prompt(manifest["pages"], manifest["nodeIds"], condition_ids(manifest["snapshot"])))
+            if manifest["operation"] == "design.derive":
+                from workspace.derive_proposals import SYSTEM, prompt
+                response = model.generate(SYSTEM, prompt(manifest))
+            else:
+                response = model.generate(guide_rules._SYSTEM,
+                    guide_rules._prompt(manifest["pages"], manifest["nodeIds"], condition_ids(manifest["snapshot"])))
             proposal = execution.upload("generate", "proposal.json", {"response": response})
             boundary = execution.upload("generate", "model-boundary.json", model.boundaries)
             execution.stage("generate", [source, context], [proposal, boundary],
@@ -35,7 +39,8 @@ class KnowledgeWorkflow:
             checked = verify_proposal(manifest, response)
             result = execution.upload("verify", "knowledge.json", checked)
             final = execution.upload("verify", "result.json", {"objects": [result]})
-            issues = [{"code": "guideline-proposal-rejected", "count": len(checked["rejected"])}] if checked["rejected"] else []
+            code = "derivation-proposal-rejected" if manifest["operation"] == "design.derive" else "guideline-proposal-rejected"
+            issues = [{"code": code, "count": len(checked["rejected"])}] if checked["rejected"] else []
             execution.stage("verify", [proposal], [result, final], {"knowledgeResult": result, "issues": issues})
             return execution.finish(final, "needs_changes" if issues else "succeeded")
         except Exception:

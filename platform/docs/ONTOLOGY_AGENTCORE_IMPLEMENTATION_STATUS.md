@@ -7,6 +7,16 @@ Final review/CI evidence belongs to the exact integration PR HEAD.
 
 ## Implemented code and remaining boundaries
 
+The 2026-10-14 remaining-screen candidate adds the O-03 application path and
+O-01 layer/usage detail views under the
+[owning ontology interface](../workspace/ONTOLOGY_CONTRACT.md#repeated-screen-composition-proposals-2026-10-14-candidate)
+and [execution design](ONTOLOGY_REVERSE_DERIVATION.md). Source regressions cover
+actual admission/parser/signed ledger with substituted AWS/model transports and
+browser interactions with synthetic APIs. Exact-HEAD review and CI remain
+separate integration gates. Actual bound customer
+assets, independently observed runtime composition and service gates remain
+separate acceptance requirements.
+
 | Area | Concrete implementation and focused tests | Remaining requirement |
 |---|---|---|
 | Canonical ontology | `workspace/ontology_store.py`, `ontology_sources.py`, `ontology_ux.py`, `source-analyzer/`; `test_ontology_*` | Preserve old parser-edge/tombstone capacity limits; run the independent bounded oracle and current-source/revocation cases |

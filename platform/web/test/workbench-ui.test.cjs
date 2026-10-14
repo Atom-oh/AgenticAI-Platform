@@ -134,6 +134,10 @@ async function harness() {
       if (target === '/designs/config') return json({ enabled: false, models: [] });
       if (target === '/designs/inputs') return json({ inputs: [] });
       if (target === '/ontology/knowledge') return json({ items: [] });
+      if (target === '/ontology/knowledge/derive-inputs') return json({ items: [] });
+      if (target === '/ontology/context') return json(data.ontology);
+      if (/^\/ontology\/nodes\/[^/]+$/.test(target) && method === 'GET') return json({
+        node: data.ontology.nodes.find(item => item.id === target.split('/')[3]), generation: data.ontology.generation });
       if (target === '/ontology/schema') return json({ analyzerConfigured: Boolean(fixture.analyzerConfigured) });
       if (target === '/ontology/analyses' && method === 'POST') {
         data.jobs['analysis-job'] = { id: 'analysis-job', kind: 'ontology-analysis', status: 'queued' };

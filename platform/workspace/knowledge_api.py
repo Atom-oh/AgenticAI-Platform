@@ -18,7 +18,7 @@ from workspace.design_api import read_object, page_for
 
 def view(ctx, artifact):
     manifest, checks, expiry = authorized(ctx, artifact, require_current=False)
-    value = {"artifact": view_artifact(artifact), "model": manifest["model"],
+    value = {"artifact": view_artifact(artifact), "model": manifest["model"], "operation": manifest["operation"],
              "nodeIds": manifest["nodeIds"], "approvalEffect": False}
     if artifact.get("result"):
         value.update(result=read_object(ctx, artifact["result"]), resultHash=artifact["result"]["sha256"],
@@ -108,10 +108,34 @@ def publish(ctx, identifier, body):
 def route(host, scope, claims, method, parts, body, query):
     ctx = Service(host, scope, claims)
     ctx.fresh(READ_ROLES)
-    if parts == ["guidelines"] and method == "POST":
+    if parts == ["derive-inputs"] and method == "GET":
+        from workspace.derive_proposals import source_inputs
+        page = page_for(ctx, "wb_artifact", query, selection="derivation-inputs")
+        items, checks = [], list(getattr(ctx, "_design_checks", []))
+        expiry = min(ctx.authorization()["authorizationExpiresAt"],
+                     getattr(ctx, "_design_expiry", ctx.scope["authorizationExpiresAt"]))
+        for artifact in page["items"]:
+            if (artifact.get("kind") != "ontology-analysis" or artifact.get("status") != "completed"
+                    or artifact.get("executionSchemaVersion") != 1 or not artifact.get("admissions")):
+                continue
+            probe = Service(host, scope, claims)
+            try:
+                decision_id = artifact["admissions"][0]["decisionId"]
+                admitted = source_inputs(probe, [decision_id], artifact["id"])
+            except (AdmissionError, CollaborationError, ValueError, KeyError):
+                ctx.fresh(READ_ROLES)
+                continue
+            items.append({"analysisId": artifact["id"], "name": artifact["name"],
+                          "collectionDecisionId": decision_id, "backend": artifact["execution"]["backend"]})
+            checks = predicates([*checks, *admitted["checks"]])
+            expiry = min(expiry, admitted["expiresAt"])
+        fence(ctx, checks, expiry)
+        return 200, {"items": items, "cursor": page.get("cursor")}
+    if parts in (["guidelines"], ["derive"]) and method == "POST":
         from ontology_runtime.execution_entrypoints import knowledge_operation
         try:
-            return 202, knowledge_operation(ctx, body)
+            return 202, (knowledge_operation(ctx, body, operation="design.derive") if parts == ["derive"]
+                         else knowledge_operation(ctx, body))
         except LedgerError as error:
             fail(403 if error.code == "forbidden" else
                  503 if error.code == "knowledge-execution-unavailable" else 409,

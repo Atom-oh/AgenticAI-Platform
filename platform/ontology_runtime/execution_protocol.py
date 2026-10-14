@@ -36,10 +36,10 @@ class ExecutionCapabilities:
         if job.get("operation") == "source.analyze":
             return True
         from workspace.design_execution import OPERATIONS
-        from workspace.knowledge_execution import OPERATION
+        from workspace.knowledge_execution import OPERATIONS as KNOWLEDGE_OPERATIONS
         configured = self.configuration.get("design") or {}
         return ((job.get("operation") in OPERATIONS.values() or
-                 job.get("operation") == OPERATION and job.get("actorRole") in {"owner", "designer"})
+                 job.get("operation") in KNOWLEDGE_OPERATIONS and job.get("actorRole") in {"owner", "designer"})
                 and job.get("projectId") in configured.get("projects", [])
                 and job.get("model") in configured.get("models", []))
 
