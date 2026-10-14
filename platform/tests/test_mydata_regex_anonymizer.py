@@ -166,3 +166,19 @@ def test_financial_housing_and_employment_status_words_are_not_names(text):
 def test_names_sharing_syllables_with_financial_words_are_still_replaced(context, name):
     out = anonymize.anonymize(context.format(name))
     assert name not in out["text"] and out["counts"] == {"PERSON": 1}
+
+
+@pytest.mark.parametrize("text", [
+    "저는 임차인입니다", "저는 임대인입니다", "저는 차주입니다", "저는 채무자예요", "저는 차상위입니다", "저는 고령자입니다",
+    "저는 장애인입니다", "저는 신혼이에요", "저는 노인입니다", "저는 승객입니다", "저는 무직인데요",
+    "설계사님께", "차주님께", "주임님이", "선임님께", "부사장님", "연구원님", "점장님", "채무자님", "고문님",
+])
+def test_borrower_tenant_and_role_words_are_not_names(text):
+    assert anonymize.anonymize(text)["text"] == text
+
+
+@pytest.mark.parametrize("raw", ["전 김민수고 연봉 5천", "저는 홍길동 입니다", "저는 홍길동이라고 해요", "저는 김철수, 40세",
+                                 "저는 홍길동인데요", "승지원님", "태진아님께", "시은영씨가", "남궁민수 고객님"])
+def test_intro_variants_and_added_surnames_are_replaced(raw):
+    out = anonymize.anonymize(raw)
+    assert out["counts"] == {"PERSON": 1}
