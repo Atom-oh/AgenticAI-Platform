@@ -150,3 +150,19 @@ def test_names_with_particles_and_short_city_addresses_are_replaced(raw, kept):
     out = anonymize.anonymize(raw)
     assert out["total"] == 1 and out["text"].endswith(kept)
     assert pii.tokens_in(out["text"])
+
+
+@pytest.mark.parametrize("text", [
+    "저는 전세입니다", "저는 반전세입니다", "저는 유주택자입니다", "저는 고정금리예요", "저는 변동금리입니다",
+    "전 정기예금이에요", "저는 기혼입니다", "저는 정규직입니다", "저는 신입사원입니다", "저는 우대고객입니다",
+    "저는 승무원입니다", "저는 동갑이에요", "하나님", "도련님", "신부님", "이사장님", "주거래 고객님", "우량한 고객님",
+])
+def test_financial_housing_and_employment_status_words_are_not_names(text):
+    assert anonymize.anonymize(text)["text"] == text
+
+
+@pytest.mark.parametrize("context", ["저는 {}입니다", "제 이름은 {}이고", "성함은 {}", "예금주: {}", "{}님 상담", "{}씨가 왔어요"])
+@pytest.mark.parametrize("name", ["정기수", "신용철", "고정민", "정규현", "우대현", "피민지", "팽현숙", "남궁민수"])
+def test_names_sharing_syllables_with_financial_words_are_still_replaced(context, name):
+    out = anonymize.anonymize(context.format(name))
+    assert name not in out["text"] and out["counts"] == {"PERSON": 1}

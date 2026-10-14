@@ -33,18 +33,29 @@ _NOT_NAMES = frozenset(("고객", "회원", "담당자", "상담사", "선생", 
                         # 성씨로 시작하지만 가족·직함 호칭인 말 ("사모님", "이모님", "기사님")
                         "사모", "이모", "고모", "장모", "부모", "선배", "후배", "기사", "원장", "소장", "차장",
                         "전무", "이사", "주인", "변호사", "지점장", "강사", "조교", "김씨", "이씨", "박씨",
-                        "남편", "조합원", "주주", "사용자", "신청자", "부부"))
+                        "남편", "조합원", "주주", "사용자", "신청자", "부부", "하나", "도련", "신부", "수녀", "목사",
+                        "이사장"))
+# 약한 문맥("저는 ○○입니다", "○○님")의 후보에 이 말이 들어 있으면 금융·주거·고용 상태로 보고 그대로 둔다
+# ("저는 전세입니다", "고정금리예요"). 이름 음절과 겹치는 짧은 말(정기·신용·고정·정규·우대)은 넣지 않는다.
+# 명시 문맥("제 이름은", "성함은", "예금주")에는 적용하지 않는다.
+_STATUS_STEMS = ("금리", "예금", "적금", "전세", "월세", "주택", "정규직", "계약직", "기혼", "미혼", "이혼", "사원",
+                 "고객", "회원", "대출", "카드", "보험", "연금", "펀드", "계좌", "소득", "월급", "연봉", "자산",
+                 "부채", "신용불량", "신용점수", "등급", "주거래", "우량", "사업", "직장", "직원", "학생", "주부",
+                 "은퇴", "무직", "가입", "수급", "거주", "세대", "가구", "담보", "청약")
 # 흔한 성씨 첫 글자 — "저는 ○○입니다"·"○○님" 같은 약한 문맥에서는 성씨로 시작하는 말만 이름 후보로 본다.
 _SURNAME = ("김이박최정강조윤장임한오서신권황안송류유전홍고문양손배백허남심노하곽성차주우구민진나지엄채원천방공"
-            "현함변염여추도소석선설마길연위표명기반라왕금옥육인맹제모탁국어은편용예경봉사부")
+            "현함변염여추도소석선설마길연위표명기반라왕금옥육인맹제모탁국어은편용예경봉사부"
+            "빈피궁팽점묵빙엽풍흥")
 _NAME = r"[가-힣]{2,4}?"   # 게으른 매치 — 이름 뒤 조사("이고")까지 삼키지 않는다
 # 이름 끝이 '이'인 경우("김영이입니다")를 위해 맨 '이'는 종결 후보에서 뺀다.
 _NAME_END = r"(?=(?:이고|이며|이에요|이예요|입니다|이구요|이고요|예요|고|님|씨|가|은|는|의|,|\.|\s|$))"
 # "저는/전 ○○" 은 "저는 전월실적이", "1년 전 대출을" 처럼 일반 문장과 겹친다 — 자기소개 종결어미만 받는다.
 _INTRO_END = r"(?=(?:입니다|이에요|이예요|예요|이고요|이고|이며|라고\s*합니다|이라고\s*합니다)(?![가-힣]))"
+# 약한 문맥의 이름: 성 + 1~2자 (복성은 + 1~2자). 네 글자 단어("반전세", "정기예금")를 이름으로 보지 않는다.
+_WEAK_NAME = (r"(?:(?:남궁|황보|제갈|선우|독고|사공|서문)[가-힣]{1,2}?|[" + _SURNAME + r"][가-힣]{1,2}?)")
 _PARTICLES = r"(?:께서|께|에게|한테|의|이|가|은|는|을|를|과|와|도){0,2}(?![가-힣])"
 
-# 순서 = 우선순위 (먼저 바뀐 자리는 뒤 규칙이 다시 보지 않는다). 캡처 그룹 "v" 가 있으면 그 부분만 바꾼다.
+# 순서 = 우선순위 (먼저 바뀐 자리는 뒤 규칙이 다시 보지 않는다). 캡처 그룹 "v"(명시 문맥)·"w"(약한 문맥)가 있으면 그 부분만 바꾼다.
 RULES: list[tuple[str, re.Pattern]] = [
     ("EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")),
     ("RRN", re.compile(r"(?<![\d-])\d{6}[- ]?[1-8]\d{6}(?![\d-]|\s*원)")),
@@ -64,10 +75,10 @@ RULES: list[tuple[str, re.Pattern]] = [
                            r"(?:\s*,?\s*\d{1,4}동)?(?:\s*\d{1,5}호)?")),
     ("PERSON", re.compile(r"(?:제\s*이름은|이름은|이름:|성함은|성함:|고객명\s*:?|예금주\s*:?|명의자\s*:?)\s*"
                           r"(?P<v>" + _NAME + r")" + _NAME_END)),
-    ("PERSON", re.compile(r"(?<![가-힣])(?:저는|전)\s+(?P<v>[" + _SURNAME + r"][가-힣]{1,3}?)" + _INTRO_END)),
-    ("PERSON", re.compile(r"(?<![가-힣])(?P<v>[" + _SURNAME + r"][가-힣]{1,3}?)\s?(?:님|씨)" + _PARTICLES)),
+    ("PERSON", re.compile(r"(?<![가-힣])(?:저는|전)\s+(?P<w>" + _WEAK_NAME + r")" + _INTRO_END)),
+    ("PERSON", re.compile(r"(?<![가-힣])(?P<w>" + _WEAK_NAME + r")\s?(?:님|씨)" + _PARTICLES)),
     # "홍길동 고객님" — 성+두 글자 이름만 ("우수 고객님", "신규 고객님" 같은 두 글자 수식어 제외)
-    ("PERSON", re.compile(r"(?<![가-힣])(?P<v>[" + _SURNAME + r"][가-힣]{2})\s+(?:고객|회원)님")),
+    ("PERSON", re.compile(r"(?<![가-힣])(?P<w>[" + _SURNAME + r"][가-힣]{2})\s+(?:고객|회원)님")),
 ]
 TYPES = tuple(dict.fromkeys(kind for kind, _ in RULES))
 
@@ -83,9 +94,11 @@ def _token(kind: str) -> str:
     return f"⟨{kind}:" + "".join(alphabet[b >> 4] + alphabet[b & 15] for b in secrets.token_bytes(16)) + "⟩"
 
 
-def _is_name_candidate(kind: str, value: str) -> bool:
+def _is_name_candidate(kind: str, value: str, weak: bool) -> bool:
     if kind != "PERSON":
         return True
+    if weak and any(stem in value for stem in _STATUS_STEMS):
+        return False
     return value not in _NOT_NAMES and not any(value.startswith(word) for word in ("고객", "회원", "담당"))
 
 
@@ -100,9 +113,10 @@ def anonymize(text: str) -> dict:
     out = text
     for kind, pattern in RULES:
         def repl(match: re.Match, kind=kind) -> str:
-            span = "v" if "v" in (match.re.groupindex or {}) else 0
+            groups = match.re.groupindex or {}
+            span = "v" if "v" in groups else "w" if "w" in groups else 0
             value = match.group(span)
-            if not value or "⟨" in match.group(0) or not _is_name_candidate(kind, value):
+            if not value or "⟨" in match.group(0) or not _is_name_candidate(kind, value, span == "w"):
                 return match.group(0)
             key = (kind, re.sub(r"[\s.()-]", "", value))
             token = tokens.get(key)
