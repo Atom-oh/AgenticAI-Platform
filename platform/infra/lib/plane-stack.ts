@@ -21,6 +21,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as aoss from 'aws-cdk-lib/aws-opensearchserverless';
+import { bedrockModelArns, DEFAULT_MODEL_ID } from './models';
 
 export const PLANE_PARAM_PREFIX = '/bank-platform/plane';
 
@@ -240,12 +241,12 @@ export class BankPlatformPlaneStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(90),
       vpc, vpcSubnets: cloudSubnets, securityGroups: [writerSg],
       logRetention: logs.RetentionDays.ONE_WEEK,
-      environment: { GEN_MODEL: 'global.anthropic.claude-sonnet-5' },
+      environment: { GEN_MODEL: DEFAULT_MODEL_ID },
       description: 'bank-platform report writer: internal docs + bedrock via VPC endpoint, no internet route',
     });
     writerFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['arn:aws:bedrock:*::foundation-model/*', `arn:aws:bedrock:*:${this.account}:inference-profile/*`],
+      resources: bedrockModelArns('aws', this.account),
     }));
     // 내부 문서 조회 도구 — Writer만 호출 가능, Reader(메인 스택)는 권한이 없다
     const internalToolFn = new lambda.Function(this, 'InternalToolFn', {

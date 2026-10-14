@@ -26,7 +26,8 @@ export function PrivacyReceipt({ step, evidence }: { step: string; evidence: Pri
     </section>;
   }
   const title = step === 'privacy_input' ? '질문 프라이버시 처리' : '설명 페이로드 프라이버시 처리';
-  const passed = evidence.status === 'pass' && evidence.processor === 'eks-sllm'
+  const regex = evidence.processor === 'regex-anonymizer';
+  const passed = evidence.status === 'pass' && (evidence.processor === 'eks-sllm' || (regex && evidence.modelInvoked === false))
     && evidence.method === 'redaction' && evidence.ruleResidualCount === 0
     && !!evidence.modelId && !!evidence.modelRevision
     && ['not-configured', 'pass'].includes(evidence.independentNer || '');
@@ -39,20 +40,20 @@ export function PrivacyReceipt({ step, evidence }: { step: string; evidence: Pri
         <span className={`chip ${passed ? 'text-emerald-700 border-emerald-300' : 'text-amber-800 border-amber-300'}`}>
           {passed ? '처리 통과' : evidence.status === 'blocked' ? '처리 차단' : '처리 상태 미확인'}
         </span>
-        <span className="chip ml-auto">VPC 내부</span>
+        <span className="chip ml-auto">{regex ? 'API 처리 · 모델 호출 없음' : 'VPC 내부'}</span>
       </div>
       <p className="mb-2">개체명 인식(NER, Named Entity Recognition)은 문장에서 이름·주소 등을 찾는 추가 검사입니다. 미구성은 검사를 수행하지 않았다는 뜻입니다.</p>
       <dl className="grid grid-cols-1 sm:grid-cols-[minmax(0,.9fr)_minmax(0,1.6fr)] gap-x-3 gap-y-1">
         <dt className="text-slate-500">처리기</dt><dd>{evidence.processor || '미확인'}</dd>
-        <dt className="text-slate-500">실행 모델</dt><dd className="break-all">{evidence.model || '미확인'} · {evidence.modelId || '미확인'}</dd>
-        <dt className="text-slate-500">모델 리비전</dt><dd className="break-all">{evidence.modelRevision || '미확인'}</dd>
+        <dt className="text-slate-500">실행 모델</dt><dd className="break-all">{regex ? '없음 (정규식 규칙)' : `${evidence.model || '미확인'} · ${evidence.modelId || '미확인'}`}</dd>
+        <dt className="text-slate-500">{regex ? '규칙 버전' : '모델 리비전'}</dt><dd className="break-all">{evidence.modelRevision || '미확인'}</dd>
         <dt className="text-slate-500">처리 방식</dt><dd>{evidence.method === 'redaction' ? '식별자 제거 (redaction)' : '미확인'}</dd>
         <dt className="text-slate-500">탐지 유형·건수</dt><dd>{counts.map((item, i) => <span key={i} className="mr-2">{item.type} ×{item.count}</span>)}총 {evidence.total ?? '미확인'}건</dd>
         <dt className="text-slate-500">문자 수</dt><dd>{evidence.sourceChars ?? '—'}자 → {evidence.outputChars ?? '—'}자</dd>
         <dt className="text-slate-500">규칙 잔여 식별자</dt><dd>{evidence.ruleResidualCount ?? '미확인'}건</dd>
         <dt className="text-slate-500">독립 NER</dt><dd>{evidence.independentNer === 'pass' ? '통과' : evidence.independentNer === 'not-configured' ? '미구성' : '미확인'}</dd>
         <dt className="text-slate-500">처리 지연</dt><dd>{evidence.latencyMs == null ? '미확인' : `${evidence.latencyMs}ms`}</dd>
-        <dt className="text-slate-500">프롬프트 버전</dt><dd className="break-all">{evidence.promptVersion || '미확인'}</dd>
+        {!regex && <><dt className="text-slate-500">프롬프트 버전</dt><dd className="break-all">{evidence.promptVersion || '미확인'}</dd></>}
       </dl>
       {passed && typeof evidence.sanitizedPreview === 'string' && (
         <div className="mt-2">

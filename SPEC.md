@@ -110,12 +110,24 @@ Gemma is an explanation choice; it is not the EKS privacy processor.
 This section incorporates the 2026-09-12 MyData requirements and supersedes S2's
 older Gemma-as-privacy, no-transformation, raw-token-streaming and cached-fallback assumptions.
 
+**2026-10-14 amendment (MyData free-text processor only).** Most MyData values
+(salary such as 연봉 8천만원, rates, periods, amounts) do not identify a person and
+are used as-is. The default free-text processor is the model-free regex anonymizer
+(`api/common/anonymize.py`, processor `regex-anonymizer`), which replaces only direct
+identifiers with per-request random tokens and keeps no original mapping. The private
+EKS processor becomes an optional selection when configured; its absence no longer
+blocks S2. Items 1, 2 and 7 below apply with this change; every other item is unchanged.
+Regex rules can miss context-free names and addresses, so INPUT Guardrails and the
+independent rule scan remain mandatory, and no legal or complete anonymization is claimed.
+
 1. Authenticate and validate the request. Send the raw free-text question only to
-   the configured private privacy service before INPUT Guardrails.
-2. The EKS gateway asks the configured model for entity evidence. Deterministic code
-   validates schema, spans, occurrences, identifier formats and overlaps, preserves
-   amounts/rates/periods, and performs replacement. Malformed, truncated, ambiguous
-   or unverifiable detections block the request.
+   the selected privacy processor (regex anonymizer by default, or a configured private
+   EKS model) before INPUT Guardrails.
+2. The selected processor produces typed replacements. The regex anonymizer applies
+   versioned identifier rules and preserves amounts/rates/periods; the EKS gateway asks
+   its model for entity evidence and deterministic code validates schema, spans,
+   occurrences, identifier formats and overlaps before replacement. Malformed, truncated,
+   ambiguous, unverifiable or rule-residual results block the request.
 3. The trusted data producer performs exact lookup, calculation and typed-field
    tokenization. Do not ask a second generative pass to reinterpret financial facts.
    Independently inspect the complete prepared payload with rules and Guardrails;
@@ -129,10 +141,11 @@ older Gemma-as-privacy, no-transformation, raw-token-streaming and cached-fallba
    inspection status. Do not return entity originals or raw questions. Newly detected
    free-text identifiers are removed; existing trusted-plane restoration is separate.
    Do not claim legal or complete anonymization.
-7. Select privacy models from the server allowlist and actual health. Qwen is the
-   reference EKS implementation; Gemma/DeepSeek privacy candidates are unconfigured
-   until an endpoint and artifact revision are registered. Explanation and privacy
-   selections remain distinct.
+7. Select the privacy processor from the server list: the regex anonymizer is always
+   listed; EKS models appear by allowlist and actual health. Qwen is the reference EKS
+   implementation; Gemma/DeepSeek privacy candidates are unconfigured until an endpoint
+   and artifact revision are registered. The Bedrock explanation model is chosen from the
+   platform model catalog; explanation and privacy selections remain distinct.
 8. Private NER is optional and reported as unconfigured unless connected. Synthetic
    evaluation and SageMaker job preparation do not mean training or promotion ran.
 
@@ -529,6 +542,11 @@ This section preserves dated evidence, not a current deployment attestation.
   and policy-enforcement results remain separate verification. PR #5 artifact-pinning
   work was still open during this reconciliation and is not claimed as implemented
   by this baseline.
+
+- **2026-10-14 MyData regex amendment:** §4-3 default free-text processor changed to the
+  model-free regex anonymizer; EKS processing became optional and S2 explanation models
+  come from the platform catalog. Recorded here as a requirement change; implementation,
+  review, merge and deployment status are tracked by its PR, not by this entry.
 
 Keep detailed operational evidence in `platform/README.md`,
 `platform/infra/README-privacy.md` and `docs/14-demo/`. Do not convert a historical test

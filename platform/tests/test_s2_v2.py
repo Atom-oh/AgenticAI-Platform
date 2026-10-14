@@ -285,8 +285,9 @@ def harness(monkeypatch):
     monkeypatch.setattr(gate, "route_info", fake_route_info)
 
     def make_stream(answer, refuse=None):
-        def fake_stream(system, user, max_tokens=800, route=None, purpose="s2", trace_id="", temperature=0.2):
-            calls["stream"].append({"system": system, "user": user, "route": route, "purpose": purpose, "trace_id": trace_id})
+        def fake_stream(system, user, max_tokens=800, route=None, purpose="s2", trace_id="", temperature=0.2, model_id=None):
+            calls["stream"].append({"system": system, "user": user, "route": route, "purpose": purpose, "trace_id": trace_id,
+                                    "model_id": model_id})
             if refuse:
                 b = gate.measure(system, user)
                 b["piiRules"]["byType"][refuse] = 1          # 페이크 거부 — 유형·건수만 (실제 게이트도 값은 남기지 않는다)
@@ -334,7 +335,8 @@ def test_route_stage_is_emitted_first_with_badges_and_done_carries_gate_measurem
     mask = by["mask"]
     assert mask["plane"] == "boundary" and "maskedPayload" in mask and mask["piiOutbound"] == 0
     assert mask["badge"] == {**mask["badge"], "title": "익명화 게이트", "prod": "가명처리 · 토큰화 · 재식별",
-                             "demo": "EKS sLLM 식별자 제거 + VPC 내부 토큰화 + 독립 잔여 검사"}
+                             "demo": "정규식 식별자 익명화 + VPC 내부 토큰화 + 독립 잔여 검사",
+                             "privacyProcessor": "regex-anonymizer"}
     assert set(mask["badge"]["refuseTypes"]) == set(gate.DEFAULT_REFUSE_TYPES)
     chk = by["semantic_check"]
     assert chk["semanticLayer"] is True and chk["engineValue"] == 450_000 and chk["modelValue"] == 450_000
@@ -409,7 +411,7 @@ def test_route_override_gemma_flows_to_gate_and_badges(harness):
     assert route["step"] == "route" and route["route"] == "gemma" and route["tier"] == "2"
     assert route["modelId"] == "google.gemma-4-31b" and route["region"] == "us-west-2"
     assert route["badge"]["prod"] == "Bedrock Gemma 4 31B · 상담 설명 모델"
-    assert "개인정보 전처리는 별도 EKS 모델" in route["badge"]["demo"]
+    assert "개인정보 전처리는 별도 처리기" in route["badge"]["demo"]
     assert route["badge"]["substituted"] is False
     assert harness["stream"][0]["route"] == "gemma"
     done = sent[-1]

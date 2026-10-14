@@ -20,6 +20,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from engine import model_catalog
+
 MAX_REGENERATIONS = 1                       # §12.9 무한 루프 금지 — 재생성은 최대 1회
 MAX_ATTEMPTS = MAX_REGENERATIONS + 1
 GATE_KEYS = ("build", "types", "lint", "a11y", "visual")
@@ -29,7 +31,8 @@ UNAVAILABLE_NOTE = "게이트 실행기 미연결"
 ROOT = Path(__file__).resolve().parent.parent
 GATES_DIR = ROOT / "gates"
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
-MODEL = os.environ.get("GEN_MODEL", "apac.anthropic.claude-sonnet-4-20250514-v1:0")
+# 실제 호출(engine.bedrock.Stream 기본 경로)과 같은 카탈로그 기본 모델을 보고한다.
+MODEL = os.environ.get("GEN_MODEL", model_catalog.DEFAULT_MODEL)
 
 
 class GatesError(Exception):

@@ -221,10 +221,14 @@ local development uses files. `/audit/recent` returns metadata/lengths rather th
 raw audit text. Authenticated S2 stage events can contain lookup values and the
 final reidentified answer; the cloud trace is not a copy of those events.
 
-Current S2 free text must pass `api/common/privacy.py` and the private EKS
-processor before cloud Guardrails. Known structured fields are tokenized by the
-internal producer, then scanned independently. The explanation route is separate
-from `privacyModel`; `gemma` does not replace private Qwen processing.
+Current S2 free text must pass the selected processor before cloud Guardrails:
+`api/common/anonymize.py` (`privacyModel="regex"`, default, `regex-anonymizer`,
+`modelInvoked: false`) or `api/common/privacy.py` with a configured private EKS model.
+`s2_privacy_models.done` lists `models[]` (each with `processor`), `defaultModel`,
+`explanationModels[]` from the platform catalog and `defaultExplanationModel`.
+Known structured fields are tokenized by the internal producer, then scanned
+independently. The explanation route and optional `model` are separate from
+`privacyModel`; `gemma` is not a privacy processor.
 Preserve `privacy_input`, `privacy_payload`, `s2_privacy_models`,
 `schema-and-independent-scan`, `structured-tokenization`, `modelInvoked`,
 receipt field names and Korean runtime strings. Privacy verification failure

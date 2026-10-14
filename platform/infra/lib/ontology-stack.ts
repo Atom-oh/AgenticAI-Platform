@@ -15,6 +15,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { createHash } from 'node:crypto';
 import { intakeConfigured, intakeDeploymentScope, denyIntakeAdministrationWrites, INTAKE_WRITE_ACTIONS } from './intake';
+import { CATALOG_MODEL_IDS, foundationModelOf } from './models';
 
 export interface OntologyStackProps extends cdk.StackProps {
   runtimeDirectory: string;
@@ -49,8 +50,7 @@ export class OntologyStack extends cdk.Stack {
           .some(value => !/^[a-f0-9]{64}$/.test(value))) {
       throw new Error('Ontology requires isolated networking and an immutable, verified tool archive');
     }
-    const approvedModels = new Set(['global.anthropic.claude-sonnet-5', 'global.anthropic.claude-opus-5',
-      'global.openai.gpt-6-astra', 'global.anthropic.claude-fable-5-1', 'global.anthropic.claude-fable-5']);
+    const approvedModels = new Set<string>(CATALOG_MODEL_IDS);
     if (props.design && (!Array.isArray(props.design.projects) || !props.design.projects.length ||
         props.design.projects.length > 20 || props.design.projects.some(id => !/^p-[a-zA-Z0-9_-]+$/.test(id)) ||
         !Array.isArray(props.design.models) || !props.design.models.length || props.design.models.some(id => !approvedModels.has(id)))) {
@@ -293,7 +293,7 @@ export class OntologyStack extends cdk.Stack {
     if (props.design) runtimeRole.addToPolicy(new iam.PolicyStatement({ actions: ['bedrock:InvokeModel'],
       resources: props.design.models.flatMap(model => [
         `arn:${this.partition}:bedrock:*:${this.account}:inference-profile/${model}`,
-        `arn:${this.partition}:bedrock:*::foundation-model/${model.replace(/^global\./, '')}`,
+        `arn:${this.partition}:bedrock:*::foundation-model/${foundationModelOf(model)}`,
       ]),
     }));
     const runtime = new agentcore.CfnRuntime(this, 'Runtime', {

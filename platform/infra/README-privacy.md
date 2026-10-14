@@ -6,6 +6,10 @@ Current code audit: 2026-09-13. This runbook covers `lib/privacy-stack.ts`,
 [SPEC.md](../../SPEC.md), and [platform contracts](../docs/CONTRACTS.md).
 Deployment observations below are dated evidence, not current readiness claims.
 
+Since the 2026-10-14 SPEC §4-3 amendment this private EKS path is an optional S2
+processor. The default is the model-free regex anonymizer (`api/common/anonymize.py`),
+so S2 runs without this stack; the checks below apply when an EKS model is selected.
+
 Shared-cluster maintenance was authorized on 2026-09-13. PR #4 adds startup
 TCP-peer enforcement and shared-cluster prerequisite inputs. See the
 [shared-cluster runbook](../privacy/deploy/shared-cluster/README.md). Authorization

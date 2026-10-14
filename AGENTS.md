@@ -50,8 +50,8 @@ old test counts, screenshots, or a successful merge.
   use `platform/engine/gate.py`; the Strands scenario runtime uses its pre-model
   hook in `platform/agents/boundary_gate.py`. Verify each entry point against the
   same privacy obligations; a hook alone does not prove complete enforcement. MyData additionally removes free-text identifiers
-  through the private privacy service before Bedrock calls; do not send raw
-  questions to Guardrails.
+  through the selected privacy processor (regex anonymizer by default, private EKS
+  model when configured) before Bedrock calls; do not send raw questions to Guardrails.
 - Preserve deterministic financial values, private identity mappings, independent
   outgoing-payload checks, and failure blocking. S2 does not replay or write the
   shared event cache. Never log raw prompts or entity originals.

@@ -61,7 +61,7 @@ def test_privacy_failure_blocks_downstream_and_never_replays_personal_results(ha
     monkeypatch.setattr(costguard, "get_cached", lambda *_: pytest.fail("S2 must not read personal event cache"))
     monkeypatch.setattr(costguard, "put_cached", lambda *_: pytest.fail("S2 must not store personal event cache"))
     harness["make_stream"]("must never execute")
-    _, sent = _run({"query": Q})
+    _, sent = _run({"query": Q, "privacyModel": "qwen"})
     assert not harness["stream"]
     assert sent[-1]["type"] == "s2.done"
     assert sent[-1]["blockedBy"] == "privacy"

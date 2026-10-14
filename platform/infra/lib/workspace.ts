@@ -17,6 +17,7 @@ import * as integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { denyIntakeAdministrationWrites, intakeConfigured, intakeDeploymentScope } from './intake';
+import { bedrockModelArns, DEFAULT_MODEL_ID } from './models';
 
 export interface StudioWorkspaceProps {
   apiCode: lambda.Code;
@@ -166,7 +167,7 @@ export class StudioWorkspace extends Construct {
         CACHE_TABLE: props.cacheTable.tableName,
         DAILY_TOKEN_CAP: '2000000', GUARDRAIL_ID: props.guardrailId,
         GUARDRAIL_VERSION: props.guardrailVersion, LLM_ROUTE: 'bedrock',
-        GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+        GEN_MODEL: DEFAULT_MODEL_ID,
         BEDROCK_READ_TIMEOUT: '240',
         WORKSPACE_GIT_CONNECTIONS: gitConfiguration,
         WORKBENCH_CONNECTIONS_JSON: knowledgeConfiguration,
@@ -187,16 +188,10 @@ export class StudioWorkspace extends Construct {
       resources: [props.cacheTable.tableArn],
       conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['usage#*'] } },
     }));
-    // Exact model families verified with Bedrock GetInferenceProfile 2026-09-11.
-    // Global profiles may route regions; model identities remain restricted.
-    const modelNames = ['anthropic.claude-sonnet-5', 'anthropic.claude-opus-5',
-      'openai.gpt-6-astra', 'anthropic.claude-fable-5-1', 'anthropic.claude-fable-5'];
+    // Global profiles may route regions; model identities remain restricted to the catalog.
     workerRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: modelNames.flatMap(model => [
-        `arn:${stack.partition}:bedrock:*::foundation-model/${model}`,
-        `arn:${stack.partition}:bedrock:*:${stack.account}:inference-profile/global.${model}`,
-      ]),
+      resources: bedrockModelArns(stack.partition, stack.account),
     }));
     const gitSecrets = [...new Set<string>(gitConnections.map(connection => connection.secretArn as string))];
     if (gitSecrets.length) workerRole.addToPolicy(new iam.PolicyStatement({
