@@ -50,6 +50,12 @@ def invoke(payload, context):
                 memory=Memory(client, configuration["memoryId"], session.client("kms"),
                               configuration["memoryNamespaceKeyArn"], configuration["organization"]))
             if payload.get("operation", "source.analyze") != "source.analyze":
+                if payload.get("operation") == "design.guidelines":
+                    from ontology_runtime.knowledge_workflow import KnowledgeWorkflow
+                    return KnowledgeWorkflow(gateway,
+                        ReceiptSigner(session.client("kms", config=Config(retries={"total_max_attempts": 1})),
+                                      configuration["evidenceKeyArn"], configuration["evidenceKeyId"]),
+                        configuration).run(payload, context.session_id)
                 from ontology_runtime.design_workflow import DesignWorkflow
                 from ontology_runtime.browser import Browser
                 return DesignWorkflow(gateway, Interpreter(client, configuration["interpreter"]),

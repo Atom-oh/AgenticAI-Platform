@@ -3,6 +3,7 @@ import { resource, listPages, waitForJob } from './client';
 import { ActionState, Details, Empty, Field, label, LoadState, Section, useAction, useLoad, useWorkbench } from './shared';
 import { DependencyGraph } from './Knowledge';
 import type { Asset } from '../workspace/types';
+import GuidelineKnowledge from './GuidelineKnowledge';
 
 type SourceRef = { sourceKind: string; sourceId: string; revision: string; sha256: string; audienceRevision: string };
 type Node = { id: string; type: string; title: string; revision: number; reviewState: string; provenance: string;
@@ -110,6 +111,9 @@ export default function OntologyView() {
     '선택한 버전의 검토 결정을 기록했습니다.');
   };
   return <div className="wb-stack">
+    {['owner', 'designer', 'developer'].includes(overview.role) &&
+      <GuidelineKnowledge target={selected} generation={state.data?.generation || null}
+        onPublished={() => { setCursor(''); setHistory([]); choose(null); state.refresh(); }} />}
     <Section title="자산·상품·규정·코드의 연결" description="워크스페이스 프로젝트 온톨로지를 정본으로 조회합니다. 그림의 연결은 원본 근거와 검토 상태를 함께 확인하세요."
       action={<button onClick={() => navigate('studio', { step: 'assets', tool: undefined })}>디자인 자산 등록</button>}>
       <p className="wb-muted">{LEVELS.map(level => KIND[level]).join(' → ')}</p>

@@ -29,12 +29,13 @@ PROFILE_DEFAULT = {"id": "agentcore-default", "revision": "1", "deadlineMs": 14 
                    # rejects a request whose worst-case plan exceeds its ceiling with "call-budget"
                    "maxCallsByOperation": {"design.extract": 12, "design.generate": 120, "design.edit": 40,
                                            "design.compose": 20, "design.release": 10, "source.analyze": 10,
-                                           "intake.transcribe": 6},
+                                           "intake.transcribe": 6, "design.guidelines": 2},
                    # Spend and cleanup reservations (N7; AGENTCORE_CONTRACT.md:712-716).
                    "tokenBudget": 400_000, "cleanupReserveMs": 60_000,
                    "toolProfiles": dict(TOOL_PROFILES)}
 
 OPERATIONS = {"design.extract": ("context", "generate", "verify"),
+              "design.guidelines": ("context", "generate", "verify"),
               "design.generate": ("context", "generate", "compile", "browser", "verify"),
               "design.edit": ("context", "generate", "compile", "browser", "verify"),
               "design.compose": ("context", "compile", "browser", "verify"),
@@ -47,6 +48,7 @@ OPERATIONS = {"design.extract": ("context", "generate", "verify"),
 _DESIGN_BUILD = {"generate": "context", "compile": "generate", "browser": "compile", "verify": "browser"}
 _BUNDLE_CHECK = {"compile": "context", "browser": "compile", "verify": "browser"}
 STAGE_INPUTS = {"design.extract": {"generate": "context", "verify": "generate"},
+                "design.guidelines": {"generate": "context", "verify": "generate"},
                 "intake.transcribe": {"generate": "context", "verify": "generate"},
                 "design.generate": _DESIGN_BUILD, "design.edit": _DESIGN_BUILD,
                 "design.compose": _BUNDLE_CHECK, "design.release": _BUNDLE_CHECK,
@@ -697,12 +699,14 @@ class Ledger:
         design_write = None
         if artifact is not None:
             is_design = isinstance(artifact, dict) and artifact.get("kind") == "design-stage"
+            is_knowledge = isinstance(artifact, dict) and artifact.get("kind") == "knowledge-stage"
             allowed = ({"id", "kind", "designId", "designRevision", "designVersion", "stage", "name", "sourceRefs", "requestHash"}
-                       if is_design else {"id", "name", "expectedGeneration", "sourceRefs", "requestHash"})
+                       if is_design else {"id", "name", "expectedGeneration", "sourceRefs", "requestHash"} | ({"kind"} if is_knowledge else set()))
             if (not isinstance(artifact, dict) or set(artifact) != allowed
                     or not _is_ident(artifact["id"]) or not _is_ident(artifact["name"])
                     or not _is_sha(artifact["requestHash"]) or not isinstance(artifact["sourceRefs"], list)
-                    or (not is_design and operation != "source.analyze")):
+                    or (not is_design and not is_knowledge and operation != "source.analyze")
+                    or (is_knowledge and operation != "design.guidelines")):
                 raise LedgerError("artifact-invalid")
             if is_design:
                 if operation not in {"design.extract", "design.generate", "design.edit", "design.compose", "design.release"}:
@@ -734,6 +738,9 @@ class Ledger:
                 or project.get("authorityRevision") != project_authority.get("authorityRevision")
                 or schema.digest(members) != project_authority.get("membershipDigest")):
             raise LedgerError("authority-changed")
+        if operation == "design.guidelines" and (not artifact or artifact.get("kind") != "knowledge-stage"
+                                                  or member.get("role") not in {"owner", "designer"}):
+            raise LedgerError("artifact-invalid")
         obligations, source_checks = self._admitted_manifest(owner, manifest, admissions, scope)
         baseline = self._release_baseline(owner, manifest) if operation == "design.release" else None
         job_id = "exec-" + secrets.token_hex(16)
@@ -1625,6 +1632,12 @@ class Ledger:
         their transactional predicates, and every time bound alongside a grant (review 8, #2) for the final
         guard to recheck against a fresh clock immediately before delivery or submission."""
         checks, expiries = [], []
+        if (job.get("artifact") or {}).get("kind") == "knowledge-stage":
+            for frozen in job["obligations"]["sourceChecks"]:
+                record = self.storage.get(frozen["owner"], frozen["kind"], frozen["id"])
+                if not record or record.get("version") != frozen["version"]:
+                    self._source_revoked(owner, job, {"artifactId": job["artifact"]["id"]})
+            checks = self._merge_checks(checks, job["obligations"]["sourceChecks"])
         if (job.get("artifact") or {}).get("kind") == "design-stage":
             from workspace.design_execution import authority
             check = authority(self.storage, owner, job)
@@ -2171,7 +2184,7 @@ class Ledger:
         operation = job["operation"]
         if operation == "source.analyze":
             return "succeeded" if "coverage" in result["analyze"] else None
-        if operation in ("design.extract", "intake.transcribe"):
+        if operation in ("design.extract", "intake.transcribe", "design.guidelines"):
             issues = result["verify"].get("issues")
             if issues == []:
                 return "succeeded"
@@ -2413,6 +2426,9 @@ class Ledger:
             raise LedgerError("completion-contention")
         from workspace.execution_source import SourcePublication
         from workspace.design_execution import DesignPublication
+        from workspace.knowledge_execution import KnowledgePublication
+        if job["operation"] == "design.guidelines" and type(stage_completion) is not KnowledgePublication:
+            raise LedgerError("completion-unavailable", reason="knowledge-staging-adapter")
         if (job.get("artifact") or {}).get("kind") == "design-stage" and type(stage_completion) is not DesignPublication:
             raise LedgerError("completion-unavailable", reason="design-staging-adapter")
         if job["operation"] in _COMPLETION_UNAVAILABLE and type(stage_completion) is not SourcePublication:
@@ -2485,7 +2501,7 @@ class Ledger:
                     or not all(isinstance(staged.get(name, []), list)
                                for name in ("writes", "checks", "sourceChecks", "sourceBindings"))):
                 raise LedgerError("completion-invalid")
-            if "expiresAt" in staged and (type(stage_completion) not in {SourcePublication, DesignPublication} or type(staged["expiresAt"]) is not int):
+            if "expiresAt" in staged and (type(stage_completion) not in {SourcePublication, DesignPublication, KnowledgePublication} or type(staged["expiresAt"]) is not int):
                 raise LedgerError("completion-invalid")
             writes.extend(staged.get("writes", []))
             checks.extend(staged.get("checks", []))

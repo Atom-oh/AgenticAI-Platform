@@ -152,7 +152,10 @@ def reconcile_handler(event, context):
     if status not in {"succeeded", "needs_changes"}:
         return {"status": "evidence-incomplete"}
     completion = SourcePublication(host, config)
-    if job["operation"].startswith("design."):
+    if job["operation"] == "design.guidelines":
+        from workspace.knowledge_execution import KnowledgePublication
+        completion = KnowledgePublication(host, config)
+    elif job["operation"].startswith("design."):
         from workspace.design_execution import DesignPublication
         completion = DesignPublication(host, config)
     completed = ledger.reconciler().reconcile(event["owner"], job["id"], job["attempt"]["id"], receipts=[],
@@ -193,3 +196,19 @@ def api_operation(ctx, action, body=None, identifier=None):
     elif action != "read":
         raise ValueError("Unknown execution operation")
     return {"job": view_job(job)}
+
+
+def knowledge_operation(ctx, body):
+    """The public API admits an existing configured operation, never signs it."""
+    if not os.environ.get("SOURCE_EXECUTION_CONFIGURATION") or not os.environ.get("SOURCE_EXECUTION_QUEUE_URL"):
+        from workbench.service import fail
+        fail(503, "knowledge-execution-unavailable", "검증된 가이드 지식화 실행 환경이 아직 구성되지 않았습니다.")
+    host, config, ledger, _, _, session, _ = dependencies()
+    from workbench.service import Service
+    from workspace.knowledge_execution import submit as knowledge_submit
+    request = Service(host, host.collaboration.resolve_scope(ctx.actor, ctx.project_id), ctx.claims)
+    queue = session.client("sqs", config=Config(retries={"total_max_attempts": 1}))
+    def enqueue(owner, identifier):
+        queue.send_message(QueueUrl=os.environ["SOURCE_EXECUTION_QUEUE_URL"],
+                           MessageBody=json.dumps({"owner": owner, "jobId": identifier}))
+    return knowledge_submit(request, body, ledger, config, enqueue)

@@ -88,11 +88,15 @@ export function useAction() {
       if (active.current === abort) active.current = null;
     }
   }
-  function cancel() {
+  function reset() {
     active.current?.abort(); active.current = null; setBusy(false); setJob(null);
+    setError(''); setMessage('');
+  }
+  function cancel() {
+    reset();
     setMessage('응답 대기를 중지했습니다. 이미 접수된 서버 작업은 계속될 수 있으므로 목록에서 확인하세요.');
   }
-  return { busy, error, message, job, run, cancel, requestId };
+  return { busy, error, message, job, run, cancel, reset, requestId };
 }
 export function Notice({ children, error = false }: { children: ReactNode; error?: boolean }) {
   return <div className={`wb-notice${error ? ' wb-error' : ''}`} role={error ? 'alert' : 'status'}>{children}</div>;

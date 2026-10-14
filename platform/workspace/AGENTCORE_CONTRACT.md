@@ -1503,3 +1503,32 @@ observations. The [owning reference interface](REACT_CONTRACT.md#independent-ref
 keeps historical comparison separate from current generation and approval.
 Actual deployed Browser profile/canary/transport/service evidence remains
 required under BROW-01/02 and G0-BROWSER/RUNTIME.
+
+### Guideline knowledge execution (2026-10-14 candidate)
+
+`design.guidelines` has `context → generate → verify` stages, one bounded model
+extraction and the existing measured boundary/inspection/budget protocol.
+Its `knowledge-stage` artifact is ledger-owned; legacy writers cannot claim or
+complete it. Every protected call retains the exact frozen canonical and
+admitted-source predicates. The dedicated capability permits the operation only
+for the configured design project/model cohort.
+The shared execution profile permits at most two model calls and 400,000 tokens;
+this workflow performs one extraction without an automatic paid retry.
+Its completion transaction reserves 20 non-source operations; excess source
+scope is rejected before admission. Human adoption retains the current project
+version and all source predicates in the same atomic write.
+
+The generated private proposal and boundary observations are hash-bound stage
+outputs. Completion requires the registered knowledge publication adapter,
+independent source/citation/target verification and one job/artifact transaction.
+Missing or rejected evidence yields needs-changes or explicit failure. Unknown
+paid outcomes cannot be replayed. Canonical publication is a later human
+source-fenced candidate adoption, with no model approval effect.
+Completed artifacts retain the input/admission bindings needed for authorized
+historical reads after job TTL. Admission replay keeps the same job; a changed
+request cannot reuse its key. Terminal unknown outcomes remain fenced, with
+the unresolved call intent available for accounting and explicit recovery.
+
+Runtime, Identity/Gateway, source admission, model and telemetry gates remain
+mandatory before activation. This interface does not broaden the bank Gateway,
+private-plane, Registry or organization publishing authority.

@@ -131,6 +131,9 @@ async function harness() {
       if (['/runs', '/releases'].includes(target)) return json({ [target.slice(1)]: [] });
       if (target === '/components') return json({ catalog });
       if (target === '/ontology') return json(data.ontology);
+      if (target === '/designs/config') return json({ enabled: false, models: [] });
+      if (target === '/designs/inputs') return json({ inputs: [] });
+      if (target === '/ontology/knowledge') return json({ items: [] });
       if (target === '/ontology/schema') return json({ analyzerConfigured: Boolean(fixture.analyzerConfigured) });
       if (target === '/ontology/analyses' && method === 'POST') {
         data.jobs['analysis-job'] = { id: 'analysis-job', kind: 'ontology-analysis', status: 'queued' };
