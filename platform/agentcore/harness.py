@@ -12,6 +12,8 @@ import uuid
 
 import boto3
 
+from agentcore import agent_specs
+
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 HARNESS_ROLE_ARN = os.environ.get("HARNESS_ROLE_ARN", "")
 GATEWAY_ARN = os.environ.get("GATEWAY_ARN", "")
@@ -81,7 +83,7 @@ def build_config(spec: dict) -> dict:
     cfg = {
         "harnessName": f"bank_{spec['name']}",
         "executionRoleArn": HARNESS_ROLE_ARN,
-        "model": {"bedrockModelConfig": {"modelId": spec.get("model", "global.anthropic.claude-sonnet-5"),
+        "model": {"bedrockModelConfig": {"modelId": spec.get("model", agent_specs.DEFAULT_MODEL),
                                          "apiFormat": "converse_stream",
                                          "maxTokens": int(spec.get("maxTokens", 2048))}},  # Claude 5: temperature 미지원
         "systemPrompt": [{"text": system_prompt}],

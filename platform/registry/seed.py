@@ -297,7 +297,8 @@ MCP_TOOLS = [
 
 
 def platform_records() -> List[dict]:
-    model_id = os.environ.get("GEN_MODEL", "apac.anthropic.claude-sonnet-4-20250514-v1:0")
+    from engine import model_catalog
+    model_id = os.environ.get("GEN_MODEL", model_catalog.DEFAULT_MODEL)
     return [
         {"name": "bank_platform_mcp_tools", "recordVersion": "v1", "recordType": "MCP", "subtype": "GATEWAY",
          "status": "APPROVED", "description": mcp_description(), "owner": OWNER_AI,

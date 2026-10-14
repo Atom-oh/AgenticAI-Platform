@@ -221,10 +221,14 @@ local development uses files. `/audit/recent` returns metadata/lengths rather th
 raw audit text. Authenticated S2 stage events can contain lookup values and the
 final reidentified answer; the cloud trace is not a copy of those events.
 
-Current S2 free text must pass `api/common/privacy.py` and the private EKS
-processor before cloud Guardrails. Known structured fields are tokenized by the
-internal producer, then scanned independently. The explanation route is separate
-from `privacyModel`; `gemma` does not replace private Qwen processing.
+Current S2 free text must pass the selected processor before cloud Guardrails:
+`api/common/anonymize.py` (`privacyModel="regex"`, default, `regex-anonymizer`,
+`modelInvoked: false`) or `api/common/privacy.py` with a configured private EKS model.
+`s2_privacy_models.done` lists `models[]` (each with `processor`), `defaultModel`,
+`explanationModels[]` from the platform catalog and `defaultExplanationModel`.
+Known structured fields are tokenized by the internal producer, then scanned
+independently. The explanation route and optional `model` are separate from
+`privacyModel`; `gemma` is not a privacy processor.
 Preserve `privacy_input`, `privacy_payload`, `s2_privacy_models`,
 `schema-and-independent-scan`, `structured-tokenization`, `modelInvoked`,
 receipt field names and Korean runtime strings. Privacy verification failure
@@ -256,8 +260,8 @@ reviewer does not turn an older description into a requirement for unrelated cod
 | --- | --- |
 | All agents are Harness; four specs | `api/admin_handler.py` prefers Runtime/Strands when configured; `agentcore/agent_specs.py` has five specs. Custom creation still uses Harness. Some source comments retain older wording. |
 | Every generation path regenerates once | F5 and `design_loop/loop.py` do; `studio/loop.py` permits 20 rounds and `workspace/http.py` permits five. |
-| Gemma substitutes for private PII processing | S2 requires the private EKS detector for free text. Its Gemma route is explanation only. |
-| Raw question goes to input Guardrails first | `api/handlers/s2.py` now sanitizes it through EKS first. Its opening source docstring still describes the older order. |
+| Gemma substitutes for private PII processing | S2 free text uses the selected privacy processor (regex anonymizer by default, private EKS detector when configured). Its Gemma route is explanation only. |
+| Raw question goes to input Guardrails first | `api/handlers/s2.py` now sanitizes it through the selected privacy processor first. Its opening source docstring still describes the older order. |
 | All scenario failures replay cache | S2 explicitly sets `cache=False`. |
 | CloudFront is the only public endpoint; all VPCs have no NAT | The browser directly uses WebSocket API Gateway. The isolated plane and reused EKS VPC are separate topologies. |
 | Loading, shared seeding and reset must be IAM-admin-only | Neptune loading follows the administrative path. Explicit authenticated `reset` and `registry_seed` routes are removed. Other legacy bootstrap/list behavior still needs separate review; route removal does not certify every Registry write. |

@@ -6,6 +6,10 @@ Current code audit: 2026-09-13. This runbook covers `lib/privacy-stack.ts`,
 [SPEC.md](../../SPEC.md), and [platform contracts](../docs/CONTRACTS.md).
 Deployment observations below are dated evidence, not current readiness claims.
 
+Since the 2026-10-14 SPEC §4-3 amendment this private EKS path is an optional S2
+processor. The default is the model-free regex anonymizer (`api/common/anonymize.py`),
+so S2 runs without this stack; the checks below apply when an EKS model is selected.
+
 Shared-cluster maintenance was authorized on 2026-09-13. PR #4 adds startup
 TCP-peer enforcement and shared-cluster prerequisite inputs. See the
 [shared-cluster runbook](../privacy/deploy/shared-cluster/README.md). Authorization
@@ -19,11 +23,13 @@ internal NLB, target group, relay Lambda, ECR repository and scoped SG/IAM rules
 It does not create an EKS cluster, GPU model, VPC or peering connection.
 
 The request path is authenticated WebSocket S2 → IAM relay → internal NLB →
-CPU gateway → private model service. `api/handlers/s2.py` (under `platform/`)
-requires this path for the free-text question before cloud Guardrails.
+CPU gateway → private model service. When the user selects an EKS model,
+`api/handlers/s2.py` (under `platform/`) uses this path for the free-text question
+before cloud Guardrails.
 Structured lookup fields instead use internal deterministic tokenization and an
 independent scan. Selecting the `gemma` explanation adapter does not replace EKS
-processing. Missing relay configuration or invalid privacy evidence blocks S2.
+processing. With an EKS model selected, missing relay configuration or invalid privacy evidence
+blocks S2; the regex default does not use the relay.
 
 The gateway defaults to `qwen` / `Qwen/Qwen3-8B`. Private `gemma4` and `deepseek`
 are disabled placeholders unless configured. `PRIVACY_MODELS_JSON` can supply

@@ -52,6 +52,11 @@ def test_catalog_exposes_verified_astra_and_fable_profiles():
     assert by_id[ASTRA]["label"] == "GPT-6 Astra"
     assert by_id[FABLE]["label"] == "Claude Fable 5.1"
     assert "global.anthropic.claude-fable-5" in by_id
+    assert {by_id[m]["label"] for m in ("global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-opus-5-5",
+                                        "global.anthropic.claude-haiku-5-5", "global.openai.gpt-6.1-sol",
+                                        "global.openai.gpt-6-luna")} == {
+        "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude Haiku 5.5", "GPT-6.1 Sol", "GPT-6 Luna"}
+    assert by_id["global.openai.gpt-6.1-sol"]["provider"] == "OpenAI"
     assert model_catalog.resolve("") == "global.anthropic.claude-sonnet-5"
 
 

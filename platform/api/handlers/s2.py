@@ -18,7 +18,7 @@ import re
 
 import boto3
 
-from common import costguard, pii, plane, privacy, tracing
+from common import anonymize, costguard, pii, plane, privacy, tracing
 from common.ctx import Ctx
 from common.log import log_event
 
@@ -190,15 +190,23 @@ def semantic_check(answer: str, semantic_layer: bool, engine_value, diagnostics:
 # ---------------------------------------------------------------------------
 # 표기 (§11-1 · §11-2) — 문구 출처는 engine.gate 하나
 # ---------------------------------------------------------------------------
-def route_stage(route: str | None) -> dict:
-    from engine import gate
+def route_stage(route: str | None, model: str | None = None) -> dict:
+    from engine import gate, model_catalog
     ri = gate.route_info(route)
+    if model:
+        ri = {**ri, "modelId": model}   # 선택한 카탈로그 모델 — 실제 호출 결과(st.model_id)로 done 에서 다시 보고한다
     b = ri.get("badge") or {}
+    if model and ri["route"] == "claude":
+        # 카탈로그에는 OpenAI 모델도 있다 — 배지는 선택한 모델의 실제 공급자를 표시한다.
+        picked = next(o for o in model_catalog.options() if o["id"] == model)
+        label = f"Bedrock {picked['label']} ({picked['provider']})"
+        b = {**b, "prod": b.get("prod", "").replace("Bedrock Claude", label),
+             "demo": b.get("demo", "").replace("Bedrock Claude", label)}
     if ri["route"] == "gemma":
-        # In S2 this adapter writes the explanation. It is not the EKS PII
+        # In S2 this adapter writes the explanation. It is not the PII
         # processor, which is reported independently by privacy_input/payload.
         b = {**b, "prod": "Bedrock Gemma 4 31B · 상담 설명 모델",
-             "demo": "bedrock-mantle · us-west-2 직접 호출 (개인정보 전처리는 별도 EKS 모델)",
+             "demo": "bedrock-mantle · us-west-2 직접 호출 (개인정보 전처리는 별도 처리기)",
              "substituted": False}
     return {"route": ri["route"], "tier": ri["tier"], "modelId": ri["modelId"], "endpoint": ri.get("endpoint", ""),
             "region": ri.get("region", ""), "inferenceRouting": ri.get("inferenceRouting", ""),
@@ -256,8 +264,20 @@ def handle(ctx: Ctx, body: dict) -> None:
         except ValueError as e:
             ctx.error(str(e))
             return
+    explanation_model = body.get("model") or None
+    if explanation_model is not None:
+        from engine import gate, model_catalog
+        try:
+            if gate.current_route(route) not in ("claude", "bedrock"):
+                raise ValueError("설명 모델 선택은 Bedrock 경로에서만 사용할 수 있습니다.")
+            explanation_model = model_catalog.resolve(explanation_model)
+        except ValueError as e:
+            ctx.error(str(e))
+            return
     semantic_on = _truthy(body.get("semanticLayer"), default=True)
-    privacy_model = body.get("privacyModel", "qwen")
+    # MyData 값 대부분(연봉·금리·기간)은 식별 정보가 아니다. 기본은 모델 호출 없는 정규식 익명화이고,
+    # 구성된 경우에만 사설 EKS 처리기(qwen 등)를 선택할 수 있다.
+    privacy_model = body.get("privacyModel") or "regex"
     ref_date = str(body.get("refDate") or "")[:10] or None   # 리허설·테스트용 기준일 고정 (선택)
     state: dict = {"blocked": False, "usage": {}, "pii": {"count": 0}, "maskedFields": [], "gOut": None,
                    "plane": plane.mode(), "boundary": None, "modelId": None, "route": None, "tier": None,
@@ -266,17 +286,24 @@ def handle(ctx: Ctx, body: dict) -> None:
     def run(c: Ctx) -> None:
         from engine import gate
         # ⓪ 추론 경로 — 어떤 모델·엔드포인트·라우팅으로 나가는지 먼저 표기한다 (§11-1, §8-3 ④)
-        ri = route_stage(route)
+        ri = route_stage(route, explanation_model)
         state.update(route=ri["route"], modelId=ri["modelId"], tier=ri["tier"])
         c.stage("s2", "route", plane="cloud", semanticLayer=semantic_on, **ri)
 
-        # The raw question reaches only the private EKS processor. Guardrails
+        # The raw question reaches only the selected privacy processor. Guardrails
         # and both explanation/grounding requests use its validated output.
         state["privacyPhase"] = "input"
-        safe_query = privacy.process(query, privacy_model, "query", c.trace_id)
+        if privacy_model == "regex":
+            try:
+                safe_query = anonymize.process(query, c.trace_id)
+            except anonymize.AnonymizationRejected as error:
+                raise privacy.PrivacyUnavailable(error.code) from None
+        else:
+            safe_query = privacy.process(query, privacy_model, "query", c.trace_id)
+        plane_label = "cloud" if privacy_model == "regex" else "onprem"
         state["safeQuery"] = safe_query["text"]
         state["privacy"] = {"status": "pass", "input": safe_query["evidence"]}
-        c.stage("s2", "privacy_input", plane="onprem", sanitizedPreview=safe_query["text"], **safe_query["evidence"])
+        c.stage("s2", "privacy_input", plane=plane_label, sanitizedPreview=safe_query["text"], **safe_query["evidence"])
         # ① 입력 가드레일 (실물 Bedrock Guardrails)
         input_tokens = pii.tokens_in(safe_query["text"])
         g_in = checked_guardrail(safe_query["text"], "INPUT", trusted_tokens=input_tokens)
@@ -355,14 +382,17 @@ def handle(ctx: Ctx, body: dict) -> None:
         c.stage("s2", "privacy_payload", plane="boundary", **payload_evidence)
         c.stage("s2", "mask", maskedFields=prep["maskedFields"], maskedPayload=masked_payload,
                 piiOutbound=scan["count"], piiHits=scan["hits"], piiDetectors=scan["detectors"], plane="boundary",
-                badge={**gate_badge(), "demo": "EKS sLLM 식별자 제거 + VPC 내부 토큰화 + 독립 잔여 검사",
-                       "privacyProcessor": "eks-sllm"},
+                badge={**gate_badge(),
+                       "demo": ("정규식 식별자 익명화" if privacy_model == "regex" else "EKS sLLM 식별자 제거")
+                               + " + VPC 내부 토큰화 + 독립 잔여 검사",
+                       "privacyProcessor": safe_query["evidence"]["processor"]},
                 systemPromptChars=len(SYSTEM if semantic_on else SYSTEM_NO_SEMANTIC))
 
         # ⑥ 익명화 게이트 → Bedrock 설명 생성 (스트리밍). 식별자가 남아 있으면 GateRefused — 페이로드는 모델에 가지 않는다
         system = SYSTEM if semantic_on else SYSTEM_NO_SEMANTIC
         try:
-            st = gate.stream(system, masked_payload, max_tokens=800, route=route, purpose="s2", trace_id=c.trace_id)
+            st = gate.stream(system, masked_payload, max_tokens=800, route=route, purpose="s2", trace_id=c.trace_id,
+                             model_id=explanation_model)
             state["explanationInvoked"] = True
         except gate.GateRefused as e:
             by_type = ((e.boundary or {}).get("piiRules") or {}).get("byType", {})
@@ -466,12 +496,16 @@ def handle(ctx: Ctx, body: dict) -> None:
 
 
 def privacy_models(ctx: Ctx, body: dict) -> None:
+    """정규식 익명화(항상 사용 가능) + 구성된 EKS 처리기 + 설명용 플랫폼 모델 카탈로그."""
+    from engine import model_catalog
+    models, message = [anonymize.option()], ""
     try:
         result = privacy.models()
-        ctx.done("s2_privacy_models", **{key: value for key, value in result.items() if key != "ok"})
+        models += [{**model, "processor": "eks-sllm"} for model in result["models"] if isinstance(model, dict)]
     except privacy.PrivacyUnavailable:
-        ctx.done("s2_privacy_models", processor="eks-sllm", models=[], defaultModel="qwen", available=False,
-                 message="EKS 개인정보 처리 모델을 확인할 수 없습니다. 연결 확인 전에는 상담을 실행하지 않습니다.")
+        message = "EKS 개인정보 처리 모델은 구성되지 않았거나 확인할 수 없습니다. 정규식 익명화로 상담할 수 있습니다."
+    ctx.done("s2_privacy_models", models=models, defaultModel="regex", available=True, message=message,
+             explanationModels=model_catalog.options(), defaultExplanationModel=model_catalog.resolve())
 
 
 ROUTES = {"s2": handle, "s2_privacy_models": privacy_models}

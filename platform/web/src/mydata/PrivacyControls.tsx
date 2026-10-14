@@ -13,18 +13,19 @@ export default function PrivacyControls({ models, running, onExample }: {
   return (
     <section className="mydata-privacy panel p-3 mb-3" aria-label="MyData 프라이버시">
       <div className="flex items-center gap-2 flex-wrap mb-2">
-        <b className="text-xl">EKS sLLM 프라이버시 처리</b>
+        <b className="text-xl">MyData 질문 익명화</b>
         <span className="chip text-amber-800 border-amber-300">항상 필수</span>
         <button type="button" className="chip ml-auto disabled:opacity-40" onClick={models.refresh}
           disabled={running || models.status === 'loading'}>모델 상태 새로고침</button>
       </div>
       <p className="text-slate-600 mb-2">
-        자유 문장은 Bedrock Guardrails 호출 전에 EKS 모델로 처리합니다.
+        MyData 값 대부분(연봉·금리·기간·금액)은 개인을 식별하지 않으므로 그대로 사용합니다.
+        자유 문장의 직접 식별자(이름·연락처·이메일·주민번호·계좌·카드·주소 등)만 Bedrock Guardrails 호출 전에 토큰으로 바꿉니다.
         정형 고객정보는 내부 고정 코드로 토큰화하고, 설명 자료 전체를 마지막에 독립 검사합니다.
-        아래 프라이버시 모델과 설명용 모델은 별도로 선택합니다.
+        아래 처리기와 설명용 모델은 별도로 선택합니다.
       </p>
       <fieldset>
-        <legend className="font-semibold mb-2">필수 프라이버시 모델</legend>
+        <legend className="font-semibold mb-2">프라이버시 처리기</legend>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           {models.models.map(model => (
             <label key={model.id} className={`min-w-0 rounded-lg border p-3 ${model.available ? 'border-amber-300' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
@@ -38,23 +39,26 @@ export default function PrivacyControls({ models, running, onExample }: {
                 {model.available ? '사용 가능 · 실행 전' : '사용 불가'}
               </span>
               {model.available
-                ? <span className="block mt-1 break-all text-slate-600">eks-sllm · {model.family}<br />{model.modelId}<br />리비전 {model.revision}</span>
+                ? <span className="block mt-1 break-all text-slate-600">{model.processor === 'regex-anonymizer'
+                  ? <>정규식 규칙 · 모델 호출 없음<br />규칙 버전 {model.revision}</>
+                  : <>eks-sllm · {model.family}<br />{model.modelId}<br />리비전 {model.revision}</>}</span>
                 : <span className="block mt-1">{model.reason}</span>}
             </label>
           ))}
         </div>
       </fieldset>
       <div aria-live="polite" className="mt-2">
-        {models.status === 'loading' ? <p>프라이버시 모델 확인 중…</p>
+        {models.status === 'loading' ? <p>프라이버시 처리기 확인 중…</p>
           : models.status === 'error' ? <p role="alert" className="text-rose-700">{models.message}</p>
             : <>
               {models.message && <p className="text-amber-800">{models.message}</p>}
-              {!models.ready && <p className="text-amber-800">사용 가능한 프라이버시 모델이 없어 상담을 실행할 수 없습니다.</p>}
+              {!models.ready && <p className="text-amber-800">사용 가능한 프라이버시 처리기가 없어 상담을 실행할 수 없습니다.</p>}
             </>}
       </div>
       <p className="mt-2 text-slate-600">
         새로 입력한 자유 텍스트 식별자는 제거하며 복원하지 않습니다.
         기존 신뢰 영역의 토큰은 고객 응답에서만 원래 값으로 복원할 수 있습니다.
+        정규식은 문맥 없는 이름·주소를 놓칠 수 있어 Bedrock Guardrails가 다시 검사합니다.
         처리 통과는 표시된 탐지·검사 결과를 뜻하며 법적 익명성을 보증하지 않습니다.
       </p>
       <div className="flex gap-2 flex-wrap items-center mt-3">

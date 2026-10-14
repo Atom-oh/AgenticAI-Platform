@@ -18,7 +18,7 @@ DEFAULT_PASS = 85
 TIME_CAP_S = 780
 GEN_MAX_TOKENS = 12000
 REVIEW_MAX_TOKENS = 2500
-MODEL = os.environ.get("GEN_MODEL", "global.anthropic.claude-sonnet-5")
+MODEL = os.environ.get("GEN_MODEL", model_catalog.DEFAULT_MODEL)
 # .done 프레임 예산 — API Gateway WebSocket 프레임(128KB)을 넘기면 마지막 프레임이 통째로 사라진다.
 DONE_FAILURES_PER_ROUND = 5
 DONE_TEXT_MAX = 160

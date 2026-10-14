@@ -31,6 +31,7 @@ import * as ecrAssets from 'aws-cdk-lib/aws-ecr-assets';
 import { PLANE_PARAM_PREFIX } from './plane-stack';
 import { StudioWorkspace } from './workspace';
 import { IntakeAdmin } from './intake';
+import { bedrockModelArns, DEFAULT_MODEL_ID } from './models';
 
 export interface BankPlatformStackProps extends cdk.StackProps {
   /** 플레인 스택이 배포되어 SSM 파라미터가 존재할 때 true (브리지·Writer 연결) */
@@ -208,10 +209,15 @@ export class BankPlatformStack extends cdk.Stack {
 
     // ---------- 공용 코드 자산 (deploy.sh가 api-dist 조립) ----------
     const apiCode = lambda.Code.fromAsset('../api-dist');
-    const bedrockInvoke = new iam.PolicyStatement({
+    // Catalog models plus the fixed embedding/rerank/Gemma models — not every model in the account.
+    // A managed policy keeps the exact ARN list out of each role's inline-policy size budget
+    // (WsFn would otherwise overflow). ReaderFn keeps the same statement inline: it is that
+    // role's only grant, and removing its default policy cannot be recorded as a reviewed delta.
+    const bedrockInvokeStatement = new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['arn:aws:bedrock:*::foundation-model/*', `arn:aws:bedrock:*:${account}:inference-profile/*`],
+      resources: bedrockModelArns('aws', account, true),
     });
+    const bedrockInvoke = new iam.ManagedPolicy(this, 'BedrockCatalogInvoke', { statements: [bedrockInvokeStatement] });
     const guardrailApply = new iam.PolicyStatement({
       actions: ['bedrock:ApplyGuardrail'],
       resources: [`arn:aws:bedrock:${region}:${account}:guardrail/*`, `arn:aws:bedrock:*:${account}:guardrail-profile/*`],
@@ -239,13 +245,13 @@ export class BankPlatformStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(90),
       logRetention: logs.RetentionDays.ONE_WEEK,
       environment: {
-        GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+        GEN_MODEL: DEFAULT_MODEL_ID,
         INTERNAL_TOOL_FN: internalToolFnName,     // 시도는 하되 IAM이 막는다
         ALLOWED_SAMPLE_HOSTS: `${props.domainName ?? 'agent.atomai.click'},${dist.distributionDomainName}`,
       },
       description: 'bank-platform report reader: external web only, no internal tool permission',
     });
-    readerFn.addToRolePolicy(bedrockInvoke);
+    readerFn.addToRolePolicy(bedrockInvokeStatement);
 
     // ---------- AgentCore: 플랫폼 도구 Gateway(MCP, IAM 인바운드) + Lambda 타깃 + Harness 실행 역할 + Skills(S3) ----------
     const toolsFn = new lambda.Function(this, 'PlatformToolsFn', {
@@ -262,14 +268,14 @@ export class BankPlatformStack extends cdk.Stack {
         BRIDGE_FN: bridgeFnName,
         ALLOW_LOCAL_PLANE: props.planeDeployed ? '0' : '1',
         GATES_FN: gatesFn ? gatesFn.functionName : '',
-        GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+        GEN_MODEL: DEFAULT_MODEL_ID,
         GUARDRAIL_ID: guardrail.attrGuardrailId,
         GUARDRAIL_VERSION: guardrailVersion.attrVersion,
       },
       description: 'bank-platform AgentCore Gateway target: platform tools (masked customer lookup, calc, ontology, registry consumer, gates)',
     });
     registryTable.grantReadData(toolsFn);
-    toolsFn.addToRolePolicy(bedrockInvoke);
+    toolsFn.role!.addManagedPolicy(bedrockInvoke);
     const inspectedPayloadGuardrailApply = new iam.PolicyStatement({
       // APAC profile destinations from Seoul, verified 2026-09-23.
       // AWS bedrock/userguide/guardrail-profiles-permissions and guardrails-cross-region-support.
@@ -335,7 +341,7 @@ export class BankPlatformStack extends cdk.Stack {
       }),
       description: 'bank-platform AgentCore Harness execution role',
     });
-    harnessRole.addToPolicy(bedrockInvoke);
+    harnessRole.addManagedPolicy(bedrockInvoke);
     harnessRole.addToPolicy(guardrailApply);
     harnessRole.addToPolicy(new iam.PolicyStatement({
       actions: ['bedrock-agentcore:InvokeGateway', 'bedrock-agentcore:GetGateway', 'bedrock-agentcore:ListGatewayTargets'],
@@ -378,7 +384,7 @@ export class BankPlatformStack extends cdk.Stack {
         }),
         description: 'bank-platform AgentCore Runtime execution role (Strands agents)',
       });
-      runtimeRole.addToPolicy(bedrockInvoke);
+      runtimeRole.addManagedPolicy(bedrockInvoke);
       runtimeRole.addToPolicy(guardrailApply);
       runtimeRole.addToPolicy(new iam.PolicyStatement({
         actions: ['bedrock-agentcore:InvokeGateway', 'bedrock-agentcore:GetGateway', 'bedrock-agentcore:ListGatewayTargets'],
@@ -405,7 +411,7 @@ export class BankPlatformStack extends cdk.Stack {
           AWS_REGION: region,
           GATEWAY_URL: gateway.attrGatewayUrl,
           GATEWAY_ARN: gateway.attrGatewayArn,
-          GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+          GEN_MODEL: DEFAULT_MODEL_ID,
           GUARDRAIL_ID: guardrail.attrGuardrailId,
           GUARDRAIL_VERSION: guardrailVersion.attrVersion,
         },
@@ -449,7 +455,7 @@ export class BankPlatformStack extends cdk.Stack {
         WRITER_FN: writerFnName,
         INTERNAL_TOOL_FN: internalToolFnName,
         GATES_FN: gatesFn ? gatesFn.functionName : '',
-        GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+        GEN_MODEL: DEFAULT_MODEL_ID,
         GUARDRAIL_ID: guardrail.attrGuardrailId,
         GUARDRAIL_VERSION: guardrailVersion.attrVersion,
         DAILY_TOKEN_CAP: '2000000',
@@ -474,7 +480,7 @@ export class BankPlatformStack extends cdk.Stack {
     traceTable.grantReadWriteData(fn);
     cacheTable.grantReadWriteData(fn);
     registryTable.grantReadWriteData(fn);
-    fn.addToRolePolicy(bedrockInvoke);
+    fn.role!.addManagedPolicy(bedrockInvoke);
     fn.addToRolePolicy(guardrailApply);
     fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock-agentcore:ListRegistryRecords', 'bedrock-agentcore:GetRegistryRecord'],
@@ -529,7 +535,7 @@ export class BankPlatformStack extends cdk.Stack {
     });
     registryTable.grantReadWriteData(adminFn);
     adminFn.addToRolePolicy(inspectedPayloadGuardrailApply);
-    adminFn.addToRolePolicy(bedrockInvoke);
+    adminFn.role!.addManagedPolicy(bedrockInvoke);
     adminFn.addToRolePolicy(agentcoreRead);
     adminFn.addToRolePolicy(agentcoreAdmin);
     adminFn.addToRolePolicy(new iam.PolicyStatement({
@@ -578,7 +584,7 @@ export class BankPlatformStack extends cdk.Stack {
         NEPTUNE_ENDPOINT: neptuneEndpoint,
         BRIDGE_FN: bridgeFnName,
         ALLOW_LOCAL_PLANE: props.planeDeployed ? '0' : '1',
-        GEN_MODEL: 'global.anthropic.claude-sonnet-5',
+        GEN_MODEL: DEFAULT_MODEL_ID,
         GUARDRAIL_ID: guardrail.attrGuardrailId,
         GUARDRAIL_VERSION: guardrailVersion.attrVersion,
         LLM_ROUTE: 'claude',
@@ -593,7 +599,7 @@ export class BankPlatformStack extends cdk.Stack {
     cacheTable.grantReadWriteData(studioLoopFn);
     webBucket.grantReadWrite(studioLoopFn, 'studio/*');
     studioLoopFn.addToRolePolicy(publicDenylistRead);
-    studioLoopFn.addToRolePolicy(bedrockInvoke);
+    studioLoopFn.role!.addManagedPolicy(bedrockInvoke);
     studioLoopFn.addToRolePolicy(guardrailApply);
     wsStage.grantManagementApiAccess(studioLoopFn);
     if (props.planeDeployed) {

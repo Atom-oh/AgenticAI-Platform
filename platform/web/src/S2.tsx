@@ -2,7 +2,7 @@
 // 색 규칙(§8-4): VPC 내부 = var(--onprem)(앰버) · Bedrock = var(--cloud)(시안). 경계(익명화 게이트)는 두 영역의 유일한 접점.
 // 배지 문구의 출처는 서버 engine/gate.py(route_info · gate_info) 하나다 — 아래 *_FALLBACK 은 실행 전 표시용 동일 문구이며
 // 실행하면 서버가 보낸 'route' / 'mask' 스테이지 값으로 대체된다 (§11 배지는 항상 보여야 한다 — 툴팁 금지).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Md from './Md';
 import type { ReactNode } from 'react';
 import { sock } from './lib';
@@ -25,16 +25,16 @@ const OK = 'var(--ok)';
 const ROSE = '#f43f5e';
 
 const ROUTES: { id: Route; label: string; sub: string }[] = [
-  { id: 'claude', label: 'Tier 0/1 · Claude (global)', sub: 'bedrock-runtime Converse · 소스 리전 ap-northeast-2 · global 프로파일' },
-  { id: 'gemma', label: 'Gemma 4 · 설명용 Bedrock (us-west-2)', sub: '상담 설명 모델 · 개인정보 전처리는 위의 EKS 모델에서 별도 수행' },
+  { id: 'claude', label: 'Tier 0/1 · Bedrock 플랫폼 모델 (global)', sub: 'bedrock-runtime Converse · 소스 리전 ap-northeast-2 · global 프로파일' },
+  { id: 'gemma', label: 'Gemma 4 · 설명용 Bedrock (us-west-2)', sub: '상담 설명 모델 · 개인정보 전처리는 위에서 고른 처리기가 별도 수행' },
 ];
 
-// 실행 전 표시용 — engine/gate.py route_info() 와 같은 문구 (실행 시 서버 값으로 교체)
+// 실행 전 표시용 — 모델 선택과 무관한 문구 (실행 시 서버 route_stage() 값으로 교체)
 const ROUTE_FALLBACK: Record<Route, { badge: Badge; modelId: string; tier: string; region: string; regionBadge: string }> = {
   claude: {
-    badge: { title: '추론 경로', prod: 'Bedrock Claude (global 프로파일) · bedrock-runtime Converse · 소스 리전 ap-northeast-2',
-      demo: '운영과 동일 — Bedrock Claude (global 프로파일)', substituted: false },
-    modelId: 'global.anthropic.claude-sonnet-5', tier: '0/1', region: 'ap-northeast-2', regionBadge: '저장: 서울 리전 / 추론: global 라우팅',
+    badge: { title: '추론 경로', prod: 'Bedrock 플랫폼 모델 (global 프로파일) · bedrock-runtime Converse · 소스 리전 ap-northeast-2',
+      demo: '운영과 동일 — Bedrock 플랫폼 모델 (global 프로파일)', substituted: false },
+    modelId: '', tier: '0/1', region: 'ap-northeast-2', regionBadge: '저장: 서울 리전 / 추론: global 라우팅',
   },
   gemma: {
     badge: { title: '추론 경로', prod: 'Bedrock Gemma 4 31B · 상담 설명 모델',
@@ -292,6 +292,10 @@ export default function S2() {
   const privacyModels = usePrivacyModels();
   const [query, setQuery] = useState(S2_PRESET);
   const [route, setRoute] = useState<Route>('claude');
+  const [explanationModel, setExplanationModel] = useState('');
+  useEffect(() => {
+    if (!privacyModels.explanationModels.some(m => m.id === explanationModel)) setExplanationModel(privacyModels.defaultExplanationModel);
+  }, [privacyModels.explanationModels, privacyModels.defaultExplanationModel, explanationModel]);
   const [semanticOn, setSemanticOn] = useState(true);
   const [running, setRunning] = useState(false);
   const [stages, setStages] = useState<Stage[]>([]);
@@ -308,7 +312,9 @@ export default function S2() {
     if (q) setQuery(q);
     setRunning(true); setErr(''); setStages([]); setText(''); setDone(null); setCached(''); setRouteInfo(null);
     try {
-      await sock.run('s2', { query: qq, route, semanticLayer: semanticOn, privacyModel: privacyModels.selected }, (e) => {
+      const body = { query: qq, route, semanticLayer: semanticOn, privacyModel: privacyModels.selected,
+        ...(route === 'claude' && explanationModel ? { model: explanationModel } : {}) };
+      await sock.run('s2', body, (e) => {
         if (e.type === 'cache.replay') { setCached(e.reason || '캐시 응답'); setStages([]); setText(''); setDone(null); return; }
         if (e.type === 's2.stage') {
           const s = e as unknown as Stage;
@@ -353,6 +359,15 @@ export default function S2() {
               {route === r.id ? '● ' : '○ '}{r.label}
             </button>
           ))}
+          {route === 'claude' && privacyModels.explanationModels.length > 0 && (
+            <label className="flex items-center gap-1 text-slate-600">설명 모델
+              <select aria-label="설명 모델" value={explanationModel} disabled={running}
+                onChange={e => setExplanationModel(e.target.value)}
+                className="px-2 py-1 rounded border border-slate-300 bg-white text-xs">
+                {privacyModels.explanationModels.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            </label>
+          )}
           <span className="mx-1 text-slate-700">|</span>
           <span className="text-slate-500">Semantic Layer</span>
           <Switch on={semanticOn} onChange={setSemanticOn} disabled={running} />
@@ -369,7 +384,7 @@ export default function S2() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3 [&>*]:min-w-0 break-words">
         <BadgeCard no="11-1" b={routeBadge} source={live ? '서버 게이트 값' : '기본 문구 — 실행 시 서버 값으로 갱신'} live={!!live} accent={route === 'gemma' ? ROSE : BEDROCK}>
           <div className="mt-1 text-[11px] text-slate-400">
-            모델 ID <span className="font-mono text-teal-900">{live?.modelId || fb.modelId}</span> · Tier {live?.tier || fb.tier}
+            모델 ID <span className="font-mono text-teal-900">{live?.modelId || (route === 'claude' ? explanationModel : '') || fb.modelId || '서버 확인 전'}</span> · Tier {live?.tier || fb.tier}
             {' '}· 호출 리전 <span className="font-mono">{live?.region || fb.region}</span>
             {' '}· <span style={{ color: BEDROCK }}>{live?.badge?.region || fb.regionBadge}</span>
           </div>

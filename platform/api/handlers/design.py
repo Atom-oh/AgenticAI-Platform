@@ -28,13 +28,14 @@ from typing import Any, Dict, List, Optional
 from common import public_scan, tracing
 from common.ctx import Ctx
 from common.log import log_event
+from engine import model_catalog
 
 KIND = "design"
 AGENT_NAME = "design_flow_agent"
 RUNTIME_ARN = os.environ.get("AGENTS_RUNTIME_ARN", "").strip()
 WEB_BUCKET = os.environ.get("WEB_BUCKET", "").strip()
 WEB_URL = os.environ.get("WEB_URL", "").rstrip("/")
-GEN_MODEL = os.environ.get("GEN_MODEL", "global.anthropic.claude-sonnet-5")
+GEN_MODEL = os.environ.get("GEN_MODEL", model_catalog.DEFAULT_MODEL)
 REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "ap-northeast-2"
 GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "").strip()
 GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "").strip()

@@ -90,7 +90,12 @@ def _events(app, payload):
 
 @pytest.mark.parametrize("model", [
     "global.anthropic.claude-sonnet-5",
+    "global.anthropic.claude-sonnet-5-5",
+    "global.anthropic.claude-opus-5-5",
     "global.anthropic.claude-opus-5",
+    "global.anthropic.claude-haiku-5-5",
+    "global.openai.gpt-6.1-sol",
+    "global.openai.gpt-6-luna",
     ASTRA,
     "global.anthropic.claude-fable-5-1",
     "global.anthropic.claude-fable-5",

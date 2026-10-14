@@ -42,12 +42,17 @@ before making an isolation or publication claim.
 
 `api/handlers/s2.py` implements this sequence:
 
-1. Validate the question and model selection. Send free text to
-   `api/common/privacy.py` → `privacy/relay/handler.py` → EKS gateway.
-2. Invoke the selected private detector, redact validated identifier spans with
-   per-request tokens, and validate the receipt. The default configured detector
-   is `qwen` / `Qwen/Qwen3-8B`; private `gemma4` and `deepseek` entries are disabled
-   until configured. `/models` checks model identity; `/health` alone is insufficient.
+1. Validate the question, the privacy processor and the optional explanation `model`
+   (platform catalog, Bedrock route only). Most MyData values (salary, rates, periods,
+   amounts) are not identifying and pass unchanged (SPEC §4-3, 2026-10-14 amendment).
+2. Replace free-text identifiers with per-request tokens and validate the receipt.
+   The default `privacyModel="regex"` runs `api/common/anonymize.py` in the API
+   (no model call, `processor="regex-anonymizer"`, versioned rule set, no original
+   mapping kept) and blocks on any rule residual. When configured, an EKS model
+   (`qwen` / `Qwen/Qwen3-8B`; `gemma4` and `deepseek` disabled until registered)
+   runs through `api/common/privacy.py` → `privacy/relay/handler.py` → EKS gateway;
+   `/models` checks model identity and `/health` alone is insufficient. EKS absence
+   no longer blocks S2.
 3. Run input Guardrails on sanitized text. Resolve semantic definitions, then
    use `onprem/service.py` for exact lookup and deterministic rate/limit calculations.
 4. Tokenize known structured fields in the internal service. Run the independent
@@ -59,11 +64,12 @@ before making an isolation or publication claim.
    tokens and reports numeric violations; semantic checking compares the answer's
    `전월실적` value with the calculation engine.
 
-`privacyModel` selects the private detector; `route` selects the explanation
-adapter (`claude` or `gemma`). The Gemma adapter defaults to `google.gemma-4-31b`
-at bedrock-mantle in `us-west-2`. It is not a substitute for the EKS privacy step.
-S2 requires `MYDATA_PRIVACY_FUNCTION_ARN`; missing configuration, invalid evidence,
-residual identifiers or verification failure blocks the request. There is no
+`privacyModel` selects the free-text processor (`regex` default, or a configured EKS
+model); `route` selects the explanation adapter (`claude` or `gemma`) and `model`
+selects a platform catalog model on the Bedrock route. The Gemma adapter defaults to
+`google.gemma-4-31b` at bedrock-mantle in `us-west-2`. It is not a privacy processor.
+EKS selection requires `MYDATA_PRIVACY_FUNCTION_ARN`; invalid evidence, residual
+identifiers or verification failure blocks the request for either processor. There is no
 rule-only privacy fallback or shared response-cache replay: S2 calls
 `costguard.guarded(..., cache=False)`.
 

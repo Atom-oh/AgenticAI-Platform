@@ -37,5 +37,6 @@ workflow; do not copy them into source, documentation, or review artifacts.
 
 The bank impact graph supports local and Neptune backends. The React workspace uses
 its own project-scoped guideline ontology and real pinned component package. MyData
-uses a private EKS privacy processor before the separate Bedrock explanation route.
+removes free-text identifiers with a regex anonymizer (or an optional private EKS
+processor) before the separate Bedrock explanation route.
 See the module references for implementation status and dated verification limits.

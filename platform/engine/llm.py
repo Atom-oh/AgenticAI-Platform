@@ -23,7 +23,7 @@ try:  # 3.8+ 표준
 except ImportError:  # pragma: no cover
     Protocol = object  # type: ignore
 
-DEFAULT_CLAUDE_MODEL = "global.anthropic.claude-sonnet-5"
+from engine.model_catalog import DEFAULT_MODEL as DEFAULT_CLAUDE_MODEL  # noqa: E402  (단일 출처)
 DEFAULT_GEMMA_MODEL = "google.gemma-4-31b"
 DEFAULT_GEMMA_BASE_URL = "https://bedrock-mantle.us-west-2.api.aws/openai/v1"
 DEFAULT_GEMMA_SECRET = "bedrock/api-key"
@@ -154,7 +154,7 @@ class ClaudeAdapter:
 
     @staticmethod
     def _inference_config(max_tokens: int, temperature: float) -> dict:
-        """Claude 5 계열(global.anthropic.claude-sonnet-5)은 Converse 에서 `temperature` 를 거부한다
+        """Claude 5 계열(Sonnet 5 global 프로파일)은 Converse 에서 `temperature` 를 거부한다
         (실측 2026-09-02: ValidationException "`temperature` is deprecated for this model").
         기본은 maxTokens 만 보내고, 구형 모델에 필요하면 env GEN_TEMPERATURE 로 명시적으로 켠다. temperature 인자는 인터페이스 호환용."""
         cfg = {"maxTokens": int(max_tokens)}

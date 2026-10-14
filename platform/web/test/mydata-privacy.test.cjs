@@ -7,12 +7,18 @@ const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '..');
 const catalog = {
-  type: 's2_privacy_models.done', processor: 'eks-sllm', defaultModel: 'qwen',
+  type: 's2_privacy_models.done', defaultModel: 'regex', available: true,
   models: [
-    { id: 'qwen', label: 'Qwen3-8B', family: 'Qwen', modelId: 'Qwen/Qwen3-8B', revision: 'test-qwen-revision', available: true },
-    { id: 'gemma', label: 'Gemma 4', family: 'Gemma', modelId: '', revision: '', available: false, reason: '엔드포인트와 리비전 미등록' },
-    { id: 'deepseek', label: 'DeepSeek', family: 'DeepSeek', modelId: '', revision: '', available: false, reason: '엔드포인트 미등록' },
+    { id: 'regex', label: '정규식 익명화', family: 'rules', processor: 'regex-anonymizer', modelId: 'regex-anonymizer', revision: 'test-ruleset', available: true },
+    { id: 'qwen', label: 'Qwen3-8B', family: 'Qwen', processor: 'eks-sllm', modelId: 'Qwen/Qwen3-8B', revision: 'test-qwen-revision', available: true },
+    { id: 'gemma', label: 'Gemma 4', family: 'Gemma', processor: 'eks-sllm', modelId: '', revision: '', available: false, reason: '엔드포인트와 리비전 미등록' },
+    { id: 'deepseek', label: 'DeepSeek', family: 'DeepSeek', processor: 'eks-sllm', modelId: '', revision: '', available: false, reason: '엔드포인트 미등록' },
   ],
+  explanationModels: [
+    { id: 'global.anthropic.claude-sonnet-5', label: 'Claude Sonnet 5', provider: 'Anthropic' },
+    { id: 'global.anthropic.claude-haiku-5-5', label: 'Claude Haiku 5.5', provider: 'Anthropic' },
+  ],
+  defaultExplanationModel: 'global.anthropic.claude-sonnet-5',
 };
 const receipt = {
   processor: 'eks-sllm', model: 'qwen', modelId: 'Qwen/Qwen3-8B', modelRevision: 'test-qwen-revision',
@@ -119,7 +125,7 @@ test('loading, unconfigured models and retry never permit an unprotected run', a
   assert.equal(await run.isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: '시나리오 S2', exact: true }).isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: 'S5 차단 시연', exact: true }).isDisabled(), true);
-  await page.getByText('프라이버시 모델 확인 중…', { exact: true }).waitFor();
+  await page.getByText('프라이버시 처리기 확인 중…', { exact: true }).waitFor();
   await page.getByLabel('상담 질문', { exact: true }).press('Enter');
   assert.deepEqual(await page.evaluate(() => window.calls), [{ action: 's2_privacy_models', payload: {} }]);
   await respond(page, { ...catalog, models: [], available: false, message: 'EKS 프라이버시 게이트웨이 미구성' });
@@ -130,14 +136,17 @@ test('loading, unconfigured models and retry never permit an unprotected run', a
   await respond(page, { ...catalog, models: catalog.models.map(m => ({ ...m, available: false, reason: '현재 사용할 수 없음' })) });
   await page.getByRole('radio', { name: 'Qwen3-8B', exact: true }).waitFor();
   assert.equal(await page.getByRole('radio', { name: 'Qwen3-8B', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('radio', { name: '정규식 익명화', exact: true }).isDisabled(), true);
   assert.equal(await run.isDisabled(), true);
   await page.getByRole('button', { name: '모델 상태 새로고침', exact: true }).click();
   await ready(page);
-  assert.equal(await page.getByRole('radio', { name: 'Qwen3-8B', exact: true }).isChecked(), true);
+  // The model-free regex anonymizer is the default; a configured EKS model stays selectable.
+  assert.equal(await page.getByRole('radio', { name: '정규식 익명화', exact: true }).isChecked(), true);
+  assert.equal(await page.getByRole('radio', { name: 'Qwen3-8B', exact: true }).isDisabled(), false);
   for (const name of ['Gemma 4', 'DeepSeek']) {
     assert.equal(await page.getByRole('radio', { name, exact: true }).isDisabled(), true);
   }
-  assert.equal(await page.getByRole('group', { name: '필수 프라이버시 모델' }).getByRole('switch').count(), 0);
+  assert.equal(await page.getByRole('group', { name: '프라이버시 처리기' }).getByRole('switch').count(), 0);
   await screenshot(page, 'ready-desktop');
 });
 
@@ -150,13 +159,13 @@ test('model-list errors and malformed readiness fail closed and can recover', as
   for (const invalid of [
     { type: 'error', message: '지원하지 않는 액션' },
     { ...catalog, models: null },
-    { ...catalog, processor: 'rules-only' },
+    { ...catalog, models: [{ ...catalog.models[0], processor: 'rules-only' }] },
     { ...catalog, models: [{ ...catalog.models[0], revision: '' }] },
     { ...catalog, available: false },
   ]) {
     await page.getByRole('button', { name: '모델 상태 새로고침', exact: true }).click();
     await respond(page, invalid);
-    await page.waitForFunction(() => !document.body.textContent.includes('프라이버시 모델 확인 중…'));
+    await page.waitForFunction(() => !document.body.textContent.includes('프라이버시 처리기 확인 중…'));
     assert.equal(await page.getByRole('button', { name: '상담 실행', exact: true }).isDisabled(), true);
   }
   await page.getByRole('button', { name: '모델 상태 새로고침', exact: true }).click();
@@ -188,6 +197,28 @@ test('synthetic examples edit the query, and selected allowlist model stays sepa
   assert.equal(await page.getByRole('radio', { name: 'Qwen3-8B', exact: true }).isDisabled(), true);
   await emit(page, { type: 's2.done', blocked: true, blockedBy: 'privacy', message: '테스트 차단',
     privacy: { status: 'blocked', code: 'TEST_BLOCKED' } });
+});
+
+test('Bedrock route sends the selected platform catalog model; regex receipts report no model call', async t => {
+  const page = await openS2(t);
+  await ready(page);
+  const select = page.getByRole('combobox', { name: '설명 모델', exact: true });
+  assert.equal(await select.inputValue(), 'global.anthropic.claude-sonnet-5');
+  await select.selectOption('global.anthropic.claude-haiku-5-5');
+  await page.getByRole('button', { name: '상담 실행', exact: true }).click();
+  const request = await page.evaluate(() => window.calls.at(-1));
+  assert.deepEqual(request.payload, { query: await page.getByLabel('상담 질문', { exact: true }).inputValue(),
+    route: 'claude', semanticLayer: true, privacyModel: 'regex', model: 'global.anthropic.claude-haiku-5-5' });
+  await emit(page, { type: 's2.stage', step: 'privacy_input', status: 'pass', processor: 'regex-anonymizer',
+    method: 'redaction', model: 'regex', modelId: 'regex-anonymizer', modelRevision: 'test-ruleset',
+    entityCounts: [{ type: 'PHONE', count: 1 }], total: 1, sourceChars: 40, outputChars: 60, ruleResidualCount: 0,
+    independentNer: 'not-configured', modelInvoked: false, latencyMs: 1, sanitizedPreview: '연락처 ⟨PHONE:x⟩, 연봉 8천만원' });
+  const input = page.getByRole('region', { name: '질문 프라이버시 처리' });
+  await input.getByText('처리 통과', { exact: true }).waitFor();
+  assert.match(await input.innerText(), /없음 \(정규식 규칙\)/);
+  assert.match(await input.innerText(), /규칙 버전\s*test-ruleset/);
+  assert.match(await input.innerText(), /연봉 8천만원/);
+  await emit(page, { type: 's2.done', blocked: false, elapsedMs: 10, traceId: 'synthetic-regex' });
 });
 
 test('streamed input and payload receipts show actual evidence without debug originals', async t => {
