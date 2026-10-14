@@ -119,3 +119,34 @@ def test_privacy_model_listing_keeps_regex_available_when_eks_is_unconfigured(mo
     assert out["models"][0]["id"] == "regex" and out["models"][0]["available"] is True
     assert "EKS" in out["message"]
     assert "global.openai.gpt-6.1-sol" in {m["id"] for m in out["explanationModels"]}
+
+
+def test_s2_route_badge_names_the_selected_models_provider():
+    badge = s2.route_stage("claude", "global.openai.gpt-6.1-sol")["badge"]
+    assert "GPT-6.1 Sol (OpenAI)" in badge["prod"] and "Claude" not in badge["prod"] + badge["demo"]
+    assert s2.route_stage("claude")["badge"]["prod"].startswith("Bedrock Claude (global 프로파일)")
+
+
+@pytest.mark.parametrize("text", [
+    "저는 전월실적이 30만원인데 우대금리 조건이 궁금해요",
+    "전 연봉이 8천만원이고 신용점수가 900점입니다",
+    "1년 전 대출을 받았는데 금리 3.5%예요",
+    "저는 서울에 살아요. 저는 전업주부이고 남편님 소득은 6천만원",
+    "우수 고객님 혜택과 신규 고객님 혜택, 사모님과 이모님께 안내",
+])
+def test_intro_phrases_and_honorifics_do_not_erase_financial_words(text):
+    assert anonymize.anonymize(text)["text"] == text
+
+
+@pytest.mark.parametrize("raw,kept", [
+    ("김철수님께 전달해 주세요", "님께 전달해 주세요"),
+    ("김철수씨가 상담했어요", "씨가 상담했어요"),
+    ("홍길동 고객님 상담", " 고객님 상담"),
+    ("저는 홍길동입니다", "입니다"),
+    ("제 이름은 김영이입니다", "입니다"),
+    ("서울시 강남구 테헤란로 123 거주", " 거주"),
+])
+def test_names_with_particles_and_short_city_addresses_are_replaced(raw, kept):
+    out = anonymize.anonymize(raw)
+    assert out["total"] == 1 and out["text"].endswith(kept)
+    assert pii.tokens_in(out["text"])

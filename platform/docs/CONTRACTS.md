@@ -260,8 +260,8 @@ reviewer does not turn an older description into a requirement for unrelated cod
 | --- | --- |
 | All agents are Harness; four specs | `api/admin_handler.py` prefers Runtime/Strands when configured; `agentcore/agent_specs.py` has five specs. Custom creation still uses Harness. Some source comments retain older wording. |
 | Every generation path regenerates once | F5 and `design_loop/loop.py` do; `studio/loop.py` permits 20 rounds and `workspace/http.py` permits five. |
-| Gemma substitutes for private PII processing | S2 requires the private EKS detector for free text. Its Gemma route is explanation only. |
-| Raw question goes to input Guardrails first | `api/handlers/s2.py` now sanitizes it through EKS first. Its opening source docstring still describes the older order. |
+| Gemma substitutes for private PII processing | S2 free text uses the selected privacy processor (regex anonymizer by default, private EKS detector when configured). Its Gemma route is explanation only. |
+| Raw question goes to input Guardrails first | `api/handlers/s2.py` now sanitizes it through the selected privacy processor first. Its opening source docstring still describes the older order. |
 | All scenario failures replay cache | S2 explicitly sets `cache=False`. |
 | CloudFront is the only public endpoint; all VPCs have no NAT | The browser directly uses WebSocket API Gateway. The isolated plane and reused EKS VPC are separate topologies. |
 | Loading, shared seeding and reset must be IAM-admin-only | Neptune loading follows the administrative path. Explicit authenticated `reset` and `registry_seed` routes are removed. Other legacy bootstrap/list behavior still needs separate review; route removal does not certify every Registry write. |

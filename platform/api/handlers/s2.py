@@ -191,11 +191,17 @@ def semantic_check(answer: str, semantic_layer: bool, engine_value, diagnostics:
 # 표기 (§11-1 · §11-2) — 문구 출처는 engine.gate 하나
 # ---------------------------------------------------------------------------
 def route_stage(route: str | None, model: str | None = None) -> dict:
-    from engine import gate
+    from engine import gate, model_catalog
     ri = gate.route_info(route)
     if model:
         ri = {**ri, "modelId": model}   # 선택한 카탈로그 모델 — 실제 호출 결과(st.model_id)로 done 에서 다시 보고한다
     b = ri.get("badge") or {}
+    if model and ri["route"] == "claude":
+        # 카탈로그에는 OpenAI 모델도 있다 — 배지는 선택한 모델의 실제 공급자를 표시한다.
+        picked = next(o for o in model_catalog.options() if o["id"] == model)
+        label = f"Bedrock {picked['label']} ({picked['provider']})"
+        b = {**b, "prod": b.get("prod", "").replace("Bedrock Claude", label),
+             "demo": b.get("demo", "").replace("Bedrock Claude", label)}
     if ri["route"] == "gemma":
         # In S2 this adapter writes the explanation. It is not the PII
         # processor, which is reported independently by privacy_input/payload.

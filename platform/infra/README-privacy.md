@@ -23,11 +23,13 @@ internal NLB, target group, relay Lambda, ECR repository and scoped SG/IAM rules
 It does not create an EKS cluster, GPU model, VPC or peering connection.
 
 The request path is authenticated WebSocket S2 → IAM relay → internal NLB →
-CPU gateway → private model service. `api/handlers/s2.py` (under `platform/`)
-requires this path for the free-text question before cloud Guardrails.
+CPU gateway → private model service. When the user selects an EKS model,
+`api/handlers/s2.py` (under `platform/`) uses this path for the free-text question
+before cloud Guardrails.
 Structured lookup fields instead use internal deterministic tokenization and an
 independent scan. Selecting the `gemma` explanation adapter does not replace EKS
-processing. Missing relay configuration or invalid privacy evidence blocks S2.
+processing. With an EKS model selected, missing relay configuration or invalid privacy evidence
+blocks S2; the regex default does not use the relay.
 
 The gateway defaults to `qwen` / `Qwen/Qwen3-8B`. Private `gemma4` and `deepseek`
 are disabled placeholders unless configured. `PRIVACY_MODELS_JSON` can supply

@@ -75,7 +75,7 @@ original single-VPC target, not proof that network enforcement is complete.
 | Bank regulation/UX graph | `GraphStore`, local development or Neptune demonstration backend |
 | Published workspace guideline ontology | Project-scoped private JSON nodes/edges; not Neptune integration |
 | Calculation and identity restoration | Trusted data service; deterministic values and private mapping |
-| Free-text privacy detection | Dedicated private EKS CPU gateway using a configured existing vLLM model |
+| Free-text privacy detection | Model-free regex anonymizer by default; optional dedicated private EKS CPU gateway using a configured existing vLLM model (§4-3 amendment 2026-10-14) |
 | Explanation inference | Configured Claude/Gemma adapter after applicable checks |
 | Registry | Implemented Registry APIs; verify each integration rather than inferring AgentCore coverage |
 
@@ -446,8 +446,9 @@ instructions in `platform/README.md`; obtain current pricing before estimating c
 ### 11-1. Privacy versus explanation
 
 Label actual processors and endpoints. The historical Gemma-for-GPU substitution is
-not the current S2 privacy path. A configured EKS Qwen detector and a Bedrock Gemma
-explanation may coexist; neither proves an IDC Hybrid Nodes deployment.
+not the current S2 privacy path. The S2 privacy path is the regex anonymizer or, when
+selected, a configured EKS Qwen detector. Either may coexist with a Bedrock Gemma
+explanation; neither proves an IDC Hybrid Nodes deployment.
 
 ### 11-2. Transformation scope
 

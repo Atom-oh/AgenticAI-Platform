@@ -41,7 +41,7 @@ flowchart LR
 | Guardrails **실물** (목 금지) | 이전 시연은 STANDARD 티어와 APAC 프로파일을 사용했다. 현재 정책·버전·지원 범위와 실제 차단 결과는 별도 확인 | Part 12 |
 | WebSocket `$connect`에서 Cognito 토큰 검증 | 별도 WebSocket 진입에서 무토큰·무효 토큰을 거부한다. 후속 메시지는 저장된 연결 신원을 사용하며 토큰을 매번 재검증하지 않는다 | Part 9 |
 | 허용된 에이전트 경로는 **AgentCore Harness + Gateway** 사용 | 주 플랫폼의 모든 핸들러가 Harness를 실행하는 것은 아니다. Registry 자체 감사와 AgentCore 미러·CloudTrail은 구분한다 | SPEC §7·§11-4·§16 |
-| S2 개인정보 탐지는 **사설 EKS 모델**, 설명은 **별도 Bedrock 모델** | Qwen이 기준 연결이며 Gemma/DeepSeek 개인정보 모델은 별도 등록·검증이 필요하다. Bedrock Gemma 설명 선택이 EKS Gemma 배포를 뜻하지 않는다 | SPEC §4-3·§11-1 |
+| S2 개인정보 처리는 **정규식 익명화(기본)** 또는 **사설 EKS 모델(선택)**, 설명은 **별도 Bedrock 모델** | EKS는 Qwen이 기준 연결이며 Gemma/DeepSeek 개인정보 모델은 별도 등록·검증이 필요하다. Bedrock Gemma 설명 선택이 EKS Gemma 배포를 뜻하지 않는다 | SPEC §4-3·§11-1 |
 | 컨트롤룸·스튜디오는 **서버사이드 프록시로 네이티브 통합** | 기존 연동은 해당 사용자 토큰을 전달한다. 제품별 인증·권한·저장·검수 한계는 그대로 남으며 주 React 작업실과 구분한다 | Part 11 |
 | `GraphStore` 인터페이스 + local/neptune 이중 구현 | Neptune 상시 과금 통제. UI가 현재 백엔드를 항상 표시 — 로컬로 시연하며 Neptune이라 말하지 않는다 | Part 8 |
 | 합성데이터 시드 고정(20260902) | 이전 기록은 3,317노드/8,520엣지였다. 현행 수는 실제 시드·백엔드에서 확인한다. 일반 원장 토큰(CUST-/ACCT-)과 PR3의 가상 식별자 검사 예제를 구분한다 | Part 5 |
@@ -55,7 +55,7 @@ flowchart LR
 ## S2 파이프라인 (F3)
 
 ```
-질의 → EKS sLLM 탐지·코드 치환 → ①처리된 질문의 입력 Guardrails → ②Semantic Layer
+질의 → 정규식 익명화(또는 EKS sLLM 탐지·코드 치환) → ①처리된 질문의 입력 Guardrails → ②Semantic Layer
      → ③정확 조회 → ④결정론적 계산 → ⑤정형 필드 토큰화·독립 잔여 검사
      → ⑥게이트·Bedrock 설명 버퍼링 → ⑦출력 Guardrails → 처리된 설명 전달 → 수치 검증·재식별
 ```

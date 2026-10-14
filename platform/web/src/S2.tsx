@@ -25,15 +25,15 @@ const OK = 'var(--ok)';
 const ROSE = '#f43f5e';
 
 const ROUTES: { id: Route; label: string; sub: string }[] = [
-  { id: 'claude', label: 'Tier 0/1 · Claude (global)', sub: 'bedrock-runtime Converse · 소스 리전 ap-northeast-2 · global 프로파일' },
-  { id: 'gemma', label: 'Gemma 4 · 설명용 Bedrock (us-west-2)', sub: '상담 설명 모델 · 개인정보 전처리는 위의 EKS 모델에서 별도 수행' },
+  { id: 'claude', label: 'Tier 0/1 · Bedrock 플랫폼 모델 (global)', sub: 'bedrock-runtime Converse · 소스 리전 ap-northeast-2 · global 프로파일' },
+  { id: 'gemma', label: 'Gemma 4 · 설명용 Bedrock (us-west-2)', sub: '상담 설명 모델 · 개인정보 전처리는 위에서 고른 처리기가 별도 수행' },
 ];
 
-// 실행 전 표시용 — engine/gate.py route_info() 와 같은 문구 (실행 시 서버 값으로 교체)
+// 실행 전 표시용 — 모델 선택과 무관한 문구 (실행 시 서버 route_stage() 값으로 교체)
 const ROUTE_FALLBACK: Record<Route, { badge: Badge; modelId: string; tier: string; region: string; regionBadge: string }> = {
   claude: {
-    badge: { title: '추론 경로', prod: 'Bedrock Claude (global 프로파일) · bedrock-runtime Converse · 소스 리전 ap-northeast-2',
-      demo: '운영과 동일 — Bedrock Claude (global 프로파일)', substituted: false },
+    badge: { title: '추론 경로', prod: 'Bedrock 플랫폼 모델 (global 프로파일) · bedrock-runtime Converse · 소스 리전 ap-northeast-2',
+      demo: '운영과 동일 — Bedrock 플랫폼 모델 (global 프로파일)', substituted: false },
     modelId: '', tier: '0/1', region: 'ap-northeast-2', regionBadge: '저장: 서울 리전 / 추론: global 라우팅',
   },
   gemma: {
