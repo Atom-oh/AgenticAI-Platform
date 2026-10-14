@@ -347,6 +347,7 @@ owner-only. Analyzer availability and source-authority checks precede dispatch.
 | `GET /ontology/schema` | Declared types, eight levels and analyzer configuration state |
 | `GET /ontology?limit=&cursor=` | Authorized page; opaque actor/role/project/generation-bound cursor |
 | `GET /ontology/nodes/:id` | Readable exact node; hidden/missing nodes are not disclosed |
+| `GET /ontology/nodes/:id/review-context` | Screen's directly owned active `IMPLEMENTS` mappings and current code endpoints; `{generation,nodes,edges,coverage}` with `coverage.complete=true` and scope `owned-direct-screen-implementations`; `404` non-Screen/hidden, `409 ontology-review-unavailable` unreadable mapping, `422 ontology-review-scope` over 50 mappings |
 | `POST /ontology/partitions` | `{requestId,name,graph,expectedGeneration}` creates/replaces a source-bound candidate partition |
 | `POST /ontology/nodes/:id/review` | `{requestId,revision,expectedGeneration,decision,reason}` records an authorized human decision |
 | `POST /ontology/context` | `{nodeIds}` returns a bounded, source-bound context fingerprint |

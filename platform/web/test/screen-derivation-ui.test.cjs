@@ -80,7 +80,7 @@ test('reverse proposals show independent evidence, preserve retries and respect 
           items: project === 'p-test' ? [proposal(), proposal('bad'),
             { operation: 'design.derive', artifact: { id: 'own-job', name: '진행 중 내 후보', status: 'queued',
               jobId: 'own-execution', createdBy: 'alice' } },
-            { operation: 'design.derive', artifact: { id: 'other-job', name: '다른 참여자 후보', status: 'running',
+            { operation: 'design.derive', artifact: { id: 'other-job', name: '다른 참여자 후보', status: 'dispatched',
               jobId: 'other-execution', createdBy: 'bob' } }, { operation: 'design.guidelines',
             artifact: { id: 'guide', name: '다른 종류 후보', status: 'completed' } }] : [] });
         if (endpoint === '/ontology/knowledge/derive' && method === 'POST') {
@@ -101,7 +101,7 @@ test('reverse proposals show independent evidence, preserve retries and respect 
             jobId: 'own-execution', createdBy: 'alice' } });
         }
         if (endpoint === '/ontology/knowledge/other-job') return send({ operation: 'design.derive',
-          artifact: { id: 'other-job', status: 'running', jobId: 'other-execution', createdBy: 'bob' } });
+          artifact: { id: 'other-job', status: 'dispatched', jobId: 'other-execution', createdBy: 'bob' } });
         if (endpoint === '/ontology/executions/own-execution/cancel' && method === 'POST') {
           cancelled = true; return send({ status: 'cancelled' });
         }
@@ -143,8 +143,8 @@ test('reverse proposals show independent evidence, preserve retries and respect 
       await page.getByRole('button', { name: '본인 반복 구성 작업 중지', exact: true }).click();
       await page.getByText('반복 구성 작업 상태: 취소됨', { exact: true }).waitFor();
       assert(cancelled);
-      await page.getByRole('button', { name: '다른 참여자 후보 · 처리 중', exact: true }).click();
-      await page.getByText('반복 구성 작업 상태: 처리 중', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '다른 참여자 후보 · 배정됨', exact: true }).click();
+      await page.getByText('반복 구성 작업 상태: 배정됨', { exact: true }).waitFor();
       assert.equal(await page.getByRole('button', { name: '본인 반복 구성 작업 중지', exact: true }).count(), 0);
       assert.equal(await page.getByRole('link', { name: '해시가 일치하는 등록 GUI 원본 보기' }).count(), 0);
       await page.getByText('해시가 일치하는 등록 원본이 연결되지 않았습니다.', { exact: false }).waitFor();

@@ -34,12 +34,16 @@ The asset detail view separates wireframe blocks, GUI snapshot declaration and
 code declaration. It links a GUI to a current matching asset original and blocks
 missing bindings. It lists registered usage witnesses and revision/hash
 bases. Declared layer presence is not a three-layer acceptance receipt.
+Screen approval reads a complete bounded view of its directly owned `IMPLEMENTS`
+mappings, independently of the broader dependency closure; review/rejection
+remain available when that closure is truncated.
 
 Acceptance scope: ONT-01/04/05/07/09/10, SRC-01–07, AUTH-01/05/08/09,
 GEN-01/03/05 and RUN-01–05. Validate current and revoked reads, role races,
 job TTL, tampered prior analysis, same-Screen multi-file support, unknown model
 outcomes, malformed proposals, narrow screens and project-scope changes.
-Offline evidence is exercised by `test_screen_derivation.py` with the real
+Offline evidence is exercised by `test_screen_derivation.py` and
+`test_screen_review_context.py` with the real
 admission, parser, signed execution, measured model boundary and conditional
 storage; AWS and model transports are substituted. Browser regressions in
 `screen-derivation-ui.test.cjs` and `workbench-ui.test.cjs` use intercepted
