@@ -462,6 +462,43 @@ reported for the new reconciler without changing completion state.
 
 ## Workbench compatibility
 
+### Guideline knowledge proposal (2026-10-14 candidate)
+
+The project-scoped `/ontology/knowledge` workflow selects exact admitted guide
+derivatives and currently readable canonical target nodes. Owner/designer
+`POST /ontology/knowledge/guidelines` accepts `{requestId, name, decisionIds,
+nodeIds, model, expectedGeneration}`. It admits `design.guidelines` through the
+single B0 ledger only in the explicitly configured design project/model cohort.
+There is no Lambda model fallback or implicit source/organization approval.
+
+The frozen manifest retains all source/admission checks, the canonical snapshot
+and its independent residual inspection. Runtime uses the measured model
+boundary and one bounded extraction. Trusted completion independently
+revalidates the exact proposal, citations, target revisions and hashes, then
+atomically completes the job and private proposal artifact. Model output remains
+a candidate; a successful extraction does not mutate the canonical ontology.
+
+`GET /ontology/knowledge` and `GET /ontology/knowledge/:id` require a current
+owner/designer/developer role and recheck source and expiry authority after reads.
+Unreadable proposals are omitted from lists and hidden on individual reads.
+Owner/designer `POST /ontology/knowledge/:id/publish`
+accepts `{requestId, version, resultHash, expectedGeneration}` and records an
+exact human adoption in the same transaction as candidate graph publication.
+The publishing producer remains `declared`; `properties.extraction` preserves
+the actual model and admitted citation provenance. Existing owner/planner
+PolicyRule review and approval still govern business-source authority.
+Source or graph changes require a fresh authorized proposal for a new adoption.
+Completed artifacts retain their immutable input and admission bindings after
+the execution job expires. Historical reads and an identical recorded adoption
+replay use the original snapshot with current source permissions; they grant no
+new generation or approval authority. Citation matching verifies linkage to the
+admitted derivative, not the semantic or legal correctness of a proposed rule.
+Organization
+`design_publish`/`policy_publish` remains IAM-admin-only.
+
+This candidate covers O-02/O-04 application wiring. Offline tests do not pass
+SRC/AUTH/GEN/RUN live modes or G0-ADMISSION/RUNTIME/IDENTITY/MODELS.
+
 The legacy-shaped change API expresses changes to selected current nodes.
 Its free-text `before`/`after` fields are annotations, not source revision IDs.
 Exact old/new source changes use `POST /ontology/impact`, which binds those

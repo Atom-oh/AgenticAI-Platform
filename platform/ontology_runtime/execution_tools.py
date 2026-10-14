@@ -92,7 +92,10 @@ class ExecutionTools:
         if action not in {"heartbeat", "outcome"}:
             kwargs["operation_id"] = envelope["operationId"]
         if action == "finish":
-            if job["operation"] == "source.analyze":
+            if job["operation"] == "design.guidelines":
+                from workspace.knowledge_execution import KnowledgePublication
+                kwargs["stage_completion"] = KnowledgePublication(self.host, self.configuration)
+            elif job["operation"] == "source.analyze":
                 kwargs["stage_completion"] = SourcePublication(self.host, self.configuration)
             else:
                 from workspace.design_execution import DesignPublication

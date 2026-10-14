@@ -17,7 +17,7 @@ import re
 import time
 from decimal import Decimal
 
-KINDS = frozenset({"asset", "contract", "job", "run", "project", "design", "design_reference", "design_comparison", "membership", "ontology_cursor",
+KINDS = frozenset({"asset", "contract", "job", "run", "project", "design", "design_reference", "design_comparison", "knowledge_decision", "membership", "ontology_cursor",
                    "product", "guideline", "ontology", "comment", "batch", "release", "gitexport",
                    "wb_source", "wb_batch", "wb_index", "wb_change", "wb_task", "wb_skill",
                    "wb_artifact", "wb_pension", "wb_report", "wb_tool",

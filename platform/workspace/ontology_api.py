@@ -75,6 +75,9 @@ def _impact_views(ontology, current, body, raw_seeds):
 
 
 def route(host, scope, claims, method, parts, body, query):
+    if parts and parts[0] == "knowledge":
+        from workspace.knowledge_api import route as knowledge_route
+        return knowledge_route(host, scope, claims, method, parts[1:], body, query)
     ctx = Service(host, scope, claims)
     if parts == ["sources", "admission"] and method == "POST":
         from ontology_runtime.admission import classify

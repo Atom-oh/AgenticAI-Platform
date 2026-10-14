@@ -182,3 +182,26 @@ regeneration, immutable retry identity, missing observations, role denials,
 actor-bound pagination and source withdrawal at the final response fence.
 `design-reference-ui.test.cjs` covers the independent criteria form, retry and
 exact-artifact comparison with API doubles.
+
+## Guideline knowledge (2026-10-14 candidate)
+
+`workspace/knowledge_api.py`, `knowledge_execution.py`,
+`ontology_runtime/knowledge_workflow.py` and `GuidelineKnowledge.tsx` connect
+O-02/O-04 through the configured B0 project/model cohort. The
+[owning ontology interface](../workspace/ONTOLOGY_CONTRACT.md#guideline-knowledge-proposal-2026-10-14-candidate)
+and [execution interface](../workspace/AGENTCORE_CONTRACT.md#guideline-knowledge-execution-2026-10-14-candidate)
+retain exact admitted derivatives, target revisions, model provenance and
+private proposal hashes. One measured extraction does not update canonical
+data; owner/designer adoption atomically publishes candidates with a human
+decision. Existing owner/planner PolicyRule approval remains separate.
+
+`test_knowledge_execution.py` uses real local admission, CAS and RSA receipt
+verification with explicit AWS/model transport doubles. It exercises candidate
+completion, quote rejection, configured cohort and current-role denials,
+source withdrawal, evidence/version/generation changes, job TTL, idempotent
+adoption and unresolved paid-call intent. `guideline-knowledge-ui.test.cjs`
+uses local Chromium and API doubles for citations, retry identity, rejected
+proposals, role restrictions and project changes. Local results do not pass
+live SRC/AUTH/GEN/RUN cases or G0-ADMISSION/RUNTIME/IDENTITY/MODELS/TELEMETRY.
+Independent latest-HEAD review, CI and live user acceptance remain required.
+O-03 reverse derivation and verified O-01 layer/Pattern mappings remain open.
