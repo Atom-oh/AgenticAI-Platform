@@ -86,6 +86,7 @@ test('guideline proposals preserve retry identity, exact citations and human rol
       const create = page.getByRole('button', { name: '가이드 인용 규칙 후보 생성', exact: true });
       const adopt = page.getByRole('button', { name: '인용 검토 후 정본 초안 연결', exact: true });
       assert(await create.isDisabled());
+      assert.equal(await page.getByText(/응답 대기를 중지했습니다/).count(), 0);
       assert.equal(await page.getByText('일반 프롬프트', { exact: true }).count(), 0);
       await page.getByRole('checkbox', { name: 'p-test 가이드', exact: true }).check();
       await page.getByLabel('가이드 추출 모델').selectOption('global.anthropic.claude-sonnet-5');
@@ -117,6 +118,7 @@ test('guideline proposals preserve retry identity, exact citations and human rol
       await page.getByRole('checkbox', { name: 'p-other 가이드', exact: true }).waitFor();
       await page.getByText('원문 2페이지: 가입 절차에는 약관 동의 단계가 있어야 합니다.', { exact: true }).waitFor({ state: 'hidden' });
       assert.equal(await page.getByRole('button', { name: '원문 인용 후보 · 완료', exact: true }).count(), 0);
+      assert.equal(await page.getByText(/응답 대기를 중지했습니다/).count(), 0);
       assert.deepEqual(errors, []);
     } finally {
       await browser.close();

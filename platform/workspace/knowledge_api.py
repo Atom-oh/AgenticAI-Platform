@@ -7,6 +7,7 @@ from intake.admission import AdmissionError
 from workbench.service import Service, fields, fail, check_source_deadlines
 from workspace import ontology_schema as schema
 from workspace.collaboration import CollaborationError
+from workspace.execution_ledger import LedgerError
 from workspace.storage import Conflict
 from workspace.knowledge_execution import KIND, ROLES, READ_ROLES, authorized
 from workspace.execution_sources import unique
@@ -25,10 +26,20 @@ def view(ctx, artifact):
     return value, checks, expiry
 
 
+def predicates(checks):
+    try:
+        return unique(checks)
+    except ValueError:
+        fail(409, "knowledge-source-changed", "동일한 원본의 다른 버전이 관찰되었습니다.")
+
+
 def fence(ctx, checks, expiry):
     ctx.fresh()
+    checks = predicates([*checks, ctx.check("project", ctx.scope["project"])])
+    if len(checks) > 100:
+        fail(422, "atomic-scope-limit", "자료 범위를 줄여 다시 조회하세요.")
     try:
-        ctx.storage.put_many([], unique([*checks, ctx.check("project", ctx.scope["project"])]), retry_conflicts=False,
+        ctx.storage.put_many([], checks, retry_conflicts=False,
             before_attempt=lambda: check_source_deadlines(ctx.storage, checks, ctx.claims, expiry))
     except Conflict:
         fail(404, "not-found", "지식화 근거 또는 권한이 변경되었습니다.")
@@ -57,7 +68,7 @@ def publish(ctx, identifier, body):
                 "decision": {key: old[key] for key in ("id", "artifactId", "actor", "resultHash", "at")},
                 "approvalEffect": False}
     _, current_checks, current_expiry = authorized(ctx, artifact)
-    checks = unique([*checks, *current_checks])
+    checks = predicates([*checks, *current_checks])
     expiry = min(expiry, current_expiry)
     decision = {"id": identity, "projectId": ctx.project_id, "artifactId": identifier, "actor": ctx.actor,
                 "resultHash": body["resultHash"], "requestHash": request_hash, "at": ctx.storage.clock()}
@@ -72,18 +83,22 @@ def publish(ctx, identifier, body):
     expiry = min([expiry, *[bound for bound, _ in deadlines]])
     try:
         writes = [*published["writes"], ctx.write("knowledge_decision", decision)]
-        predicates = {(row["owner"], row["kind"], row["item"]["id"]): row.get("expected_version") for row in writes}
-        all_checks = unique([*checks, *published["checks"], *fences])
+        write_versions = {(row["owner"], row["kind"], row["item"]["id"]): row.get("expected_version") for row in writes}
+        # _stage bypasses Service.commit; retain its current project fence here.
+        all_checks = predicates([*checks, *published["checks"], *fences,
+                                 ctx.check("project", ctx.scope["project"])])
         retained = []
         for check in all_checks:
             key = check["owner"], check["kind"], check["id"]
-            if key in predicates:
-                if predicates[key] != check["version"]:
+            if key in write_versions:
+                if write_versions[key] != check["version"]:
                     fail(409, "knowledge-source-changed", "동일한 원본의 다른 버전이 관찰되었습니다.")
             else:
                 retained.append(check)
+        if len(writes) + len(retained) > 100:
+            fail(422, "atomic-scope-limit", "원자적 저장 한도를 초과했습니다. 후보와 근거 범위를 나누세요.")
         ctx.storage.put_many(writes, retained, retry_conflicts=False,
-            before_attempt=lambda: check_source_deadlines(ctx.storage, checks, ctx.claims, expiry))
+            before_attempt=lambda: check_source_deadlines(ctx.storage, all_checks, ctx.claims, expiry))
     except Conflict:
         fail(409, "knowledge-source-changed", "게시 전에 원본·자산·권한이 변경되었습니다.")
     return {"publication": published["result"], "decision": {key: decision[key]
@@ -95,10 +110,19 @@ def route(host, scope, claims, method, parts, body, query):
     ctx.fresh(READ_ROLES)
     if parts == ["guidelines"] and method == "POST":
         from ontology_runtime.execution_entrypoints import knowledge_operation
-        return 202, knowledge_operation(ctx, body)
+        try:
+            return 202, knowledge_operation(ctx, body)
+        except LedgerError as error:
+            fail(403 if error.code == "forbidden" else
+                 503 if error.code == "knowledge-execution-unavailable" else 409,
+                 error.code, "지식화의 현재 승인 조건과 실행 상태를 확인하세요.")
+        except AdmissionError as error:
+            fail(error.status, error.code, "자료의 현재 반입 승인이 필요합니다.")
     if not parts and method == "GET":
         page = page_for(ctx, "wb_artifact", query, selection="knowledge")
-        items, checks, expiry = [], [], ctx.authorization()["authorizationExpiresAt"]
+        items, checks = [], list(getattr(ctx, "_design_checks", []))
+        expiry = min(ctx.authorization()["authorizationExpiresAt"],
+                     getattr(ctx, "_design_expiry", ctx.scope["authorizationExpiresAt"]))
         for artifact in page["items"]:
             if artifact.get("kind") != KIND:
                 continue
@@ -108,7 +132,7 @@ def route(host, scope, claims, method, parts, body, query):
             except (AdmissionError, CollaborationError, ValueError):
                 continue
             items.append(value)
-            checks = unique([*checks, *observed])
+            checks = predicates([*checks, *observed])
             expiry = min(expiry, bound)
         fence(ctx, checks, expiry)
         return 200, {"items": items, "cursor": page.get("cursor")}
@@ -117,7 +141,17 @@ def route(host, scope, claims, method, parts, body, query):
             value, checks, expiry = view(ctx, ctx.get("wb_artifact", parts[0]))
             fence(ctx, checks, expiry)
             return 200, value
-        except (AdmissionError, CollaborationError, ValueError):
+        except CollaborationError as error:
+            if error.status not in {403, 404, 409}:
+                raise
+            # Source visibility stays opaque; current actor denial stays explicit.
+            ctx.fresh()
+            fail(404, "not-found", "지식화 후보를 찾을 수 없습니다.")
+        except AdmissionError as error:
+            if error.status == 401:
+                fail(error.status, error.code, "인증이 만료되었습니다.")
+            fail(404, "not-found", "지식화 후보를 찾을 수 없습니다.")
+        except ValueError:
             fail(404, "not-found", "지식화 후보를 찾을 수 없습니다.")
     if len(parts) == 2 and parts[1] == "publish" and method == "POST":
         return 201, publish(ctx, parts[0], body)

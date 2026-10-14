@@ -133,6 +133,30 @@ def test_project_cohort_and_target_approval_block_before_model_or_job(knowledge_
     assert state.models == [] and state.storage.list(state.ctx.owner, "job") == before
 
 
+def test_http_submission_preserves_cohort_and_replay_errors(knowledge_pipeline, env, monkeypatch):
+    from ontology_runtime import execution_entrypoints
+    state = knowledge_pipeline
+    config = {**state.config, "design": {"projects": [], "models": []}}
+    monkeypatch.setattr(execution_entrypoints, "knowledge_operation",
+                        lambda ctx, body: submit(ctx, body, state.ledger, config, lambda *args: None))
+
+    def post(body):
+        response = env.api.handle({"rawPath": "/studio-api/ontology/knowledge/guidelines",
+            "headers": {"X-Workspace-Project": env.pid}, "body": json.dumps(body),
+            "requestContext": {"http": {"method": "POST"},
+                "authorizer": {"jwt": {"claims": {**state.ctx.claims, "token_use": "access"}}}}})
+        return response["statusCode"], json.loads(response["body"])
+
+    status, response = post(state.body)
+    assert (status, response["code"]) == (503, "knowledge-execution-unavailable")
+    config = state.config
+    assert post(state.body)[0] == 202
+    status, response = post({**state.body, "name": "changed"})
+    assert (status, response["code"]) == (409, "request-changed")
+    assert len([job for job in state.storage.list(state.ctx.owner, "job")
+                if job.get("operation") == "design.guidelines"]) == 1 and not state.models
+
+
 def test_revoked_source_during_call_never_publishes_success(knowledge_pipeline, env):
     from intake.records import INTAKE_OWNER
     state = knowledge_pipeline
@@ -151,6 +175,35 @@ def adoption_body(state, artifact, **overrides):
     return {"requestId": "adopt-guide", "version": artifact["version"],
             "resultHash": artifact["result"]["sha256"],
             "expectedGeneration": state.body["expectedGeneration"], **overrides}
+
+
+def test_membership_change_at_adoption_commit_blocks_every_canonical_write(knowledge_pipeline, env, monkeypatch):
+    state = knowledge_pipeline
+    _, queued = execute(state)
+    artifact = state.ctx.get("wb_artifact", queued["artifact"]["id"])
+    before = Ontology(state.ctx).current()["generation"]
+    put_many = state.storage.put_many
+    raced = []
+
+    def commit_after_demotion(writes, *args, **kwargs):
+        if any(write["kind"] == "knowledge_decision" for write in writes) and not raced:
+            raced.append(True)
+            project = state.storage.get(state.ctx.owner, "project", env.pid)
+            members = copy.deepcopy(project["members"])
+            members["carol"]["role"] = "developer"
+            status, _ = env.http("PUT", f"/projects/{env.pid}/members",
+                                 {"version": project["version"], "members": members})
+            assert status == 200
+        return put_many(writes, *args, **kwargs)
+
+    monkeypatch.setattr(state.storage, "put_many", commit_after_demotion)
+    with pytest.raises(CollaborationError) as error:
+        route(env.api, env.scope("carol"), {"sub": "carol", "exp": state.ctx.claims["exp"]},
+              "POST", [artifact["id"], "publish"], adoption_body(state, artifact), {})
+    assert error.value.status == 409 and raced
+    assert Ontology(state.ctx).current()["generation"] == before
+    assert not state.storage.list(state.ctx.owner, "knowledge_decision")
+    assert len(state.models) == 1
 
 
 def test_submission_replay_keeps_one_job_and_changed_request_cannot_reuse_it(knowledge_pipeline):
@@ -243,6 +296,24 @@ def test_revoked_completed_evidence_is_hidden_before_private_result_reads(knowle
         route(state.ctx.host, state.ctx.scope, state.ctx.claims, "GET", [artifact["id"]], {}, {})
     assert error.value.status == 404
     assert route(state.ctx.host, state.ctx.scope, state.ctx.claims, "GET", [], {}, {})[1]["items"] == []
+
+
+def test_singular_read_preserves_authorization_expiry_after_result_read(knowledge_pipeline, monkeypatch):
+    state = knowledge_pipeline
+    _, queued = execute(state)
+    artifact = state.ctx.get("wb_artifact", queued["artifact"]["id"])
+    get_blob = state.storage.get_blob
+
+    def expire_after_read(key, *args, **kwargs):
+        value = get_blob(key, *args, **kwargs)
+        if key == artifact["result"]["key"]:
+            monkeypatch.setattr(state.storage, "clock", lambda: state.ctx.claims["exp"] * 1000)
+        return value
+
+    monkeypatch.setattr(state.storage, "get_blob", expire_after_read)
+    with pytest.raises(CollaborationError) as error:
+        route(state.ctx.host, state.ctx.scope, state.ctx.claims, "GET", [artifact["id"]], {}, {})
+    assert (error.value.status, error.value.code) == (401, "authorization-expired")
 
 
 def test_uncertain_provider_result_keeps_intent_and_never_replays_model(knowledge_pipeline):

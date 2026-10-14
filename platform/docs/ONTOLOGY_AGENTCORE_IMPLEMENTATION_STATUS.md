@@ -1,7 +1,7 @@
 # Ontology/AgentCore implementation register
 
-Date: 2026-10-12. Scope: source/design execution follow-up to source integration of ontology branch `c234292` and main
-`f5157c7`. This register is subordinate to SPEC, the [architecture](ARCHITECTURE.md)
+Date: 2026-10-14. Scope: source/design execution and guideline knowledge follow-up to source integration of ontology branch `c234292` and main
+`5a5b8ce`. This register is subordinate to SPEC, the [architecture](ARCHITECTURE.md)
 and the owning contracts. It records implementation and gaps, not deployment.
 Final review/CI evidence belongs to the exact integration PR HEAD.
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { resource, listPages } from './client';
 import { ActionState, Details, Field, LoadState, Section, useAction, useLoad, useWorkbench, label } from './shared';
 
@@ -20,6 +20,7 @@ export default function GuidelineKnowledge({ target, generation, onPublished }: 
   const [name, setName] = useState('guide-learning');
   const [selected, setSelected] = useState('');
   const [cursor, setCursor] = useState('');
+  const pollUntil = useRef(0);
   const action = useAction();
   const config = useLoad(signal => client.get<{ enabled: boolean; models: string[] }>('/designs/config', signal), [client]);
   const inputs = useLoad(signal => listPages<{ id: string; title?: string; kind: string }>(
@@ -29,10 +30,12 @@ export default function GuidelineKnowledge({ target, generation, onPublished }: 
   const detail = useLoad(signal => selected ? client.get<Proposal>(
     '/ontology/knowledge/' + resource(selected), signal) : Promise.resolve(null), [client, selected]);
   useEffect(() => {
-    setSelected(''); setCursor(''); setDecisions([]); setModel(''); action.cancel();
+    setSelected(''); setCursor(''); setDecisions([]); setModel(''); action.reset();
   }, [client]);
+  useEffect(() => { pollUntil.current = Date.now() + 30 * 60 * 1000; }, [client, selected]);
   useEffect(() => {
-    if (!selected || !detail.data || !['queued', 'dispatched', 'running'].includes(detail.data.artifact.status)) return;
+    if (!selected || !detail.data || Date.now() >= pollUntil.current
+      || !['queued', 'dispatched', 'running'].includes(detail.data.artifact.status)) return;
     const timer = window.setTimeout(() => detail.refresh(), 1500);
     return () => window.clearTimeout(timer);
   }, [selected, detail.data]);

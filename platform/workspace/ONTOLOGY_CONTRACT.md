@@ -484,6 +484,9 @@ Unreadable proposals are omitted from lists and hidden on individual reads.
 Owner/designer `POST /ontology/knowledge/:id/publish`
 accepts `{requestId, version, resultHash, expectedGeneration}` and records an
 exact human adoption in the same transaction as candidate graph publication.
+The transaction fences the observed project version as well as every source
+revision; a concurrent membership change blocks the entire adoption. Requests
+that exceed the 100-operation atomic scope return `atomic-scope-limit`.
 The publishing producer remains `declared`; `properties.extraction` preserves
 the actual model and admitted citation provenance. Existing owner/planner
 PolicyRule review and approval still govern business-source authority.

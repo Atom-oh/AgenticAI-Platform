@@ -1512,6 +1512,11 @@ Its `knowledge-stage` artifact is ledger-owned; legacy writers cannot claim or
 complete it. Every protected call retains the exact frozen canonical and
 admitted-source predicates. The dedicated capability permits the operation only
 for the configured design project/model cohort.
+The shared execution profile permits at most two model calls and 400,000 tokens;
+this workflow performs one extraction without an automatic paid retry.
+Its completion transaction reserves 20 non-source operations; excess source
+scope is rejected before admission. Human adoption retains the current project
+version and all source predicates in the same atomic write.
 
 The generated private proposal and boundary observations are hash-bound stage
 outputs. Completion requires the registered knowledge publication adapter,
